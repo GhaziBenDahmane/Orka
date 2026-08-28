@@ -81,6 +81,9 @@ func (r *Registry) Render(engine string, request Request) (Result, error) {
 }
 
 func (r *Registry) Backup(engine, version, host string, credentials map[string]string, filename string) (BackupPlan, error) {
+	if driver, ok := r.drivers[engine].(*externalDriver); ok {
+		return driver.Backup(version, host, credentials, filename)
+	}
 	if err := validateNativePlan(version, host, credentials, filename); err != nil {
 		return BackupPlan{}, err
 	}
@@ -100,6 +103,9 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 }
 
 func (r *Registry) Restore(engine, version, host string, credentials map[string]string, filename string) (RestorePlan, error) {
+	if driver, ok := r.drivers[engine].(*externalDriver); ok {
+		return driver.Restore(version, host, credentials, filename)
+	}
 	if err := validateNativePlan(version, host, credentials, filename); err != nil {
 		return RestorePlan{}, err
 	}
@@ -119,6 +125,9 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 }
 
 func (r *Registry) BackupExtension(engine string) (string, bool) {
+	if driver, ok := r.drivers[engine].(*externalDriver); ok {
+		return driver.BackupExtension()
+	}
 	switch engine {
 	case "postgres":
 		return "dump", true
@@ -132,6 +141,9 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 }
 
 func (r *Registry) Readiness(engine, version, host string, credentials map[string]string) (BackupPlan, error) {
+	if driver, ok := r.drivers[engine].(*externalDriver); ok {
+		return driver.Readiness(version, host, credentials)
+	}
 	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) {
 		return BackupPlan{}, errors.New("invalid database readiness parameters")
 	}

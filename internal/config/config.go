@@ -12,25 +12,26 @@ import (
 )
 
 type Config struct {
-	ListenAddr          string
-	DatabaseURL         string
-	MasterKey           []byte
-	DockerBin           string
-	WorkerConcurrency   int
-	SessionTTL          time.Duration
-	TraefikNetwork      string
-	UnsafeWorkloads     bool
-	PublicURL           string
-	BackupDirectory     string
-	OTLPEndpoint        string
-	OTLPInsecure        bool
-	ServiceName         string
-	AgentCACertificate  []byte
-	AgentCAKey          []byte
-	AgentCertificateTTL time.Duration
-	AgentListenAddr     string
-	AgentServerCertFile string
-	AgentServerKeyFile  string
+	ListenAddr              string
+	DatabaseURL             string
+	MasterKey               []byte
+	DockerBin               string
+	WorkerConcurrency       int
+	SessionTTL              time.Duration
+	TraefikNetwork          string
+	UnsafeWorkloads         bool
+	PublicURL               string
+	BackupDirectory         string
+	OTLPEndpoint            string
+	OTLPInsecure            bool
+	ServiceName             string
+	AgentCACertificate      []byte
+	AgentCAKey              []byte
+	AgentCertificateTTL     time.Duration
+	AgentListenAddr         string
+	AgentServerCertFile     string
+	AgentServerKeyFile      string
+	DatabaseDriverDirectory string
 }
 
 func Load() (Config, error) {
@@ -65,6 +66,10 @@ func Load() (Config, error) {
 	if !filepath.IsAbs(backupDirectory) {
 		return Config{}, errors.New("DOCKYARD_BACKUP_DIRECTORY must be absolute")
 	}
+	driverDirectory := strings.TrimSpace(os.Getenv("DOCKYARD_DATABASE_DRIVER_DIRECTORY"))
+	if driverDirectory != "" && !filepath.IsAbs(driverDirectory) {
+		return Config{}, errors.New("DOCKYARD_DATABASE_DRIVER_DIRECTORY must be absolute")
+	}
 	otlpInsecure, err := strconv.ParseBool(env("DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("parse DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE: %w", err)
@@ -95,25 +100,26 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DOCKYARD_AGENT_CERTIFICATE_TTL must be between 5m and 720h")
 	}
 	return Config{
-		ListenAddr:          env("DOCKYARD_LISTEN_ADDR", ":8080"),
-		DatabaseURL:         databaseURL,
-		MasterKey:           key,
-		DockerBin:           env("DOCKYARD_DOCKER_BIN", "docker"),
-		WorkerConcurrency:   concurrency,
-		SessionTTL:          ttl,
-		TraefikNetwork:      env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
-		UnsafeWorkloads:     unsafeWorkloads,
-		PublicURL:           strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
-		BackupDirectory:     filepath.Clean(backupDirectory),
-		OTLPEndpoint:        otlpEndpoint,
-		OTLPInsecure:        otlpInsecure,
-		ServiceName:         env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
-		AgentCACertificate:  []byte(agentCACertificate),
-		AgentCAKey:          []byte(agentCAKey),
-		AgentCertificateTTL: agentCertificateTTL,
-		AgentListenAddr:     agentListenAddr,
-		AgentServerCertFile: agentServerCertFile,
-		AgentServerKeyFile:  agentServerKeyFile,
+		ListenAddr:              env("DOCKYARD_LISTEN_ADDR", ":8080"),
+		DatabaseURL:             databaseURL,
+		MasterKey:               key,
+		DockerBin:               env("DOCKYARD_DOCKER_BIN", "docker"),
+		WorkerConcurrency:       concurrency,
+		SessionTTL:              ttl,
+		TraefikNetwork:          env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		UnsafeWorkloads:         unsafeWorkloads,
+		PublicURL:               strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
+		BackupDirectory:         filepath.Clean(backupDirectory),
+		OTLPEndpoint:            otlpEndpoint,
+		OTLPInsecure:            otlpInsecure,
+		ServiceName:             env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
+		AgentCACertificate:      []byte(agentCACertificate),
+		AgentCAKey:              []byte(agentCAKey),
+		AgentCertificateTTL:     agentCertificateTTL,
+		AgentListenAddr:         agentListenAddr,
+		AgentServerCertFile:     agentServerCertFile,
+		AgentServerKeyFile:      agentServerKeyFile,
+		DatabaseDriverDirectory: driverDirectory,
 	}, nil
 }
 

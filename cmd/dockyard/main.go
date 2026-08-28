@@ -215,6 +215,11 @@ func serve() error {
 	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
 	swarm := deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.TraefikNetwork, Timeout: 5 * time.Minute}
 	databaseRegistry := database.NewRegistry()
+	if cfg.DatabaseDriverDirectory != "" {
+		if err := databaseRegistry.LoadExternal(cfg.DatabaseDriverDirectory); err != nil {
+			return fmt.Errorf("load external database drivers: %w", err)
+		}
+	}
 	metrics := observability.NewMetrics()
 	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
