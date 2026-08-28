@@ -3,7 +3,8 @@
 All request and response bodies use JSON. Except for health, bootstrap, login,
 SSO discovery/callback, and deploy hooks, endpoints require
 `Authorization: Bearer <session-token>`. Use `X-Organization-ID` to select an
-organization when a user belongs to more than one.
+organization when a user belongs to more than one. This includes `/metrics`;
+Prometheus should use a dedicated read-only service-account token.
 
 Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a

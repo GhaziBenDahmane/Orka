@@ -51,3 +51,12 @@ func TestHandlerSetsSecurityHeadersOnAPIAndConsole(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsRequiresAuthentication(t *testing.T) {
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("metrics status=%d, want 401", response.Code)
+	}
+}

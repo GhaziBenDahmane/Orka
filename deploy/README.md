@@ -18,7 +18,8 @@ API to deploy stacks. The outbound mTLS agent described below keeps the same
 Swarm adapter while removing direct control-plane access to remote sockets.
 
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
-and scrape `http://dockyard:8080/metrics`. The rules cover controller outage,
+and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
+account configured as an HTTP bearer token. The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, stale backups, and
 maintenance mode left enabled. Route those alerts through Alertmanager to the
 team's email, Slack, PagerDuty, or other incident receiver.

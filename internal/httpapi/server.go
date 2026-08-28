@@ -65,7 +65,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /metrics", s.metrics)
+	mux.Handle("GET /metrics", s.requireAuth(http.HandlerFunc(s.metrics)))
 	mux.HandleFunc("POST /v1/auth/bootstrap", s.bootstrap)
 	mux.HandleFunc("POST /v1/auth/login", s.login)
 	mux.HandleFunc("GET /v1/auth/sso/discover", s.discoverOIDC)
