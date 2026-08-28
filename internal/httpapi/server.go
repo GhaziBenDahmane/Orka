@@ -72,6 +72,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/service-accounts/{accountID}/rotate", s.requireRole("admin", http.HandlerFunc(s.rotateServiceAccountToken)))
 	mux.Handle("DELETE /v1/service-accounts/{accountID}", s.requireRole("admin", http.HandlerFunc(s.deleteServiceAccount)))
 	mux.Handle("GET /v1/audit-events", s.requireRole("admin", http.HandlerFunc(s.auditEvents)))
+	mux.Handle("GET /v1/audit-events/export", s.requireRole("admin", http.HandlerFunc(s.exportAuditEvents)))
+	mux.Handle("GET /v1/audit-retention", s.requireRole("admin", http.HandlerFunc(s.getAuditRetention)))
+	mux.Handle("PUT /v1/audit-retention", s.requireRole("admin", http.HandlerFunc(s.putAuditRetention)))
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
 	mux.Handle("DELETE /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.deleteSourceCredential)))
@@ -250,24 +253,15 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) auditEvents(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	rows, err := s.Store.Pool.Query(r.Context(), `SELECT id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata,created_at FROM audit_events WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`, p.OrganizationID)
+	beforeID, limit, err := auditPage(r, false)
+	if err != nil {
+		writeError(w, 400, "invalid_cursor", err.Error())
+		return
+	}
+	items, err := s.Store.ListAuditEvents(r.Context(), p.OrganizationID, beforeID, limit, false)
 	if err != nil {
 		writeStoreError(w, err)
 		return
-	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() {
-		var id int64
-		var actor, serviceAccount *uuid.UUID
-		var action, resourceType, resourceID, remoteAddr string
-		var metadata json.RawMessage
-		var created time.Time
-		if err := rows.Scan(&id, &actor, &serviceAccount, &action, &resourceType, &resourceID, &remoteAddr, &metadata, &created); err != nil {
-			writeStoreError(w, err)
-			return
-		}
-		items = append(items, map[string]any{"id": id, "actorUserId": actor, "actorServiceAccountId": serviceAccount, "action": action, "resourceType": resourceType, "resourceId": resourceID, "remoteAddr": remoteAddr, "metadata": metadata, "createdAt": created})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }

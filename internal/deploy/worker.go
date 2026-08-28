@@ -47,14 +47,30 @@ type job struct {
 func (w *Worker) Run(ctx context.Context) {
 	w.recoverStale(ctx)
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() { defer wg.Done(); w.scheduleBackups(ctx) }()
+	go func() { defer wg.Done(); w.pruneAuditEvents(ctx) }()
 	for i := 0; i < w.Concurrency; i++ {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.loop(ctx) }()
 	}
 	<-ctx.Done()
 	wg.Wait()
+}
+
+func (w *Worker) pruneAuditEvents(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		if _, err := w.Store.PruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
+			w.Logger.Error("prune audit events", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (w *Worker) scheduleBackups(ctx context.Context) {

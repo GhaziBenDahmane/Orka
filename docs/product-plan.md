@@ -95,10 +95,11 @@ database advertised as backup-capable.
 
 Status: OIDC/PKCE, signed SAML 2.0 with replay protection, mandatory SSO,
 device-session administration, expiring service accounts with atomic token
-rotation, SCIM users/groups, group-to-role mapping, owner protection, and
-inherited project/environment grants implemented.
+rotation, SCIM users/groups, group-to-role mapping, owner protection, inherited
+project/environment grants, resumable audit export, and configurable audit
+retention implemented.
 
-- Add immutable audit export and configurable retention.
+- Add external write-once audit archive delivery and retention-policy alerts.
 
 Exit gate: IdP-initiated and SP-initiated conformance tests against Entra ID,
 Okta, Keycloak, and Google Workspace where applicable.

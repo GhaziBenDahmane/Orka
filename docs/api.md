@@ -20,6 +20,9 @@ organization when a user belongs to more than one.
 | GET/POST | `/v1/service-accounts` | List or create scoped automation identities |
 | POST | `/v1/service-accounts/{id}/rotate` | Revoke old tokens and issue a replacement |
 | DELETE | `/v1/service-accounts/{id}` | Disable an automation identity |
+| GET | `/v1/audit-events?beforeId=…&limit=…` | Read a descending audit page |
+| GET | `/v1/audit-events/export?afterId=…&limit=…` | Export ascending NDJSON with integrity headers |
+| GET/PUT | `/v1/audit-retention` | Read or set the 30–3650 day retention policy |
 | GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
@@ -45,6 +48,10 @@ Once enabled, local-password sessions cannot access that organization.
 Service-account tokens are shown once, stored as hashes, expire within 365
 days, carry an organization role, support atomic rotation, and are attributed
 separately from users in the audit log.
+Audit exports are ordered by immutable event ID. Each response includes
+`X-Content-SHA256` for offline verification and `X-Next-After-ID` for resumable
+pagination. The default retention is 365 days; configured policies are pruned
+hourly by workers.
 
 ## Workloads
 
