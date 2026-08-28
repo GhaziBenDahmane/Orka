@@ -156,6 +156,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/environments/{environmentID}/services", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listServices)))
 	mux.Handle("GET /v1/database-engines", s.requireAuth(http.HandlerFunc(s.databaseEngines)))
 	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createDatabase)))
+	mux.Handle("GET /v1/databases/{databaseID}", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getDatabase)))
+	mux.Handle("DELETE /v1/databases/{databaseID}", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.deleteDatabase)))
 	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireResourceRole("developer", "database", "databaseID", http.HandlerFunc(s.createDatabaseBackup)))
 	mux.Handle("GET /v1/backup-destinations", s.requireRole("developer", http.HandlerFunc(s.listBackupDestinations)))
 	mux.Handle("POST /v1/backup-destinations", s.requireRole("admin", http.HandlerFunc(s.createBackupDestination)))
@@ -910,6 +912,44 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "database.create", "database", instance.ID.String(), r.RemoteAddr, map[string]any{"engine": in.Engine})
 	writeJSON(w, 201, map[string]any{"database": instance, "credentials": rendered.Credentials, "internalUrl": rendered.InternalURL})
+}
+
+func (s *Server) getDatabase(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("databaseID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid database id")
+		return
+	}
+	item, err := s.Store.GetDatabase(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("databaseID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid database id")
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.GetDatabase(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if err = s.Store.QueueServiceDeletion(r.Context(), p.OrganizationID, item.ComposeServiceID, false); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "database_busy", "cancel or wait for active database operations or an existing deletion")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "database.delete", "database", id.String(), r.RemoteAddr, map[string]any{"composeServiceId": item.ComposeServiceID})
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 
 func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {

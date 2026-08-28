@@ -1502,6 +1502,15 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 	return instance, nil
 }
 
+func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (DatabaseInstance, error) {
+	var item DatabaseInstance
+	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DatabaseInstance{}, ErrNotFound
+	}
+	return item, err
+}
+
 func (s *Store) CreateTemplate(ctx context.Context, item Template) (Template, error) {
 	item.ID = uuid.New()
 	err := s.Pool.QueryRow(ctx, `INSERT INTO templates(id,organization_id,template_key,version,name,description,compose_yaml,config,source,checksum) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING created_at`, item.ID, item.OrganizationID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.Checksum).Scan(&item.CreatedAt)

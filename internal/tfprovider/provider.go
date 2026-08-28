@@ -73,7 +73,7 @@ func configured(value types.String, environment string) string {
 }
 
 func (p *dockyardProvider) Resources(_ context.Context) []func() resource.Resource {
-	return []func() resource.Resource{newProjectResource, newEnvironmentResource, newServiceResource}
+	return []func() resource.Resource{newProjectResource, newEnvironmentResource, newServiceResource, newDatabaseResource, newBackupPolicyResource}
 }
 
 func (p *dockyardProvider) DataSources(_ context.Context) []func() datasource.DataSource { return nil }

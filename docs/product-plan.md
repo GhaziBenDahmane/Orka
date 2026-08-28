@@ -165,8 +165,9 @@ a full raw-API escape hatch, generated route-level OpenAPI coverage, and an
 embedded React console for core workload, template, database, and cluster
 workflows are implemented. Advanced build modes and application settings
 remain manual and persistent database data still requires backup/restore. The
-Terraform/OpenTofu provider covers projects, environments, and Compose services;
-additional provider resources and administrative console screens remain.
+Terraform/OpenTofu provider covers projects, environments, Compose services,
+managed databases, and backup policies; additional provider resources and
+administrative console screens remain.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.

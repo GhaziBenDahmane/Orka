@@ -20,8 +20,8 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 3 {
-		t.Fatal("provider must expose project, environment, and service resources")
+	if len(instance.Resources(context.Background())) != 5 {
+		t.Fatal("provider must expose project, environment, service, database, and backup policy resources")
 	}
 	for _, factory := range instance.Resources(context.Background()) {
 		var response resource.SchemaResponse

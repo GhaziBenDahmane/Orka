@@ -6,6 +6,8 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_project`
 - `dockyard_environment`
 - `dockyard_service`
+- `dockyard_database`
+- `dockyard_backup_policy`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
 optional `DOCKYARD_ORGANIZATION_ID` selects an organization for owners with
@@ -26,3 +28,12 @@ An environment may set `cluster_id` directly, or use `placement_selector`,
 capacity-aware placement. Placement inputs are immutable;
 changing them replaces the environment so workloads cannot silently move
 between Swarms.
+
+`dockyard_backup_policy` manages the single native-backup policy associated
+with a database. Its import ID is the database UUID (not the policy UUID), for
+example `terraform import dockyard_backup_policy.primary DATABASE_UUID`.
+
+Managed databases are replacement-oriented because changing an engine,
+version, or credential-bearing driver configuration in place is unsafe.
+`config_json` is sensitive: credentials are submitted once, remain encrypted
+in Dockyard, and are retained only in Terraform's sensitive state on refresh.

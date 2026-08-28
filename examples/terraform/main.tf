@@ -35,3 +35,22 @@ resource "dockyard_service" "whoami" {
           replicas: 1
   YAML
 }
+
+resource "dockyard_database" "postgres" {
+  environment_id = dockyard_environment.production.id
+  name           = "Primary PostgreSQL"
+  engine         = "postgres"
+  version        = "17"
+  config_json = jsonencode({
+    database = "app"
+    username = "app"
+  })
+}
+
+resource "dockyard_backup_policy" "postgres" {
+  database_id      = dockyard_database.postgres.id
+  interval_seconds = 86400
+  retention_count  = 14
+  enabled          = true
+  verify_restore   = true
+}
