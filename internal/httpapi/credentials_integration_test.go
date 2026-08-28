@@ -3,7 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +20,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
@@ -97,5 +102,30 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 	plain, err := box.Decrypt(encrypted, "source-credential")
 	if err != nil || string(plain) != "never-return-this" {
 		t.Fatalf("encrypted secret cannot be recovered: %v", err)
+	}
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privatePEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)}))
+	publicKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownHosts := "git.example.test " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(publicKey)))
+	sshBody, _ := json.Marshal(map[string]string{"kind": "git-ssh", "name": "deploy-key", "server": "git.example.test", "username": "git", "privateKey": privatePEM, "knownHosts": knownHosts})
+	req, _ = http.NewRequest(http.MethodPost, server.URL+"/v1/source-credentials", bytes.NewReader(sshBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated || bytes.Contains(data, []byte("PRIVATE KEY")) || bytes.Contains(data, []byte("knownHosts")) {
+		t.Fatalf("SSH credential response status=%d leaked secret material: %s", response.StatusCode, data)
 	}
 }

@@ -41,7 +41,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |
 | POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
 | POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
-| GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted Git and OCI registry credentials |
+| GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable failure notification webhooks |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
 | PATCH | `/v1/clusters/{id}` | Activate, drain, or disable a cluster |

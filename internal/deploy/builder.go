@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,9 +22,11 @@ import (
 type Builder struct{ GitBin, DockerBin string }
 
 type Credential struct {
-	Server   string
-	Username string
-	Secret   string
+	Kind       string
+	Server     string
+	Username   string
+	Secret     string
+	KnownHosts string
 }
 type BuildCredentials struct {
 	Git      Credential
@@ -35,8 +38,8 @@ var registryImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$`)
 
 func (b Builder) Build(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, credentials BuildCredentials) (string, string, error) {
 	repo, err := url.Parse(source.RepositoryURL)
-	if err != nil || repo.Scheme != "https" || repo.Host == "" || repo.User != nil {
-		return "", "", fmt.Errorf("repository URL must use HTTPS")
+	if err != nil || (repo.Scheme != "https" && repo.Scheme != "ssh") || repo.Host == "" || repo.Scheme == "https" && repo.User != nil {
+		return "", "", fmt.Errorf("repository URL must use HTTPS or SSH")
 	}
 	if !safeRef.MatchString(source.GitRef) {
 		return "", "", fmt.Errorf("invalid git ref")
@@ -56,7 +59,20 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	}
 	defer os.RemoveAll(directory)
 	gitEnvironment := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
-	if credentials.Git.Secret != "" {
+	if repo.Scheme == "ssh" {
+		if credentials.Git.Kind != "git-ssh" || credentials.Git.Secret == "" || credentials.Git.KnownHosts == "" {
+			return "", "", errors.New("SSH repository requires a git-ssh credential with pinned host keys")
+		}
+		if repo.User == nil || repo.User.Username() != credentials.Git.Username {
+			return "", "", errors.New("SSH credential username does not match repository URL")
+		}
+		sshDirectory, createErr := writeSSHConfig(credentials.Git)
+		if createErr != nil {
+			return "", "", createErr
+		}
+		defer os.RemoveAll(sshDirectory)
+		gitEnvironment["GIT_SSH_COMMAND"] = "ssh -F /dev/null -i " + filepath.Join(sshDirectory, "key") + " -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=" + filepath.Join(sshDirectory, "known_hosts")
+	} else if credentials.Git.Secret != "" {
 		askPass, createErr := writeAskPass()
 		if createErr != nil {
 			return "", "", createErr
@@ -102,6 +118,21 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	}
 	buildOutput, err := run(ctx, b.docker(), buildEnvironment, "buildx", "build", "--pull", "--push", "--tag", tag, "--file", dockerfilePath, contextPath)
 	return tag, output + buildOutput, err
+}
+
+func writeSSHConfig(credential Credential) (string, error) {
+	directory, err := os.MkdirTemp("", "dockyard-ssh-*")
+	if err != nil {
+		return "", err
+	}
+	if err = os.WriteFile(filepath.Join(directory, "key"), []byte(credential.Secret), 0600); err == nil {
+		err = os.WriteFile(filepath.Join(directory, "known_hosts"), []byte(credential.KnownHosts), 0600)
+	}
+	if err != nil {
+		_ = os.RemoveAll(directory)
+		return "", err
+	}
+	return directory, nil
 }
 
 func writeAskPass() (string, error) {

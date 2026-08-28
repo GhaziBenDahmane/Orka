@@ -112,8 +112,8 @@ Status: public/private HTTPS Git, private OCI registries, ephemeral build
 credentials, generic deploy hooks, and signed/replay-safe provider webhooks
 implemented.
 
-- Add SSH deploy keys alongside the implemented encrypted HTTPS Git tokens and
-  OCI registry credentials.
+- Encrypted HTTPS Git tokens, pinned-host SSH deploy keys, and OCI registry
+  credentials are implemented.
 - Add build status callbacks to the GitHub, GitLab, Gitea, and Bitbucket
   webhook adapters.
 - Notification rules and providers for email, Slack-compatible webhooks, and

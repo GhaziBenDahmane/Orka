@@ -734,7 +734,7 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id)
 		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
-		AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$9 AND c.organization_id=$2 AND c.kind='git'))
+		AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$9 AND c.organization_id=$2 AND c.kind IN ('git','git-ssh')))
 		AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=$2 AND c.kind='registry'))
 		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,updated_at=now()
 		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID).Scan(&source.UpdatedAt)

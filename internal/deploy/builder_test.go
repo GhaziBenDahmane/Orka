@@ -77,3 +77,28 @@ func TestBuildRejectsCredentialHostMismatchBeforeClone(t *testing.T) {
 		t.Fatalf("expected host mismatch, got %v", err)
 	}
 }
+
+func TestBuildRequiresPinnedSSHCredential(t *testing.T) {
+	source := store.ApplicationSource{RepositoryURL: "ssh://git@example.com/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
+	_, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: Credential{Kind: "git-ssh", Server: "example.com", Username: "git", Secret: "key"}})
+	if err == nil || !strings.Contains(err.Error(), "pinned host keys") {
+		t.Fatalf("expected pinned-host-key rejection, got %v", err)
+	}
+}
+
+func TestSSHCredentialFilesArePrivate(t *testing.T) {
+	directory, err := writeSSHConfig(Credential{Secret: "private", KnownHosts: "example.com ssh-ed25519 AAAA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(directory)
+	for _, name := range []string{"key", "known_hosts"} {
+		info, statErr := os.Stat(filepath.Join(directory, name))
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("%s permissions=%v", name, info.Mode().Perm())
+		}
+	}
+}

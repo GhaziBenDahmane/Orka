@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/crypto/ssh"
 )
 
 type Server struct {
@@ -1333,11 +1334,13 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Kind     string `json:"kind"`
-		Name     string `json:"name"`
-		Server   string `json:"server"`
-		Username string `json:"username"`
-		Secret   string `json:"secret"`
+		Kind       string `json:"kind"`
+		Name       string `json:"name"`
+		Server     string `json:"server"`
+		Username   string `json:"username"`
+		Secret     string `json:"secret"`
+		PrivateKey string `json:"privateKey"`
+		KnownHosts string `json:"knownHosts"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -1345,11 +1348,32 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 	in.Kind = strings.ToLower(strings.TrimSpace(in.Kind))
 	in.Name = strings.TrimSpace(in.Name)
 	in.Server = strings.ToLower(strings.TrimSpace(in.Server))
-	if (in.Kind != "git" && in.Kind != "registry") || in.Name == "" || in.Server == "" || strings.ContainsAny(in.Server, "/@") || in.Username == "" || in.Secret == "" {
-		writeError(w, 400, "invalid_credential", "kind, name, server, username, and secret are required")
+	if !contains([]string{"git", "git-ssh", "registry"}, in.Kind) || in.Name == "" || in.Server == "" || strings.ContainsAny(in.Server, "/@") || in.Username == "" {
+		writeError(w, 400, "invalid_credential", "kind, name, server, and username are required")
 		return
 	}
-	encrypted, err := s.Box.Encrypt([]byte(in.Secret), "source-credential")
+	secret := in.Secret
+	if in.Kind == "git-ssh" {
+		if len(in.PrivateKey) > 64<<10 || len(in.KnownHosts) > 1<<20 || strings.TrimSpace(in.KnownHosts) == "" {
+			writeError(w, 400, "invalid_credential", "SSH private key and pinned known-hosts entries are required")
+			return
+		}
+		if _, err := ssh.ParsePrivateKey([]byte(in.PrivateKey)); err != nil {
+			writeError(w, 400, "invalid_credential", "SSH private key is invalid or encrypted")
+			return
+		}
+		if !validKnownHosts(in.Server, in.KnownHosts) {
+			writeError(w, 400, "invalid_credential", "known-hosts must contain a valid pinned key for the credential server")
+			return
+		}
+		encoded, _ := json.Marshal(map[string]string{"privateKey": in.PrivateKey, "knownHosts": in.KnownHosts})
+		secret = string(encoded)
+	}
+	if secret == "" {
+		writeError(w, 400, "invalid_credential", "credential secret is required")
+		return
+	}
+	encrypted, err := s.Box.Encrypt([]byte(secret), "source-credential")
 	if err != nil {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
@@ -1362,6 +1386,32 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Store.Audit(r.Context(), &p, "source_credential.create", "source_credential", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "server": item.Server})
 	writeJSON(w, 201, item)
+}
+
+func validKnownHosts(server, contents string) bool {
+	host := strings.ToLower(strings.TrimSpace(strings.Split(server, ":")[0]))
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		index := 0
+		if len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
+			index = 1
+		}
+		if len(fields) < index+3 {
+			continue
+		}
+		hosts := strings.ToLower(fields[index])
+		if !strings.HasPrefix(hosts, "|1|") && !contains(strings.Split(hosts, ","), host) && !strings.Contains(hosts, "["+host+"]:") {
+			continue
+		}
+		if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.Join(fields[index+1:], " "))); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) listSourceCredentials(w http.ResponseWriter, r *http.Request) {
