@@ -1,4 +1,4 @@
-.PHONY: test lint build run
+.PHONY: test lint build run generate-openapi check-openapi
 
 test:
 	go test ./...
@@ -12,3 +12,9 @@ build:
 
 run:
 	go run ./cmd/dockyard serve
+
+generate-openapi:
+	go run ./tools/generate-openapi
+
+check-openapi: generate-openapi
+	git diff --exit-code -- api/openapi.yaml
