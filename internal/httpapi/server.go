@@ -96,40 +96,46 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /scim/v2/Groups/{groupID}", s.scimGroup)
 	mux.Handle("GET /v1/projects", s.requireAuth(http.HandlerFunc(s.listProjects)))
 	mux.Handle("POST /v1/projects", s.requireRole("developer", http.HandlerFunc(s.createProject)))
-	mux.Handle("POST /v1/projects/{projectID}/environments", s.requireRole("developer", http.HandlerFunc(s.createEnvironment)))
-	mux.Handle("GET /v1/projects/{projectID}/environments", s.requireAuth(http.HandlerFunc(s.listEnvironments)))
-	mux.Handle("POST /v1/environments/{environmentID}/services", s.requireRole("developer", http.HandlerFunc(s.createService)))
-	mux.Handle("GET /v1/environments/{environmentID}/services", s.requireAuth(http.HandlerFunc(s.listServices)))
+	mux.Handle("GET /v1/projects/{projectID}/grants", s.requireRole("admin", http.HandlerFunc(s.listProjectGrants)))
+	mux.Handle("PUT /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.putProjectGrant)))
+	mux.Handle("DELETE /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteProjectGrant)))
+	mux.Handle("GET /v1/environments/{environmentID}/grants", s.requireRole("admin", http.HandlerFunc(s.listEnvironmentGrants)))
+	mux.Handle("PUT /v1/environments/{environmentID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.putEnvironmentGrant)))
+	mux.Handle("DELETE /v1/environments/{environmentID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteEnvironmentGrant)))
+	mux.Handle("POST /v1/projects/{projectID}/environments", s.requireResourceRole("developer", "project", "projectID", http.HandlerFunc(s.createEnvironment)))
+	mux.Handle("GET /v1/projects/{projectID}/environments", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.listEnvironments)))
+	mux.Handle("POST /v1/environments/{environmentID}/services", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createService)))
+	mux.Handle("GET /v1/environments/{environmentID}/services", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listServices)))
 	mux.Handle("GET /v1/database-engines", s.requireAuth(http.HandlerFunc(s.databaseEngines)))
-	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireRole("developer", http.HandlerFunc(s.createDatabase)))
-	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireRole("developer", http.HandlerFunc(s.createDatabaseBackup)))
+	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createDatabase)))
+	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireResourceRole("developer", "database", "databaseID", http.HandlerFunc(s.createDatabaseBackup)))
 	mux.Handle("GET /v1/backup-destinations", s.requireRole("developer", http.HandlerFunc(s.listBackupDestinations)))
 	mux.Handle("POST /v1/backup-destinations", s.requireRole("admin", http.HandlerFunc(s.createBackupDestination)))
 	mux.Handle("DELETE /v1/backup-destinations/{destinationID}", s.requireRole("admin", http.HandlerFunc(s.deleteBackupDestination)))
-	mux.Handle("GET /v1/databases/{databaseID}/backup-policy", s.requireAuth(http.HandlerFunc(s.getBackupPolicy)))
-	mux.Handle("PUT /v1/databases/{databaseID}/backup-policy", s.requireRole("admin", http.HandlerFunc(s.putBackupPolicy)))
-	mux.Handle("DELETE /v1/databases/{databaseID}/backup-policy", s.requireRole("admin", http.HandlerFunc(s.deleteBackupPolicy)))
-	mux.Handle("GET /v1/database-backups/{backupID}", s.requireAuth(http.HandlerFunc(s.getDatabaseBackup)))
-	mux.Handle("POST /v1/database-backups/{backupID}/restore", s.requireRole("admin", http.HandlerFunc(s.restoreDatabaseBackup)))
-	mux.Handle("GET /v1/database-restores/{restoreID}", s.requireAuth(http.HandlerFunc(s.getDatabaseRestore)))
+	mux.Handle("GET /v1/databases/{databaseID}/backup-policy", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getBackupPolicy)))
+	mux.Handle("PUT /v1/databases/{databaseID}/backup-policy", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.putBackupPolicy)))
+	mux.Handle("DELETE /v1/databases/{databaseID}/backup-policy", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.deleteBackupPolicy)))
+	mux.Handle("GET /v1/database-backups/{backupID}", s.requireResourceRole("viewer", "backup", "backupID", http.HandlerFunc(s.getDatabaseBackup)))
+	mux.Handle("POST /v1/database-backups/{backupID}/restore", s.requireResourceRole("admin", "backup", "backupID", http.HandlerFunc(s.restoreDatabaseBackup)))
+	mux.Handle("GET /v1/database-restores/{restoreID}", s.requireResourceRole("viewer", "restore", "restoreID", http.HandlerFunc(s.getDatabaseRestore)))
 	mux.Handle("GET /v1/templates", s.requireAuth(http.HandlerFunc(s.listTemplates)))
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
-	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireRole("developer", http.HandlerFunc(s.instantiateTemplate)))
-	mux.Handle("GET /v1/services/{serviceID}", s.requireAuth(http.HandlerFunc(s.getService)))
-	mux.Handle("DELETE /v1/services/{serviceID}", s.requireRole("admin", http.HandlerFunc(s.deleteService)))
-	mux.Handle("PATCH /v1/services/{serviceID}", s.requireRole("developer", http.HandlerFunc(s.updateService)))
-	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireRole("developer", http.HandlerFunc(s.upsertSource)))
-	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireRole("developer", http.HandlerFunc(s.addRoute)))
-	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireRole("developer", http.HandlerFunc(s.deployService)))
-	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireAuth(http.HandlerFunc(s.listDeployments)))
-	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireAuth(http.HandlerFunc(s.serviceLogs)))
-	mux.Handle("POST /v1/services/{serviceID}/rollback", s.requireRole("developer", http.HandlerFunc(s.rollbackService)))
-	mux.Handle("POST /v1/services/{serviceID}/deploy-tokens", s.requireRole("developer", http.HandlerFunc(s.createDeployToken)))
-	mux.Handle("GET /v1/services/{serviceID}/webhooks", s.requireRole("developer", http.HandlerFunc(s.listWebhookIntegrations)))
-	mux.Handle("POST /v1/services/{serviceID}/webhooks", s.requireRole("developer", http.HandlerFunc(s.createWebhookIntegration)))
-	mux.Handle("DELETE /v1/webhooks/{integrationID}", s.requireRole("developer", http.HandlerFunc(s.deleteWebhookIntegration)))
-	mux.Handle("GET /v1/deployments/{deploymentID}", s.requireAuth(http.HandlerFunc(s.getDeployment)))
-	mux.Handle("POST /v1/deployments/{deploymentID}/cancel", s.requireRole("developer", http.HandlerFunc(s.cancelDeployment)))
+	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireAuth(http.HandlerFunc(s.instantiateTemplate)))
+	mux.Handle("GET /v1/services/{serviceID}", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.getService)))
+	mux.Handle("DELETE /v1/services/{serviceID}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteService)))
+	mux.Handle("PATCH /v1/services/{serviceID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateService)))
+	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertSource)))
+	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.addRoute)))
+	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deployService)))
+	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listDeployments)))
+	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.serviceLogs)))
+	mux.Handle("POST /v1/services/{serviceID}/rollback", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.rollbackService)))
+	mux.Handle("POST /v1/services/{serviceID}/deploy-tokens", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createDeployToken)))
+	mux.Handle("GET /v1/services/{serviceID}/webhooks", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.listWebhookIntegrations)))
+	mux.Handle("POST /v1/services/{serviceID}/webhooks", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createWebhookIntegration)))
+	mux.Handle("DELETE /v1/webhooks/{integrationID}", s.requireResourceRole("developer", "webhook", "integrationID", http.HandlerFunc(s.deleteWebhookIntegration)))
+	mux.Handle("GET /v1/deployments/{deploymentID}", s.requireResourceRole("viewer", "deployment", "deploymentID", http.HandlerFunc(s.getDeployment)))
+	mux.Handle("POST /v1/deployments/{deploymentID}/cancel", s.requireResourceRole("developer", "deployment", "deploymentID", http.HandlerFunc(s.cancelDeployment)))
 	return s.middleware(mux)
 }
 
@@ -178,6 +184,26 @@ func (s *Server) requireRole(minimum string, next http.Handler) http.Handler {
 		p := principal(r)
 		if roleRank(p.Role) < roleRank(minimum) {
 			writeError(w, 403, "forbidden", "insufficient role")
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+func (s *Server) requireResourceRole(minimum, resourceType, pathParameter string, next http.Handler) http.Handler {
+	return s.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.PathValue(pathParameter))
+		if err != nil {
+			writeError(w, 400, "invalid_id", "invalid resource id")
+			return
+		}
+		role, err := s.Store.EffectiveResourceRole(r.Context(), principal(r), resourceType, id)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if roleRank(role) < roleRank(minimum) {
+			writeError(w, 403, "forbidden", "insufficient resource role")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -908,6 +934,15 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
+	effectiveRole, err := s.Store.EffectiveResourceRole(r.Context(), p, "environment", in.EnvironmentID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if roleRank(effectiveRole) < roleRank("developer") {
+		writeError(w, 403, "forbidden", "insufficient resource role")
+		return
+	}
 	item, err := s.Store.GetTemplate(r.Context(), p.OrganizationID, templateID)
 	if err != nil {
 		writeStoreError(w, err)

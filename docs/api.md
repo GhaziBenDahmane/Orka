@@ -52,6 +52,8 @@ separately from users in the audit log.
 |---|---|---|
 | GET/POST | `/v1/projects` | List or create projects |
 | GET/POST | `/v1/projects/{id}/environments` | List or create environments |
+| GET/PUT/DELETE | `/v1/projects/{id}/grants…` | Manage per-user project roles |
+| GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack |
 | PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build, registry target, and credentials |
@@ -66,6 +68,12 @@ separately from users in the audit log.
 | GET/POST | `/v1/services/{id}/webhooks` | List or create provider webhook integrations |
 | DELETE | `/v1/webhooks/{id}` | Disable a provider webhook integration |
 | POST | `/v1/hooks/provider/{id}` | Verify a provider push event and deploy |
+
+Organization owners and administrators manage scoped grants. A project grant
+is inherited by all of its environments, while a more privileged environment
+grant applies within that environment. Scoped roles elevate a member's
+organization role; they never reduce an owner or administrator's authority.
+Service accounts continue to use their organization-scoped role.
 
 Provider integrations support GitHub, GitLab, Gitea, and Bitbucket. Secrets are
 shown once, encrypted at rest, and used to authenticate the raw request body.
