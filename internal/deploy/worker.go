@@ -362,6 +362,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		}
 	}
 	buildOutput := ""
+	var deploymentRegistryCredential *Credential
 	if err == nil {
 		var source store.ApplicationSource
 		source.ComposeServiceID = uuid.Nil
@@ -392,6 +393,8 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 					err = decryptErr
 				} else {
 					credentials.Registry.Secret = string(plain)
+					credential := credentials.Registry
+					deploymentRegistryCredential = &credential
 				}
 			}
 			if err == nil {
@@ -411,7 +414,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if err == nil {
 		var output string
-		output, err = w.scheduler(clusterID).Deploy(ctx, stack, compiled, env)
+		output, err = w.scheduler(clusterID).Deploy(ctx, stack, compiled, env, deploymentRegistryCredential)
 		w.markDeployment(ctx, id, map[bool]string{true: "failed", false: "succeeded"}[err != nil], buildOutput+output, err)
 	} else {
 		w.markDeployment(ctx, id, "failed", buildOutput, err)
@@ -929,7 +932,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 			return w.failRestore(ctx, restoreID, renderErr)
 		}
 		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
-		if _, err = w.Swarm.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment); err != nil {
+		if _, err = w.Swarm.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment, nil); err != nil {
 			return w.failRestore(ctx, restoreID, err)
 		}
 		defer func() {
@@ -1011,7 +1014,7 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, restoreID, backupID 
 			return w.failRestore(ctx, restoreID, renderErr)
 		}
 		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
-		if _, err = remote.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment); err != nil {
+		if _, err = remote.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment, nil); err != nil {
 			return w.failRestore(ctx, restoreID, err)
 		}
 		defer func() {

@@ -27,7 +27,7 @@ type Swarm struct {
 // manager. The local CLI adapter and outbound cluster agents implement the
 // same contract so Compose remains the workload format in either topology.
 type Scheduler interface {
-	Deploy(context.Context, string, string, map[string]string) (string, error)
+	Deploy(context.Context, string, string, map[string]string, *Credential) (string, error)
 	Remove(context.Context, string) (string, error)
 	RemoveVolumes(context.Context, string) (string, error)
 	Logs(context.Context, string, int) (string, error)
@@ -63,7 +63,7 @@ func (s Swarm) EnsureReady(ctx context.Context) error {
 	return err
 }
 
-func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[string]string) (string, error) {
+func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[string]string, registryCredential *Credential) (string, error) {
 	if !safeName.MatchString(stackName) {
 		return "", fmt.Errorf("invalid stack name %q", stackName)
 	}
@@ -83,8 +83,22 @@ func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[st
 	if err = os.WriteFile(path, []byte(compose), 0600); err != nil {
 		return "", err
 	}
-	args := []string{"stack", "deploy", "--compose-file", path, "--prune", "--resolve-image", "always", stackName}
-	output, err := s.runEnv(ctx, env, args...)
+	processEnv := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		processEnv[key] = value
+	}
+	args := []string{"stack", "deploy", "--compose-file", path, "--prune", "--resolve-image", "always"}
+	if registryCredential != nil && registryCredential.Secret != "" {
+		configDirectory, configErr := writeDockerConfig(*registryCredential)
+		if configErr != nil {
+			return "", configErr
+		}
+		defer os.RemoveAll(configDirectory)
+		processEnv["DOCKER_CONFIG"] = configDirectory
+		args = append(args, "--with-registry-auth")
+	}
+	args = append(args, stackName)
+	output, err := s.runEnv(ctx, processEnv, args...)
 	if err != nil {
 		return output, err
 	}

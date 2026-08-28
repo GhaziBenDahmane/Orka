@@ -92,8 +92,9 @@ destination before cutover.
 GitHub App private keys are intentionally not converted to static credentials:
 recreate that integration or attach a scoped token before the first deployment.
 Credentials are never attached across hostnames. Docker-image applications that
-pull from a private registry still require operator validation; the current
-Swarm deployment path does not propagate per-application registry credentials.
+pull from a private registry still require operator validation because they do
+not use an application-source build record. Imported Git builds forward a
+matching registry credential to local or remote Swarm managers.
 
 Managed-database import creates the destination Compose service and database
 record, but it does not copy persistent volume contents. Back up every source

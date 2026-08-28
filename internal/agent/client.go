@@ -333,20 +333,21 @@ func (c *Client) execute(parent context.Context, cmd command) {
 
 func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error) {
 	var payload struct {
-		StackName   string            `json:"stackName"`
-		Compose     string            `json:"compose"`
-		Environment map[string]string `json:"environment"`
-		Tail        int               `json:"tail"`
-		Command     []string          `json:"command"`
-		Network     string            `json:"network"`
-		Image       string            `json:"image"`
+		StackName          string             `json:"stackName"`
+		Compose            string             `json:"compose"`
+		Environment        map[string]string  `json:"environment"`
+		Tail               int                `json:"tail"`
+		Command            []string           `json:"command"`
+		Network            string             `json:"network"`
+		Image              string             `json:"image"`
+		RegistryCredential *deploy.Credential `json:"registryCredential"`
 	}
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 		return "", err
 	}
 	switch cmd.Kind {
 	case "swarm.deploy":
-		return c.swarm.Deploy(ctx, payload.StackName, payload.Compose, payload.Environment)
+		return c.swarm.Deploy(ctx, payload.StackName, payload.Compose, payload.Environment, payload.RegistryCredential)
 	case "swarm.remove":
 		return c.swarm.Remove(ctx, payload.StackName)
 	case "swarm.prune-volumes":

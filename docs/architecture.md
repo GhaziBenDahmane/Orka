@@ -48,6 +48,12 @@ the multi-cluster adapter can therefore route the same validated Compose
 snapshot through outbound agents without changing application or database
 models.
 
+Private build-registry credentials are scoped to the configured registry host.
+After a successful push, the scheduler supplies them to `docker stack deploy
+--with-registry-auth` through a temporary mode-0700 Docker configuration. For a
+remote Swarm the credential travels only inside the encrypted, fenced command
+payload and is materialized by the outbound agent for that deployment.
+
 Remote agent identities use short-lived X.509 client certificates issued from
 a dedicated Dockyard CA. Enrollment accepts a proof-of-possession CSR, ignores
 caller-supplied certificate identities, and binds the certificate to

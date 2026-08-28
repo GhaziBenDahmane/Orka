@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 	}
 	resultChannel := make(chan result, 1)
 	go func() {
-		output, runErr := remote.Deploy(ctx, "test-stack", "services: {}", map[string]string{"SECRET": "value"})
+		output, runErr := remote.Deploy(ctx, "test-stack", "services: {}", map[string]string{"SECRET": "value"}, &Credential{Kind: "registry", Server: "registry.example.test", Username: "robot", Secret: "registry-secret"})
 		resultChannel <- result{output, runErr}
 	}()
 	var command store.ClusterCommand
@@ -59,12 +60,19 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(command.EncryptedPayload, "registry-secret") {
+		t.Fatal("cluster command persisted a plaintext registry credential")
+	}
 	plain, err := box.Decrypt(command.EncryptedPayload, "cluster-command:"+command.ID.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var payload map[string]any
-	if err = json.Unmarshal(plain, &payload); err != nil || payload["stackName"] != "test-stack" {
+	if err = json.Unmarshal(plain, &payload); err != nil {
+		t.Fatalf("payload=%s err=%v", plain, err)
+	}
+	credential, _ := payload["registryCredential"].(map[string]any)
+	if payload["stackName"] != "test-stack" || credential["secret"] != "registry-secret" {
 		t.Fatalf("payload=%s err=%v", plain, err)
 	}
 	resultPayload, _ := json.Marshal(map[string]string{"output": "deployed"})

@@ -22,11 +22,11 @@ import (
 type Builder struct{ GitBin, DockerBin string }
 
 type Credential struct {
-	Kind       string
-	Server     string
-	Username   string
-	Secret     string
-	KnownHosts string
+	Kind       string `json:"kind"`
+	Server     string `json:"server"`
+	Username   string `json:"username"`
+	Secret     string `json:"secret"`
+	KnownHosts string `json:"knownHosts,omitempty"`
 }
 type BuildCredentials struct {
 	Git      Credential

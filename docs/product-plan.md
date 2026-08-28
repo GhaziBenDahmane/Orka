@@ -118,6 +118,9 @@ durable provider build-status callbacks implemented.
 
 - Encrypted HTTPS Git tokens, pinned-host SSH deploy keys, and OCI registry
   credentials are implemented.
+- Private build-registry authentication is forwarded to local and remote Swarm
+  managers with `--with-registry-auth`; remote credentials remain inside the
+  encrypted command envelope.
 - GitHub, GitLab, Gitea, and Bitbucket callbacks publish ordered pending and
   terminal statuses using snapshotted, host-pinned encrypted credentials.
 - Failure notification rules and durable providers for TLS email,

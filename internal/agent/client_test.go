@@ -19,15 +19,16 @@ import (
 )
 
 type fakeScheduler struct {
-	stack, compose string
-	environment    map[string]string
-	artifact       []byte
-	wantArtifact   []byte
-	nodes          []deploy.Node
+	stack, compose     string
+	environment        map[string]string
+	registryCredential *deploy.Credential
+	artifact           []byte
+	wantArtifact       []byte
+	nodes              []deploy.Node
 }
 
-func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environment map[string]string) (string, error) {
-	f.stack, f.compose, f.environment = stack, compose, environment
+func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environment map[string]string, registryCredential *deploy.Credential) (string, error) {
+	f.stack, f.compose, f.environment, f.registryCredential = stack, compose, environment, registryCredential
 	return "deployed", nil
 }
 func (*fakeScheduler) Remove(context.Context, string) (string, error)        { return "", nil }
@@ -95,11 +96,11 @@ func TestExecuteArtifactJobEncryptsUploadAndDecryptsDownload(t *testing.T) {
 func TestExecuteDeployCommand(t *testing.T) {
 	scheduler := &fakeScheduler{}
 	client := &Client{swarm: scheduler}
-	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.deploy", Payload: []byte(`{"stackName":"demo","compose":"services: {}","environment":{"TOKEN":"secret"}}`)})
+	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.deploy", Payload: []byte(`{"stackName":"demo","compose":"services: {}","environment":{"TOKEN":"secret"},"registryCredential":{"kind":"registry","server":"registry.example.test","username":"robot","secret":"registry-secret"}}`)})
 	if err != nil || output != "deployed" {
 		t.Fatalf("output=%q err=%v", output, err)
 	}
-	if scheduler.stack != "demo" || scheduler.compose != "services: {}" || scheduler.environment["TOKEN"] != "secret" {
+	if scheduler.stack != "demo" || scheduler.compose != "services: {}" || scheduler.environment["TOKEN"] != "secret" || scheduler.registryCredential == nil || scheduler.registryCredential.Secret != "registry-secret" {
 		t.Fatalf("unexpected dispatch: %#v", scheduler)
 	}
 }
