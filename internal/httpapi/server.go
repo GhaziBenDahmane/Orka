@@ -618,7 +618,7 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	shortID := strings.Split(uuid.NewString(), "-")[0]
 	stackName := "db-" + in.Slug + "-" + shortID
-	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, Config: in.Config}, store.ComposeService{Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
+	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, Config: database.StoredConfig(in.Config)}, store.ComposeService{Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
 	if err != nil {
 		writeStoreError(w, err)
 		return

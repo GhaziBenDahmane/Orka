@@ -161,11 +161,16 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 	if req.Name == "" {
 		return Result{}, fmt.Errorf("database name is required")
 	}
-	user := "dockyard"
-	database := "app"
-	password := secret(32)
+	user := configString(req.Config, "username", "dockyard")
+	databaseName := configString(req.Config, "database", "app")
+	password := configString(req.Config, "password", secret(32))
+	rootPassword := configString(req.Config, "rootPassword", secret(32))
+	image := configString(req.Config, "image", d.image+":"+req.Version)
+	if !registryImagePattern.MatchString(image) || strings.Contains(image, "..") {
+		return Result{}, fmt.Errorf("invalid database image")
+	}
 	env := map[string]string{}
-	credentials := map[string]string{"username": user, "password": password, "database": database}
+	credentials := map[string]string{"username": user, "password": password, "database": databaseName}
 	if d.userKey != "" {
 		env[d.userKey] = user
 	}
@@ -173,12 +178,13 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 		env[d.passwordKey] = password
 	}
 	if d.databaseKey != "" {
-		env[d.databaseKey] = database
+		env[d.databaseKey] = databaseName
 	}
 	if d.rootPasswordKey != "" {
-		env[d.rootPasswordKey] = secret(32)
+		env[d.rootPasswordKey] = rootPassword
+		credentials["rootPassword"] = rootPassword
 	}
-	service := map[string]any{"image": d.image + ":" + req.Version, "volumes": []any{req.Name + "-data:" + d.dataPath}, "networks": []any{"default"}, "deploy": map[string]any{"restart_policy": map[string]any{"condition": "on-failure"}}}
+	service := map[string]any{"image": image, "volumes": []any{req.Name + "-data:" + d.dataPath}, "networks": []any{"default"}, "deploy": map[string]any{"restart_policy": map[string]any{"condition": "on-failure"}}}
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
 		for k := range env {
@@ -204,12 +210,34 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 	if user != "" {
 		auth = user + ":" + password + "@"
 	}
-	url := fmt.Sprintf("%s://%s%s:%d/%s", d.scheme, auth, req.Name, d.port, database)
+	url := fmt.Sprintf("%s://%s%s:%d/%s", d.scheme, auth, req.Name, d.port, databaseName)
 	if d.scheme == "http" {
 		url = fmt.Sprintf("http://%s:%d", req.Name, d.port)
 	}
 	return Result{ComposeYAML: string(out), Environment: env, Credentials: credentials, InternalURL: url, Version: req.Version}, nil
 }
+
+var registryImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)
+
+func configString(config map[string]any, key, fallback string) string {
+	if value, ok := config[key].(string); ok && value != "" {
+		return value
+	}
+	return fallback
+}
+
+// StoredConfig removes values that belong only in encrypted credentials and
+// environment storage before persisting driver configuration.
+func StoredConfig(config map[string]any) map[string]any {
+	stored := make(map[string]any, len(config))
+	for key, value := range config {
+		if key != "password" && key != "rootPassword" {
+			stored[key] = value
+		}
+	}
+	return stored
+}
+
 func secret(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {

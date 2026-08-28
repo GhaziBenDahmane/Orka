@@ -37,9 +37,14 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		`CREATE TABLE ` + quotedSchema + `.domain ("domainId" text PRIMARY KEY,"composeId" text,host text,path text,"serviceName" text,port integer,https boolean,enabled boolean,"customCertResolver" text)`,
 		`CREATE TABLE ` + quotedSchema + `.application ("applicationId" text,"environmentId" text)`,
 	}
-	for _, table := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
-		statements = append(statements, `CREATE TABLE `+quotedSchema+`.`+pgx.Identifier{table}.Sanitize()+` ("environmentId" text)`)
-	}
+	statements = append(statements,
+		`CREATE TABLE `+quotedSchema+`.postgres ("postgresId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,"databaseName" text,"databaseUser" text,"databasePassword" text,"dockerImage" text,env text)`,
+		`CREATE TABLE `+quotedSchema+`.mysql ("mysqlId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,"databaseName" text,"databaseUser" text,"databasePassword" text,"rootPassword" text,"dockerImage" text,env text)`,
+		`CREATE TABLE `+quotedSchema+`.mariadb ("mariadbId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,"databaseName" text,"databaseUser" text,"databasePassword" text,"rootPassword" text,"dockerImage" text,env text)`,
+		`CREATE TABLE `+quotedSchema+`.mongo ("mongoId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,"databaseUser" text,"databasePassword" text,"dockerImage" text,env text)`,
+		`CREATE TABLE `+quotedSchema+`.redis ("redisId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,password text,"dockerImage" text,env text)`,
+		`CREATE TABLE `+quotedSchema+`.libsql ("libsqlId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,"databaseUser" text,"databasePassword" text,"dockerImage" text,env text)`,
+	)
 	for _, statement := range statements {
 		if _, err = destination.Pool.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -51,6 +56,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
   web:
     image: nginx:alpine
 ','A=one'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1','`+fixtureHost+`','/','web',80,true,true,'letsencrypt')`)
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.postgres VALUES('pg1','e1','Imported DB','legacy-postgres','legacydb','legacyuser','legacy-secret','postgres:16','EXTRA=value')`)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +77,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	parsed.RawQuery = query.Encode()
 	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, DryRun: true}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
-	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 1 {
+	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 1 || report.Databases != 1 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
 	options.DryRun = false
@@ -79,11 +87,27 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
 	}
-	var projects, services, routes int
-	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes); err != nil {
+	var projects, services, routes, databases int
+	var encryptedCredentials, encryptedEnvironment string
+	var storedConfig []byte
+	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases); err != nil {
 		t.Fatal(err)
 	}
-	if projects != 1 || services != 1 || routes != 1 {
-		t.Fatalf("idempotent counts = %d/%d/%d", projects, services, routes)
+	if projects != 1 || services != 2 || routes != 1 || databases != 1 {
+		t.Fatalf("idempotent counts = %d/%d/%d/%d", projects, services, routes, databases)
+	}
+	if err = destination.Pool.QueryRow(ctx, `SELECT d.encrypted_credentials,s.encrypted_env,d.config FROM database_instances d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1`, targetOrg).Scan(&encryptedCredentials, &encryptedEnvironment, &storedConfig); err != nil {
+		t.Fatal(err)
+	}
+	credentialsJSON, err := box.Decrypt(encryptedCredentials, "database-credentials")
+	if err != nil || !bytes.Contains(credentialsJSON, []byte("legacy-secret")) {
+		t.Fatalf("migrated credentials cannot be decrypted: %s, err = %v", credentialsJSON, err)
+	}
+	environmentJSON, err := box.Decrypt(encryptedEnvironment, "compose-env")
+	if err != nil || !bytes.Contains(environmentJSON, []byte(`"EXTRA":"value"`)) || !bytes.Contains(environmentJSON, []byte(`"POSTGRES_PASSWORD":"legacy-secret"`)) {
+		t.Fatalf("migrated environment cannot be decrypted: %s, err = %v", environmentJSON, err)
+	}
+	if bytes.Contains(storedConfig, []byte("legacy-secret")) {
+		t.Fatalf("database config contains a plaintext password: %s", storedConfig)
 	}
 }

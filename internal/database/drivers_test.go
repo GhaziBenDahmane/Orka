@@ -58,3 +58,31 @@ func TestNativeBackupPlanRejectsUnsafeInput(t *testing.T) {
 		t.Fatal("expected unsafe filename rejection")
 	}
 }
+
+func TestRegistryUsesImportedCredentialsAndImage(t *testing.T) {
+	result, err := NewRegistry().Render("postgres", Request{Name: "data", Version: "16", Config: map[string]any{"username": "legacy", "password": "migrated-secret", "database": "legacy_db", "image": "registry.example.test/postgres:16.4"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Credentials["username"] != "legacy" || result.Credentials["password"] != "migrated-secret" || result.Credentials["database"] != "legacy_db" {
+		t.Fatalf("credentials were not preserved: %#v", result.Credentials)
+	}
+	for _, expected := range []string{"registry.example.test/postgres:16.4", "POSTGRES_USER=${POSTGRES_USER}", "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"} {
+		if !strings.Contains(result.ComposeYAML, expected) {
+			t.Fatalf("compose does not contain %q:\n%s", expected, result.ComposeYAML)
+		}
+	}
+}
+
+func TestStoredConfigRemovesPasswords(t *testing.T) {
+	stored := StoredConfig(map[string]any{"username": "legacy", "password": "user-secret", "rootPassword": "root-secret", "image": "postgres:16"})
+	if _, ok := stored["password"]; ok {
+		t.Fatal("password was retained in stored config")
+	}
+	if _, ok := stored["rootPassword"]; ok {
+		t.Fatal("root password was retained in stored config")
+	}
+	if stored["username"] != "legacy" || stored["image"] != "postgres:16" {
+		t.Fatalf("non-secret config was not retained: %#v", stored)
+	}
+}

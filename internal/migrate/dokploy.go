@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
@@ -35,6 +36,8 @@ type DokployReport struct {
 	Projects     int      `json:"projects"`
 	Environments int      `json:"environments"`
 	Services     int      `json:"services"`
+	Applications int      `json:"applications"`
+	Databases    int      `json:"databases"`
 	Routes       int      `json:"routes"`
 	Skipped      int      `json:"skipped"`
 	Warnings     []string `json:"warnings"`
@@ -43,6 +46,11 @@ type DokployReport struct {
 type sourceProject struct{ id, name, description string }
 type sourceEnvironment struct{ id, projectID, name string }
 type sourceCompose struct{ id, environmentID, name, appName, compose, env string }
+type sourceDatabase struct {
+	id, environmentID, name, appName, engine                   string
+	databaseName, databaseUser, databasePassword, rootPassword string
+	dockerImage, env                                           string
+}
 type sourceRoute struct {
 	id, composeID, host, path, serviceName, resolver string
 	port                                             int
@@ -122,22 +130,31 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		filteredRoutes = append(filteredRoutes, route)
 	}
 	report.Routes = len(filteredRoutes)
-	var applications, databases int
+	var applications int
 	_ = source.QueryRow(ctx, `SELECT count(*) FROM application a JOIN environment e ON e."environmentId"=a."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1`, options.SourceOrganizationID).Scan(&applications)
-	for _, table := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
-		var count int
-		query := fmt.Sprintf(`SELECT count(*) FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1`, pgx.Identifier{table}.Sanitize())
-		if source.QueryRow(ctx, query, options.SourceOrganizationID).Scan(&count) == nil {
-			databases += count
+	databases, err := readDatabases(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	report.Applications = applications
+	report.Databases = len(databases)
+	registry := database.NewRegistry()
+	validDatabases := map[string]bool{}
+	for _, item := range databases {
+		_, renderErr := registry.Render(item.engine, database.Request{Name: migratedSlug(item.appName, mappedID(options, "database:"+item.engine, item.id)), Version: imageVersion(item.dockerImage, "latest"), Config: databaseConfig(item)})
+		if renderErr != nil {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s is incompatible: %v", item.engine, item.id, renderErr))
+			continue
+		}
+		validDatabases[item.engine+":"+item.id] = true
+		if strings.HasPrefix(item.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s has encrypted environment values; supply --encryption-key-file before import", item.engine, item.id))
 		}
 	}
 	if applications > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("%d Dokploy application records require the application conversion phase and were not imported", applications))
 		report.Skipped += applications
-	}
-	if databases > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("%d managed database records require secret-aware conversion and were not imported", databases))
-		report.Skipped += databases
 	}
 	sort.Strings(report.Warnings)
 	if options.DryRun {
@@ -190,6 +207,50 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			return report, fmt.Errorf("import compose %s: %w", item.id, err)
 		}
 	}
+	for _, item := range databases {
+		if !validDatabases[item.engine+":"+item.id] {
+			continue
+		}
+		databaseID := mappedID(options, "database:"+item.engine, item.id)
+		serviceID := mappedID(options, "database-service:"+item.engine, item.id)
+		slug := migratedSlug(item.appName, databaseID)
+		config := databaseConfig(item)
+		version := imageVersion(item.dockerImage, "latest")
+		rendered, renderErr := registry.Render(item.engine, database.Request{Name: slug, Version: version, Config: config})
+		if renderErr != nil {
+			return report, fmt.Errorf("render %s database %s: %w", item.engine, item.id, renderErr)
+		}
+		environment := map[string]string{}
+		if item.env != "" {
+			plain, decryptErr := decryptDokploy(item.env, options.EncryptionKeys)
+			if decryptErr != nil {
+				return report, fmt.Errorf("decrypt %s database %s environment: %w", item.engine, item.id, decryptErr)
+			}
+			environment = parseEnv(plain)
+		}
+		for key, value := range rendered.Environment {
+			environment[key] = value
+		}
+		environmentJSON, _ := json.Marshal(environment)
+		encryptedEnvironment, encryptErr := box.Encrypt(environmentJSON, "compose-env")
+		if encryptErr != nil {
+			return report, encryptErr
+		}
+		credentialsJSON, _ := json.Marshal(rendered.Credentials)
+		encryptedCredentials, encryptErr := box.Encrypt(credentialsJSON, "database-credentials")
+		if encryptErr != nil {
+			return report, encryptErr
+		}
+		configJSON, _ := json.Marshal(database.StoredConfig(config))
+		_, err = tx.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,compose_yaml=excluded.compose_yaml,encrypted_env=excluded.encrypted_env,revision=compose_services.revision+1,updated_at=now()`, serviceID, mappedID(options, "environment", item.environmentID), item.name, "db-"+slug, slug, rendered.ComposeYAML, encryptedEnvironment)
+		if err != nil {
+			return report, fmt.Errorf("import %s service %s: %w", item.engine, item.id, err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, serviceID, encryptedCredentials, configJSON)
+		if err != nil {
+			return report, fmt.Errorf("import %s database %s: %w", item.engine, item.id, err)
+		}
+	}
 	for _, item := range filteredRoutes {
 		id := mappedID(options, "route", item.id)
 		path := item.path
@@ -206,6 +267,58 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 	}
 	return report, tx.Commit(ctx)
+}
+
+func databaseConfig(item sourceDatabase) map[string]any {
+	return map[string]any{"username": item.databaseUser, "password": item.databasePassword, "database": item.databaseName, "rootPassword": item.rootPassword, "image": item.dockerImage, "source": "dokploy", "sourceId": item.id}
+}
+
+func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceDatabase, error) {
+	items := []sourceDatabase{}
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
+		idColumn := pgx.Identifier{engine + "Id"}.Sanitize()
+		table := pgx.Identifier{engine}.Sanitize()
+		var query string
+		switch engine {
+		case "postgres":
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",d."databaseName",d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,'') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+		case "mysql", "mariadb":
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",d."databaseName",d."databaseUser",d."databasePassword",d."rootPassword",d."dockerImage",COALESCE(d.env,'') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+		case "mongo":
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'admin',d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,'') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+		case "redis":
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'0','',d.password,'',d."dockerImage",COALESCE(d.env,'') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+		case "libsql":
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'app',d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,'') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+		}
+		rows, err := db.Query(ctx, query, org)
+		if err != nil {
+			return nil, fmt.Errorf("read Dokploy %s databases: %w", engine, err)
+		}
+		for rows.Next() {
+			item := sourceDatabase{engine: engine}
+			if err = rows.Scan(&item.id, &item.environmentID, &item.name, &item.appName, &item.databaseName, &item.databaseUser, &item.databasePassword, &item.rootPassword, &item.dockerImage, &item.env); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			items = append(items, item)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return items, nil
+}
+
+func imageVersion(image, fallback string) string {
+	withoutDigest := strings.SplitN(image, "@", 2)[0]
+	colon := strings.LastIndex(withoutDigest, ":")
+	if colon > strings.LastIndex(withoutDigest, "/") && colon+1 < len(withoutDigest) {
+		return withoutDigest[colon+1:]
+	}
+	return fallback
 }
 
 func readProjects(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceProject, error) {
