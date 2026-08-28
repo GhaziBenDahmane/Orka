@@ -172,7 +172,9 @@ Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
 policies. The console provides credential, backup-destination, OIDC, SAML,
 hierarchical policy, mandatory-SSO, audit retention/archive, and notification
-administration.
+administration. Remote clusters can be registered, enrolled, drained,
+reactivated, removed, and upgraded to a digest-pinned agent image from the
+console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
