@@ -42,6 +42,7 @@ type DokployReport struct {
 	Routes             int                     `json:"routes"`
 	BackupDestinations int                     `json:"backupDestinations"`
 	BackupPolicies     int                     `json:"backupPolicies"`
+	SourceCredentials  int                     `json:"sourceCredentials"`
 	Skipped            int                     `json:"skipped"`
 	Warnings           []string                `json:"warnings"`
 	Resources          []DokployResourceReport `json:"resources"`
@@ -214,6 +215,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		return report, err
 	}
 	report.BackupDestinations, report.BackupPolicies = len(backupDestinations), len(backupPolicies)
+	sourceCredentials, err := readSourceCredentials(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	report.SourceCredentials = len(sourceCredentials)
 	registry := database.NewRegistry()
 	validDatabases := map[string]bool{}
 	for _, item := range databases {
@@ -286,6 +292,40 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		preparedPolicies = append(preparedPolicies, preparedBackupPolicy{source: item, id: policyID, databaseID: databaseID, destinationID: preparedDestination.id, intervalSeconds: interval})
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_policy", SourceID: item.id, TargetID: &policyID, Status: "imported", Metadata: metadata})
 	}
+	preparedCredentials := map[string]preparedSourceCredential{}
+	for _, item := range sourceCredentials {
+		prepared, prepareErr := prepareSourceCredential(box, options, item)
+		metadata := map[string]any{"name": item.name, "provider": item.sourceKind, "server": item.server, "kind": item.kind}
+		if prepareErr != nil {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("%s credential %s was skipped: %v", item.sourceKind, item.sourceID, prepareErr))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "source_credential", SourceID: item.sourceKind + ":" + item.sourceID, Status: "skipped", Reason: prepareErr.Error(), Metadata: metadata})
+			continue
+		}
+		preparedCredentials[credentialKey(item.sourceKind, item.sourceID)] = prepared
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "source_credential", SourceID: item.sourceKind + ":" + item.sourceID, TargetID: &prepared.id, Status: "imported", Metadata: metadata})
+	}
+	for _, item := range applications {
+		if !validApplications[item.ID] {
+			continue
+		}
+		providerID := applicationProviderID(item)
+		if providerID != "" {
+			if _, ok := preparedCredentials[credentialKey(item.SourceType, providerID)]; !ok {
+				report.Warnings = append(report.Warnings, fmt.Sprintf("application %s has no convertible %s credential", item.ID, item.SourceType))
+			}
+		}
+		registryID := item.BuildRegistryID
+		if registryID == "" {
+			registryID = item.RegistryID
+		}
+		if registryID != "" {
+			credential, ok := preparedCredentials[credentialKey("registry", registryID)]
+			if !ok || credential.server != migrationImageRegistry(options.RegistryPrefix) {
+				report.Warnings = append(report.Warnings, fmt.Sprintf("application %s build registry credential could not be attached to %s", item.ID, options.RegistryPrefix))
+			}
+		}
+	}
 	sort.Strings(report.Warnings)
 	if options.DryRun {
 		return report, nil
@@ -308,6 +348,14 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		_, err = tx.Exec(ctx, `INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET name=excluded.name`, id, projectID, item.name, migratedSlug(item.name, id))
 		if err != nil {
 			return report, fmt.Errorf("import environment %s: %w", item.id, err)
+		}
+	}
+	for _, item := range preparedCredentials {
+		name := strings.TrimSpace(item.source.name) + " (Dokploy " + strings.Split(item.id.String(), "-")[0] + ")"
+		_, err = tx.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,$3,$4,$5,$6,$7)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,server=excluded.server,username=excluded.username,encrypted_secret=excluded.encrypted_secret,updated_at=now()`, item.id, options.TargetOrganizationID, item.source.kind, name, item.server, item.source.username, item.secret)
+		if err != nil {
+			return report, fmt.Errorf("import %s credential %s: %w", item.source.sourceKind, item.source.sourceID, err)
 		}
 	}
 	for _, item := range services {
@@ -362,7 +410,22 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			return report, fmt.Errorf("import application %s: %w", item.ID, err)
 		}
 		if prepared.source != nil {
-			_, err = tx.Exec(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,updated_at=now()`, prepared.source.ComposeServiceID, prepared.source.RepositoryURL, prepared.source.GitRef, prepared.source.ContextDirectory, prepared.source.Dockerfile, prepared.source.TargetService, prepared.source.RegistryImage)
+			var gitCredentialID, registryCredentialID *uuid.UUID
+			if providerID := applicationProviderID(item); providerID != "" {
+				if credential, ok := preparedCredentials[credentialKey(item.SourceType, providerID)]; ok && credential.server == repositoryHost(prepared.source.RepositoryURL) {
+					id := credential.id
+					gitCredentialID = &id
+				}
+			}
+			registryID := item.BuildRegistryID
+			if registryID == "" {
+				registryID = item.RegistryID
+			}
+			if credential, ok := preparedCredentials[credentialKey("registry", registryID)]; ok && credential.server == migrationImageRegistry(prepared.source.RegistryImage) {
+				id := credential.id
+				registryCredentialID = &id
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,updated_at=now()`, prepared.source.ComposeServiceID, prepared.source.RepositoryURL, prepared.source.GitRef, prepared.source.ContextDirectory, prepared.source.Dockerfile, prepared.source.TargetService, prepared.source.RegistryImage, gitCredentialID, registryCredentialID)
 			if err != nil {
 				return report, fmt.Errorf("import application source %s: %w", item.ID, err)
 			}

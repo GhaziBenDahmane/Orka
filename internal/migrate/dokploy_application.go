@@ -64,6 +64,12 @@ type sourceApplication struct {
 	CPUReservation    string   `json:"cpuReservation"`
 	CPULimit          string   `json:"cpuLimit"`
 	ProviderURL       string   `json:"-"`
+	GitHubID          string   `json:"githubId"`
+	GitLabID          string   `json:"gitlabId"`
+	GiteaID           string   `json:"giteaId"`
+	BitbucketID       string   `json:"bitbucketId"`
+	RegistryID        string   `json:"registryId"`
+	BuildRegistryID   string   `json:"buildRegistryId"`
 }
 
 type sourceApplicationRoute struct {

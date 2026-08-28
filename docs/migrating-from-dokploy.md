@@ -61,6 +61,9 @@ Imported automatically:
   definitions, including their image, credentials, and custom environment;
 - S3-compatible backup destinations, with credentials decrypted only in memory
   and re-encrypted under the Dockyard master key;
+- registry credentials plus GitLab, Gitea, and Bitbucket token credentials;
+  compatible credentials are attached to imported Git applications when the
+  repository or build-registry host matches;
 - the first enabled or disabled database backup policy for each imported,
   backup-capable database when its cron expression has a constant interval;
   per-policy object prefixes are preserved with deterministic destination
@@ -75,9 +78,9 @@ Reported for manual conversion:
 - application mounts, published host ports, custom Swarm health/restart/update/
   placement settings, redirects, and security rules;
 - Compose definitions stored only in a remote Git repository;
-- Git provider and registry credentials, SSH keys, certificates, unsupported or
-  calendar-based backup schedules, additional policies for the same database,
-  Compose backup policies, and notifications.
+- GitHub App credentials, SSH keys, certificates, unsupported or calendar-based
+  backup schedules, additional policies for the same database, Compose backup
+  policies, and notifications.
 
 Imported backup schedules support fixed 15-minute-or-longer minute steps,
 hourly schedules, evenly divisible hour steps, daily schedules, and weekly
@@ -86,11 +89,11 @@ conversion because Dockyard's current policy model is interval-based. Dokploy
 destination `additionalFlags` are reported but are not executed; audit any such
 destination before cutover.
 
-Imported Git applications initially have no Git or registry credential attached.
-Recreate those credentials in Dockyard and attach them to the imported source
-before the first deployment. Docker-image applications that pull from a private
-registry likewise require operator validation; the current Swarm deployment
-path does not propagate per-application registry credentials.
+GitHub App private keys are intentionally not converted to static credentials:
+recreate that integration or attach a scoped token before the first deployment.
+Credentials are never attached across hostnames. Docker-image applications that
+pull from a private registry still require operator validation; the current
+Swarm deployment path does not propagate per-application registry credentials.
 
 Managed-database import creates the destination Compose service and database
 record, but it does not copy persistent volume contents. Back up every source
