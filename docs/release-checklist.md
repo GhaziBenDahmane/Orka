@@ -40,6 +40,9 @@ links for every item below.
 - Sign the image and catalog artifacts, publish their digests and SBOM, deploy
   by digest, then observe health, queue age, error rate, agents, backups, and
   alerts through the agreed soak window.
+- Run `scripts/ci/check-image-digests.sh controller` (or `agent`) against the
+  exact environment used for `docker stack deploy`; production manifests do
+  not provide mutable-tag fallbacks.
 - Roll forward for application defects. If schema rollback is required, stop
   all controllers/workers and restore the pre-upgrade database plus matching
   master key and artifacts before starting the previous image.

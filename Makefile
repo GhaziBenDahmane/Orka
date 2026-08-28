@@ -1,4 +1,4 @@
-.PHONY: test lint build run web generate-openapi check-openapi
+.PHONY: test lint build run web generate-openapi check-openapi check-release-images
 
 test:
 	go test ./...
@@ -22,3 +22,6 @@ generate-openapi:
 
 check-openapi: generate-openapi
 	git diff --exit-code -- api/openapi.yaml
+
+check-release-images:
+	./scripts/ci/check-image-digests.sh controller

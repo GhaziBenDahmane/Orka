@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17-alpine
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to an immutable digest}
     environment:
       POSTGRES_USER: dockyard
       POSTGRES_PASSWORD_FILE: /run/secrets/dockyard_db_password
@@ -15,7 +15,7 @@ services:
         condition: on-failure
 
   dockyard:
-    image: ${DOCKYARD_IMAGE:-ghcr.io/bendahma/dockyard:latest}
+    image: ${DOCKYARD_IMAGE:?set DOCKYARD_IMAGE to an immutable digest}
     environment:
       DOCKYARD_DATABASE_URL_FILE: /run/secrets/dockyard_database_url
       DOCKYARD_MASTER_KEY_FILE: /run/secrets/dockyard_master_key
@@ -44,7 +44,7 @@ services:
         traefik.docker.network: dockyard-public
 
   traefik:
-    image: traefik:v3.5
+    image: ${TRAEFIK_IMAGE:?set TRAEFIK_IMAGE to an immutable digest}
     command:
       - --providers.swarm=true
       - --providers.swarm.exposedbydefault=false

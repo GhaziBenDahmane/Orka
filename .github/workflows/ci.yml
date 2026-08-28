@@ -60,7 +60,15 @@ jobs:
       - run: go build ./cmd/dockyard
       - run: go build ./cmd/terraform-provider-dockyard
       - run: docker compose config --quiet
-      - run: DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com DOCKYARD_IMAGE=example/dockyard:test docker stack config -c deploy/swarm.yml >/dev/null
+      - name: Validate immutable production images
+        env:
+          DOCKYARD_IMAGE: example/dockyard@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          POSTGRES_IMAGE: postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          TRAEFIK_IMAGE: traefik@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        run: |
+          scripts/ci/check-image-digests.sh controller
+          scripts/ci/check-image-digests.sh agent
+          DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml >/dev/null
 
   smoke:
     runs-on: ubuntu-latest

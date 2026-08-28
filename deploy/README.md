@@ -9,7 +9,14 @@ printf '%s' 'replace-with-a-long-password' | docker secret create dockyard_db_pa
 printf '%s' 'postgres://dockyard:replace-with-a-long-password@postgres:5432/dockyard?sslmode=disable' | docker secret create dockyard_database_url -
 openssl rand -base64 32 | docker secret create dockyard_master_key -
 DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
-  DOCKYARD_IMAGE=ghcr.io/example/dockyard:latest \
+  DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
+  POSTGRES_IMAGE=postgres@sha256:... \
+  TRAEFIK_IMAGE=traefik@sha256:... \
+  scripts/ci/check-image-digests.sh controller
+DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
+  DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
+  POSTGRES_IMAGE=postgres@sha256:... \
+  TRAEFIK_IMAGE=traefik@sha256:... \
   docker stack deploy -c deploy/swarm.yml dockyard
 ```
 
@@ -34,9 +41,17 @@ one outbound agent on a manager of that Swarm:
 printf '%s' "$ENROLLMENT_TOKEN" | docker secret create dockyard_agent_enrollment_token -
 DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com \
   DOCKYARD_AGENT_URL=https://agents.dockyard.example.com:8444 \
-  DOCKYARD_IMAGE=ghcr.io/example/dockyard:latest \
+  DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
+  scripts/ci/check-image-digests.sh agent
+DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com \
+  DOCKYARD_AGENT_URL=https://agents.dockyard.example.com:8444 \
+  DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
   docker stack deploy -c deploy/agent-swarm.yml dockyard-agent
 ```
+
+Resolve and record real 64-character digests before running these commands;
+the abbreviated values above are placeholders. The production manifests have
+no mutable-tag defaults, and the validation script rejects tags.
 
 The token is used once. The agent generates its private key locally, stores its
 identity in the `agent-state` volume, verifies the controller using the

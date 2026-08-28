@@ -1,6 +1,6 @@
 services:
   agent:
-    image: ${DOCKYARD_IMAGE:-ghcr.io/bendahma/dockyard:latest}
+    image: ${DOCKYARD_IMAGE:?set DOCKYARD_IMAGE to an immutable digest}
     command: ["agent"]
     environment:
       DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL}
