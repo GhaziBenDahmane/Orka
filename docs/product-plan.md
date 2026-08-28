@@ -172,7 +172,9 @@ additional provider resources and administrative console screens remain.
 - CLI and Terraform/OpenTofu provider for automation.
 - The idempotent Dokploy importer emits and persists a secret-safe parity
   manifest for advanced application settings and unsupported build features;
-  provider credential and backup-policy import remain operator-assisted.
+  compatible S3 destinations and fixed-interval database backup policies are
+  imported with secret re-encryption; Git/registry credentials and backup
+  policies that cannot be represented losslessly remain operator-assisted.
 - Ed25519-signed deterministic catalog manifests are implemented and verified
   before import by default. A versioned, bounded process protocol and Go SDK
   support externally packaged database drivers with compatibility tests.

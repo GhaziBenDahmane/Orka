@@ -33,16 +33,18 @@ type DokployOptions struct {
 }
 
 type DokployReport struct {
-	DryRun       bool                    `json:"dryRun"`
-	Projects     int                     `json:"projects"`
-	Environments int                     `json:"environments"`
-	Services     int                     `json:"services"`
-	Applications int                     `json:"applications"`
-	Databases    int                     `json:"databases"`
-	Routes       int                     `json:"routes"`
-	Skipped      int                     `json:"skipped"`
-	Warnings     []string                `json:"warnings"`
-	Resources    []DokployResourceReport `json:"resources"`
+	DryRun             bool                    `json:"dryRun"`
+	Projects           int                     `json:"projects"`
+	Environments       int                     `json:"environments"`
+	Services           int                     `json:"services"`
+	Applications       int                     `json:"applications"`
+	Databases          int                     `json:"databases"`
+	Routes             int                     `json:"routes"`
+	BackupDestinations int                     `json:"backupDestinations"`
+	BackupPolicies     int                     `json:"backupPolicies"`
+	Skipped            int                     `json:"skipped"`
+	Warnings           []string                `json:"warnings"`
+	Resources          []DokployResourceReport `json:"resources"`
 }
 
 type DokployResourceReport struct {
@@ -66,6 +68,19 @@ type sourceRoute struct {
 	id, composeID, host, path, serviceName, resolver string
 	port                                             int
 	tls, enabled                                     bool
+}
+
+type preparedBackupDestination struct {
+	sourceID, key, name, endpoint, region, bucket, prefix string
+	id, reportID                                          uuid.UUID
+	useTLS                                                bool
+	encryptedCredentials                                  string
+}
+
+type preparedBackupPolicy struct {
+	source                        sourceBackupPolicy
+	id, databaseID, destinationID uuid.UUID
+	intervalSeconds               int
 }
 
 func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.Box, compiler deploy.Compiler, options DokployOptions) (DokployReport, error) {
@@ -190,6 +205,15 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	}
 	report.Applications = len(applications)
 	report.Databases = len(databases)
+	backupDestinations, err := readBackupDestinations(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	backupPolicies, err := readBackupPolicies(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	report.BackupDestinations, report.BackupPolicies = len(backupDestinations), len(backupPolicies)
 	registry := database.NewRegistry()
 	validDatabases := map[string]bool{}
 	for _, item := range databases {
@@ -203,6 +227,64 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if strings.HasPrefix(item.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s has encrypted environment values; supply --encryption-key-file before import", item.engine, item.id))
 		}
+	}
+	preparedDestinations := map[string]preparedBackupDestination{}
+	destinationSources := map[string]sourceBackupDestination{}
+	for _, item := range backupDestinations {
+		destinationSources[item.id] = item
+		if len(item.additionalFlags) > 0 {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("backup destination %s has additional flags that require manual review", item.id))
+		}
+		prepared, prepareErr := prepareDokployBackupDestination(box, options, item, "")
+		if prepareErr != nil {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("backup destination %s is incompatible: %v", item.id, prepareErr))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_destination", SourceID: item.id, Status: "skipped", Reason: prepareErr.Error(), Metadata: backupDestinationMetadata(item, "")})
+			continue
+		}
+		preparedDestinations[prepared.key] = prepared
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_destination", SourceID: item.id, TargetID: &prepared.reportID, Status: "imported", Metadata: backupDestinationMetadata(item, "")})
+	}
+	preparedPolicies := []preparedBackupPolicy{}
+	seenDatabasePolicy := map[uuid.UUID]bool{}
+	for _, item := range backupPolicies {
+		policyID := mappedID(options, "backup-policy", item.id)
+		metadata := map[string]any{"schedule": item.schedule, "databaseType": item.databaseType, "backupType": item.backupType, "prefix": item.prefix, "enabled": item.enabled, "retentionCount": item.retentionCount}
+		reason := ""
+		interval, supportedSchedule := cronInterval(item.schedule)
+		databaseID := mappedID(options, "database:"+item.databaseType, item.databaseID)
+		if item.backupType != "database" {
+			reason = "Compose backup policies are not supported"
+		} else if !validDatabases[item.databaseType+":"+item.databaseID] || item.databaseID == "" || !migrationBackupCapableEngine(item.databaseType) {
+			reason = "the referenced database was not imported or is not backup-capable"
+		} else if !supportedSchedule || interval < 900 || interval > 2_678_400 {
+			reason = "cron schedule cannot be represented as a fixed 15-minute to 31-day interval"
+		} else if item.retentionCount < 1 || item.retentionCount > 100 {
+			reason = "retention count is outside Dockyard's 1..100 range"
+		} else if seenDatabasePolicy[databaseID] {
+			reason = "Dockyard supports one backup policy per database"
+		}
+		destinationSource, destinationFound := destinationSources[item.destinationID]
+		if reason == "" && !destinationFound {
+			reason = "the referenced backup destination was not found"
+		}
+		var preparedDestination preparedBackupDestination
+		if reason == "" {
+			preparedDestination, err = prepareDokployBackupDestination(box, options, destinationSource, item.prefix)
+			if err != nil {
+				reason = err.Error()
+			}
+		}
+		if reason != "" {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("backup policy %s was skipped: %s", item.id, reason))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_policy", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: metadata})
+			continue
+		}
+		seenDatabasePolicy[databaseID] = true
+		preparedDestinations[preparedDestination.key] = preparedDestination
+		preparedPolicies = append(preparedPolicies, preparedBackupPolicy{source: item, id: policyID, databaseID: databaseID, destinationID: preparedDestination.id, intervalSeconds: interval})
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_policy", SourceID: item.id, TargetID: &policyID, Status: "imported", Metadata: metadata})
 	}
 	sort.Strings(report.Warnings)
 	if options.DryRun {
@@ -332,6 +414,20 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			return report, fmt.Errorf("import %s database %s: %w", item.engine, item.id, err)
 		}
 	}
+	for _, item := range preparedDestinations {
+		_, err = tx.Exec(ctx, `INSERT INTO backup_destinations(id,organization_id,name,endpoint,region,bucket,prefix,use_tls,encrypted_credentials) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,endpoint=excluded.endpoint,region=excluded.region,bucket=excluded.bucket,prefix=excluded.prefix,use_tls=excluded.use_tls,encrypted_credentials=excluded.encrypted_credentials,updated_at=now()`, item.id, options.TargetOrganizationID, item.name, item.endpoint, item.region, item.bucket, item.prefix, item.useTLS, item.encryptedCredentials)
+		if err != nil {
+			return report, fmt.Errorf("import backup destination %s: %w", item.sourceID, err)
+		}
+	}
+	for _, item := range preparedPolicies {
+		_, err = tx.Exec(ctx, `INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore) VALUES($1,$2,$3,$4,$5,now()+($3::int * interval '1 second'),$6,false)
+			ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN excluded.next_run_at ELSE backup_policies.next_run_at END,updated_at=now()`, item.id, item.databaseID, item.intervalSeconds, item.source.retentionCount, item.source.enabled, item.destinationID)
+		if err != nil {
+			return report, fmt.Errorf("import backup policy %s: %w", item.source.id, err)
+		}
+	}
 	for _, item := range filteredRoutes {
 		id := mappedID(options, "route", item.id)
 		path := item.path
@@ -373,6 +469,15 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 	}
 	return report, tx.Commit(ctx)
+}
+
+func migrationBackupCapableEngine(engine string) bool {
+	switch engine {
+	case "postgres", "mysql", "mariadb", "mongo":
+		return true
+	default:
+		return false
+	}
 }
 
 func databaseConfig(item sourceDatabase) map[string]any {

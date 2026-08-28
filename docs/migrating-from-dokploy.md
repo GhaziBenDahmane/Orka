@@ -59,6 +59,12 @@ Imported automatically:
   enabled application domains;
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and libSQL managed-database
   definitions, including their image, credentials, and custom environment;
+- S3-compatible backup destinations, with credentials decrypted only in memory
+  and re-encrypted under the Dockyard master key;
+- the first enabled or disabled database backup policy for each imported,
+  backup-capable database when its cron expression has a constant interval;
+  per-policy object prefixes are preserved with deterministic destination
+  variants;
 - enabled Compose domains with service name and valid target port.
 
 Reported for manual conversion:
@@ -69,7 +75,16 @@ Reported for manual conversion:
 - application mounts, published host ports, custom Swarm health/restart/update/
   placement settings, redirects, and security rules;
 - Compose definitions stored only in a remote Git repository;
-- provider credentials, SSH keys, certificates, schedules, and notifications.
+- Git provider and registry credentials, SSH keys, certificates, unsupported or
+  calendar-based backup schedules, additional policies for the same database,
+  Compose backup policies, and notifications.
+
+Imported backup schedules support fixed 15-minute-or-longer minute steps,
+hourly schedules, evenly divisible hour steps, daily schedules, and weekly
+schedules. Monthly and other calendar schedules are reported for manual
+conversion because Dockyard's current policy model is interval-based. Dokploy
+destination `additionalFlags` are reported but are not executed; audit any such
+destination before cutover.
 
 Imported Git applications initially have no Git or registry credential attached.
 Recreate those credentials in Dockyard and attach them to the imported source
