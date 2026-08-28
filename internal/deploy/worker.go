@@ -241,7 +241,10 @@ func (w *Worker) claim(ctx context.Context) (job, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j job
-	err = tx.QueryRow(ctx, `SELECT j.id,j.kind,j.payload,j.attempts,j.max_attempts FROM jobs j WHERE j.status='pending' AND j.run_after<=now() AND (j.kind<>'deploy.compose' OR NOT EXISTS (SELECT 1 FROM jobs older JOIN deployments old_deployment ON old_deployment.id=(older.payload->>'deploymentId')::uuid JOIN deployments this_deployment ON this_deployment.id=(j.payload->>'deploymentId')::uuid WHERE older.kind='deploy.compose' AND older.status IN ('pending','running') AND old_deployment.compose_service_id=this_deployment.compose_service_id AND older.created_at<j.created_at)) ORDER BY j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.Kind, &j.Payload, &j.Attempts, &j.MaxAttempts)
+	err = tx.QueryRow(ctx, `SELECT j.id,j.kind,j.payload,j.attempts,j.max_attempts FROM jobs j WHERE j.status='pending' AND j.run_after<=now()
+		AND (j.kind<>'deploy.compose' OR NOT EXISTS (SELECT 1 FROM jobs older JOIN deployments old_deployment ON old_deployment.id=(older.payload->>'deploymentId')::uuid JOIN deployments this_deployment ON this_deployment.id=(j.payload->>'deploymentId')::uuid WHERE older.kind='deploy.compose' AND older.status IN ('pending','running') AND old_deployment.compose_service_id=this_deployment.compose_service_id AND older.created_at<j.created_at))
+		AND (j.kind<>'commit.status' OR NOT EXISTS (SELECT 1 FROM commit_status_deliveries current_delivery JOIN commit_status_deliveries earlier_delivery ON earlier_delivery.deployment_id=current_delivery.deployment_id JOIN jobs earlier_job ON earlier_job.kind='commit.status' AND earlier_job.payload->>'deliveryId'=earlier_delivery.id::text WHERE current_delivery.id=(j.payload->>'deliveryId')::uuid AND earlier_delivery.created_at<current_delivery.created_at AND earlier_job.status IN ('pending','running')))
+		ORDER BY j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.Kind, &j.Payload, &j.Attempts, &j.MaxAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return job{}, store.ErrNotFound
 	}
@@ -267,6 +270,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if j.Kind == "notify.webhook" {
 		return w.deliverNotification(ctx, j)
+	}
+	if j.Kind == "commit.status" {
+		return w.deliverCommitStatus(ctx, j)
 	}
 	if j.Kind != "deploy.compose" {
 		return fmt.Errorf("unsupported job kind %q", j.Kind)
@@ -961,8 +967,9 @@ func (w *Worker) markDeployment(ctx context.Context, id uuid.UUID, status, outpu
 	if deployErr != nil {
 		message = deployErr.Error()
 	}
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE deployments SET status=$2,output=$3,error=$4,finished_at=now() WHERE id=$1`, id, status, truncate(output, 65536), truncate(message, 8192))
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_instances db SET status=$2,updated_at=now() FROM deployments d WHERE d.id=$1 AND db.compose_service_id=d.compose_service_id`, id, map[string]string{"succeeded": "running", "failed": "error"}[status])
+	if err := w.Store.FinishDeployment(ctx, id, status, output, message); err != nil {
+		w.Logger.Error("finish deployment", "deployment", id, "error", err)
+	}
 }
 
 func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
@@ -1064,7 +1071,9 @@ func (w *Worker) markJobResourceCancelled(ctx context.Context, j job) {
 	}
 	switch j.Kind {
 	case "deploy.compose":
-		_, _ = w.Store.Pool.Exec(ctx, `UPDATE deployments SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, payload["deploymentId"])
+		if id, err := uuid.Parse(payload["deploymentId"]); err == nil {
+			_ = w.Store.FinishDeployment(ctx, id, "cancelled", "", "cancelled by user")
+		}
 	case "backup.database":
 		_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, payload["backupId"])
 	case "restore.database":

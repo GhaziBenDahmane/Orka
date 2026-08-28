@@ -112,6 +112,7 @@ type Deployment struct {
 	Revision         int64      `json:"revision"`
 	Status           string     `json:"status"`
 	Trigger          string     `json:"trigger"`
+	CommitSHA        string     `json:"commitSha,omitempty"`
 	Error            string     `json:"error,omitempty"`
 	Output           string     `json:"output,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
@@ -238,6 +239,9 @@ type ApplicationSource struct {
 	RegistryImage        string     `json:"registryImage"`
 	GitCredentialID      *uuid.UUID `json:"gitCredentialId,omitempty"`
 	RegistryCredentialID *uuid.UUID `json:"registryCredentialId,omitempty"`
+	StatusProvider       string     `json:"statusProvider,omitempty"`
+	StatusCredentialID   *uuid.UUID `json:"statusCredentialId,omitempty"`
+	StatusContext        string     `json:"statusContext,omitempty"`
 	UpdatedAt            time.Time  `json:"updatedAt"`
 }
 type SourceCredential struct {
@@ -731,13 +735,14 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ApplicationSource{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id)
-		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
+	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id,status_provider,status_credential_id,status_context)
+		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
 		AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$9 AND c.organization_id=$2 AND c.kind IN ('git','git-ssh')))
 		AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=$2 AND c.kind='registry'))
-		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,updated_at=now()
-		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID).Scan(&source.UpdatedAt)
+		AND ($12::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$12 AND c.organization_id=$2 AND c.kind='git'))
+		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,status_provider=excluded.status_provider,status_credential_id=excluded.status_credential_id,status_context=excluded.status_context,updated_at=now()
+		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID, source.StatusProvider, source.StatusCredentialID, source.StatusContext).Scan(&source.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}
@@ -949,6 +954,9 @@ func (s *Store) CancelDeployment(ctx context.Context, organizationID, deployment
 		if _, err = tx.Exec(ctx, `UPDATE deployments SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, deploymentID); err != nil {
 			return err
 		}
+		if err = queueCommitStatusTx(ctx, tx, deploymentID, "error"); err != nil {
+			return err
+		}
 	case "running":
 		if _, err = tx.Exec(ctx, `UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()) WHERE id=$1`, jobID); err != nil {
 			return err
@@ -1021,7 +1029,7 @@ func (s *Store) DisableWebhookIntegration(ctx context.Context, organizationID, i
 	return nil
 }
 
-func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID string) (Deployment, error) {
+func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA string) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
@@ -1050,13 +1058,18 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 		}
 		return Deployment{}, err
 	}
-	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: provider + "-webhook"}
-	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger) VALUES($1,$2,$3,$4,$5,'queued',$6) RETURNING created_at`, d.ID, serviceID, revision, compose, environment, d.Trigger).Scan(&d.CreatedAt); err != nil {
+	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: provider + "-webhook", CommitSHA: commitSHA}
+	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,commit_sha) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, revision, compose, environment, d.Trigger, commitSHA).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'deploy.compose',$2)`, uuid.New(), payload); err != nil {
 		return Deployment{}, err
+	}
+	if commitSHA != "" {
+		if err = queueCommitStatusTx(ctx, tx, d.ID, "pending"); err != nil {
+			return Deployment{}, err
+		}
 	}
 	return d, tx.Commit(ctx)
 }
@@ -1243,7 +1256,7 @@ func (s *Store) ListDeployments(ctx context.Context, organizationID, serviceID u
 	if limit < 1 || limit > 100 {
 		limit = 50
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.compose_service_id,d.revision,d.status,d.trigger,d.error,d.output,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.compose_service_id=$1 AND p.organization_id=$2 ORDER BY d.created_at DESC LIMIT $3`, serviceID, organizationID, limit)
+	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.compose_service_id,d.revision,d.status,d.trigger,d.commit_sha,d.error,d.output,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.compose_service_id=$1 AND p.organization_id=$2 ORDER BY d.created_at DESC LIMIT $3`, serviceID, organizationID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1251,7 +1264,7 @@ func (s *Store) ListDeployments(ctx context.Context, organizationID, serviceID u
 	items := []Deployment{}
 	for rows.Next() {
 		var item Deployment
-		if err := rows.Scan(&item.ID, &item.ComposeServiceID, &item.Revision, &item.Status, &item.Trigger, &item.Error, &item.Output, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ComposeServiceID, &item.Revision, &item.Status, &item.Trigger, &item.CommitSHA, &item.Error, &item.Output, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

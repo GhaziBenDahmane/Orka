@@ -15,7 +15,7 @@ The initial implementation includes:
 - extensible managed-database drivers;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
 - public or authenticated HTTPS/SSH Git builds with pinned host keys, pushed to authenticated OCI registries;
-- signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks;
+- signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks with durable commit-status callbacks;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets and an audit trail.
 - request correlation, optional OTLP tracing, and Prometheus operational metrics.

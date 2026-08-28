@@ -1305,6 +1305,9 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		RegistryImage        string     `json:"registryImage"`
 		GitCredentialID      *uuid.UUID `json:"gitCredentialId"`
 		RegistryCredentialID *uuid.UUID `json:"registryCredentialId"`
+		StatusProvider       string     `json:"statusProvider"`
+		StatusCredentialID   *uuid.UUID `json:"statusCredentialId"`
+		StatusContext        string     `json:"statusContext"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -1318,12 +1321,20 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	if in.Dockerfile == "" {
 		in.Dockerfile = "Dockerfile"
 	}
+	in.StatusProvider = strings.ToLower(strings.TrimSpace(in.StatusProvider))
+	if in.StatusContext == "" {
+		in.StatusContext = "dockyard/deploy"
+	}
 	if in.RepositoryURL == "" || in.TargetService == "" || in.RegistryImage == "" {
 		writeError(w, 400, "invalid_source", "repositoryUrl, targetService and registryImage are required")
 		return
 	}
+	if (in.StatusProvider == "") != (in.StatusCredentialID == nil) || (in.StatusProvider != "" && !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.StatusProvider)) || len(in.StatusContext) > 100 || !webhookBranchPattern.MatchString(in.StatusContext) {
+		writeError(w, 400, "invalid_source_status", "status provider and Git token credential must be configured together with a valid context")
+		return
+	}
 	p := principal(r)
-	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID})
+	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1606,7 +1617,7 @@ func (s *Server) getDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	var d store.Deployment
-	err = s.Store.Pool.QueryRow(r.Context(), `SELECT d.id,d.compose_service_id,d.revision,d.status,d.trigger,d.error,d.output,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, p.OrganizationID).Scan(&d.ID, &d.ComposeServiceID, &d.Revision, &d.Status, &d.Trigger, &d.Error, &d.Output, &d.CreatedAt, &d.StartedAt, &d.FinishedAt)
+	err = s.Store.Pool.QueryRow(r.Context(), `SELECT d.id,d.compose_service_id,d.revision,d.status,d.trigger,d.commit_sha,d.error,d.output,d.created_at,d.started_at,d.finished_at FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, p.OrganizationID).Scan(&d.ID, &d.ComposeServiceID, &d.Revision, &d.Status, &d.Trigger, &d.CommitSHA, &d.Error, &d.Output, &d.CreatedAt, &d.StartedAt, &d.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = store.ErrNotFound
 	}

@@ -11,11 +11,11 @@ import (
 
 func TestVerifyProviderWebhook(t *testing.T) {
 	secret := "test-secret"
-	githubBody := []byte(`{"ref":"refs/heads/main","deleted":false}`)
+	githubBody := []byte(`{"ref":"refs/heads/main","after":"0123456789abcdef0123456789abcdef01234567","deleted":false}`)
 	githubHeader := http.Header{"X-Hub-Signature-256": {testWebhookSignature(secret, githubBody)}, "X-Github-Delivery": {"delivery-1"}, "X-Github-Event": {"push"}}
-	delivery, branches, err := verifyProviderWebhook("github", secret, githubHeader, githubBody)
-	if err != nil || delivery != "delivery-1" || len(branches) != 1 || branches[0] != "refs/heads/main" {
-		t.Fatalf("github result = %q/%q, err = %v", delivery, branches, err)
+	delivery, refs, err := verifyProviderWebhook("github", secret, githubHeader, githubBody)
+	if err != nil || delivery != "delivery-1" || len(refs) != 1 || refs[0].Branch != "refs/heads/main" || refs[0].CommitSHA == "" {
+		t.Fatalf("github result = %q/%v, err = %v", delivery, refs, err)
 	}
 	githubHeader.Set("X-Hub-Signature-256", testWebhookSignature(secret, []byte("tampered")))
 	if _, _, err = verifyProviderWebhook("github", secret, githubHeader, githubBody); err == nil {
@@ -23,14 +23,14 @@ func TestVerifyProviderWebhook(t *testing.T) {
 	}
 
 	gitlabHeader := http.Header{"X-Gitlab-Token": {secret}, "X-Gitlab-Event-Uuid": {"delivery-2"}, "X-Gitlab-Event": {"Push Hook"}}
-	if delivery, branches, err = verifyProviderWebhook("gitlab", secret, gitlabHeader, []byte(`{"ref":"refs/heads/release"}`)); err != nil || delivery != "delivery-2" || len(branches) != 1 || branches[0] != "refs/heads/release" {
-		t.Fatalf("gitlab result = %q/%q, err = %v", delivery, branches, err)
+	if delivery, refs, err = verifyProviderWebhook("gitlab", secret, gitlabHeader, []byte(`{"ref":"refs/heads/release","after":"abcdef0123456789abcdef0123456789abcdef01"}`)); err != nil || delivery != "delivery-2" || len(refs) != 1 || refs[0].Branch != "refs/heads/release" {
+		t.Fatalf("gitlab result = %q/%v, err = %v", delivery, refs, err)
 	}
 
-	bitbucketBody := []byte(`{"push":{"changes":[{"new":{"name":"main","type":"branch"}}]}}`)
+	bitbucketBody := []byte(`{"push":{"changes":[{"new":{"name":"main","type":"branch","target":{"hash":"abcdef0123456789abcdef0123456789abcdef01"}}}]}}`)
 	bitbucketHeader := http.Header{"X-Hub-Signature": {testWebhookSignature(secret, bitbucketBody)}, "X-Request-Uuid": {"delivery-3"}, "X-Event-Key": {"repo:push"}}
-	if delivery, branches, err = verifyProviderWebhook("bitbucket", secret, bitbucketHeader, bitbucketBody); err != nil || delivery != "delivery-3" || len(branches) != 1 || branches[0] != "main" {
-		t.Fatalf("bitbucket result = %q/%q, err = %v", delivery, branches, err)
+	if delivery, refs, err = verifyProviderWebhook("bitbucket", secret, bitbucketHeader, bitbucketBody); err != nil || delivery != "delivery-3" || len(refs) != 1 || refs[0].Branch != "main" {
+		t.Fatalf("bitbucket result = %q/%v, err = %v", delivery, refs, err)
 	}
 	bitbucketHeader.Set("X-Event-Key", "repo:fork")
 	if _, _, err = verifyProviderWebhook("bitbucket", secret, bitbucketHeader, bitbucketBody); !errors.Is(err, errWebhookIgnored) {

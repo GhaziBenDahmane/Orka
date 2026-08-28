@@ -19,6 +19,11 @@ import (
 var webhookBranchPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
 var errWebhookIgnored = errors.New("webhook event does not match the configured branch")
 
+type webhookRef struct {
+	Branch    string
+	CommitSHA string
+}
+
 func (s *Server) createWebhookIntegration(w http.ResponseWriter, r *http.Request) {
 	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
 	if err != nil {
@@ -112,7 +117,7 @@ func (s *Server) providerWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_payload", "webhook body is too large")
 		return
 	}
-	deliveryID, branches, err := verifyProviderWebhook(integration.Provider, string(secret), r.Header, body)
+	deliveryID, refs, err := verifyProviderWebhook(integration.Provider, string(secret), r.Header, body)
 	if errors.Is(err, errWebhookIgnored) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -121,18 +126,18 @@ func (s *Server) providerWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_webhook", "webhook signature or payload is invalid")
 		return
 	}
-	matchesBranch := false
-	for _, branch := range branches {
-		if strings.EqualFold(strings.TrimPrefix(branch, "refs/heads/"), integration.Branch) {
-			matchesBranch = true
+	commitSHA := ""
+	for _, ref := range refs {
+		if strings.EqualFold(strings.TrimPrefix(ref.Branch, "refs/heads/"), integration.Branch) {
+			commitSHA = ref.CommitSHA
 			break
 		}
 	}
-	if !matchesBranch {
+	if commitSHA == "" {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	deployment, err := s.Store.QueueWebhookDeployment(r.Context(), integration.ID, deliveryID)
+	deployment, err := s.Store.QueueWebhookDeployment(r.Context(), integration.ID, deliveryID, commitSHA)
 	if errors.Is(err, store.ErrDuplicateDelivery) {
 		writeError(w, 409, "duplicate_delivery", err.Error())
 		return
@@ -141,11 +146,11 @@ func (s *Server) providerWebhook(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.AuditOrganization(r.Context(), integration.OrganizationID, "deployment.webhook", "deployment", deployment.ID.String(), r.RemoteAddr, map[string]any{"provider": integration.Provider, "deliveryId": deliveryID})
+	s.Store.AuditOrganization(r.Context(), integration.OrganizationID, "deployment.webhook", "deployment", deployment.ID.String(), r.RemoteAddr, map[string]any{"provider": integration.Provider, "deliveryId": deliveryID, "commitSha": commitSHA})
 	writeJSON(w, http.StatusAccepted, deployment)
 }
 
-func verifyProviderWebhook(provider, secret string, header http.Header, body []byte) (string, []string, error) {
+func verifyProviderWebhook(provider, secret string, header http.Header, body []byte) (string, []webhookRef, error) {
 	var deliveryID, event string
 	switch provider {
 	case "github":
@@ -187,8 +192,11 @@ func verifyProviderWebhook(provider, secret string, header http.Header, body []b
 			Push struct {
 				Changes []struct {
 					New *struct {
-						Name string `json:"name"`
-						Type string `json:"type"`
+						Name   string `json:"name"`
+						Type   string `json:"type"`
+						Target struct {
+							Hash string `json:"hash"`
+						} `json:"target"`
 					} `json:"new"`
 				} `json:"changes"`
 			} `json:"push"`
@@ -196,28 +204,41 @@ func verifyProviderWebhook(provider, secret string, header http.Header, body []b
 		if json.Unmarshal(body, &payload) != nil {
 			return "", nil, errors.New("invalid payload")
 		}
-		branches := []string{}
+		refs := []webhookRef{}
 		for _, change := range payload.Push.Changes {
-			if change.New != nil && change.New.Type == "branch" && change.New.Name != "" {
-				branches = append(branches, change.New.Name)
+			if change.New != nil && change.New.Type == "branch" && change.New.Name != "" && validCommitSHA(change.New.Target.Hash) {
+				refs = append(refs, webhookRef{Branch: change.New.Name, CommitSHA: strings.ToLower(change.New.Target.Hash)})
 			}
 		}
-		if len(branches) == 0 {
+		if len(refs) == 0 {
 			return "", nil, errWebhookIgnored
 		}
-		return deliveryID, branches, nil
+		return deliveryID, refs, nil
 	}
 	var payload struct {
 		Ref     string `json:"ref"`
+		After   string `json:"after"`
 		Deleted bool   `json:"deleted"`
 	}
-	if json.Unmarshal(body, &payload) != nil || payload.Ref == "" {
+	if json.Unmarshal(body, &payload) != nil || payload.Ref == "" || !validCommitSHA(payload.After) {
 		return "", nil, errors.New("invalid payload")
 	}
 	if payload.Deleted {
 		return "", nil, errWebhookIgnored
 	}
-	return deliveryID, []string{payload.Ref}, nil
+	return deliveryID, []webhookRef{{Branch: payload.Ref, CommitSHA: strings.ToLower(payload.After)}}, nil
+}
+
+func validCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", char) {
+			return false
+		}
+	}
+	return strings.Trim(value, "0") != ""
 }
 
 func validHMACSignature(secret string, body []byte, signature string) bool {

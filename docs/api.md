@@ -132,7 +132,12 @@ Service accounts continue to use their organization-scoped role.
 Provider integrations support GitHub, GitLab, Gitea, and Bitbucket. Secrets are
 shown once, encrypted at rest, and used to authenticate the raw request body.
 Only pushes to the configured branch are deployed; delivery IDs are retained
-for 30 days to reject replays.
+for 30 days to reject replays. A service source can also set `statusProvider`,
+`statusCredentialId`, and `statusContext`. Matching webhook deployments then
+publish ordered pending and terminal commit statuses through durable retrying
+jobs. The status credential must be a Git-token credential pinned to the
+repository host; callback configuration is snapshotted when each delivery is
+queued so later source edits cannot redirect an in-flight secret.
 
 ## Catalog and databases
 

@@ -64,6 +64,13 @@ func TestSignedProviderWebhookQueuesOnce(t *testing.T) {
 	if err == nil {
 		_, err = tx.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'API','api',$3,'services: {}')`, serviceID, environmentID, "webhook-"+serviceID.String())
 	}
+	credentialID := uuid.New()
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,'git','status-token','github.com','bot','encrypted-test')`, credentialID, orgID)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,status_provider,status_credential_id,status_context) VALUES($1,'https://github.com/acme/api.git','api','registry.example/acme/api','github',$2,'dockyard/deploy')`, serviceID, credentialID)
+	}
 	if err == nil {
 		err = tx.Commit(ctx)
 	}
@@ -72,6 +79,7 @@ func TestSignedProviderWebhookQueuesOnce(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs j USING deployments d WHERE j.payload->>'deploymentId'=d.id::text AND d.compose_service_id=$1`, serviceID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs j USING commit_status_deliveries cs,deployments d WHERE j.payload->>'deliveryId'=cs.id::text AND cs.deployment_id=d.id AND d.compose_service_id=$1`, serviceID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
@@ -108,7 +116,8 @@ func TestSignedProviderWebhookQueuesOnce(t *testing.T) {
 		t.Fatalf("stored secret was not encrypted, err = %v", err)
 	}
 
-	payload := []byte(`{"ref":"refs/heads/main","deleted":false}`)
+	commitSHA := "0123456789abcdef0123456789abcdef01234567"
+	payload := []byte(`{"ref":"refs/heads/main","after":"` + commitSHA + `","deleted":false}`)
 	call := func(delivery, signature string) *http.Response {
 		hookRequest, requestErr := http.NewRequest(http.MethodPost, server.URL+"/v1/hooks/provider/"+created.Integration.ID.String(), bytes.NewReader(payload))
 		if requestErr != nil {
@@ -146,5 +155,16 @@ func TestSignedProviderWebhookQueuesOnce(t *testing.T) {
 	var deploymentCount int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM deployments WHERE compose_service_id=$1 AND trigger='github-webhook'`, serviceID).Scan(&deploymentCount); err != nil || deploymentCount != 1 {
 		t.Fatalf("deployment count = %d, err = %v", deploymentCount, err)
+	}
+	var storedSHA string
+	if err = db.Pool.QueryRow(ctx, `SELECT commit_sha FROM deployments WHERE compose_service_id=$1 AND trigger='github-webhook'`, serviceID).Scan(&storedSHA); err != nil || storedSHA != commitSHA {
+		t.Fatalf("commit SHA = %q, err = %v", storedSHA, err)
+	}
+	var statusDeliveries, statusJobs int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM commit_status_deliveries cs JOIN deployments d ON d.id=cs.deployment_id WHERE d.compose_service_id=$1 AND cs.state='pending'`, serviceID).Scan(&statusDeliveries); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='commit.status' AND payload->>'deliveryId' IN (SELECT cs.id::text FROM commit_status_deliveries cs JOIN deployments d ON d.id=cs.deployment_id WHERE d.compose_service_id=$1)`, serviceID).Scan(&statusJobs); err != nil || statusDeliveries != 1 || statusJobs != 1 {
+		t.Fatalf("status deliveries=%d jobs=%d err=%v", statusDeliveries, statusJobs, err)
 	}
 }
