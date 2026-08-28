@@ -47,3 +47,9 @@ worker. The in-process adapter invokes Docker directly for a single manager;
 the multi-cluster adapter can therefore route the same validated Compose
 snapshot through outbound agents without changing application or database
 models.
+
+Remote agent identities use short-lived X.509 client certificates issued from
+a dedicated Dockyard CA. Enrollment accepts a proof-of-possession CSR, ignores
+caller-supplied certificate identities, and binds the certificate to
+`spiffe://dockyard/cluster/{uuid}`. Agent certificates are client-auth only and
+capped by the CA lifetime; rotation reuses the same verified cluster identity.
