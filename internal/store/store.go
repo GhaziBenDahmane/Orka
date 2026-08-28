@@ -137,6 +137,21 @@ type OIDCProvider struct {
 	Enabled               bool      `json:"enabled"`
 }
 
+type SAMLProvider struct {
+	ID                  uuid.UUID `json:"id"`
+	OrganizationID      uuid.UUID `json:"organizationId"`
+	Name                string    `json:"name"`
+	IDPMetadata         string    `json:"-"`
+	CertificatePEM      string    `json:"-"`
+	EncryptedPrivateKey string    `json:"-"`
+	Domains             []string  `json:"domains"`
+	EmailAttribute      string    `json:"emailAttribute"`
+	NameAttribute       string    `json:"nameAttribute"`
+	DefaultRole         string    `json:"defaultRole"`
+	AllowIDPInitiated   bool      `json:"allowIdpInitiated"`
+	Enabled             bool      `json:"enabled"`
+}
+
 type DatabaseBackup struct {
 	ID                 uuid.UUID  `json:"id"`
 	DatabaseInstanceID uuid.UUID  `json:"databaseInstanceId"`
@@ -980,6 +995,129 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 			return uuid.Nil, err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO external_identities(provider_id,subject,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.ID, subject, userID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+	} else if err != nil {
+		return uuid.Nil, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.OrganizationID, userID, p.DefaultRole)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return userID, tx.Commit(ctx)
+}
+
+func (s *Store) CreateSAMLProvider(ctx context.Context, p SAMLProvider) (SAMLProvider, error) {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	p.Enabled = true
+	err := s.Pool.QueryRow(ctx, `INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.IDPMetadata, p.CertificatePEM, p.EncryptedPrivateKey, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.Enabled)
+	return p, err
+}
+
+func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider, error) {
+	var p SAMLProvider
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SAMLProvider{}, ErrNotFound
+	}
+	return p, err
+}
+
+func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID) ([]SAMLProvider, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SAMLProvider{}
+	for rows.Next() {
+		var p SAMLProvider
+		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
+			return nil, err
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) DiscoverSAML(ctx context.Context, domain string) ([]SAMLProvider, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE enabled AND $1=ANY(domains) ORDER BY name`, strings.ToLower(domain))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SAMLProvider{}
+	for rows.Next() {
+		var p SAMLProvider
+		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
+			return nil, err
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) DisableSAMLProvider(ctx context.Context, organizationID, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET enabled=false WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CreateSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID, requestID string) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO saml_states(token_hash,provider_id,request_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')`, hash, providerID, requestID)
+	return err
+}
+
+func (s *Store) ConsumeSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID) (string, error) {
+	var requestID string
+	err := s.Pool.QueryRow(ctx, `DELETE FROM saml_states WHERE token_hash=$1 AND provider_id=$2 AND expires_at>now() RETURNING request_id`, hash, providerID).Scan(&requestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return requestID, err
+}
+
+func (s *Store) RecordSAMLAssertion(ctx context.Context, providerID uuid.UUID, assertionID string, expiresAt time.Time) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `DELETE FROM saml_assertions WHERE expires_at<now()`); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO saml_assertions(provider_id,assertion_id,expires_at) VALUES($1,$2,$3)`, providerID, assertionID, expiresAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email, name string) (uuid.UUID, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	defer tx.Rollback(ctx)
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT user_id FROM saml_external_identities WHERE provider_id=$1 AND subject=$2`, p.ID, subject).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, strings.ToLower(email)).Scan(&userID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			userID = uuid.New()
+			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, strings.ToLower(email), "!saml:"+uuid.NewString(), name)
+		}
+		if err != nil {
+			return uuid.Nil, err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO saml_external_identities(provider_id,subject,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.ID, subject, userID)
 		if err != nil {
 			return uuid.Nil, err
 		}

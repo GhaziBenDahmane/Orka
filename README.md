@@ -13,7 +13,7 @@ The initial implementation includes:
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;
 - extensible managed-database drivers;
-- OIDC/PKCE login, domain discovery, SCIM users/groups, and group-to-role mapping;
+- OIDC/PKCE and signed SAML 2.0 login, domain discovery, SCIM users/groups, and group-to-role mapping;
 - public or authenticated Git/Dockerfile builds pushed to authenticated OCI registries;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets and an audit trail.

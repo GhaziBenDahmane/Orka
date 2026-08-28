@@ -17,10 +17,22 @@ organization when a user belongs to more than one.
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
 | GET | `/v1/auth/sso/callback` | Verify the ID token and create a session |
+| GET/POST | `/v1/sso/saml-providers` | List or configure SAML identity providers |
+| GET | `/v1/auth/saml/discover?email=…` | Discover SAML providers by email domain |
+| GET | `/v1/auth/saml/{providerID}/metadata` | Download signed-request SP metadata |
+| GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |
+| POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
 | POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted Git and OCI registry credentials |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
+
+SAML providers accept identity-provider metadata XML, allowed email domains,
+email/name attribute mappings, a default role, and an opt-in
+`allowIdpInitiated` flag. Dockyard generates an encrypted per-provider RSA key,
+signs authentication requests with RSA-SHA256, validates signed assertions,
+binds SP-initiated responses to one-time RelayState, and rejects assertion
+replays. Register the provider metadata URL with the IdP.
 
 ## Workloads
 

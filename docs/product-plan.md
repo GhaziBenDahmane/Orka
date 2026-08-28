@@ -93,11 +93,9 @@ database advertised as backup-capable.
 
 ### 3. Enterprise identity and policy
 
-Status: OIDC/PKCE, SCIM users/groups, group-to-role mapping, and owner
-protection implemented.
+Status: OIDC/PKCE, signed SAML 2.0 with replay protection, SCIM users/groups,
+group-to-role mapping, and owner protection implemented.
 
-- Add SAML 2.0 using a maintained, audited library; do not implement XML
-  signature validation in-house.
 - Add service accounts, token rotation, mandatory SSO, and session/device
   administration.
 - Extend RBAC from organization roles to project/environment grants.
