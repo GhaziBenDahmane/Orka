@@ -227,6 +227,9 @@ func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, le
 	leaseID := uuid.New()
 	err = tx.QueryRow(ctx, `SELECT id,cluster_id,kind,encrypted_payload,status,attempts,created_at FROM cluster_commands WHERE cluster_id=$1 AND status='pending' AND run_after<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.EncryptedPayload, &item.Status, &item.Attempts, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return ClusterCommand{}, commitErr
+		}
 		return ClusterCommand{}, ErrNotFound
 	}
 	if err != nil {

@@ -83,6 +83,37 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if _, err = db.ClaimClusterCommand(ctx, cluster.ID, time.Minute); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("empty queue error = %v", err)
 	}
+	partitioned, err := db.EnqueueClusterCommand(ctx, cluster.ID, uuid.New(), "swarm.nodes", "encrypted-after-partition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldLease, err := db.ClaimClusterCommand(ctx, cluster.ID, 10*time.Second)
+	if err != nil || oldLease.ID != partitioned.ID || oldLease.LeaseID == nil {
+		t.Fatalf("old lease=%#v err=%v", oldLease, err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE cluster_commands SET lease_expires_at=now()-interval '1 second' WHERE id=$1`, partitioned.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ClaimClusterCommand(ctx, cluster.ID, time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired command backoff error = %v", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE cluster_commands SET run_after=now()-interval '1 second' WHERE id=$1`, partitioned.ID); err != nil {
+		t.Fatal(err)
+	}
+	newLease, err := db.ClaimClusterCommand(ctx, cluster.ID, time.Minute)
+	if err != nil || newLease.ID != partitioned.ID || newLease.LeaseID == nil || *newLease.LeaseID == *oldLease.LeaseID {
+		t.Fatalf("replacement lease=%#v err=%v", newLease, err)
+	}
+	if err = db.CompleteClusterCommand(ctx, cluster.ID, partitioned.ID, *oldLease.LeaseID, "stale-result", false); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("partitioned agent completion error=%v, want lease lost", err)
+	}
+	if err = db.CompleteClusterCommand(ctx, cluster.ID, partitioned.ID, *newLease.LeaseID, "fresh-result", false); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := db.GetClusterCommand(ctx, cluster.ID, partitioned.ID)
+	if err != nil || completed.Status != "succeeded" || completed.EncryptedResult != "fresh-result" || completed.Attempts != 2 {
+		t.Fatalf("completed replacement command=%#v err=%v", completed, err)
+	}
 	if _, err = db.UpdateClusterState(ctx, orgID, cluster.ID, "draining"); err != nil {
 		t.Fatal(err)
 	}
