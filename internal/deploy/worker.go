@@ -32,7 +32,7 @@ type Worker struct {
 	Store              *store.Store
 	Box                *cryptox.Box
 	Compiler           Compiler
-	Swarm              Swarm
+	Swarm              Scheduler
 	Concurrency        int
 	Logger             *slog.Logger
 	ID                 string

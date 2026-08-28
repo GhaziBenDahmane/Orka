@@ -41,3 +41,9 @@ allowed to finish before deletion can begin.
 Builders, schedulers, routers, backup stores, identity providers, and database
 engines are application-layer interfaces. External extensions will use a
 versioned RPC protocol instead of Go's ABI-sensitive plugin mechanism.
+
+The `deploy.Scheduler` contract isolates all Swarm operations from the API and
+worker. The in-process adapter invokes Docker directly for a single manager;
+the multi-cluster adapter can therefore route the same validated Compose
+snapshot through outbound agents without changing application or database
+models.

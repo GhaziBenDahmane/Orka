@@ -23,6 +23,19 @@ type Swarm struct {
 	Timeout   time.Duration
 }
 
+// Scheduler is the execution boundary between the control plane and a Swarm
+// manager. The local CLI adapter and outbound cluster agents implement the
+// same contract so Compose remains the workload format in either topology.
+type Scheduler interface {
+	Deploy(context.Context, string, string, map[string]string) (string, error)
+	Remove(context.Context, string) (string, error)
+	Logs(context.Context, string, int) (string, error)
+	Nodes(context.Context) ([]Node, error)
+	RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error)
+}
+
+var _ Scheduler = Swarm{}
+
 type Node struct {
 	ID            string `json:"id"`
 	Hostname      string `json:"hostname"`

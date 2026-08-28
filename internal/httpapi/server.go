@@ -36,7 +36,7 @@ type Server struct {
 	Box        *cryptox.Box
 	Compiler   deploy.Compiler
 	Databases  *database.Registry
-	Swarm      deploy.Swarm
+	Swarm      deploy.Scheduler
 	SessionTTL time.Duration
 	Logger     *slog.Logger
 	PublicURL  string
