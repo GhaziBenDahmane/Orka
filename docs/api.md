@@ -219,7 +219,8 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | GET | `/v1/database-engines` | List built-in database drivers |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
-| POST | `/v1/databases/{id}/backups` | Queue a verified native backup |
+| GET/POST | `/v1/databases/{id}/backups` | List or queue verified native backups |
+| GET | `/v1/databases/{id}/restores` | List manual and verification restores |
 | GET/DELETE | `/v1/databases/{id}` | Inspect or asynchronously delete a managed database |
 | GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |

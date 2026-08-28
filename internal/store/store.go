@@ -189,7 +189,7 @@ type DatabaseBackup struct {
 	DatabaseInstanceID uuid.UUID  `json:"databaseInstanceId"`
 	Status             string     `json:"status"`
 	Format             string     `json:"format"`
-	Path               string     `json:"path,omitempty"`
+	Path               string     `json:"-"`
 	SizeBytes          *int64     `json:"sizeBytes,omitempty"`
 	SHA256             string     `json:"sha256,omitempty"`
 	Encrypted          bool       `json:"encrypted"`
@@ -1341,7 +1341,7 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 		return DatabaseBackup{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"backupId": backup.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'backup.database',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'backup.database',$2,$3)`, uuid.New(), payload, "database:"+databaseID.String()); err != nil {
 		return DatabaseBackup{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1458,7 +1458,8 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	}
 	defer tx.Rollback(ctx)
 	var slug, status string
-	err = tx.QueryRow(ctx, `SELECT d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, backupID, organizationID).Scan(&slug, &status)
+	var backupDatabaseID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}
@@ -1477,7 +1478,7 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 		return DatabaseRestore{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"restoreId": restore.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'restore.database',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'restore.database',$2,$3)`, uuid.New(), payload, "database:"+backupDatabaseID.String()); err != nil {
 		return DatabaseRestore{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {

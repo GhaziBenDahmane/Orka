@@ -80,8 +80,8 @@ directory and are removed when the command completes.
 Multiple controller replicas coordinate durable jobs with `SKIP LOCKED` and a
 fresh UUID fencing token for every execution attempt. Heartbeats and terminal
 job state transitions must present that token. Resource start and completion
-transitions for deployments, backups, restores, notifications, commit statuses,
-and audit archives lock the owning job and update the resource in one database
+transitions for deployments, backups, restores, database migrations,
+notifications, commit statuses, and audit archives lock the owning job and update the resource in one database
 transaction. A paused worker therefore cannot restart or finish a resource
 after another replica recovers the expired attempt—even when the replacement
 uses the same configured worker name. External Swarm, provider, and object-store
@@ -89,6 +89,12 @@ operations remain at-least-once and must be idempotent. Singleton maintenance
 loops additionally use expiring, database-backed leader leases; only the
 current holder schedules backup policy runs or prunes audit history, and
 another replica takes over after expiry.
+
+Backup, restore, restore-drill, and migration jobs carry the same
+`database:<uuid>` resource key. Workers claim those jobs in FIFO order and a
+partial unique index permits only one running operation per database, including
+under concurrent claims from separate workers. This prevents a destructive
+restore from racing a backup or migration.
 
 The stale-job reaper locks each expired job before changing either the job or
 its resource, and skips rows currently held by a heartbeat or resource

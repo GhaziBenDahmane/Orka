@@ -55,6 +55,28 @@ func recoveryTestStore(t *testing.T) (*store.Store, context.Context) {
 	return &store.Store{Pool: pool}, ctx
 }
 
+func TestClaimSerializesJobsWithTheSameResourceKey(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	firstID, secondID := uuid.New(), uuid.New()
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,created_at) VALUES($1,'test.serial','{}','database:test',now()-interval '1 second'),($2,'test.serial','{}','database:test',now())`, firstID, secondID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := (&Worker{Store: db}).claim(ctx)
+	if err != nil || first.ID != firstID {
+		t.Fatalf("first claim=%s err=%v", first.ID, err)
+	}
+	if _, err = (&Worker{Store: db}).claim(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second same-resource claim error=%v, want ErrNotFound", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1`, firstID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := (&Worker{Store: db}).claim(ctx)
+	if err != nil || second.ID != secondID {
+		t.Fatalf("second claim=%s err=%v", second.ID, err)
+	}
+}
+
 func TestRecoverStaleJobsFinalizesCancellationAndAllowsTakeover(t *testing.T) {
 	db, ctx := recoveryTestStore(t)
 	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()

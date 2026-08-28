@@ -166,7 +166,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]any{"backupId": backupID.String(), "retentionCount": retentionCount, "verifyRestore": verifyRestore})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'backup.database',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'backup.database',$2,$3)`, uuid.New(), payload, "database:"+databaseID.String()); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE backup_policies SET last_run_at=now(),next_run_at=now()+($2::int * interval '1 second'),updated_at=now() WHERE id=$1`, policyID, intervalSeconds)
@@ -356,7 +356,8 @@ func (w *Worker) claim(ctx context.Context) (job, error) {
 	err = tx.QueryRow(ctx, `SELECT j.id,j.kind,j.payload,j.attempts,j.max_attempts FROM jobs j WHERE j.status='pending' AND j.run_after<=now()
 		AND (j.kind<>'deploy.compose' OR NOT EXISTS (SELECT 1 FROM jobs older JOIN deployments old_deployment ON old_deployment.id=(older.payload->>'deploymentId')::uuid JOIN deployments this_deployment ON this_deployment.id=(j.payload->>'deploymentId')::uuid WHERE older.kind='deploy.compose' AND older.status IN ('pending','running') AND old_deployment.compose_service_id=this_deployment.compose_service_id AND older.created_at<j.created_at))
 		AND (j.kind<>'commit.status' OR NOT EXISTS (SELECT 1 FROM commit_status_deliveries current_delivery JOIN commit_status_deliveries earlier_delivery ON earlier_delivery.deployment_id=current_delivery.deployment_id JOIN jobs earlier_job ON earlier_job.kind='commit.status' AND earlier_job.payload->>'deliveryId'=earlier_delivery.id::text WHERE current_delivery.id=(j.payload->>'deliveryId')::uuid AND earlier_delivery.created_at<current_delivery.created_at AND earlier_job.status IN ('pending','running')))
-		ORDER BY j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.Kind, &j.Payload, &j.Attempts, &j.MaxAttempts)
+		AND (j.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs resource_job WHERE resource_job.resource_key=j.resource_key AND resource_job.status IN ('pending','running') AND (resource_job.created_at,resource_job.id)<(j.created_at,j.id)))
+		ORDER BY j.created_at,j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&j.ID, &j.Kind, &j.Payload, &j.Attempts, &j.MaxAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return job{}, store.ErrNotFound
 	}
@@ -915,7 +916,7 @@ func (w *Worker) backupDatabaseRemote(ctx context.Context, j job, backupID uuid.
 func (w *Worker) queueRestoreDrill(ctx context.Context, backupID uuid.UUID) error {
 	restoreID := uuid.New()
 	payload, _ := json.Marshal(map[string]string{"restoreId": restoreID.String()})
-	_, err := w.Store.Pool.Exec(ctx, `WITH inserted AS (INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'queued','drill') ON CONFLICT(database_backup_id) WHERE kind='drill' DO NOTHING RETURNING id) INSERT INTO jobs(id,kind,payload) SELECT $3,'restore.database',$4 FROM inserted`, restoreID, backupID, uuid.New(), payload)
+	_, err := w.Store.Pool.Exec(ctx, `WITH inserted AS (INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'queued','drill') ON CONFLICT(database_backup_id) WHERE kind='drill' DO NOTHING RETURNING id), target AS (SELECT database_instance_id FROM database_backups WHERE id=$2) INSERT INTO jobs(id,kind,payload,resource_key) SELECT $3,'restore.database',$4,'database:' || target.database_instance_id::text FROM inserted CROSS JOIN target`, restoreID, backupID, uuid.New(), payload)
 	return err
 }
 
@@ -976,7 +977,11 @@ func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int)
 }
 
 func (w *Worker) failBackup(ctx context.Context, j job, id uuid.UUID, backupErr error) error {
-	if err := w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(backupErr.Error(), 8192)); err != nil {
+	query := `UPDATE database_backups SET status='failed',error=$2,finished_at=now() WHERE id=$1`
+	if j.Attempts+1 < j.MaxAttempts {
+		query = `UPDATE database_backups SET status='running',error=$2,finished_at=NULL WHERE id=$1`
+	}
+	if err := w.updateResourceForJob(ctx, j, query, id, truncate(backupErr.Error(), 8192)); err != nil {
 		return errors.Join(backupErr, err)
 	}
 	return backupErr
@@ -1342,7 +1347,11 @@ func (w *Worker) s3(ctx context.Context, id uuid.UUID) (*backupstore.S3, error) 
 	return backupstore.NewS3(backupstore.S3Config{Endpoint: endpoint, Region: region, Bucket: bucket, Prefix: prefix, UseTLS: useTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"]})
 }
 func (w *Worker) failRestore(ctx context.Context, j job, id uuid.UUID, restoreErr error) error {
-	if err := w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(restoreErr.Error(), 8192)); err != nil {
+	query := `UPDATE database_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`
+	if j.Attempts+1 < j.MaxAttempts {
+		query = `UPDATE database_restores SET status='running',error=$2,finished_at=NULL WHERE id=$1`
+	}
+	if err := w.updateResourceForJob(ctx, j, query, id, truncate(restoreErr.Error(), 8192)); err != nil {
 		return errors.Join(restoreErr, err)
 	}
 	return restoreErr

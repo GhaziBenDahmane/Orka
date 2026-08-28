@@ -60,9 +60,9 @@ func TestDatabaseMigrationQueueScopeUniquenessAndCancellation(t *testing.T) {
 	if err != nil || got.Status != "cancelled" || got.FinishedAt == nil {
 		t.Fatalf("cancelled migration=%#v err=%v", got, err)
 	}
-	var jobStatus string
-	if err = pool.QueryRow(ctx, `SELECT status FROM jobs WHERE kind='migrate.database' AND payload->>'migrationId'=$1`, queued.ID.String()).Scan(&jobStatus); err != nil || jobStatus != "cancelled" {
-		t.Fatalf("job status=%q err=%v", jobStatus, err)
+	var jobStatus, resourceKey string
+	if err = pool.QueryRow(ctx, `SELECT status,resource_key FROM jobs WHERE kind='migrate.database' AND payload->>'migrationId'=$1`, queued.ID.String()).Scan(&jobStatus, &resourceKey); err != nil || jobStatus != "cancelled" || resourceKey != "database:"+databaseID.String() {
+		t.Fatalf("job status=%q resource=%q err=%v", jobStatus, resourceKey, err)
 	}
 	if err = s.CancelDatabaseMigration(ctx, organizationID, queued.ID); !errors.Is(err, ErrNotCancellable) {
 		t.Fatalf("second cancellation error=%v, want ErrNotCancellable", err)

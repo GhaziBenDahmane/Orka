@@ -56,7 +56,7 @@ func (s *Store) QueueDatabaseMigration(ctx context.Context, organizationID uuid.
 		return DatabaseMigration{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"migrationId": item.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'migrate.database',$2,3)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts,resource_key) VALUES($1,'migrate.database',$2,3,$3)`, uuid.New(), payload, "database:"+item.DatabaseInstanceID.String()); err != nil {
 		return DatabaseMigration{}, err
 	}
 	item.EncryptedSourceConfig = ""
