@@ -140,14 +140,15 @@ state, duplicate destructive jobs, or expose credentials.
 
 ### 6. Product surface and migration
 
-Status: Compose and managed-database Dokploy dry-run/import tooling is
-implemented; persistent database data still requires backup/restore. The UI,
-application converter, CLI breadth, and providers remain.
+Status: Compose, Docker-image application, Dockerfile/HTTPS Git application,
+and managed-database Dokploy dry-run/import tooling is implemented. Advanced
+build modes and application settings remain manual, and persistent database
+data still requires backup/restore. The UI, CLI breadth, and providers remain.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
-- Extend the idempotent Dokploy importer from Compose and managed-database
-  resources to generated applications, providers, and backup metadata.
+- Extend the idempotent Dokploy importer to advanced application settings,
+  providers, and backup metadata.
 - Signed catalog releases and an external driver protocol with compatibility
   tests.
 

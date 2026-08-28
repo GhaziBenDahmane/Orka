@@ -66,6 +66,7 @@ func migrateDokploy(arguments []string) error {
 	targetOrganization := flags.String("target-organization", "", "Dockyard organization UUID")
 	dryRun := flags.Bool("dry-run", true, "validate and report without writing")
 	keyFile := flags.String("encryption-key-file", "", "Dokploy exportEncryptionKeys file")
+	registryPrefix := flags.String("registry-prefix", "", "OCI registry repository prefix for imported Git applications")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -99,7 +100,7 @@ func migrateDokploy(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, DryRun: *dryRun, EncryptionKeys: keys})
+	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, RegistryPrefix: *registryPrefix, DryRun: *dryRun, EncryptionKeys: keys})
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
 }

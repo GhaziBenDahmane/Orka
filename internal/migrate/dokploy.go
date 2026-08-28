@@ -27,6 +27,7 @@ type DokployOptions struct {
 	SourceURL            string
 	SourceOrganizationID string
 	TargetOrganizationID uuid.UUID
+	RegistryPrefix       string
 	DryRun               bool
 	EncryptionKeys       [][]byte
 }
@@ -94,6 +95,14 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	if err != nil {
 		return report, err
 	}
+	applications, err := readApplications(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	applicationRoutes, err := readApplicationRoutes(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
 	report.Projects, report.Environments, report.Services = len(projects), len(environments), len(services)
 
 	validServices := map[string]bool{}
@@ -129,14 +138,44 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		seenRoute[key] = true
 		filteredRoutes = append(filteredRoutes, route)
 	}
-	report.Routes = len(filteredRoutes)
-	var applications int
-	_ = source.QueryRow(ctx, `SELECT count(*) FROM application a JOIN environment e ON e."environmentId"=a."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1`, options.SourceOrganizationID).Scan(&applications)
+	validApplications := map[string]bool{}
+	for _, item := range applications {
+		prepared, warnings, prepareErr := prepareApplication(item, options)
+		report.Warnings = append(report.Warnings, warnings...)
+		if prepareErr == nil {
+			_, prepareErr = compiler.Compile(prepared.composeYAML, nil)
+		}
+		if prepareErr != nil {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("application %s is incompatible: %v", item.ID, prepareErr))
+			continue
+		}
+		validApplications[item.ID] = true
+		if strings.HasPrefix(item.Env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("application %s has encrypted environment values; supply --encryption-key-file before import", item.ID))
+		}
+	}
+	filteredApplicationRoutes := make([]sourceApplicationRoute, 0, len(applicationRoutes))
+	for _, route := range applicationRoutes {
+		if !route.enabled || !validApplications[route.applicationID] || route.port < 1 || route.port > 65535 {
+			report.Skipped++
+			continue
+		}
+		key := strings.ToLower(route.host) + "\x00" + route.path
+		if seenRoute[key] {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, "duplicate route "+route.host+route.path+" was skipped")
+			continue
+		}
+		seenRoute[key] = true
+		filteredApplicationRoutes = append(filteredApplicationRoutes, route)
+	}
+	report.Routes = len(filteredRoutes) + len(filteredApplicationRoutes)
 	databases, err := readDatabases(ctx, source, options.SourceOrganizationID)
 	if err != nil {
 		return report, err
 	}
-	report.Applications = applications
+	report.Applications = len(applications)
 	report.Databases = len(databases)
 	registry := database.NewRegistry()
 	validDatabases := map[string]bool{}
@@ -151,10 +190,6 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if strings.HasPrefix(item.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s has encrypted environment values; supply --encryption-key-file before import", item.engine, item.id))
 		}
-	}
-	if applications > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("%d Dokploy application records require the application conversion phase and were not imported", applications))
-		report.Skipped += applications
 	}
 	sort.Strings(report.Warnings)
 	if options.DryRun {
@@ -205,6 +240,39 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		_, err = tx.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,compose_yaml=excluded.compose_yaml,encrypted_env=excluded.encrypted_env,revision=compose_services.revision+1,updated_at=now()`, id, mappedID(options, "environment", item.environmentID), name, migratedSlug(item.appName, id), migratedSlug(item.appName, id), item.compose, encryptedEnv)
 		if err != nil {
 			return report, fmt.Errorf("import compose %s: %w", item.id, err)
+		}
+	}
+	for _, item := range applications {
+		if !validApplications[item.ID] {
+			continue
+		}
+		if item.Env != "" {
+			plain, decryptErr := decryptDokploy(item.Env, options.EncryptionKeys)
+			if decryptErr != nil {
+				return report, fmt.Errorf("decrypt application %s environment: %w", item.ID, decryptErr)
+			}
+			item.Env = plain
+		}
+		prepared, _, prepareErr := prepareApplication(item, options)
+		if prepareErr != nil {
+			return report, fmt.Errorf("prepare application %s: %w", item.ID, prepareErr)
+		}
+		environmentJSON, _ := json.Marshal(prepared.environment)
+		encryptedEnvironment, encryptErr := box.Encrypt(environmentJSON, "compose-env")
+		if encryptErr != nil {
+			return report, encryptErr
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,compose_yaml=excluded.compose_yaml,encrypted_env=excluded.encrypted_env,revision=compose_services.revision+1,updated_at=now()`, prepared.serviceID, mappedID(options, "environment", item.EnvironmentID), item.Name, "app-"+prepared.slug, prepared.slug, prepared.composeYAML, encryptedEnvironment)
+		if err != nil {
+			return report, fmt.Errorf("import application %s: %w", item.ID, err)
+		}
+		if prepared.source != nil {
+			_, err = tx.Exec(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,updated_at=now()`, prepared.source.ComposeServiceID, prepared.source.RepositoryURL, prepared.source.GitRef, prepared.source.ContextDirectory, prepared.source.Dockerfile, prepared.source.TargetService, prepared.source.RegistryImage)
+			if err != nil {
+				return report, fmt.Errorf("import application source %s: %w", item.ID, err)
+			}
+		} else if _, err = tx.Exec(ctx, `DELETE FROM application_sources WHERE compose_service_id=$1`, prepared.serviceID); err != nil {
+			return report, fmt.Errorf("remove stale application source %s: %w", item.ID, err)
 		}
 	}
 	for _, item := range databases {
@@ -264,6 +332,20 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,$3,lower($4),$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET service_name=excluded.service_name,host=excluded.host,path_prefix=excluded.path_prefix,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver`, id, mappedID(options, "compose", item.composeID), item.serviceName, item.host, path, item.port, item.tls, resolver)
 		if err != nil {
 			return report, fmt.Errorf("import route %s: %w", item.id, err)
+		}
+	}
+	for _, item := range filteredApplicationRoutes {
+		path := item.path
+		if path == "" {
+			path = "/"
+		}
+		resolver := item.resolver
+		if resolver == "" {
+			resolver = "letsencrypt"
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'app',lower($3),$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET service_name='app',host=excluded.host,path_prefix=excluded.path_prefix,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver`, mappedID(options, "application-route", item.id), mappedID(options, "application-service", item.applicationID), item.host, path, item.port, item.tls, resolver)
+		if err != nil {
+			return report, fmt.Errorf("import application route %s: %w", item.id, err)
 		}
 	}
 	return report, tx.Commit(ctx)
