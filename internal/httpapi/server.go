@@ -67,6 +67,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/sessions/revoke-others", s.requireAuth(http.HandlerFunc(s.revokeOtherSessions)))
 	mux.Handle("GET /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.getAuthSettings)))
 	mux.Handle("PUT /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.putAuthSettings)))
+	mux.Handle("GET /v1/service-accounts", s.requireRole("admin", http.HandlerFunc(s.listServiceAccounts)))
+	mux.Handle("POST /v1/service-accounts", s.requireRole("admin", http.HandlerFunc(s.createServiceAccount)))
+	mux.Handle("POST /v1/service-accounts/{accountID}/rotate", s.requireRole("admin", http.HandlerFunc(s.rotateServiceAccountToken)))
+	mux.Handle("DELETE /v1/service-accounts/{accountID}", s.requireRole("admin", http.HandlerFunc(s.deleteServiceAccount)))
 	mux.Handle("GET /v1/audit-events", s.requireRole("admin", http.HandlerFunc(s.auditEvents)))
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
@@ -220,7 +224,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) auditEvents(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	rows, err := s.Store.Pool.Query(r.Context(), `SELECT id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata,created_at FROM audit_events WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`, p.OrganizationID)
+	rows, err := s.Store.Pool.Query(r.Context(), `SELECT id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata,created_at FROM audit_events WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 200`, p.OrganizationID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -229,15 +233,15 @@ func (s *Server) auditEvents(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var actor *uuid.UUID
+		var actor, serviceAccount *uuid.UUID
 		var action, resourceType, resourceID, remoteAddr string
 		var metadata json.RawMessage
 		var created time.Time
-		if err := rows.Scan(&id, &actor, &action, &resourceType, &resourceID, &remoteAddr, &metadata, &created); err != nil {
+		if err := rows.Scan(&id, &actor, &serviceAccount, &action, &resourceType, &resourceID, &remoteAddr, &metadata, &created); err != nil {
 			writeStoreError(w, err)
 			return
 		}
-		items = append(items, map[string]any{"id": id, "actorUserId": actor, "action": action, "resourceType": resourceType, "resourceId": resourceID, "remoteAddr": remoteAddr, "metadata": metadata, "createdAt": created})
+		items = append(items, map[string]any{"id": id, "actorUserId": actor, "actorServiceAccountId": serviceAccount, "action": action, "resourceType": resourceType, "resourceId": resourceID, "remoteAddr": remoteAddr, "metadata": metadata, "createdAt": created})
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
@@ -344,6 +348,10 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, 
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	if p.ServiceAccountID != nil {
+		writeError(w, 403, "forbidden", "service accounts do not have interactive sessions")
+		return
+	}
 	items, err := s.Store.ListSessions(r.Context(), p.UserID, p.SessionID)
 	if err != nil {
 		writeStoreError(w, err)
@@ -353,6 +361,10 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
+	if principal(r).ServiceAccountID != nil {
+		writeError(w, 403, "forbidden", "service accounts do not have interactive sessions")
+		return
+	}
 	id, err := uuid.Parse(r.PathValue("sessionID"))
 	if err != nil {
 		writeError(w, 400, "invalid_id", "invalid session id")
@@ -367,6 +379,10 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	if p.ServiceAccountID != nil {
+		writeError(w, 403, "forbidden", "service accounts do not have interactive sessions")
+		return
+	}
 	count, err := s.Store.RevokeOtherSessions(r.Context(), p.UserID, p.SessionID)
 	if err != nil {
 		writeStoreError(w, err)

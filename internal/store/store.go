@@ -39,12 +39,13 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 }
 
 type Principal struct {
-	UserID         uuid.UUID `json:"userId"`
-	SessionID      uuid.UUID `json:"-"`
-	Email          string    `json:"email"`
-	OrganizationID uuid.UUID `json:"organizationId"`
-	Organization   string    `json:"organization"`
-	Role           string    `json:"role"`
+	UserID           uuid.UUID  `json:"userId"`
+	SessionID        uuid.UUID  `json:"-"`
+	ServiceAccountID *uuid.UUID `json:"serviceAccountId,omitempty"`
+	Email            string     `json:"email"`
+	OrganizationID   uuid.UUID  `json:"organizationId"`
+	Organization     string     `json:"organization"`
+	Role             string     `json:"role"`
 }
 
 type Session struct {
@@ -258,6 +259,18 @@ type WebhookIntegration struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
+type ServiceAccount struct {
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID uuid.UUID  `json:"organizationId"`
+	Name           string     `json:"name"`
+	Role           string     `json:"role"`
+	Enabled        bool       `json:"enabled"`
+	TokenExpiresAt *time.Time `json:"tokenExpiresAt,omitempty"`
+	LastUsedAt     *time.Time `json:"lastUsedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
 func (s *Store) HasUsers(ctx context.Context) (bool, error) {
 	var exists bool
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users)`).Scan(&exists)
@@ -338,13 +351,99 @@ func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organization
 	query += ` ORDER BY m.created_at LIMIT 1`
 	var p Principal
 	if err := s.Pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.SessionID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Principal{}, ErrNotFound
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Principal{}, err
 		}
-		return Principal{}, err
+		serviceQuery := `SELECT a.id,a.name,o.id,o.name,a.role FROM service_account_tokens t JOIN service_accounts a ON a.id=t.service_account_id JOIN organizations o ON o.id=a.organization_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND a.enabled`
+		serviceArgs := []any{tokenHash}
+		if organizationID != nil {
+			serviceQuery += ` AND o.id=$2`
+			serviceArgs = append(serviceArgs, *organizationID)
+		}
+		var serviceAccountID uuid.UUID
+		if err = s.Pool.QueryRow(ctx, serviceQuery, serviceArgs...).Scan(&serviceAccountID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Principal{}, ErrNotFound
+			}
+			return Principal{}, err
+		}
+		p.Email = "service-account:" + p.Email
+		p.ServiceAccountID = &serviceAccountID
+		_, _ = s.Pool.Exec(ctx, `UPDATE service_account_tokens SET last_used_at=now() WHERE token_hash=$1`, tokenHash)
+		return p, nil
 	}
 	_, _ = s.Pool.Exec(ctx, `UPDATE sessions SET last_seen_at=now() WHERE token_hash=$1`, tokenHash)
 	return p, nil
+}
+
+func (s *Store) CreateServiceAccount(ctx context.Context, organizationID, creatorID uuid.UUID, name, role string, tokenHash []byte, expiresAt time.Time) (ServiceAccount, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	defer tx.Rollback(ctx)
+	item := ServiceAccount{ID: uuid.New(), OrganizationID: organizationID, Name: name, Role: role, Enabled: true, TokenExpiresAt: &expiresAt}
+	err = tx.QueryRow(ctx, `INSERT INTO service_accounts(id,organization_id,name,role,created_by) SELECT $1,o.id,$3,$4,$5 FROM organizations o WHERE o.id=$2 RETURNING created_at,updated_at`, item.ID, organizationID, name, role, creatorID).Scan(&item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ServiceAccount{}, ErrNotFound
+	}
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,$4)`, uuid.New(), item.ID, tokenHash, expiresAt); err != nil {
+		return ServiceAccount{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) ListServiceAccounts(ctx context.Context, organizationID uuid.UUID) ([]ServiceAccount, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT a.id,a.organization_id,a.name,a.role,a.enabled,t.expires_at,t.last_used_at,a.created_at,a.updated_at FROM service_accounts a LEFT JOIN LATERAL (SELECT expires_at,last_used_at FROM service_account_tokens WHERE service_account_id=a.id AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1) t ON true WHERE a.organization_id=$1 ORDER BY a.name`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ServiceAccount{}
+	for rows.Next() {
+		var item ServiceAccount
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Role, &item.Enabled, &item.TokenExpiresAt, &item.LastUsedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) RotateServiceAccountToken(ctx context.Context, organizationID, id uuid.UUID, tokenHash []byte, expiresAt time.Time) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var exists bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled)`, id, organizationID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	if _, err = tx.Exec(ctx, `UPDATE service_account_tokens SET revoked_at=now() WHERE service_account_id=$1 AND revoked_at IS NULL`, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,$4)`, uuid.New(), id, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DisableServiceAccount(ctx context.Context, organizationID, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE service_accounts SET enabled=false,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID) ([]Session, error) {
@@ -597,7 +696,7 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	if err != nil {
 		return Deployment{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, d.Revision, compose, env, trigger, actorID).Scan(&d.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, d.Revision, compose, env, trigger, nullableUUID(actorID)).Scan(&d.CreatedAt)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -680,7 +779,7 @@ func (s *Store) CancelDeployment(ctx context.Context, organizationID, deployment
 }
 
 func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID, userID uuid.UUID, name string, tokenHash []byte) error {
-	tag, err := s.Pool.Exec(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by) SELECT $1,s.id,$3,$4,$5 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND p.organization_id=$6`, uuid.New(), serviceID, tokenHash, name, userID, organizationID)
+	tag, err := s.Pool.Exec(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by) SELECT $1,s.id,$3,$4,$5 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND p.organization_id=$6`, uuid.New(), serviceID, tokenHash, name, nullableUUID(userID), organizationID)
 	if err != nil {
 		return err
 	}
@@ -792,7 +891,7 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 		return DatabaseBackup{}, ErrNotFound
 	}
 	backup := DatabaseBackup{ID: uuid.New(), DatabaseInstanceID: databaseID, Status: "queued", Format: "native", DestinationID: destinationID}
-	if err = tx.QueryRow(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,actor_user_id,destination_id) VALUES($1,$2,'queued','native',$3,$4) RETURNING created_at`, backup.ID, databaseID, actorID, destinationID).Scan(&backup.CreatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,actor_user_id,destination_id) VALUES($1,$2,'queued','native',$3,$4) RETURNING created_at`, backup.ID, databaseID, nullableUUID(actorID), destinationID).Scan(&backup.CreatedAt); err != nil {
 		return DatabaseBackup{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"backupId": backup.ID.String()})
@@ -901,7 +1000,7 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 		return DatabaseRestore{}, errors.New("restore confirmation must match database slug")
 	}
 	restore := DatabaseRestore{ID: uuid.New(), DatabaseBackupID: backupID, Status: "queued"}
-	if err = tx.QueryRow(ctx, `INSERT INTO database_restores(id,database_backup_id,status,actor_user_id) VALUES($1,$2,'queued',$3) RETURNING created_at`, restore.ID, backupID, actorID).Scan(&restore.CreatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO database_restores(id,database_backup_id,status,actor_user_id) VALUES($1,$2,'queued',$3) RETURNING created_at`, restore.ID, backupID, nullableUUID(actorID)).Scan(&restore.CreatedAt); err != nil {
 		return DatabaseRestore{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"restoreId": restore.ID.String()})
@@ -991,7 +1090,7 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "rollback"}
-	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued','rollback',$6) RETURNING created_at`, d.ID, serviceID, revision, compose, encrypted, actorID).Scan(&d.CreatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued','rollback',$6) RETURNING created_at`, d.ID, serviceID, revision, compose, encrypted, nullableUUID(actorID)).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
@@ -1344,12 +1443,22 @@ func (s *Store) AuthenticateSCIM(ctx context.Context, hash []byte) (uuid.UUID, s
 
 func (s *Store) Audit(ctx context.Context, p *Principal, action, resourceType, resourceID, remoteAddr string, metadata any) {
 	b, _ := json.Marshal(metadata)
-	var org, user any
+	var org, user, serviceAccount any
 	if p != nil {
 		org = p.OrganizationID
-		user = p.UserID
+		user = nullableUUID(p.UserID)
+		if p.ServiceAccountID != nil {
+			serviceAccount = *p.ServiceAccountID
+		}
 	}
-	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)`, org, user, action, resourceType, resourceID, remoteAddr, b)
+	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, org, user, serviceAccount, action, resourceType, resourceID, remoteAddr, b)
+}
+
+func nullableUUID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
 }
 
 func (s *Store) AuditOrganization(ctx context.Context, organizationID uuid.UUID, action, resourceType, resourceID, remoteAddr string, metadata any) {

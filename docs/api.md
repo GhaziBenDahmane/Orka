@@ -17,6 +17,9 @@ organization when a user belongs to more than one.
 | DELETE | `/v1/sessions/{id}` | Revoke one of the caller's sessions |
 | POST | `/v1/sessions/revoke-others` | Revoke every session except the caller's |
 | GET/PUT | `/v1/sso/settings` | Read or enforce organization-wide SSO |
+| GET/POST | `/v1/service-accounts` | List or create scoped automation identities |
+| POST | `/v1/service-accounts/{id}/rotate` | Revoke old tokens and issue a replacement |
+| DELETE | `/v1/service-accounts/{id}` | Disable an automation identity |
 | GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
@@ -39,6 +42,9 @@ binds SP-initiated responses to one-time RelayState, and rejects assertion
 replays. Register the provider metadata URL with the IdP.
 Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
 Once enabled, local-password sessions cannot access that organization.
+Service-account tokens are shown once, stored as hashes, expire within 365
+days, carry an organization role, support atomic rotation, and are attributed
+separately from users in the audit log.
 
 ## Workloads
 
