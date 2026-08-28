@@ -247,6 +247,8 @@ restore the verified artifact with fresh credentials, record the result as a
 target the production database service.
 Prometheus exposes the latest successful drill duration and an overdue signal
 per database. A drill is overdue after twice the configured backup interval,
-with a 24-hour minimum; the supplied alert rules page on that signal. Together,
-backup age and drill duration are the measured inputs for deployment-specific
-RPO and RTO objectives.
+with a 24-hour minimum; the supplied alert rules page on that signal. Migration
+metrics expose counts by engine/state, active age by database, latest terminal
+duration, and the age of the latest failure. Together, backup age and drill
+duration are the measured inputs for deployment-specific RPO and RTO
+objectives.

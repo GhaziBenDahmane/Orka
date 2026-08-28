@@ -65,9 +65,10 @@ database provider's responsibility.
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
 account configured as an HTTP bearer token. The rules cover controller outage,
-stale worker leases, queue backlog, failed operations, stale backups, and
-maintenance mode left enabled. Route those alerts through Alertmanager to the
-team's email, Slack, PagerDuty, or other incident receiver.
+stale worker leases, queue backlog, failed operations, stale backups, overdue
+restore drills, stalled or failed Dokploy database migrations, and maintenance
+mode left enabled. Route those alerts through Alertmanager to the team's email,
+Slack, PagerDuty, or other incident receiver.
 
 ## Remote Swarm agent
 

@@ -62,6 +62,23 @@ groups:
           summary: A scheduled database restore drill is overdue
           description: Database {{ $labels.database }} has no successful restore drill within twice its configured backup interval (minimum 24 hours).
 
+      - alert: DockyardDatabaseMigrationStalled
+        expr: dockyard_database_migration_active_age_seconds > 7200
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dokploy database transfer is stalled
+          description: Database {{ $labels.database }} has had a queued or running native migration for more than two hours.
+
+      - alert: DockyardDatabaseMigrationFailed
+        expr: dockyard_database_migration_last_failure_age_seconds{scope="all"} < 900
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dokploy database transfer failed
+          description: A destructive native database migration exhausted its retries in the last fifteen minutes.
+
       - alert: DockyardMaintenanceModeLeftEnabled
         expr: sum(dockyard_maintenance_scopes) > 0
         for: 4h
