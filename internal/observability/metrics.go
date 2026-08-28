@@ -1,0 +1,201 @@
+package observability
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+var durationBuckets = [...]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 2700}
+
+type Queryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type observation struct {
+	Count   uint64
+	Sum     float64
+	Buckets [len(durationBuckets)]uint64
+}
+
+type Metrics struct {
+	mu         sync.RWMutex
+	http       map[string]*observation
+	operations map[string]*observation
+}
+
+func NewMetrics() *Metrics {
+	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation)}
+}
+
+func (m *Metrics) ObserveHTTP(method, route string, status int, elapsed time.Duration) {
+	if route == "" {
+		route = "unmatched"
+	}
+	m.observe(m.http, strings.Join([]string{method, route, strconv.Itoa(status)}, "\x00"), elapsed)
+}
+
+func (m *Metrics) ObserveOperation(kind, status string, elapsed time.Duration) {
+	m.observe(m.operations, kind+"\x00"+status, elapsed)
+}
+
+func (m *Metrics) observe(target map[string]*observation, key string, elapsed time.Duration) {
+	seconds := elapsed.Seconds()
+	m.mu.Lock()
+	o := target[key]
+	if o == nil {
+		o = &observation{}
+		target[key] = o
+	}
+	o.Count++
+	o.Sum += seconds
+	for i, upper := range durationBuckets {
+		if seconds <= upper {
+			o.Buckets[i]++
+		}
+	}
+	m.mu.Unlock()
+}
+
+func (m *Metrics) Handler(db Queryer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		var output bytes.Buffer
+		if err := m.renderDatabase(ctx, &output, db); err != nil {
+			http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		m.renderRuntime(&output)
+		fmt.Fprintln(&output, "# HELP dockyard_up Whether the controller can serve metrics.")
+		fmt.Fprintln(&output, "# TYPE dockyard_up gauge")
+		fmt.Fprintln(&output, "dockyard_up 1")
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = w.Write(output.Bytes())
+	})
+}
+
+func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) error {
+	type family struct {
+		name, help, query string
+		labels            []string
+	}
+	families := []family{
+		{"dockyard_jobs", "Durable jobs by kind and state.", `SELECT kind,status,count(*)::float8 FROM jobs GROUP BY kind,status`, []string{"kind", "status"}},
+		{"dockyard_job_oldest_age_seconds", "Age of the oldest durable job by kind and state.", `SELECT kind,status,COALESCE(extract(epoch FROM now()-min(created_at)),0)::float8 FROM jobs GROUP BY kind,status`, []string{"kind", "status"}},
+		{"dockyard_deployments", "Deployments by state.", `SELECT status,count(*)::float8 FROM deployments GROUP BY status`, []string{"status"}},
+		{"dockyard_database_backups", "Database backups by state.", `SELECT status,count(*)::float8 FROM database_backups GROUP BY status`, []string{"status"}},
+		{"dockyard_database_restores", "Database restores by kind and state.", `SELECT kind,status,count(*)::float8 FROM database_restores GROUP BY kind,status`, []string{"kind", "status"}},
+		{"dockyard_deployment_last_duration_seconds", "Duration of the most recently finished deployment by final state.", `SELECT DISTINCT ON (status) status,extract(epoch FROM finished_at-started_at)::float8 FROM deployments WHERE started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY status,finished_at DESC`, []string{"status"}},
+		{"dockyard_database_backup_last_success_age_seconds", "Age of the most recent successful database backup.", `SELECT 'all',extract(epoch FROM now()-max(finished_at))::float8 FROM database_backups WHERE status='succeeded' HAVING max(finished_at) IS NOT NULL`, []string{"scope"}},
+		{"dockyard_database_restore_last_success_age_seconds", "Age of the most recent successful restore by kind.", `SELECT kind,extract(epoch FROM now()-max(finished_at))::float8 FROM database_restores WHERE status='succeeded' GROUP BY kind`, []string{"kind"}},
+	}
+	for _, f := range families {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", f.name, f.help, f.name)
+		rows, err := db.Query(ctx, f.query)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			values := make([]string, len(f.labels))
+			dest := make([]any, 0, len(values)+1)
+			for i := range values {
+				dest = append(dest, &values[i])
+			}
+			var value float64
+			dest = append(dest, &value)
+			if err := rows.Scan(dest...); err != nil {
+				rows.Close()
+				return err
+			}
+			fmt.Fprintf(w, "%s%s %g\n", f.name, labels(f.labels, values), value)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+	var stale float64
+	if err := db.QueryRow(ctx, `SELECT count(*)::float8 FROM jobs WHERE status='running' AND locked_at<now()-interval '30 seconds'`).Scan(&stale); err != nil {
+		return err
+	}
+	fmt.Fprintln(w, "# HELP dockyard_job_stale_leases Running jobs whose worker heartbeat is stale.")
+	fmt.Fprintln(w, "# TYPE dockyard_job_stale_leases gauge")
+	fmt.Fprintf(w, "dockyard_job_stale_leases %g\n", stale)
+	return nil
+}
+
+func (m *Metrics) renderRuntime(w io.Writer) {
+	m.mu.RLock()
+	httpItems := clone(m.http)
+	operationItems := clone(m.operations)
+	m.mu.RUnlock()
+	renderCounter(w, "dockyard_http_requests_total", "HTTP requests by method, route, and status.", httpItems, []string{"method", "route", "status"})
+	renderHistogram(w, "dockyard_http_request_duration_seconds", "HTTP request latency.", httpItems, []string{"method", "route", "status"})
+	renderCounter(w, "dockyard_operations_total", "Completed background operations by kind and status.", operationItems, []string{"kind", "status"})
+	renderHistogram(w, "dockyard_operation_duration_seconds", "Background operation latency.", operationItems, []string{"kind", "status"})
+}
+
+func clone(source map[string]*observation) map[string]observation {
+	result := make(map[string]observation, len(source))
+	for key, value := range source {
+		result[key] = *value
+	}
+	return result
+}
+
+func renderHistogram(w io.Writer, name, help string, items map[string]observation, labelNames []string) {
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s histogram\n", name, help, name)
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		o := items[key]
+		values := strings.Split(key, "\x00")
+		for i, upper := range durationBuckets {
+			fmt.Fprintf(w, "%s_bucket%s %d\n", name, labels(append(labelNames, "le"), append(values, strconv.FormatFloat(upper, 'g', -1, 64))), o.Buckets[i])
+		}
+		fmt.Fprintf(w, "%s_bucket%s %d\n", name, labels(append(labelNames, "le"), append(values, "+Inf")), o.Count)
+		fmt.Fprintf(w, "%s_sum%s %g\n", name, labels(labelNames, values), o.Sum)
+		fmt.Fprintf(w, "%s_count%s %d\n", name, labels(labelNames, values), o.Count)
+	}
+}
+
+func renderCounter(w io.Writer, name, help string, items map[string]observation, labelNames []string) {
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n", name, help, name)
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Fprintf(w, "%s%s %d\n", name, labels(labelNames, strings.Split(key, "\x00")), items[key].Count)
+	}
+}
+
+func labels(names, values []string) string {
+	parts := make([]string, len(names))
+	for i := range names {
+		parts[i] = names[i] + "=\"" + prometheusEscape(values[i]) + "\""
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func prometheusEscape(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	return strings.ReplaceAll(value, `"`, `\"`)
+}

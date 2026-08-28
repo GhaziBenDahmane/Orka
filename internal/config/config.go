@@ -22,6 +22,9 @@ type Config struct {
 	UnsafeWorkloads   bool
 	PublicURL         string
 	BackupDirectory   string
+	OTLPEndpoint      string
+	OTLPInsecure      bool
+	ServiceName       string
 }
 
 func Load() (Config, error) {
@@ -56,6 +59,14 @@ func Load() (Config, error) {
 	if !filepath.IsAbs(backupDirectory) {
 		return Config{}, errors.New("DOCKYARD_BACKUP_DIRECTORY must be absolute")
 	}
+	otlpInsecure, err := strconv.ParseBool(env("DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE: %w", err)
+	}
+	otlpEndpoint := strings.TrimSpace(os.Getenv("DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if otlpEndpoint == "" {
+		otlpEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
 	return Config{
 		ListenAddr:        env("DOCKYARD_LISTEN_ADDR", ":8080"),
 		DatabaseURL:       databaseURL,
@@ -67,6 +78,9 @@ func Load() (Config, error) {
 		UnsafeWorkloads:   unsafeWorkloads,
 		PublicURL:         strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
 		BackupDirectory:   filepath.Clean(backupDirectory),
+		OTLPEndpoint:      otlpEndpoint,
+		OTLPInsecure:      otlpInsecure,
+		ServiceName:       env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
 	}, nil
 }
 

@@ -116,8 +116,9 @@ implemented.
   webhook adapters.
 - Notification rules and providers for email, Slack-compatible webhooks, and
   common incident systems.
-- OpenTelemetry traces/log correlation, richer Prometheus metrics, alerts,
-  maintenance mode, and resource quotas.
+- OpenTelemetry HTTP and worker traces, request/log correlation, and richer
+  Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
+  implemented. Alerts, maintenance mode, and resource quotas remain.
 - Extend the implemented asynchronous service/stack finalizer model to
   projects, environments, volumes, and clusters.
 

@@ -19,6 +19,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/httpapi"
 	dockyardmigrate "github.com/bendahma/dokploy-go/internal/migrate"
+	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
 	"github.com/google/uuid"
@@ -131,6 +132,17 @@ func serve() error {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	shutdownTracing, err := observability.InitTracing(ctx, observability.TraceConfig{Endpoint: cfg.OTLPEndpoint, Insecure: cfg.OTLPInsecure, Service: cfg.ServiceName, Version: "dev"})
+	if err != nil {
+		return fmt.Errorf("initialize OpenTelemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			logger.Error("shutdown OpenTelemetry", "error", err)
+		}
+	}()
 	db, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -143,9 +155,10 @@ func serve() error {
 	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
 	swarm := deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.TraefikNetwork, Timeout: 5 * time.Minute}
 	databaseRegistry := database.NewRegistry()
-	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}}
+	metrics := observability.NewMetrics()
+	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
 	go worker.Run(ctx)
-	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL}
+	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics}
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	go func() {
 		<-ctx.Done()

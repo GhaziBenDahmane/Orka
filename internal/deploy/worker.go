@@ -19,6 +19,7 @@ import (
 	backupstore "github.com/bendahma/dokploy-go/internal/backup"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
+	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -35,6 +36,7 @@ type Worker struct {
 	Databases       *database.Registry
 	BackupDirectory string
 	Builder         Builder
+	Metrics         *observability.Metrics
 }
 
 type job struct {
@@ -148,7 +150,17 @@ func (w *Worker) loop(ctx context.Context) {
 				w.Logger.Error("claim job", "error", err)
 				continue
 			}
-			err = w.runClaimed(ctx, j)
+			started := time.Now()
+			jobCtx, span := observability.StartOperation(ctx, j.Kind, j.ID.String())
+			err = w.runClaimed(jobCtx, j)
+			observability.EndOperation(span, err)
+			status := "succeeded"
+			if err != nil {
+				status = "failed"
+			}
+			if w.Metrics != nil {
+				w.Metrics.ObserveOperation(j.Kind, status, time.Since(started))
+			}
 			if finishErr := w.finish(ctx, j, err); finishErr != nil {
 				w.Logger.Error("finish job", "error", finishErr)
 			}

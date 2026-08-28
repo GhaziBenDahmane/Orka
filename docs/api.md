@@ -5,6 +5,11 @@ SSO discovery/callback, and deploy hooks, endpoints require
 `Authorization: Bearer <session-token>`. Use `X-Organization-ID` to select an
 organization when a user belongs to more than one.
 
+Every response includes `X-Request-ID`. A printable caller-provided request ID
+is preserved; otherwise the server generates a UUID. `GET /metrics` is a
+Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,
+deployments, backups, restores, restore drills, and operation durations.
+
 ## Identity
 
 | Method | Path | Purpose |

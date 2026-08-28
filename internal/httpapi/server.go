@@ -21,11 +21,14 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Server struct {
@@ -37,15 +40,22 @@ type Server struct {
 	SessionTTL time.Duration
 	Logger     *slog.Logger
 	PublicURL  string
+	Metrics    *observability.Metrics
 }
 
 type contextKey string
 
-const principalKey contextKey = "principal"
+const (
+	principalKey contextKey = "principal"
+	requestIDKey contextKey = "request-id"
+)
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 func (s *Server) Handler() http.Handler {
+	if s.Metrics == nil {
+		s.Metrics = observability.NewMetrics()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /metrics", s.metrics)
@@ -139,22 +149,85 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/webhooks/{integrationID}", s.requireResourceRole("developer", "webhook", "integrationID", http.HandlerFunc(s.deleteWebhookIntegration)))
 	mux.Handle("GET /v1/deployments/{deploymentID}", s.requireResourceRole("viewer", "deployment", "deploymentID", http.HandlerFunc(s.getDeployment)))
 	mux.Handle("POST /v1/deployments/{deploymentID}/cancel", s.requireResourceRole("developer", "deployment", "deploymentID", http.HandlerFunc(s.cancelDeployment)))
-	return s.middleware(mux)
+	instrumented := otelhttp.NewHandler(s.middleware(mux), "dockyard.http")
+	return s.requestIDMiddleware(instrumented)
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				s.Logger.Error("panic", "error", recovered)
-				writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+				recorder.status = http.StatusInternalServerError
+				s.logger().ErrorContext(r.Context(), "panic", "error", recovered, "request_id", requestID(r))
+				writeError(recorder, http.StatusInternalServerError, "internal_error", "internal server error")
 			}
+			route := r.Pattern
+			s.Metrics.ObserveHTTP(r.Method, route, recorder.status, time.Since(started))
+			attrs := []any{"request_id", requestID(r), "method", r.Method, "route", route, "status", recorder.status, "duration_ms", time.Since(started).Milliseconds()}
+			if span := trace.SpanContextFromContext(r.Context()); span.IsValid() {
+				attrs = append(attrs, "trace_id", span.TraceID().String())
+			}
+			s.logger().InfoContext(r.Context(), "http request", attrs...)
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(recorder, r)
 	})
+}
+
+func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if !validRequestID(id) {
+			id = uuid.NewString()
+		}
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey, id)))
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (w *statusRecorder) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func validRequestID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x21 || r > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func requestID(r *http.Request) string {
+	id, _ := r.Context().Value(requestIDKey).(string)
+	return id
+}
+
+func (s *Server) logger() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.Default()
 }
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
@@ -230,25 +303,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-	defer cancel()
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	rows, err := s.Store.Pool.Query(ctx, `SELECT status,count(*) FROM jobs GROUP BY status`)
-	if err != nil {
-		http.Error(w, "metrics unavailable", 503)
-		return
-	}
-	defer rows.Close()
-	fmt.Fprintln(w, "# HELP dockyard_jobs Number of durable jobs by state.")
-	fmt.Fprintln(w, "# TYPE dockyard_jobs gauge")
-	for rows.Next() {
-		var status string
-		var count int64
-		if err := rows.Scan(&status, &count); err == nil {
-			fmt.Fprintf(w, "dockyard_jobs{status=%q} %d\n", status, count)
-		}
-	}
-	fmt.Fprintln(w, "dockyard_up 1")
+	s.Metrics.Handler(s.Store.Pool).ServeHTTP(w, r)
 }
 
 func (s *Server) auditEvents(w http.ResponseWriter, r *http.Request) {

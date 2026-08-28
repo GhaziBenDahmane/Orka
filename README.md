@@ -18,6 +18,7 @@ The initial implementation includes:
 - signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets and an audit trail.
+- request correlation, optional OTLP tracing, and Prometheus operational metrics.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/roadmap.md](docs/roadmap.md). The detailed clean-room comparison, effort
@@ -50,6 +51,15 @@ curl -X POST http://localhost:8080/v1/auth/bootstrap \
   -H 'content-type: application/json' \
   -d '{"email":"admin@example.com","password":"change-me-now","organization":"Default"}'
 ```
+
+Every HTTP response includes `X-Request-ID`; callers may supply their own
+printable value. `GET /metrics` exposes bounded-route HTTP latency/status,
+background-operation duration/status, queue and lease health, deployment
+state, and backup/restore state and age. Set
+`DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP/gRPC URL (for example,
+`http://otel-collector:4317`) to export traces. TLS is the default; set
+`DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE=true` only for a trusted plaintext
+collector endpoint.
 
 ## License
 
