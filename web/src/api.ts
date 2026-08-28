@@ -9,7 +9,8 @@ export type Principal = {
 export type Project = { id: string; name: string; slug: string; description: string };
 export type Environment = { id: string; projectId: string; name: string; slug: string; clusterId?: string; placementSelector?: Record<string, string>; minimumNodes?: number; minimumNanoCpus?: number; minimumMemoryBytes?: number };
 export type Service = { id: string; environmentId: string; name: string; slug: string; revision: number; status: string; composeYaml?: string };
-export type ApplicationSource = { composeServiceId: string; repositoryUrl: string; gitRef: string; contextDirectory: string; dockerfile: string; buildType: "dockerfile" | "static" | "nixpacks" | "railpack" | "buildpacks"; outputDirectory?: string; buildTarget?: string; enableSubmodules: boolean; hasBuildArguments: boolean; hasBuildSecrets: boolean; targetService: string; registryImage: string; gitCredentialId?: string; registryCredentialId?: string; statusProvider?: string; statusCredentialId?: string; statusContext?: string; updatedAt: string };
+export type ApplicationArtifact = { filename: string; sha256: string; compressedSize: number; updatedAt: string };
+export type ApplicationSource = { composeServiceId: string; sourceType: "git" | "drop"; repositoryUrl: string; gitRef: string; contextDirectory: string; dockerfile: string; buildType: "dockerfile" | "static" | "nixpacks" | "railpack" | "buildpacks"; outputDirectory?: string; buildTarget?: string; enableSubmodules: boolean; hasBuildArguments: boolean; hasBuildSecrets: boolean; targetService: string; registryImage: string; gitCredentialId?: string; registryCredentialId?: string; statusProvider?: string; statusCredentialId?: string; statusContext?: string; artifact?: ApplicationArtifact; updatedAt: string };
 export type Deployment = { id: string; revision: number; status: string; trigger: string; error?: string; output?: string; createdAt: string };
 export type Template = { id: string; key: string; version: string; name: string; description: string; source: string };
 export type Cluster = { id: string; name: string; slug: string; state: string; labels: Record<string, unknown>; capacity: Record<string, unknown>; agentVersion: string; dockerVersion: string; certificateNotAfter?: string; lastSeenAt?: string; maintenanceStartsAt?: string; maintenanceEndsAt?: string };
@@ -46,7 +47,7 @@ export const session = {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body) headers.set("content-type", "application/json");
+  if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
   if (session.get()) headers.set("authorization", `Bearer ${session.get()}`);
   const response = await fetch(path, { ...init, headers });
   if (response.status === 401) session.clear();
@@ -86,7 +87,8 @@ export const api = {
   service: (serviceId: string) => request<{ service: Service; routes: unknown[]; source: ApplicationSource | null }>(`/v1/services/${serviceId}`),
   createService: (environmentId: string, body: { name: string; composeYaml: string }) => request<Service>(`/v1/environments/${environmentId}/services`, { method: "POST", body: JSON.stringify(body) }),
   updateService: (serviceId: string, composeYaml: string) => request<Service>(`/v1/services/${serviceId}`, { method: "PATCH", body: JSON.stringify({ composeYaml, environment: {} }) }),
-  upsertSource: (serviceId: string, body: { repositoryUrl: string; gitRef: string; contextDirectory: string; dockerfile: string; buildType: "dockerfile" | "static" | "nixpacks" | "railpack" | "buildpacks"; outputDirectory?: string; buildTarget?: string; enableSubmodules: boolean; buildArguments?: Record<string, string>; buildSecrets?: Record<string, string>; targetService: string; registryImage: string; gitCredentialId?: string; registryCredentialId?: string; statusProvider?: string; statusCredentialId?: string; statusContext?: string }) => request<ApplicationSource>(`/v1/services/${serviceId}/source`, { method: "PUT", body: JSON.stringify(body) }),
+  upsertSource: (serviceId: string, body: { sourceType: "git" | "drop"; repositoryUrl: string; gitRef: string; contextDirectory: string; dockerfile: string; buildType: "dockerfile" | "static" | "nixpacks" | "railpack" | "buildpacks"; outputDirectory?: string; buildTarget?: string; enableSubmodules: boolean; buildArguments?: Record<string, string>; buildSecrets?: Record<string, string>; targetService: string; registryImage: string; gitCredentialId?: string; registryCredentialId?: string; statusProvider?: string; statusCredentialId?: string; statusContext?: string }) => request<ApplicationSource>(`/v1/services/${serviceId}/source`, { method: "PUT", body: JSON.stringify(body) }),
+  uploadArtifact: (serviceId: string, file: File) => { const body = new FormData(); body.append("file", file); return request<ApplicationArtifact>(`/v1/services/${serviceId}/artifact-source`, { method: "PUT", body }); },
   deploy: (serviceId: string) => request<Deployment>(`/v1/services/${serviceId}/deployments`, { method: "POST", body: "{}" }),
   deployments: (serviceId: string) => request<Envelope<Deployment>>(`/v1/services/${serviceId}/deployments`),
   logs: (serviceId: string) => request<{ logs: string }>(`/v1/services/${serviceId}/logs`),

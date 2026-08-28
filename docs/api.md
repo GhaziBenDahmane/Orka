@@ -138,7 +138,8 @@ until an administrator retries them.
 | GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup) |
-| PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build, registry target, credentials, target stage, arguments, BuildKit secrets, and submodules |
+| PUT | `/v1/services/{id}/source` | Configure a Git or uploaded-ZIP application build, registry target, build mode, credentials, arguments, secrets, and submodules |
+| PUT | `/v1/services/{id}/artifact-source` | Upload or replace an encrypted ZIP source (25 MiB compressed / 250 MiB expanded limits) |
 | POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
 | GET/DELETE | `/v1/routes/{id}` | Inspect or remove a route |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |

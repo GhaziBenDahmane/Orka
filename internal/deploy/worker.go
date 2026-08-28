@@ -467,7 +467,8 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		var source store.ApplicationSource
 		source.ComposeServiceID = uuid.Nil
 		var gitKind, gitServer, gitUser, gitSecret, registryServer, registryUser, registrySecret string
-		sourceErr := w.Store.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_type,a.output_directory,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.updated_at,COALESCE(gc.kind,''),COALESCE(gc.server,''),COALESCE(gc.username,''),COALESCE(gc.encrypted_secret,''),COALESCE(rc.server,''),COALESCE(rc.username,''),COALESCE(rc.encrypted_secret,'') FROM application_sources a JOIN deployments d ON d.compose_service_id=a.compose_service_id LEFT JOIN source_credentials gc ON gc.id=a.git_credential_id LEFT JOIN source_credentials rc ON rc.id=a.registry_credential_id WHERE d.id=$1`, id).Scan(&source.ComposeServiceID, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildType, &source.OutputDirectory, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.UpdatedAt, &gitKind, &gitServer, &gitUser, &gitSecret, &registryServer, &registryUser, &registrySecret)
+		var encryptedArchive *string
+		sourceErr := w.Store.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.source_type,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_type,a.output_directory,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.updated_at,COALESCE(gc.kind,''),COALESCE(gc.server,''),COALESCE(gc.username,''),COALESCE(gc.encrypted_secret,''),COALESCE(rc.server,''),COALESCE(rc.username,''),COALESCE(rc.encrypted_secret,''),x.encrypted_archive FROM application_sources a JOIN deployments d ON d.compose_service_id=a.compose_service_id LEFT JOIN source_credentials gc ON gc.id=a.git_credential_id LEFT JOIN source_credentials rc ON rc.id=a.registry_credential_id LEFT JOIN application_artifacts x ON x.compose_service_id=a.compose_service_id WHERE d.id=$1`, id).Scan(&source.ComposeServiceID, &source.SourceType, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildType, &source.OutputDirectory, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.UpdatedAt, &gitKind, &gitServer, &gitUser, &gitSecret, &registryServer, &registryUser, &registrySecret, &encryptedArchive)
 		if sourceErr == nil {
 			if source.EncryptedBuildConfig != "" {
 				plain, decryptErr := w.Box.Decrypt(source.EncryptedBuildConfig, "application-build-config:"+source.ComposeServiceID.String())
@@ -512,7 +513,21 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 			}
 			if err == nil {
 				buildCtx, cancel := context.WithTimeout(ctx, 45*time.Minute)
-				tag, output, buildErr := w.Builder.Build(buildCtx, source, id, credentials)
+				var tag, output string
+				var buildErr error
+				if source.SourceType == "drop" {
+					if encryptedArchive == nil || *encryptedArchive == "" {
+						buildErr = errors.New("uploaded ZIP source is missing")
+					} else {
+						var archive []byte
+						archive, buildErr = w.Box.Decrypt(*encryptedArchive, "application-artifact:"+source.ComposeServiceID.String())
+						if buildErr == nil {
+							tag, output, buildErr = w.Builder.BuildArchive(buildCtx, source, id, credentials.Registry, archive)
+						}
+					}
+				} else {
+					tag, output, buildErr = w.Builder.Build(buildCtx, source, id, credentials)
+				}
 				cancel()
 				buildOutput = output
 				if buildErr != nil {

@@ -139,3 +139,10 @@ func TestPrepareHerokuBuildpackRemainsManual(t *testing.T) {
 		t.Fatalf("expected Heroku buildpack to require manual conversion, got %v", err)
 	}
 }
+
+func TestPrepareDropApplicationExplainsManualArtifactTransfer(t *testing.T) {
+	item := sourceApplication{ID: "drop-app", AppName: "Drop", Name: "Drop", SourceType: "drop", BuildType: "dockerfile", Replicas: 1}
+	if _, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"}); err == nil || !strings.Contains(err.Error(), "filesystem") || !strings.Contains(err.Error(), "upload the ZIP") {
+		t.Fatalf("expected actionable manual drop migration guidance, got %v", err)
+	}
+}

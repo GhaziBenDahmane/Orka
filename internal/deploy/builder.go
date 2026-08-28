@@ -120,10 +120,7 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 }
 
 func (b Builder) Build(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, credentials BuildCredentials) (string, string, error) {
-	if source.BuildType == "" {
-		source.BuildType = "dockerfile"
-	}
-	if err := ValidateBuildMode(source.BuildType, source.OutputDirectory, source.BuildTarget, store.ApplicationBuildConfig{Arguments: source.BuildArguments, Secrets: source.BuildSecrets}); err != nil {
+	if err := validateBuildSource(&source, credentials.Registry); err != nil {
 		return "", "", err
 	}
 	repo, err := url.Parse(source.RepositoryURL)
@@ -133,14 +130,8 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if !safeRef.MatchString(source.GitRef) {
 		return "", "", fmt.Errorf("invalid git ref")
 	}
-	if !registryImage.MatchString(source.RegistryImage) || strings.Contains(source.RegistryImage, "..") {
-		return "", "", fmt.Errorf("invalid registry image")
-	}
 	if credentials.Git.Secret != "" && !strings.EqualFold(repo.Hostname(), credentials.Git.Server) {
 		return "", "", fmt.Errorf("Git credential server does not match repository host")
-	}
-	if credentials.Registry.Secret != "" && !strings.EqualFold(imageRegistry(source.RegistryImage), credentials.Registry.Server) {
-		return "", "", fmt.Errorf("registry credential server does not match image registry")
 	}
 	directory, err := os.MkdirTemp("", "dockyard-build-*")
 	if err != nil {
@@ -191,10 +182,53 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if err != nil {
 		return "", output, fmt.Errorf("invalid build context: %w", err)
 	}
+	return b.buildWorkspace(ctx, source, deploymentID, credentials.Registry, contextPath, output)
+}
+
+func (b Builder) BuildArchive(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, registryCredential Credential, archive []byte) (string, string, error) {
+	if err := validateBuildSource(&source, registryCredential); err != nil {
+		return "", "", err
+	}
+	directory, err := os.MkdirTemp("", "dockyard-drop-*")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.RemoveAll(directory)
+	if err = ExtractArchive(archive, directory); err != nil {
+		return "", "", fmt.Errorf("invalid source archive: %w", err)
+	}
+	contextPath, err := safeJoin(directory, source.ContextDirectory)
+	if err != nil {
+		return "", "", err
+	}
+	contextPath, err = resolveInside(directory, contextPath)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid build context: %w", err)
+	}
+	return b.buildWorkspace(ctx, source, deploymentID, registryCredential, contextPath, "")
+}
+
+func validateBuildSource(source *store.ApplicationSource, registryCredential Credential) error {
+	if source.BuildType == "" {
+		source.BuildType = "dockerfile"
+	}
+	if err := ValidateBuildMode(source.BuildType, source.OutputDirectory, source.BuildTarget, store.ApplicationBuildConfig{Arguments: source.BuildArguments, Secrets: source.BuildSecrets}); err != nil {
+		return err
+	}
+	if !registryImage.MatchString(source.RegistryImage) || strings.Contains(source.RegistryImage, "..") {
+		return errors.New("invalid registry image")
+	}
+	if registryCredential.Secret != "" && !strings.EqualFold(imageRegistry(source.RegistryImage), registryCredential.Server) {
+		return errors.New("registry credential server does not match image registry")
+	}
+	return nil
+}
+
+func (b Builder) buildWorkspace(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, registryCredential Credential, contextPath, output string) (string, string, error) {
 	tag := source.RegistryImage + ":" + deploymentID.String()
 	buildEnvironment := map[string]string{}
-	if credentials.Registry.Secret != "" {
-		configDir, configErr := writeDockerConfig(credentials.Registry)
+	if registryCredential.Secret != "" {
+		configDir, configErr := writeDockerConfig(registryCredential)
 		if configErr != nil {
 			return "", output, configErr
 		}

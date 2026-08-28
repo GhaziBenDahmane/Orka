@@ -311,6 +311,8 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		if item.SourceType != "git" {
 			warnings = append(warnings, fmt.Sprintf("application %s provider credentials and webhooks are not imported; public clone access is required until they are recreated", item.ID))
 		}
+	case "drop":
+		return preparedApplication{}, warnings, errors.New("drop source archive is stored on Dokploy's filesystem and cannot be copied from PostgreSQL; upload the ZIP manually after creating the application")
 	default:
 		return preparedApplication{}, warnings, fmt.Errorf("source type %q is not supported", item.SourceType)
 	}

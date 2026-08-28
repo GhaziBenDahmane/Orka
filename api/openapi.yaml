@@ -2084,6 +2084,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/artifact-source:
+    put:
+      operationId: put_v1_services_serviceID_artifact_source
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/services/{serviceID}/deploy-tokens:
     post:
       operationId: post_v1_services_serviceID_deploy_tokens

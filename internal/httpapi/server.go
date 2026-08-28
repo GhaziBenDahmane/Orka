@@ -176,6 +176,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/services/{serviceID}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteService)))
 	mux.Handle("PATCH /v1/services/{serviceID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateService)))
 	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertSource)))
+	mux.Handle("PUT /v1/services/{serviceID}/artifact-source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertArtifactSource)))
 	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.addRoute)))
 	mux.Handle("GET /v1/routes/{routeID}", s.requireResourceRole("viewer", "route", "routeID", http.HandlerFunc(s.getRoute)))
 	mux.Handle("DELETE /v1/routes/{routeID}", s.requireResourceRole("developer", "route", "routeID", http.HandlerFunc(s.deleteRoute)))
@@ -1409,6 +1410,7 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		SourceType           string             `json:"sourceType"`
 		RepositoryURL        string             `json:"repositoryUrl"`
 		GitRef               string             `json:"gitRef"`
 		ContextDirectory     string             `json:"contextDirectory"`
@@ -1428,6 +1430,13 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		StatusContext        string             `json:"statusContext"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if in.SourceType == "" {
+		in.SourceType = "git"
+	}
+	if in.SourceType != "git" && in.SourceType != "drop" {
+		writeError(w, 400, "invalid_source", "sourceType must be git or drop")
 		return
 	}
 	if in.GitRef == "" {
@@ -1479,21 +1488,91 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	if in.StatusContext == "" {
 		in.StatusContext = "dockyard/deploy"
 	}
-	if in.RepositoryURL == "" || in.TargetService == "" || in.RegistryImage == "" {
-		writeError(w, 400, "invalid_source", "repositoryUrl, targetService and registryImage are required")
+	if in.TargetService == "" || in.RegistryImage == "" || (in.SourceType == "git" && in.RepositoryURL == "") {
+		writeError(w, 400, "invalid_source", "targetService, registryImage, and a repositoryUrl for Git sources are required")
 		return
 	}
-	if (in.StatusProvider == "") != (in.StatusCredentialID == nil) || (in.StatusProvider != "" && !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.StatusProvider)) || len(in.StatusContext) > 100 || !webhookBranchPattern.MatchString(in.StatusContext) {
+	if in.SourceType == "drop" {
+		hasArtifact, artifactErr := s.Store.ApplicationArtifactExists(r.Context(), principal(r).OrganizationID, id)
+		if artifactErr != nil {
+			writeStoreError(w, artifactErr)
+			return
+		}
+		if !hasArtifact {
+			writeError(w, 400, "artifact_missing", "upload a ZIP artifact before selecting the drop source type")
+			return
+		}
+		in.RepositoryURL, in.GitRef, in.EnableSubmodules, in.GitCredentialID = "", "", false, nil
+		in.StatusProvider, in.StatusCredentialID, in.StatusContext = "", nil, ""
+	}
+	if in.SourceType == "git" && ((in.StatusProvider == "") != (in.StatusCredentialID == nil) || (in.StatusProvider != "" && !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.StatusProvider)) || len(in.StatusContext) > 100 || !webhookBranchPattern.MatchString(in.StatusContext)) {
 		writeError(w, 400, "invalid_source_status", "status provider and Git token credential must be configured together with a valid context")
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildType: in.BuildType, OutputDirectory: in.OutputDirectory, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
+	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, SourceType: in.SourceType, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildType: in.BuildType, OutputDirectory: in.OutputDirectory, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "source.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"repository": in.RepositoryURL, "ref": in.GitRef})
+	s.Store.Audit(r.Context(), &p, "source.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"sourceType": in.SourceType, "repository": in.RepositoryURL, "ref": in.GitRef})
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) upsertArtifactSource(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid service id")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, deploy.MaxArchiveSize+(1<<20))
+	if err = r.ParseMultipartForm(deploy.MaxArchiveSize); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, 413, "artifact_too_large", "multipart upload exceeds the 25 MiB ZIP limit")
+		} else {
+			writeError(w, 400, "invalid_multipart", "request must be multipart/form-data with a file field")
+		}
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, 400, "artifact_missing", "multipart field file must contain a ZIP archive")
+		return
+	}
+	defer file.Close()
+	filename := strings.TrimSpace(header.Filename)
+	if filename == "" || len(filename) > 255 || strings.ContainsAny(filename, "/\\\x00\r\n") || !strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		writeError(w, 400, "invalid_artifact_name", "artifact filename must be a simple .zip filename of at most 255 characters")
+		return
+	}
+	archive, err := io.ReadAll(io.LimitReader(file, deploy.MaxArchiveSize+1))
+	if err != nil {
+		writeError(w, 400, "artifact_read_failed", "could not read uploaded ZIP archive")
+		return
+	}
+	if len(archive) > deploy.MaxArchiveSize {
+		writeError(w, 413, "artifact_too_large", "ZIP archive exceeds 25 MiB")
+		return
+	}
+	if err = deploy.ValidateArchive(archive); err != nil {
+		writeError(w, 400, "invalid_artifact", err.Error())
+		return
+	}
+	encrypted, err := s.Box.Encrypt(archive, "application-artifact:"+id.String())
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	digest := sha256.Sum256(archive)
+	p := principal(r)
+	item, err := s.Store.UpsertApplicationArtifact(r.Context(), p.OrganizationID, store.ApplicationArtifact{ComposeServiceID: id, EncryptedArchive: encrypted, Filename: filename, SHA256: hex.EncodeToString(digest[:]), CompressedSize: int64(len(archive))})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "source.artifact.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"filename": filename, "sha256": item.SHA256, "compressedSize": item.CompressedSize})
 	writeJSON(w, 200, item)
 }
 

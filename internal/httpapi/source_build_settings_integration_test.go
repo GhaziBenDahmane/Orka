@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,5 +185,98 @@ func TestApplicationBuildSettingsAreEncryptedAndRedacted(t *testing.T) {
 	railpackResponse.Body.Close()
 	if railpackResponse.StatusCode != http.StatusOK || !bytes.Contains(railpackData, []byte(`"buildType":"railpack"`)) || !bytes.Contains(railpackData, []byte(`"hasBuildSecrets":true`)) || bytes.Contains(railpackData, []byte("railpack-secret")) {
 		t.Fatalf("Railpack source update failed or leaked a secret: status=%d body=%s", railpackResponse.StatusCode, railpackData)
+	}
+	dropBody := []byte(`{"sourceType":"drop","contextDirectory":".","dockerfile":"Dockerfile","buildType":"dockerfile","buildArguments":{},"buildSecrets":{},"targetService":"api","registryImage":"ghcr.io/acme/api"}`)
+	missingRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(dropBody))
+	missingRequest.Header.Set("Authorization", "Bearer "+token)
+	missingRequest.Header.Set("X-Organization-ID", organizationID.String())
+	missingRequest.Header.Set("Content-Type", "application/json")
+	missingResponse, err := http.DefaultClient.Do(missingRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingData, _ := io.ReadAll(missingResponse.Body)
+	missingResponse.Body.Close()
+	if missingResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(missingData, []byte(`"code":"artifact_missing"`)) {
+		t.Fatalf("drop source without artifact was accepted: status=%d body=%s", missingResponse.StatusCode, missingData)
+	}
+
+	var archive bytes.Buffer
+	zipWriter := zip.NewWriter(&archive)
+	entry, err := zipWriter.Create("release/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = entry.Write([]byte("FROM scratch")); err != nil {
+		t.Fatal(err)
+	}
+	if err = zipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var multipartBody bytes.Buffer
+	multipartWriter := multipart.NewWriter(&multipartBody)
+	part, err := multipartWriter.CreateFormFile("file", "release.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = part.Write(archive.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err = multipartWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	uploadRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/artifact-source", &multipartBody)
+	uploadRequest.Header.Set("Authorization", "Bearer "+token)
+	uploadRequest.Header.Set("X-Organization-ID", organizationID.String())
+	uploadRequest.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+	uploadResponse, err := http.DefaultClient.Do(uploadRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadData, _ := io.ReadAll(uploadResponse.Body)
+	uploadResponse.Body.Close()
+	if uploadResponse.StatusCode != http.StatusOK || !bytes.Contains(uploadData, []byte(`"filename":"release.zip"`)) || bytes.Contains(uploadData, []byte("FROM scratch")) {
+		t.Fatalf("artifact upload failed or leaked contents: status=%d body=%s", uploadResponse.StatusCode, uploadData)
+	}
+	var encryptedArchive, digest string
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_archive,sha256 FROM application_artifacts WHERE compose_service_id=$1`, serviceID).Scan(&encryptedArchive, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if encryptedArchive == "" || strings.Contains(encryptedArchive, "FROM scratch") || len(digest) != 64 {
+		t.Fatalf("artifact was not safely persisted: ciphertext=%q digest=%q", encryptedArchive, digest)
+	}
+	plainArchive, err := box.Decrypt(encryptedArchive, "application-artifact:"+serviceID.String())
+	if err != nil || !bytes.Equal(plainArchive, archive.Bytes()) {
+		t.Fatalf("artifact did not round-trip: %v", err)
+	}
+	if _, err = box.Decrypt(encryptedArchive, "application-artifact:"+uuid.NewString()); err == nil {
+		t.Fatal("artifact ciphertext was not bound to its service")
+	}
+
+	dropRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(dropBody))
+	dropRequest.Header.Set("Authorization", "Bearer "+token)
+	dropRequest.Header.Set("X-Organization-ID", organizationID.String())
+	dropRequest.Header.Set("Content-Type", "application/json")
+	dropResponse, err := http.DefaultClient.Do(dropRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropData, _ := io.ReadAll(dropResponse.Body)
+	dropResponse.Body.Close()
+	if dropResponse.StatusCode != http.StatusOK || !bytes.Contains(dropData, []byte(`"sourceType":"drop"`)) {
+		t.Fatalf("drop source update failed: status=%d body=%s", dropResponse.StatusCode, dropData)
+	}
+
+	detailRequest, _ = http.NewRequest(http.MethodGet, server.URL+"/v1/services/"+serviceID.String(), nil)
+	detailRequest.Header.Set("Authorization", "Bearer "+token)
+	detailRequest.Header.Set("X-Organization-ID", organizationID.String())
+	detailResponse, err = http.DefaultClient.Do(detailRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailData, _ = io.ReadAll(detailResponse.Body)
+	detailResponse.Body.Close()
+	if detailResponse.StatusCode != http.StatusOK || !bytes.Contains(detailData, []byte(`"artifact":{"filename":"release.zip"`)) || bytes.Contains(detailData, []byte("FROM scratch")) {
+		t.Fatalf("service detail omitted safe artifact metadata or leaked contents: status=%d body=%s", detailResponse.StatusCode, detailData)
 	}
 }

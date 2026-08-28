@@ -29,6 +29,10 @@ allowed to finish before deletion can begin.
   digests are persisted.
 - Sensitive application values are encrypted with AES-256-GCM using the
   instance master key.
+- Uploaded application ZIPs are size-bounded, fully validated, encrypted with
+  service-bound authenticated data, and stored in PostgreSQL so any controller
+  can execute the build. Extraction rejects traversal, links, devices, FIFOs,
+  duplicate/conflicting paths, encrypted entries, and expansion bombs.
 - Every query is scoped through an organization membership.
 - Compose validation rejects privileged containers, host networking, host PID,
   Docker socket mounts, and host-path volumes unless an administrator explicitly

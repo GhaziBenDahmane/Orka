@@ -15,7 +15,7 @@ The initial implementation includes:
 - a versioned template catalog with Dokploy template import support;
 - ten built-in managed databases plus a versioned external driver protocol and Go SDK;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
-- public or authenticated HTTPS/SSH Git builds with pinned host keys, pushed to authenticated OCI registries;
+- public or authenticated HTTPS/SSH Git builds and encrypted, hardened ZIP uploads, pushed to authenticated OCI registries;
 - signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks with durable commit-status callbacks;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets, a queryable audit trail, and hash-chained S3 Object Lock archives.

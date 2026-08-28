@@ -176,6 +176,7 @@ state, duplicate destructive jobs, or expose credentials.
 ### 6. Product surface and migration
 
 Status: Compose, Docker-image application, Dockerfile/HTTPS Git application,
+encrypted uploaded-ZIP application sources with bounded hardened extraction,
 managed-database Dokploy dry-run/import tooling, a secure operational CLI with
 a full raw-API escape hatch, generated route-level OpenAPI coverage, and an
 embedded React console for core workload, template, database, and cluster

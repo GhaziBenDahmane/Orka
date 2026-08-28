@@ -75,7 +75,11 @@ paths:
 				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" {
-				output.WriteString("      requestBody:\n        required: false\n        content:\n          application/json:\n            schema:\n              type: object\n              additionalProperties: true\n")
+				if strings.HasSuffix(op.path, "/artifact-source") {
+					output.WriteString("      requestBody:\n        required: true\n        content:\n          multipart/form-data:\n            schema:\n              type: object\n              required: [file]\n              properties:\n                file:\n                  type: string\n                  format: binary\n")
+				} else {
+					output.WriteString("      requestBody:\n        required: false\n        content:\n          application/json:\n            schema:\n              type: object\n              additionalProperties: true\n")
+				}
 			}
 			output.WriteString("      responses:\n        '2XX':\n          description: Successful response\n        default:\n          description: Structured API error\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/ErrorEnvelope'\n")
 		}
