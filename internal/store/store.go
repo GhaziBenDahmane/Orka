@@ -171,14 +171,27 @@ type BackupPolicy struct {
 	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 type ApplicationSource struct {
-	ComposeServiceID uuid.UUID `json:"composeServiceId"`
-	RepositoryURL    string    `json:"repositoryUrl"`
-	GitRef           string    `json:"gitRef"`
-	ContextDirectory string    `json:"contextDirectory"`
-	Dockerfile       string    `json:"dockerfile"`
-	TargetService    string    `json:"targetService"`
-	RegistryImage    string    `json:"registryImage"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ComposeServiceID     uuid.UUID  `json:"composeServiceId"`
+	RepositoryURL        string     `json:"repositoryUrl"`
+	GitRef               string     `json:"gitRef"`
+	ContextDirectory     string     `json:"contextDirectory"`
+	Dockerfile           string     `json:"dockerfile"`
+	TargetService        string     `json:"targetService"`
+	RegistryImage        string     `json:"registryImage"`
+	GitCredentialID      *uuid.UUID `json:"gitCredentialId,omitempty"`
+	RegistryCredentialID *uuid.UUID `json:"registryCredentialId,omitempty"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+}
+type SourceCredential struct {
+	ID              uuid.UUID `json:"id"`
+	OrganizationID  uuid.UUID `json:"organizationId"`
+	Kind            string    `json:"kind"`
+	Name            string    `json:"name"`
+	Server          string    `json:"server"`
+	Username        string    `json:"username"`
+	EncryptedSecret string    `json:"-"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 func (s *Store) HasUsers(ctx context.Context) (bool, error) {
@@ -327,11 +340,51 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 }
 
 func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid.UUID, source ApplicationSource) (ApplicationSource, error) {
-	err := s.Pool.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image) SELECT s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,updated_at=now() RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage).Scan(&source.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id)
+		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
+		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
+		AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$9 AND c.organization_id=$2 AND c.kind='git'))
+		AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=$2 AND c.kind='registry'))
+		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,updated_at=now()
+		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID).Scan(&source.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}
 	return source, err
+}
+
+func (s *Store) CreateSourceCredential(ctx context.Context, item SourceCredential) (SourceCredential, error) {
+	item.ID = uuid.New()
+	err := s.Pool.QueryRow(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Kind, item.Name, item.Server, item.Username, item.EncryptedSecret).Scan(&item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *Store) ListSourceCredentials(ctx context.Context, organizationID uuid.UUID) ([]SourceCredential, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,kind,name,server,username,created_at,updated_at FROM source_credentials WHERE organization_id=$1 ORDER BY kind,name`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SourceCredential{}
+	for rows.Next() {
+		var item SourceCredential
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Kind, &item.Name, &item.Server, &item.Username, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.UUID) (ComposeService, []Route, error) {

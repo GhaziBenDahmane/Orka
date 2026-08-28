@@ -14,7 +14,7 @@ The initial implementation includes:
 - a versioned template catalog with Dokploy template import support;
 - extensible managed-database drivers;
 - OIDC/PKCE login, domain discovery, SCIM users/groups, and group-to-role mapping;
-- public Git/Dockerfile builds pushed to an OCI registry;
+- public or authenticated Git/Dockerfile builds pushed to authenticated OCI registries;
 - checksummed PostgreSQL backup, confirmed restore, scheduling, and retention jobs;
 - encrypted secrets and an audit trail.
 

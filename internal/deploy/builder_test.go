@@ -1,10 +1,14 @@
 package deploy
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/google/uuid"
 )
 
 func TestSafeJoin(t *testing.T) {
@@ -35,5 +39,41 @@ func TestSetServiceImage(t *testing.T) {
 	}
 	if !strings.Contains(out, "registry.example/web:123") || strings.Contains(out, "build:") {
 		t.Fatalf("image was not applied:\n%s", out)
+	}
+}
+
+func TestImageRegistry(t *testing.T) {
+	for image, want := range map[string]string{"postgres": "docker.io", "library/postgres": "docker.io", "ghcr.io/acme/api": "ghcr.io", "localhost:5000/api": "localhost:5000"} {
+		if got := imageRegistry(image); got != want {
+			t.Errorf("imageRegistry(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+func TestDockerConfigPermissionsAndAuth(t *testing.T) {
+	directory, err := writeDockerConfig(Credential{Server: "registry.example", Username: "robot", Secret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(directory)
+	path := filepath.Join(directory, "config.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("config permissions = %o", info.Mode().Perm())
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "secret") {
+		t.Fatal("Docker config contains a plaintext secret")
+	}
+}
+
+func TestBuildRejectsCredentialHostMismatchBeforeClone(t *testing.T) {
+	source := store.ApplicationSource{RepositoryURL: "https://github.com/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
+	_, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: Credential{Server: "gitlab.com", Username: "robot", Secret: "secret"}})
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected host mismatch, got %v", err)
 	}
 }

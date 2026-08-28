@@ -56,6 +56,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.me)))
 	mux.Handle("GET /v1/audit-events", s.requireRole("admin", http.HandlerFunc(s.auditEvents)))
+	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
+	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
+	mux.Handle("DELETE /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.deleteSourceCredential)))
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))
 	mux.Handle("POST /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.createOIDCProvider)))
 	mux.Handle("GET /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.listOIDCProviders)))
@@ -831,12 +834,14 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		RepositoryURL    string `json:"repositoryUrl"`
-		GitRef           string `json:"gitRef"`
-		ContextDirectory string `json:"contextDirectory"`
-		Dockerfile       string `json:"dockerfile"`
-		TargetService    string `json:"targetService"`
-		RegistryImage    string `json:"registryImage"`
+		RepositoryURL        string     `json:"repositoryUrl"`
+		GitRef               string     `json:"gitRef"`
+		ContextDirectory     string     `json:"contextDirectory"`
+		Dockerfile           string     `json:"dockerfile"`
+		TargetService        string     `json:"targetService"`
+		RegistryImage        string     `json:"registryImage"`
+		GitCredentialID      *uuid.UUID `json:"gitCredentialId"`
+		RegistryCredentialID *uuid.UUID `json:"registryCredentialId"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -855,13 +860,70 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, TargetService: in.TargetService, RegistryImage: in.RegistryImage})
+	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	s.Store.Audit(r.Context(), &p, "source.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"repository": in.RepositoryURL, "ref": in.GitRef})
 	writeJSON(w, 200, item)
+}
+
+func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+		Server   string `json:"server"`
+		Username string `json:"username"`
+		Secret   string `json:"secret"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Kind = strings.ToLower(strings.TrimSpace(in.Kind))
+	in.Name = strings.TrimSpace(in.Name)
+	in.Server = strings.ToLower(strings.TrimSpace(in.Server))
+	if (in.Kind != "git" && in.Kind != "registry") || in.Name == "" || in.Server == "" || strings.ContainsAny(in.Server, "/@") || in.Username == "" || in.Secret == "" {
+		writeError(w, 400, "invalid_credential", "kind, name, server, username, and secret are required")
+		return
+	}
+	encrypted, err := s.Box.Encrypt([]byte(in.Secret), "source-credential")
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.CreateSourceCredential(r.Context(), store.SourceCredential{OrganizationID: p.OrganizationID, Kind: in.Kind, Name: in.Name, Server: in.Server, Username: in.Username, EncryptedSecret: encrypted})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "source_credential.create", "source_credential", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "server": item.Server})
+	writeJSON(w, 201, item)
+}
+
+func (s *Server) listSourceCredentials(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListSourceCredentials(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) deleteSourceCredential(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("credentialID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid credential id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.DeleteSourceCredential(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "source_credential.delete", "source_credential", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(204)
 }
 func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
 	serviceID, err := uuid.Parse(r.PathValue("serviceID"))

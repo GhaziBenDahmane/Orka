@@ -107,9 +107,11 @@ Okta, Keycloak, and Google Workspace where applicable.
 
 ### 4. Delivery integrations and operations
 
-Status: public HTTPS Git and generic deploy hooks implemented.
+Status: public/private HTTPS Git, private OCI registries, ephemeral build
+credentials, and generic deploy hooks implemented.
 
-- Encrypted Git deploy keys/tokens and registry credentials.
+- Add SSH deploy keys alongside the implemented encrypted HTTPS Git tokens and
+  OCI registry credentials.
 - GitHub, GitLab, Gitea, and Bitbucket adapters with signature verification,
   branch filtering, delivery replay protection, and build status callbacks.
 - Notification rules and providers for email, Slack-compatible webhooks, and

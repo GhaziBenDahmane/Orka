@@ -3,6 +3,8 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -18,10 +20,20 @@ import (
 
 type Builder struct{ GitBin, DockerBin string }
 
+type Credential struct {
+	Server   string
+	Username string
+	Secret   string
+}
+type BuildCredentials struct {
+	Git      Credential
+	Registry Credential
+}
+
 var safeRef = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
 var registryImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$`)
 
-func (b Builder) Build(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID) (string, string, error) {
+func (b Builder) Build(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, credentials BuildCredentials) (string, string, error) {
 	repo, err := url.Parse(source.RepositoryURL)
 	if err != nil || repo.Scheme != "https" || repo.Host == "" || repo.User != nil {
 		return "", "", fmt.Errorf("repository URL must use HTTPS")
@@ -32,12 +44,29 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if !registryImage.MatchString(source.RegistryImage) || strings.Contains(source.RegistryImage, "..") {
 		return "", "", fmt.Errorf("invalid registry image")
 	}
+	if credentials.Git.Secret != "" && !strings.EqualFold(repo.Hostname(), credentials.Git.Server) {
+		return "", "", fmt.Errorf("Git credential server does not match repository host")
+	}
+	if credentials.Registry.Secret != "" && !strings.EqualFold(imageRegistry(source.RegistryImage), credentials.Registry.Server) {
+		return "", "", fmt.Errorf("registry credential server does not match image registry")
+	}
 	directory, err := os.MkdirTemp("", "dockyard-build-*")
 	if err != nil {
 		return "", "", err
 	}
 	defer os.RemoveAll(directory)
-	output, err := run(ctx, b.git(), nil, "clone", "--depth", "1", "--branch", source.GitRef, "--", source.RepositoryURL, directory)
+	gitEnvironment := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
+	if credentials.Git.Secret != "" {
+		askPass, createErr := writeAskPass()
+		if createErr != nil {
+			return "", "", createErr
+		}
+		defer os.Remove(askPass)
+		gitEnvironment["GIT_ASKPASS"] = askPass
+		gitEnvironment["DOCKYARD_GIT_USERNAME"] = credentials.Git.Username
+		gitEnvironment["DOCKYARD_GIT_SECRET"] = credentials.Git.Secret
+	}
+	output, err := run(ctx, b.git(), gitEnvironment, "clone", "--depth", "1", "--branch", source.GitRef, "--", source.RepositoryURL, directory)
 	if err != nil {
 		return "", output, err
 	}
@@ -62,8 +91,63 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		return "", output, fmt.Errorf("Dockerfile must be a regular file")
 	}
 	tag := source.RegistryImage + ":" + deploymentID.String()
-	buildOutput, err := run(ctx, b.docker(), nil, "buildx", "build", "--pull", "--push", "--tag", tag, "--file", dockerfilePath, contextPath)
+	buildEnvironment := map[string]string{}
+	if credentials.Registry.Secret != "" {
+		configDir, configErr := writeDockerConfig(credentials.Registry)
+		if configErr != nil {
+			return "", output, configErr
+		}
+		defer os.RemoveAll(configDir)
+		buildEnvironment["DOCKER_CONFIG"] = configDir
+	}
+	buildOutput, err := run(ctx, b.docker(), buildEnvironment, "buildx", "build", "--pull", "--push", "--tag", tag, "--file", dockerfilePath, contextPath)
 	return tag, output + buildOutput, err
+}
+
+func writeAskPass() (string, error) {
+	file, err := os.CreateTemp("", "dockyard-askpass-*")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	content := "#!/bin/sh\ncase \"$1\" in *Username*) printf '%s' \"$DOCKYARD_GIT_USERNAME\" ;; *) printf '%s' \"$DOCKYARD_GIT_SECRET\" ;; esac\n"
+	if _, err = file.WriteString(content); err == nil {
+		err = file.Chmod(0700)
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func writeDockerConfig(credential Credential) (string, error) {
+	directory, err := os.MkdirTemp("", "dockyard-docker-config-*")
+	if err != nil {
+		return "", err
+	}
+	config := map[string]any{"auths": map[string]any{credential.Server: map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(credential.Username + ":" + credential.Secret))}}}
+	data, err := json.Marshal(config)
+	if err == nil {
+		err = os.WriteFile(filepath.Join(directory, "config.json"), data, 0600)
+	}
+	if err != nil {
+		_ = os.RemoveAll(directory)
+		return "", err
+	}
+	return directory, nil
+}
+
+func imageRegistry(image string) string {
+	first, _, _ := strings.Cut(image, "/")
+	if strings.ContainsAny(first, ".:") || first == "localhost" {
+		return strings.ToLower(first)
+	}
+	return "docker.io"
 }
 func (b Builder) git() string {
 	if b.GitBin == "" {
