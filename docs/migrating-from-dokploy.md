@@ -21,10 +21,9 @@ applications. Dockyard uses it as the destination repository prefix for images
 built from imported Dockerfiles.
 
 The JSON report lists convertible projects, environments, Compose services,
-managed databases, routes, skipped resources, and manual actions. Its
-structured `resources` entries record every application's deterministic target
-ID, disposition, source/build mode, resource settings, and boolean flags for
-credentials, build arguments, and build secrets. Secret values and URL
+managed databases, routes, notifications, skipped resources, and manual
+actions. Its structured `resources` entries record deterministic target IDs,
+dispositions, and secret-safe compatibility metadata. Secret values and URL
 credentials are never included. Repeated imports map every source identifier
 to the same target UUID, so a retry updates imported resources instead of
 duplicating them.
@@ -68,6 +67,8 @@ Imported automatically:
   backup-capable database when its cron expression has a constant interval;
   per-policy object prefixes are preserved with deterministic destination
   variants;
+- Slack webhooks and SMTP email endpoints, with source secrets decrypted only
+  in memory and re-encrypted under the Dockyard master key;
 - enabled Compose domains with service name and valid target port.
 
 Reported for manual conversion:
@@ -79,8 +80,16 @@ Reported for manual conversion:
   placement settings, redirects, and security rules;
 - Compose definitions stored only in a remote Git repository;
 - GitHub App credentials, SSH keys, certificates, unsupported or calendar-based
-  backup schedules, additional policies for the same database, Compose backup
-  policies, and notifications.
+  backup schedules, additional policies for the same database, and Compose
+  backup policies;
+- Telegram, Discord, Resend, Gotify, ntfy, Mattermost, Pushover, custom, Lark,
+  and Teams notification providers.
+
+Dokploy `appBuildError` and `databaseBackup` notification triggers map to
+Dockyard `deployment.failed` and `backup.failed`. Dokploy success, volume,
+restart, platform-backup, cleanup, and server-threshold triggers have no direct
+Dockyard equivalent and are called out in the migration report. A notification
+with only unmapped triggers is left for manual conversion.
 
 Imported backup schedules support fixed 15-minute-or-longer minute steps,
 hourly schedules, evenly divisible hour steps, daily schedules, and weekly

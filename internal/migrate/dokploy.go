@@ -33,19 +33,20 @@ type DokployOptions struct {
 }
 
 type DokployReport struct {
-	DryRun             bool                    `json:"dryRun"`
-	Projects           int                     `json:"projects"`
-	Environments       int                     `json:"environments"`
-	Services           int                     `json:"services"`
-	Applications       int                     `json:"applications"`
-	Databases          int                     `json:"databases"`
-	Routes             int                     `json:"routes"`
-	BackupDestinations int                     `json:"backupDestinations"`
-	BackupPolicies     int                     `json:"backupPolicies"`
-	SourceCredentials  int                     `json:"sourceCredentials"`
-	Skipped            int                     `json:"skipped"`
-	Warnings           []string                `json:"warnings"`
-	Resources          []DokployResourceReport `json:"resources"`
+	DryRun                bool                    `json:"dryRun"`
+	Projects              int                     `json:"projects"`
+	Environments          int                     `json:"environments"`
+	Services              int                     `json:"services"`
+	Applications          int                     `json:"applications"`
+	Databases             int                     `json:"databases"`
+	Routes                int                     `json:"routes"`
+	BackupDestinations    int                     `json:"backupDestinations"`
+	BackupPolicies        int                     `json:"backupPolicies"`
+	SourceCredentials     int                     `json:"sourceCredentials"`
+	NotificationEndpoints int                     `json:"notificationEndpoints"`
+	Skipped               int                     `json:"skipped"`
+	Warnings              []string                `json:"warnings"`
+	Resources             []DokployResourceReport `json:"resources"`
 }
 
 type DokployResourceReport struct {
@@ -220,6 +221,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		return report, err
 	}
 	report.SourceCredentials = len(sourceCredentials)
+	notifications, err := readNotifications(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	report.NotificationEndpoints = len(notifications)
 	registry := database.NewRegistry()
 	validDatabases := map[string]bool{}
 	for _, item := range databases {
@@ -304,6 +310,20 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 		preparedCredentials[credentialKey(item.sourceKind, item.sourceID)] = prepared
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "source_credential", SourceID: item.sourceKind + ":" + item.sourceID, TargetID: &prepared.id, Status: "imported", Metadata: metadata})
+	}
+	preparedNotifications := []preparedNotification{}
+	for _, item := range notifications {
+		prepared, warnings, prepareErr := prepareNotification(box, options, item)
+		report.Warnings = append(report.Warnings, warnings...)
+		metadata := notificationMetadata(item, prepared.events)
+		if prepareErr != nil {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("notification %s was skipped: %v", item.id, prepareErr))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "notification", SourceID: item.id, Status: "skipped", Reason: prepareErr.Error(), Metadata: metadata})
+			continue
+		}
+		preparedNotifications = append(preparedNotifications, prepared)
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "notification", SourceID: item.id, TargetID: &prepared.id, Status: "imported", Metadata: metadata})
 	}
 	for _, item := range applications {
 		if !validApplications[item.ID] {
@@ -489,6 +509,14 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN excluded.next_run_at ELSE backup_policies.next_run_at END,updated_at=now()`, item.id, item.databaseID, item.intervalSeconds, item.source.retentionCount, item.source.enabled, item.destinationID)
 		if err != nil {
 			return report, fmt.Errorf("import backup policy %s: %w", item.source.id, err)
+		}
+	}
+	for _, item := range preparedNotifications {
+		name := strings.TrimSpace(item.source.name) + " (Dokploy " + strings.Split(item.id.String(), "-")[0] + ")"
+		_, err = tx.Exec(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,true)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,encrypted_url=excluded.encrypted_url,encrypted_secret=excluded.encrypted_secret,events=excluded.events,enabled=true,updated_at=now()`, item.id, options.TargetOrganizationID, name, item.kind, item.encryptedURL, item.encryptedSecret, item.events)
+		if err != nil {
+			return report, fmt.Errorf("import notification %s: %w", item.source.id, err)
 		}
 	}
 	for _, item := range filteredRoutes {

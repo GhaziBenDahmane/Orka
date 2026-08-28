@@ -49,6 +49,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		`CREATE TABLE ` + quotedSchema + `.application ("applicationId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,env text,"sourceType" text,"buildType" text,"dockerImage" text,username text,password text,command text,args text[],replicas integer,repository text,owner text,branch text,"buildPath" text,dockerfile text,"githubId" text,"gitlabId" text,"giteaId" text,"bitbucketId" text,"registryId" text,"buildRegistryId" text)`,
 		`CREATE TABLE ` + quotedSchema + `.destination ("destinationId" text PRIMARY KEY,name text NOT NULL,provider text,"accessKey" text NOT NULL,"secretAccessKey" text NOT NULL,bucket text NOT NULL,region text NOT NULL,endpoint text NOT NULL,"additionalFlags" text[],"organizationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.backup ("backupId" text PRIMARY KEY,schedule text NOT NULL,enabled boolean,database text NOT NULL,prefix text NOT NULL,"destinationId" text NOT NULL,"keepLatestCount" integer,"backupType" text NOT NULL,"databaseType" text NOT NULL,"composeId" text,"postgresId" text,"mariadbId" text,"mysqlId" text,"mongoId" text,"libsqlId" text)`,
+		`CREATE TABLE ` + quotedSchema + `.slack ("slackId" text PRIMARY KEY,"webhookUrl" text NOT NULL,channel text)`,
+		`CREATE TABLE ` + quotedSchema + `.email ("emailId" text PRIMARY KEY,"smtpServer" text NOT NULL,"smtpPort" integer NOT NULL,username text NOT NULL,password text NOT NULL,"fromAddress" text NOT NULL,"toAddress" text[] NOT NULL)`,
+		`CREATE TABLE ` + quotedSchema + `.notification ("notificationId" text PRIMARY KEY,name text NOT NULL,"appDeploy" boolean NOT NULL DEFAULT false,"appBuildError" boolean NOT NULL DEFAULT false,"databaseBackup" boolean NOT NULL DEFAULT false,"volumeBackup" boolean NOT NULL DEFAULT false,"dokployRestart" boolean NOT NULL DEFAULT false,"dokployBackup" boolean NOT NULL DEFAULT false,"dockerCleanup" boolean NOT NULL DEFAULT false,"serverThreshold" boolean NOT NULL DEFAULT false,"notificationType" text NOT NULL,"slackId" text,"emailId" text,"organizationId" text NOT NULL)`,
 	}
 	statements = append(statements,
 		`CREATE TABLE `+quotedSchema+`.postgres ("postgresId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,"databaseName" text,"databaseUser" text,"databasePassword" text,"dockerImage" text,env text)`,
@@ -82,6 +85,12 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.backup VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres',NULL,'pg1',NULL,NULL,NULL,NULL)`)
 	}
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.slack VALUES('slack1',$1,'#operations')`, encryptDokployFixture(t, sourceKey, "https://hooks.slack.example.test/services/secret-token"))
+	}
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.notification ("notificationId",name,"appBuildError","databaseBackup","notificationType","slackId","organizationId") VALUES('notification1','Production alerts',true,true,'slack','slack1','source-org')`)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,14 +109,14 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	parsed.RawQuery = query.Encode()
 	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
-	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 1 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 1 || report.SourceCredentials != 2 {
+	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 1 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 1 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
-	if len(report.Resources) != 6 || report.Resources[0].SourceKind != "application" || report.Resources[2].SourceKind != "backup_destination" || report.Resources[3].SourceKind != "backup_policy" || report.Resources[4].SourceKind != "source_credential" {
+	if len(report.Resources) != 7 || report.Resources[0].SourceKind != "application" || report.Resources[2].SourceKind != "backup_destination" || report.Resources[3].SourceKind != "backup_policy" || report.Resources[4].SourceKind != "source_credential" || report.Resources[6].SourceKind != "notification" {
 		t.Fatalf("migration parity resources = %#v", report.Resources)
 	}
 	encodedReport, _ := json.Marshal(report)
-	if bytes.Contains(encodedReport, []byte("legacy-secret")) || bytes.Contains(encodedReport, []byte("registry-secret")) {
+	if bytes.Contains(encodedReport, []byte("legacy-secret")) || bytes.Contains(encodedReport, []byte("registry-secret")) || bytes.Contains(encodedReport, []byte("secret-token")) {
 		t.Fatal("dry-run report leaked source credentials")
 	}
 	options.DryRun = false
@@ -117,14 +126,23 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
 	}
-	var projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials int
+	var projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials, notifications int
 	var encryptedCredentials, encryptedEnvironment string
 	var storedConfig []byte
-	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &sourceCredentials); err != nil {
+	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &sourceCredentials, &notifications); err != nil {
 		t.Fatal(err)
 	}
-	if projects != 1 || services != 4 || routes != 2 || databases != 1 || applicationSources != 1 || backupDestinations != 2 || backupPolicies != 1 || sourceCredentials != 1 {
-		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials)
+	if projects != 1 || services != 4 || routes != 2 || databases != 1 || applicationSources != 1 || backupDestinations != 2 || backupPolicies != 1 || sourceCredentials != 1 || notifications != 1 {
+		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials, notifications)
+	}
+	var encryptedNotificationURL string
+	notificationID := mappedID(options, "notification", "notification1")
+	if err = destination.Pool.QueryRow(ctx, `SELECT encrypted_url FROM notification_endpoints WHERE id=$1 AND organization_id=$2`, notificationID, targetOrg).Scan(&encryptedNotificationURL); err != nil {
+		t.Fatal(err)
+	}
+	notificationURL, err := box.Decrypt(encryptedNotificationURL, "notification-url:"+notificationID.String())
+	if err != nil || string(notificationURL) != "https://hooks.slack.example.test/services/secret-token" {
+		t.Fatalf("notification URL mismatch: %q, err=%v", notificationURL, err)
 	}
 	if err = destination.Pool.QueryRow(ctx, `SELECT d.encrypted_credentials,s.encrypted_env,d.config FROM database_instances d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1`, targetOrg).Scan(&encryptedCredentials, &encryptedEnvironment, &storedConfig); err != nil {
 		t.Fatal(err)
