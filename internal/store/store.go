@@ -181,6 +181,9 @@ type DatabaseBackup struct {
 	Path               string     `json:"path,omitempty"`
 	SizeBytes          *int64     `json:"sizeBytes,omitempty"`
 	SHA256             string     `json:"sha256,omitempty"`
+	Encrypted          bool       `json:"encrypted"`
+	PlaintextSHA256    string     `json:"plaintextSha256,omitempty"`
+	EncryptedDataKey   string     `json:"-"`
 	DestinationID      *uuid.UUID `json:"destinationId,omitempty"`
 	ObjectKey          string     `json:"objectKey,omitempty"`
 	Error              string     `json:"error,omitempty"`
@@ -972,7 +975,7 @@ func (s *Store) DeleteBackupDestination(ctx context.Context, organizationID, id 
 
 func (s *Store) GetDatabaseBackup(ctx context.Context, organizationID, id uuid.UUID) (DatabaseBackup, error) {
 	var b DatabaseBackup
-	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.status,b.format,b.path,b.size_bytes,b.sha256,b.destination_id,b.object_key,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&b.ID, &b.DatabaseInstanceID, &b.Status, &b.Format, &b.Path, &b.SizeBytes, &b.SHA256, &b.DestinationID, &b.ObjectKey, &b.Error, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.status,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&b.ID, &b.DatabaseInstanceID, &b.Status, &b.Format, &b.Path, &b.SizeBytes, &b.SHA256, &b.Encrypted, &b.PlaintextSHA256, &b.EncryptedDataKey, &b.DestinationID, &b.ObjectKey, &b.Error, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseBackup{}, ErrNotFound
 	}

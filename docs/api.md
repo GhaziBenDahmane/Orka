@@ -109,3 +109,7 @@ currently available for PostgreSQL, MySQL, MariaDB, and MongoDB.
 Pass `destinationId` to a backup request or backup policy to upload through an
 S3-compatible multipart client. Restores download to an isolated temporary
 directory and verify the stored SHA-256 checksum before invoking native tools.
+Every new local or S3 artifact is encrypted before storage with a random
+per-backup AES-256-GCM data key; only the master-key-wrapped data key is kept in
+PostgreSQL. Chunk authentication detects modification, reordering, and
+truncation, and restores also verify the original plaintext checksum.

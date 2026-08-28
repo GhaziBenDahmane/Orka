@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -444,6 +445,12 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err = os.MkdirAll(directory, 0700); err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
+	keepLocalArtifact := false
+	defer func() {
+		if !keepLocalArtifact {
+			_ = os.RemoveAll(directory)
+		}
+	}()
 	if err = writePlanFiles(directory, plan.Files); err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
@@ -454,12 +461,37 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
-	path := filepath.Join(directory, filename)
-	sum, size, err := checksumFile(path)
+	plainPath := filepath.Join(directory, filename)
+	defer os.Remove(plainPath)
+	plainSum, _, err := checksumFile(plainPath)
 	if err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
-	storedPath, objectKey := path, ""
+	encryptedPath := plainPath + ".enc"
+	dataKey := make([]byte, 32)
+	if _, err = rand.Read(dataKey); err != nil {
+		return w.failBackup(ctx, backupID, err)
+	}
+	artifactBox, err := cryptox.New(dataKey)
+	if err != nil {
+		return w.failBackup(ctx, backupID, err)
+	}
+	wrappedDataKey, err := w.Box.Encrypt(dataKey, "backup-data-key:"+backupID.String())
+	clear(dataKey)
+	if err != nil {
+		return w.failBackup(ctx, backupID, err)
+	}
+	if err = encryptBackupFile(artifactBox, plainPath, encryptedPath, backupID); err != nil {
+		return w.failBackup(ctx, backupID, err)
+	}
+	if err = os.Remove(plainPath); err != nil {
+		return w.failBackup(ctx, backupID, fmt.Errorf("remove plaintext backup: %w", err))
+	}
+	sum, size, err := checksumFile(encryptedPath)
+	if err != nil {
+		return w.failBackup(ctx, backupID, err)
+	}
+	storedPath, objectKey := encryptedPath, ""
 	var remote *backupstore.S3
 	if destinationID != nil {
 		var remoteErr error
@@ -467,13 +499,13 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		if remoteErr != nil {
 			return w.failBackup(ctx, backupID, remoteErr)
 		}
-		objectKey = remote.ObjectKey(serviceName + "/" + filename)
-		if remoteErr = remote.Put(ctx, objectKey, path); remoteErr != nil {
+		objectKey = remote.ObjectKey(serviceName + "/" + filename + ".enc")
+		if remoteErr = remote.Put(ctx, objectKey, encryptedPath); remoteErr != nil {
 			return w.failBackup(ctx, backupID, remoteErr)
 		}
 		storedPath = ""
 	}
-	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum)
+	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,encrypted=true,plaintext_sha256=$6,encrypted_data_key=$7,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum, plainSum, wrappedDataKey)
 	if err != nil {
 		// The object is not referenced until the metadata update commits. Remove
 		// it with a fresh context when cancellation or a transient database error
@@ -487,8 +519,8 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		}
 		return err
 	}
-	if remote != nil {
-		_ = os.RemoveAll(directory)
+	if remote == nil {
+		keepLocalArtifact = true
 	}
 	if payload.RetentionCount > 0 {
 		w.pruneBackups(ctx, backupID, payload.RetentionCount)
@@ -549,9 +581,11 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	var engine, version, stackName, serviceName, encrypted, path, expectedHash, objectKey string
+	var backupID uuid.UUID
+	var engine, version, stackName, serviceName, encryptedCredentials, path, expectedHash, plaintextHash, encryptedDataKey, objectKey string
+	var artifactEncrypted bool
 	var destinationID *uuid.UUID
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.destination_id,b.object_key`, restoreID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &path, &expectedHash, &destinationID, &objectKey)
+	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING b.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key`, restoreID).Scan(&backupID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey)
 	if err != nil {
 		return err
 	}
@@ -583,7 +617,33 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if actualHash != expectedHash {
 		return w.failRestore(ctx, restoreID, errors.New("backup checksum mismatch"))
 	}
-	plain, err := w.Box.Decrypt(encrypted, "database-credentials")
+	if artifactEncrypted {
+		dataKey, keyErr := w.Box.Decrypt(encryptedDataKey, "backup-data-key:"+backupID.String())
+		if keyErr != nil {
+			return w.failRestore(ctx, restoreID, keyErr)
+		}
+		artifactBox, keyErr := cryptox.New(dataKey)
+		clear(dataKey)
+		if keyErr != nil {
+			return w.failRestore(ctx, restoreID, keyErr)
+		}
+		decryptedPath := strings.TrimSuffix(cleanPath, ".enc")
+		if decryptedPath == cleanPath {
+			decryptedPath += ".plain"
+		}
+		if err = decryptBackupFile(artifactBox, cleanPath, decryptedPath, backupID); err != nil {
+			return w.failRestore(ctx, restoreID, err)
+		}
+		defer os.Remove(decryptedPath)
+		cleanPath = decryptedPath
+		if actualPlainHash, _, hashErr := checksumFile(cleanPath); hashErr != nil || actualPlainHash != plaintextHash {
+			if hashErr == nil {
+				hashErr = errors.New("backup plaintext checksum mismatch")
+			}
+			return w.failRestore(ctx, restoreID, hashErr)
+		}
+	}
+	plain, err := w.Box.Decrypt(encryptedCredentials, "database-credentials")
 	if err != nil {
 		return w.failRestore(ctx, restoreID, err)
 	}
@@ -697,6 +757,60 @@ func checksumFile(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+func encryptBackupFile(box *cryptox.Box, source, destination string, backupID uuid.UUID) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	return writeEncryptedBackup(box, input, destination, "database-backup:"+backupID.String(), true)
+}
+
+func decryptBackupFile(box *cryptox.Box, source, destination string, backupID uuid.UUID) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	return writeEncryptedBackup(box, input, destination, "database-backup:"+backupID.String(), false)
+}
+
+func writeEncryptedBackup(box *cryptox.Box, input io.Reader, destination, context string, encrypt bool) (err error) {
+	temporary := destination + ".tmp"
+	_ = os.Remove(temporary)
+	output, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := output.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if err != nil {
+			_ = os.Remove(temporary)
+		}
+	}()
+	if encrypt {
+		err = box.EncryptStream(output, input, context)
+	} else {
+		err = box.DecryptStream(output, input, context)
+	}
+	if err != nil {
+		return err
+	}
+	if err = output.Sync(); err != nil {
+		return err
+	}
+	if err = output.Close(); err != nil {
+		return err
+	}
+	closed = true
+	return os.Rename(temporary, destination)
 }
 
 func writePlanFiles(directory string, files map[string]string) error {

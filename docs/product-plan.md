@@ -84,9 +84,9 @@ Status: core implementation complete; storage breadth remains.
   Qdrant, and Meilisearch provisioning definitions.
 - PostgreSQL, MySQL, MariaDB, and MongoDB native backup/restore, streaming
   checksums, interval policies, and retention.
-- S3-compatible multipart storage with encrypted destination credentials.
-- Next: automated restore drills and client-side backup encryption per
-  destination.
+- S3-compatible multipart storage with encrypted destination credentials and
+  client-side, per-backup envelope encryption for local and remote artifacts.
+- Next: automated restore drills.
 
 Exit gate: automated restore verification and documented RPO/RTO for every
 database advertised as backup-capable.

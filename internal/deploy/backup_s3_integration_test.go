@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -143,7 +144,7 @@ esac
 		t.Fatal(err)
 	}
 	backup, err = db.GetDatabaseBackup(ctx, orgID, backup.ID)
-	if err != nil || backup.Status != "succeeded" || backup.Path != "" || backup.ObjectKey == "" || backup.SHA256 == "" {
+	if err != nil || backup.Status != "succeeded" || backup.Path != "" || backup.ObjectKey == "" || backup.SHA256 == "" || !backup.Encrypted || backup.PlaintextSHA256 == "" || backup.EncryptedDataKey == "" || !strings.HasSuffix(backup.ObjectKey, ".enc") {
 		t.Fatalf("remote backup = %#v, err = %v", backup, err)
 	}
 	t.Cleanup(func() {
@@ -151,6 +152,15 @@ esac
 	})
 	if _, err = minioClient.StatObject(ctx, bucket, backup.ObjectKey, minio.StatObjectOptions{}); err != nil {
 		t.Fatalf("stat uploaded backup: %v", err)
+	}
+	object, err := minioClient.GetObject(ctx, bucket, backup.ObjectKey, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteBytes, err := io.ReadAll(object)
+	_ = object.Close()
+	if err != nil || bytes.Contains(remoteBytes, []byte("verified worker backup")) {
+		t.Fatalf("remote artifact is not encrypted: err=%v", err)
 	}
 
 	restore, err := db.QueueDatabaseRestore(ctx, orgID, backup.ID, userID, "postgres")
