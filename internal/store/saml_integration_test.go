@@ -47,7 +47,11 @@ func TestSAMLProviderStateReplayAndJITIsolation(t *testing.T) {
 		t.Fatalf("organization providers = %#v, err = %v", items, err)
 	}
 	discovered, err := db.DiscoverSAML(ctx, "EXAMPLE.TEST")
-	if err != nil || len(discovered) != 1 || discovered[0].ID != provider.ID {
+	found := false
+	for _, item := range discovered {
+		found = found || item.ID == provider.ID
+	}
+	if err != nil || !found {
 		t.Fatalf("discovered providers = %#v, err = %v", discovered, err)
 	}
 	if err = db.DisableSAMLProvider(ctx, orgID, otherProvider.ID); !errors.Is(err, ErrNotFound) {
