@@ -2,6 +2,8 @@ package deploy
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,5 +102,108 @@ func TestSSHCredentialFilesArePrivate(t *testing.T) {
 		if info.Mode().Perm() != 0600 {
 			t.Fatalf("%s permissions=%v", name, info.Mode().Perm())
 		}
+	}
+}
+
+func TestValidateBuildSettings(t *testing.T) {
+	valid := store.ApplicationBuildConfig{Arguments: map[string]string{"GO_VERSION": "1.26"}, Secrets: map[string]string{"NPM_TOKEN": "secret"}}
+	if err := ValidateBuildSettings("runtime", valid); err != nil {
+		t.Fatal(err)
+	}
+	for name, config := range map[string]store.ApplicationBuildConfig{
+		"invalid name": {Arguments: map[string]string{"BAD-NAME": "value"}},
+		"overlap":      {Arguments: map[string]string{"TOKEN": "public"}, Secrets: map[string]string{"TOKEN": "secret"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateBuildSettings("runtime", config); err == nil {
+				t.Fatal("expected invalid build settings")
+			}
+		})
+	}
+	if err := ValidateBuildSettings("../../escape", valid); err == nil {
+		t.Fatal("expected invalid build target")
+	}
+}
+
+func TestBuildUsesTargetArgumentsAndFileBackedSecrets(t *testing.T) {
+	directory := t.TempDir()
+	gitPath := filepath.Join(directory, "git")
+	dockerPath := filepath.Join(directory, "docker")
+	logPath := filepath.Join(directory, "docker-args")
+	t.Setenv("DOCKYARD_BUILD_TEST_LOG", logPath)
+	gitScript := "#!/bin/sh\nfor destination do :; done\nmkdir -p \"$destination\"\nprintf 'FROM scratch\\n' >\"$destination/Dockerfile\"\n"
+	dockerScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$DOCKYARD_BUILD_TEST_LOG\"\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dockerPath, []byte(dockerScript), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := store.ApplicationSource{
+		RepositoryURL: "https://git.example.test/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile",
+		RegistryImage: "registry.example.test/acme/app", BuildTarget: "runtime",
+		BuildArguments: map[string]string{"GO_VERSION": "1.26"}, BuildSecrets: map[string]string{"NPM_TOKEN": "s3cr3t"},
+	}
+	tag, _, err := (Builder{GitBin: gitPath, DockerBin: dockerPath}).Build(context.Background(), source, uuid.MustParse("00000000-0000-0000-0000-000000000123"), BuildCredentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag != "registry.example.test/acme/app:00000000-0000-0000-0000-000000000123" {
+		t.Fatalf("tag=%q", tag)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := string(data)
+	for _, expected := range []string{"--target\nruntime\n", "--build-arg\nGO_VERSION=1.26\n", "--secret\nid=NPM_TOKEN,src="} {
+		if !strings.Contains(arguments, expected) {
+			t.Errorf("Docker arguments omit %q:\n%s", expected, arguments)
+		}
+	}
+	if strings.Contains(arguments, "s3cr3t") {
+		t.Fatal("BuildKit secret value leaked into Docker argv")
+	}
+	secretMarker := "id=NPM_TOKEN,src="
+	start := strings.Index(arguments, secretMarker)
+	if start < 0 {
+		t.Fatal("secret source argument missing")
+	}
+	secretPath := strings.TrimSpace(strings.SplitN(arguments[start+len(secretMarker):], "\n", 2)[0])
+	if _, err := os.Stat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary build secret was not removed: %v", err)
+	}
+}
+
+func TestBuildSecretFilesArePrivate(t *testing.T) {
+	directory, err := writeBuildSecrets(map[string]string{"TOKEN": "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(directory)
+	info, err := os.Stat(filepath.Join(directory, "TOKEN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("build secret permissions=%o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestSafeSubmoduleURL(t *testing.T) {
+	repository, _ := url.Parse("https://github.com/acme/app.git")
+	for raw, want := range map[string]bool{
+		"../shared.git":                         true,
+		"https://github.com/acme/shared.git":    true,
+		"https://gitlab.com/acme/stolen.git":    false,
+		"https://github.com:8443/acme/evil.git": false,
+		"ssh://git@github.com/acme/shared.git":  false,
+		"file:///etc":                           false,
+	} {
+		t.Run(fmt.Sprintf("%s=%t", raw, want), func(t *testing.T) {
+			if got := safeSubmoduleURL(raw, repository); got != want {
+				t.Fatalf("safeSubmoduleURL(%q)=%t, want %t", raw, got, want)
+			}
+		})
 	}
 }

@@ -233,8 +233,11 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		if item.BuildType != "dockerfile" {
 			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported by the Dockerfile build worker", item.BuildType)
 		}
-		if item.BuildArgs != "" || item.BuildSecrets != "" || item.DockerBuildStage != "" || item.EnableSubmodules {
-			return preparedApplication{}, warnings, errors.New("build arguments, build secrets, target stages, and Git submodules require manual source configuration")
+		if item.BuildArgs != "" || item.BuildSecrets != "" {
+			return preparedApplication{}, warnings, errors.New("build arguments and build secrets require manual source configuration")
+		}
+		if item.DockerBuildStage != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(item.DockerBuildStage) {
+			return preparedApplication{}, warnings, errors.New("Docker build stage is invalid")
 		}
 		registryPrefix := strings.TrimSuffix(strings.TrimSpace(options.RegistryPrefix), "/")
 		registryImage := registryPrefix + "/" + slug
@@ -276,7 +279,7 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 			dockerfile = strings.TrimPrefix(dockerfile, prefix)
 		}
 		service["image"] = registryImage + ":pending"
-		source = &store.ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: repositoryURL, GitRef: gitRef, ContextDirectory: contextDirectory, Dockerfile: dockerfile, TargetService: "app", RegistryImage: registryImage}
+		source = &store.ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: repositoryURL, GitRef: gitRef, ContextDirectory: contextDirectory, Dockerfile: dockerfile, BuildTarget: item.DockerBuildStage, EnableSubmodules: item.EnableSubmodules, TargetService: "app", RegistryImage: registryImage}
 		if item.SourceType != "git" {
 			warnings = append(warnings, fmt.Sprintf("application %s provider credentials and webhooks are not imported; public clone access is required until they are recreated", item.ID))
 		}

@@ -239,19 +239,31 @@ type BackupDestination struct {
 	UpdatedAt            time.Time `json:"updatedAt"`
 }
 type ApplicationSource struct {
-	ComposeServiceID     uuid.UUID  `json:"composeServiceId"`
-	RepositoryURL        string     `json:"repositoryUrl"`
-	GitRef               string     `json:"gitRef"`
-	ContextDirectory     string     `json:"contextDirectory"`
-	Dockerfile           string     `json:"dockerfile"`
-	TargetService        string     `json:"targetService"`
-	RegistryImage        string     `json:"registryImage"`
-	GitCredentialID      *uuid.UUID `json:"gitCredentialId,omitempty"`
-	RegistryCredentialID *uuid.UUID `json:"registryCredentialId,omitempty"`
-	StatusProvider       string     `json:"statusProvider,omitempty"`
-	StatusCredentialID   *uuid.UUID `json:"statusCredentialId,omitempty"`
-	StatusContext        string     `json:"statusContext,omitempty"`
-	UpdatedAt            time.Time  `json:"updatedAt"`
+	ComposeServiceID     uuid.UUID         `json:"composeServiceId"`
+	RepositoryURL        string            `json:"repositoryUrl"`
+	GitRef               string            `json:"gitRef"`
+	ContextDirectory     string            `json:"contextDirectory"`
+	Dockerfile           string            `json:"dockerfile"`
+	BuildTarget          string            `json:"buildTarget,omitempty"`
+	EnableSubmodules     bool              `json:"enableSubmodules"`
+	HasBuildArguments    bool              `json:"hasBuildArguments"`
+	HasBuildSecrets      bool              `json:"hasBuildSecrets"`
+	EncryptedBuildConfig string            `json:"-"`
+	BuildArguments       map[string]string `json:"-"`
+	BuildSecrets         map[string]string `json:"-"`
+	TargetService        string            `json:"targetService"`
+	RegistryImage        string            `json:"registryImage"`
+	GitCredentialID      *uuid.UUID        `json:"gitCredentialId,omitempty"`
+	RegistryCredentialID *uuid.UUID        `json:"registryCredentialId,omitempty"`
+	StatusProvider       string            `json:"statusProvider,omitempty"`
+	StatusCredentialID   *uuid.UUID        `json:"statusCredentialId,omitempty"`
+	StatusContext        string            `json:"statusContext,omitempty"`
+	UpdatedAt            time.Time         `json:"updatedAt"`
+}
+
+type ApplicationBuildConfig struct {
+	Arguments map[string]string `json:"arguments,omitempty"`
+	Secrets   map[string]string `json:"secrets,omitempty"`
 }
 type SourceCredential struct {
 	ID              uuid.UUID `json:"id"`
@@ -871,14 +883,14 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ApplicationSource{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id,status_provider,status_credential_id,status_context)
-		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
+	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,build_target,enable_submodules,encrypted_build_config,target_service,registry_image,git_credential_id,registry_credential_id,status_provider,status_credential_id,status_context)
+		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
-		AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$9 AND c.organization_id=$2 AND c.kind IN ('git','git-ssh')))
-		AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=$2 AND c.kind='registry'))
-		AND ($12::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$12 AND c.organization_id=$2 AND c.kind='git'))
-		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,status_provider=excluded.status_provider,status_credential_id=excluded.status_credential_id,status_context=excluded.status_context,updated_at=now()
-		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID, source.StatusProvider, source.StatusCredentialID, source.StatusContext).Scan(&source.UpdatedAt)
+		AND ($12::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$12 AND c.organization_id=$2 AND c.kind IN ('git','git-ssh')))
+		AND ($13::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$13 AND c.organization_id=$2 AND c.kind='registry'))
+		AND ($15::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$15 AND c.organization_id=$2 AND c.kind='git'))
+		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,build_target=excluded.build_target,enable_submodules=excluded.enable_submodules,encrypted_build_config=excluded.encrypted_build_config,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,status_provider=excluded.status_provider,status_credential_id=excluded.status_credential_id,status_context=excluded.status_context,updated_at=now()
+		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.BuildTarget, source.EnableSubmodules, source.EncryptedBuildConfig, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID, source.StatusProvider, source.StatusCredentialID, source.StatusContext).Scan(&source.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}
@@ -886,6 +898,17 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 		return ApplicationSource{}, err
 	}
 	return source, tx.Commit(ctx)
+}
+
+func (s *Store) GetApplicationSource(ctx context.Context, organizationID, serviceID uuid.UUID) (ApplicationSource, error) {
+	var source ApplicationSource
+	err := s.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.git_credential_id,a.registry_credential_id,a.status_provider,a.status_credential_id,a.status_context,a.updated_at
+		FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
+		WHERE a.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&source.ComposeServiceID, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.GitCredentialID, &source.RegistryCredentialID, &source.StatusProvider, &source.StatusCredentialID, &source.StatusContext, &source.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ApplicationSource{}, ErrNotFound
+	}
+	return source, err
 }
 
 func (s *Store) CreateSourceCredential(ctx context.Context, item SourceCredential) (SourceCredential, error) {

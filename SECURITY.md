@@ -48,6 +48,9 @@ only for a dedicated, isolated cluster whose workloads are fully trusted.
   code. Their configured directory and executable files must be owned by the
   controller OS user and must not be group/world writable; symlinks are rejected
   or ignored.
+- Docker build arguments are not secrets and may be retained in image metadata.
+  Build secrets are encrypted in PostgreSQL and exposed to BuildKit only through
+  short-lived mode `0600` files; keep credentials out of build arguments.
 - Use HTTPS S3-compatible endpoints. Audit archives additionally require S3
   Object Lock in COMPLIANCE mode. Restrict credentials to the configured bucket
   and prefix.

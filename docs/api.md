@@ -138,7 +138,7 @@ until an administrator retries them.
 | GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup) |
-| PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build, registry target, and credentials |
+| PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build, registry target, credentials, target stage, arguments, BuildKit secrets, and submodules |
 | POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
 | GET/DELETE | `/v1/routes/{id}` | Inspect or remove a route |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |
@@ -174,6 +174,15 @@ publish ordered pending and terminal commit statuses through durable retrying
 jobs. The status credential must be a Git-token credential pinned to the
 repository host; callback configuration is snapshotted when each delivery is
 queued so later source edits cannot redirect an in-flight secret.
+
+Dockerfile sources accept `buildTarget`, `enableSubmodules`, `buildArguments`,
+and `buildSecrets`. Argument values are non-secret Docker build arguments and
+may appear in image metadata. Build secrets are encrypted at rest, omitted from
+API responses and process arguments, materialized as mode `0600` temporary
+files, and passed with BuildKit `--secret`. Submodules are restricted to
+relative URLs or the source repository's original protocol, hostname, and
+port. Omitting either build-settings map preserves its stored values; sending
+an empty object clears that map.
 
 ## Catalog and databases
 

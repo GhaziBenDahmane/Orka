@@ -55,7 +55,8 @@ Imported automatically:
 - Compose environment values when the source key is supplied;
 - Docker-image applications and HTTPS Git applications that use a Dockerfile,
   including runtime environment, replicas, resource reservations/limits, and
-  enabled application domains;
+  enabled application domains; Docker target stages and recursive Git
+  submodules are preserved;
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and libSQL managed-database
   definitions, including their image, credentials, and custom environment;
 - S3-compatible backup destinations, with credentials decrypted only in memory
@@ -74,8 +75,8 @@ Imported automatically:
 Reported for manual conversion:
 
 - Nixpacks, Railpack, Paketo/Heroku buildpack, static, and drop applications;
-- Git applications with build arguments, build secrets, target stages,
-  submodules, non-HTTPS clone URLs, or provider-specific private access;
+- Git applications with build arguments, build secrets, non-HTTPS clone URLs,
+  or provider-specific private access;
 - application mounts, published host ports, custom Swarm health/restart/update/
   placement settings, redirects, and security rules;
 - Compose definitions stored only in a remote Git repository;

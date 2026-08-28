@@ -467,8 +467,21 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		var source store.ApplicationSource
 		source.ComposeServiceID = uuid.Nil
 		var gitKind, gitServer, gitUser, gitSecret, registryServer, registryUser, registrySecret string
-		sourceErr := w.Store.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.target_service,a.registry_image,a.updated_at,COALESCE(gc.kind,''),COALESCE(gc.server,''),COALESCE(gc.username,''),COALESCE(gc.encrypted_secret,''),COALESCE(rc.server,''),COALESCE(rc.username,''),COALESCE(rc.encrypted_secret,'') FROM application_sources a JOIN deployments d ON d.compose_service_id=a.compose_service_id LEFT JOIN source_credentials gc ON gc.id=a.git_credential_id LEFT JOIN source_credentials rc ON rc.id=a.registry_credential_id WHERE d.id=$1`, id).Scan(&source.ComposeServiceID, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.TargetService, &source.RegistryImage, &source.UpdatedAt, &gitKind, &gitServer, &gitUser, &gitSecret, &registryServer, &registryUser, &registrySecret)
+		sourceErr := w.Store.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.updated_at,COALESCE(gc.kind,''),COALESCE(gc.server,''),COALESCE(gc.username,''),COALESCE(gc.encrypted_secret,''),COALESCE(rc.server,''),COALESCE(rc.username,''),COALESCE(rc.encrypted_secret,'') FROM application_sources a JOIN deployments d ON d.compose_service_id=a.compose_service_id LEFT JOIN source_credentials gc ON gc.id=a.git_credential_id LEFT JOIN source_credentials rc ON rc.id=a.registry_credential_id WHERE d.id=$1`, id).Scan(&source.ComposeServiceID, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.UpdatedAt, &gitKind, &gitServer, &gitUser, &gitSecret, &registryServer, &registryUser, &registrySecret)
 		if sourceErr == nil {
+			if source.EncryptedBuildConfig != "" {
+				plain, decryptErr := w.Box.Decrypt(source.EncryptedBuildConfig, "application-build-config:"+source.ComposeServiceID.String())
+				if decryptErr != nil {
+					err = decryptErr
+				} else {
+					var buildConfig store.ApplicationBuildConfig
+					if jsonErr := json.Unmarshal(plain, &buildConfig); jsonErr != nil {
+						err = jsonErr
+					} else {
+						source.BuildArguments, source.BuildSecrets = buildConfig.Arguments, buildConfig.Secrets
+					}
+				}
+			}
 			credentials := BuildCredentials{Git: Credential{Kind: gitKind, Server: gitServer, Username: gitUser}, Registry: Credential{Kind: "registry", Server: registryServer, Username: registryUser}}
 			if gitSecret != "" {
 				plain, decryptErr := w.Box.Decrypt(gitSecret, "source-credential")

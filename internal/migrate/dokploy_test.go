@@ -53,14 +53,14 @@ func TestMappedIDsAreStableAndTargetScoped(t *testing.T) {
 }
 
 func TestPrepareGitApplicationRequiresRegistryPrefix(t *testing.T) {
-	item := sourceApplication{ID: "app1", AppName: "Web", Name: "Web", SourceType: "github", BuildType: "dockerfile", Owner: "acme", Repository: "web", Branch: "main", BuildPath: "/", Replicas: 1}
+	item := sourceApplication{ID: "app1", AppName: "Web", Name: "Web", SourceType: "github", BuildType: "dockerfile", Owner: "acme", Repository: "web", Branch: "main", BuildPath: "/", DockerBuildStage: "runtime", EnableSubmodules: true, Replicas: 1}
 	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
 	if _, _, err := prepareApplication(item, options); err == nil {
 		t.Fatal("expected missing registry prefix to be rejected")
 	}
 	options.RegistryPrefix = "ghcr.io/acme"
 	prepared, warnings, err := prepareApplication(item, options)
-	if err != nil || prepared.source == nil || prepared.source.RepositoryURL != "https://github.com/acme/web.git" || prepared.source.RegistryImage == "" || len(warnings) != 2 {
+	if err != nil || prepared.source == nil || prepared.source.RepositoryURL != "https://github.com/acme/web.git" || prepared.source.RegistryImage == "" || prepared.source.BuildTarget != "runtime" || !prepared.source.EnableSubmodules || len(warnings) != 2 {
 		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
 	}
 }

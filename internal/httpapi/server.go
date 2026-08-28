@@ -1327,7 +1327,19 @@ func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"service": item, "routes": routes})
+	var source *store.ApplicationSource
+	applicationSource, sourceErr := s.Store.GetApplicationSource(r.Context(), principal(r).OrganizationID, id)
+	if sourceErr == nil {
+		if err = s.redactApplicationBuildConfig(&applicationSource); err != nil {
+			writeError(w, 500, "decryption_failed", err.Error())
+			return
+		}
+		source = &applicationSource
+	} else if !errors.Is(sourceErr, store.ErrNotFound) {
+		writeStoreError(w, sourceErr)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"service": item, "routes": routes, "source": source})
 }
 
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
@@ -1397,17 +1409,21 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		RepositoryURL        string     `json:"repositoryUrl"`
-		GitRef               string     `json:"gitRef"`
-		ContextDirectory     string     `json:"contextDirectory"`
-		Dockerfile           string     `json:"dockerfile"`
-		TargetService        string     `json:"targetService"`
-		RegistryImage        string     `json:"registryImage"`
-		GitCredentialID      *uuid.UUID `json:"gitCredentialId"`
-		RegistryCredentialID *uuid.UUID `json:"registryCredentialId"`
-		StatusProvider       string     `json:"statusProvider"`
-		StatusCredentialID   *uuid.UUID `json:"statusCredentialId"`
-		StatusContext        string     `json:"statusContext"`
+		RepositoryURL        string             `json:"repositoryUrl"`
+		GitRef               string             `json:"gitRef"`
+		ContextDirectory     string             `json:"contextDirectory"`
+		Dockerfile           string             `json:"dockerfile"`
+		BuildTarget          string             `json:"buildTarget"`
+		EnableSubmodules     bool               `json:"enableSubmodules"`
+		BuildArguments       *map[string]string `json:"buildArguments"`
+		BuildSecrets         *map[string]string `json:"buildSecrets"`
+		TargetService        string             `json:"targetService"`
+		RegistryImage        string             `json:"registryImage"`
+		GitCredentialID      *uuid.UUID         `json:"gitCredentialId"`
+		RegistryCredentialID *uuid.UUID         `json:"registryCredentialId"`
+		StatusProvider       string             `json:"statusProvider"`
+		StatusCredentialID   *uuid.UUID         `json:"statusCredentialId"`
+		StatusContext        string             `json:"statusContext"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -1420,6 +1436,39 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Dockerfile == "" {
 		in.Dockerfile = "Dockerfile"
+	}
+	buildConfig := store.ApplicationBuildConfig{}
+	if in.BuildArguments == nil || in.BuildSecrets == nil {
+		existing, existingErr := s.Store.GetApplicationSource(r.Context(), principal(r).OrganizationID, id)
+		if existingErr == nil && existing.EncryptedBuildConfig != "" {
+			plain, decryptErr := s.Box.Decrypt(existing.EncryptedBuildConfig, "application-build-config:"+id.String())
+			if decryptErr != nil || json.Unmarshal(plain, &buildConfig) != nil {
+				writeError(w, 500, "decryption_failed", "stored build configuration is invalid")
+				return
+			}
+		} else if existingErr != nil && !errors.Is(existingErr, store.ErrNotFound) {
+			writeStoreError(w, existingErr)
+			return
+		}
+	}
+	if in.BuildArguments != nil {
+		buildConfig.Arguments = *in.BuildArguments
+	}
+	if in.BuildSecrets != nil {
+		buildConfig.Secrets = *in.BuildSecrets
+	}
+	if err = deploy.ValidateBuildSettings(in.BuildTarget, buildConfig); err != nil {
+		writeError(w, 400, "invalid_build_settings", err.Error())
+		return
+	}
+	encryptedBuildConfig := ""
+	if len(buildConfig.Arguments) > 0 || len(buildConfig.Secrets) > 0 {
+		plain, _ := json.Marshal(buildConfig)
+		encryptedBuildConfig, err = s.Box.Encrypt(plain, "application-build-config:"+id.String())
+		if err != nil {
+			writeError(w, 500, "encryption_failed", err.Error())
+			return
+		}
 	}
 	in.StatusProvider = strings.ToLower(strings.TrimSpace(in.StatusProvider))
 	if in.StatusContext == "" {
@@ -1434,13 +1483,31 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
+	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	s.Store.Audit(r.Context(), &p, "source.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"repository": in.RepositoryURL, "ref": in.GitRef})
 	writeJSON(w, 200, item)
+}
+
+func (s *Server) redactApplicationBuildConfig(source *store.ApplicationSource) error {
+	if source.EncryptedBuildConfig == "" {
+		return nil
+	}
+	plain, err := s.Box.Decrypt(source.EncryptedBuildConfig, "application-build-config:"+source.ComposeServiceID.String())
+	if err != nil {
+		return err
+	}
+	var config store.ApplicationBuildConfig
+	if err = json.Unmarshal(plain, &config); err != nil {
+		return err
+	}
+	source.HasBuildArguments = len(config.Arguments) > 0
+	source.HasBuildSecrets = len(config.Secrets) > 0
+	source.EncryptedBuildConfig = ""
+	return nil
 }
 
 func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) {
