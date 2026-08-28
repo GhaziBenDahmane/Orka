@@ -2,8 +2,14 @@
 
 Trusted executable drivers extend the built-in database catalog without being
 linked into the controller. Set `DOCKYARD_DATABASE_DRIVER_DIRECTORY` to an
-absolute directory containing root-owned executable files. Symlinks and
-non-executable files are ignored. Driver names cannot replace built-ins.
+absolute directory containing executable files owned by the controller's OS
+user (root in the published container). The directory must have the same owner;
+neither it nor its drivers may be group/world writable. A symlink cannot be
+used as the directory, and symlinked entries and non-executable files are
+ignored. Driver names cannot replace built-ins. External drivers are supported
+only on Linux. Every invocation opens the driver without following symlinks,
+revalidates the opened inode, and executes that file descriptor so a path swap
+cannot bypass the startup checks.
 
 Dockyard starts a fresh process for each call, writes one JSON request to stdin,
 and reads one JSON response from stdout. Protocol version 1 supports

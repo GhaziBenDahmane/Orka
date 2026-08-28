@@ -44,6 +44,10 @@ only for a dedicated, isolated cluster whose workloads are fully trusted.
   verified network transport when PostgreSQL is remote, and network policy
   limiting access to controllers. The HA profile enforces
   `sslmode=verify-full` instead of accepting encrypted-but-unverified modes.
+- External database drivers execute as the controller and are therefore trusted
+  code. Their configured directory and executable files must be owned by the
+  controller OS user and must not be group/world writable; symlinks are rejected
+  or ignored.
 - Use HTTPS S3-compatible endpoints. Audit archives additionally require S3
   Object Lock in COMPLIANCE mode. Restrict credentials to the configured bucket
   and prefix.

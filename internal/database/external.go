@@ -71,9 +71,15 @@ func (d *externalDriver) plan(operation string, request databaseplugin.UtilityRe
 func (d *externalDriver) call(request databaseplugin.Request, operation string) (databaseplugin.Response, error) {
 	request.ProtocolVersion, request.Operation = databaseplugin.ProtocolVersion, operation
 	payload, _ := json.Marshal(request)
+	executable, err := openTrustedDriver(d.path)
+	if err != nil {
+		return databaseplugin.Response{}, fmt.Errorf("open database driver %s: %w", filepath.Base(d.path), err)
+	}
+	defer executable.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, d.path)
+	command := exec.CommandContext(ctx, "/proc/self/fd/3")
+	command.ExtraFiles = []*os.File{executable}
 	// Do not leak the controller's database URL, master key, or provider
 	// credentials into an extension process.
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}
@@ -113,12 +119,18 @@ func (r *Registry) LoadExternal(directory string) error {
 	if !filepath.IsAbs(directory) {
 		return errors.New("database driver directory must be absolute")
 	}
-	directoryInfo, err := os.Stat(directory)
+	directoryInfo, err := os.Lstat(directory)
 	if err != nil {
 		return err
 	}
+	if directoryInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("database driver directory must not be a symbolic link")
+	}
 	if !directoryInfo.IsDir() || directoryInfo.Mode().Perm()&0022 != 0 {
-		return errors.New("database driver directory must not be group/world writable")
+		return errors.New("database driver directory must be a directory and not group/world writable")
+	}
+	if err := validateDriverOwner(directoryInfo); err != nil {
+		return fmt.Errorf("database driver directory: %w", err)
 	}
 	entries, err := os.ReadDir(directory)
 	if err != nil {
@@ -126,6 +138,9 @@ func (r *Registry) LoadExternal(directory string) error {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
@@ -135,6 +150,9 @@ func (r *Registry) LoadExternal(directory string) error {
 		}
 		if info.Mode().Perm()&0022 != 0 {
 			return fmt.Errorf("database driver %s must not be group/world writable", entry.Name())
+		}
+		if err := validateDriverOwner(info); err != nil {
+			return fmt.Errorf("database driver %s: %w", entry.Name(), err)
 		}
 		driver := &externalDriver{path: filepath.Join(directory, entry.Name())}
 		response, err := driver.call(databaseplugin.Request{}, "describe")
