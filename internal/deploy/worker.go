@@ -197,16 +197,18 @@ func (w *Worker) loop(ctx context.Context) {
 			}
 			started := time.Now()
 			jobCtx, span := observability.StartOperation(ctx, j.Kind, j.ID.String())
-			err = w.runClaimed(jobCtx, j)
-			observability.EndOperation(span, err)
+			jobErr := w.runClaimed(jobCtx, j)
+			finishErr := w.finish(ctx, j, jobErr)
+			operationErr := errors.Join(jobErr, finishErr)
+			observability.EndOperation(span, operationErr)
 			status := "succeeded"
-			if err != nil {
+			if operationErr != nil {
 				status = "failed"
 			}
 			if w.Metrics != nil {
 				w.Metrics.ObserveOperation(j.Kind, status, time.Since(started))
 			}
-			if finishErr := w.finish(ctx, j, err); finishErr != nil {
+			if finishErr != nil {
 				w.Logger.Error("finish job", "error", finishErr)
 			}
 		}

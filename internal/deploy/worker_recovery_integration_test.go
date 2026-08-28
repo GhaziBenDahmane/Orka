@@ -304,3 +304,120 @@ func TestFinishSerializesWithCancellation(t *testing.T) {
 		t.Fatalf("cancellation lost to finish: job=%s deployment=%s", jobStatus, deploymentStatus)
 	}
 }
+
+type takeoverScheduler struct {
+	started chan struct{}
+	release chan struct{}
+	output  string
+}
+
+func (s takeoverScheduler) Deploy(ctx context.Context, _ string, _ string, _ map[string]string, _ *Credential) (string, error) {
+	if s.started != nil {
+		close(s.started)
+	}
+	if s.release != nil {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return s.output, nil
+}
+
+func (takeoverScheduler) Remove(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (takeoverScheduler) RemoveVolumes(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (takeoverScheduler) Logs(context.Context, string, int) (string, error) {
+	return "", nil
+}
+
+func (takeoverScheduler) Nodes(context.Context) ([]Node, error) {
+	return nil, nil
+}
+
+func (takeoverScheduler) RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error) {
+	return "", nil
+}
+
+func TestDeploymentTakeoverRejectsPausedWorkerCompletion(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'takeover','takeover')`, []any{organizationID}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'takeover','takeover')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'takeover','takeover')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'takeover','takeover',$3,$4)`, []any{serviceID, environmentID, "takeover-" + serviceID.String(), "services:\n  web:\n    image: nginx:1.29-alpine\n"}},
+	}
+	for _, statement := range statements {
+		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deployment, err := db.QueueDeployment(ctx, organizationID, serviceID, uuid.Nil, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	firstWorker := &Worker{Store: db, ID: "worker-a", Logger: logger, Compiler: Compiler{PublicNetwork: "dockyard-public"}}
+	firstLease, err := firstWorker.claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	firstWorker.Swarm = takeoverScheduler{started: started, release: release, output: "stale output"}
+	firstExecution := make(chan error, 1)
+	go func() { firstExecution <- firstWorker.execute(ctx, firstLease) }()
+	select {
+	case <-started:
+	case executionErr := <-firstExecution:
+		t.Fatalf("first deployment stopped before scheduler: %v", executionErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first deployment did not reach scheduler")
+	}
+
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET locked_at=now()-interval '2 minutes' WHERE id=$1`, firstLease.ID); err != nil {
+		t.Fatal(err)
+	}
+	secondWorker := &Worker{Store: db, ID: "worker-b", Logger: logger, Compiler: Compiler{PublicNetwork: "dockyard-public"}, Swarm: takeoverScheduler{output: "replacement output"}}
+	secondWorker.recoverStale(ctx)
+	secondLease, err := secondWorker.claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondLease.ID != firstLease.ID || secondLease.LeaseID == firstLease.LeaseID {
+		t.Fatalf("replacement lease=%#v, first=%#v", secondLease, firstLease)
+	}
+	if err = secondWorker.execute(ctx, secondLease); err != nil {
+		t.Fatal(err)
+	}
+	if err = secondWorker.finish(ctx, secondLease, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	close(release)
+	if err = <-firstExecution; err != nil {
+		t.Fatalf("paused scheduler result: %v", err)
+	}
+	if err = firstWorker.finish(ctx, firstLease, nil); !errors.Is(err, store.ErrLeaseLost) {
+		t.Fatalf("paused worker finish error=%v, want lease lost", err)
+	}
+	var deploymentStatus, output, jobStatus string
+	if err = db.Pool.QueryRow(ctx, `SELECT status,output FROM deployments WHERE id=$1`, deployment.ID).Scan(&deploymentStatus, &output); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, firstLease.ID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if deploymentStatus != "succeeded" || output != "replacement output" || jobStatus != "succeeded" {
+		t.Fatalf("stale completion changed takeover result: deployment=%s output=%q job=%s", deploymentStatus, output, jobStatus)
+	}
+}

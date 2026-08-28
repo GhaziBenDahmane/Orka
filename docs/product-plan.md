@@ -155,7 +155,10 @@ job state after takeover, including when both processes use the same worker
 name. User-visible resource start and completion transitions are transactionally
 coupled to that job ownership, preventing stale attempts from regressing or
 finalizing deployments, backups, restores, notification deliveries, commit
-statuses, and audit archives.
+statuses, and audit archives. A two-worker integration test pauses the original
+attempt inside its scheduler call, forces recovery and successful redeployment
+by a replacement worker, then proves the resumed attempt cannot overwrite the
+replacement's deployment or job result.
 
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.

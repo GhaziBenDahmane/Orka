@@ -8,9 +8,9 @@ links for every item below.
 
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
-  checkpoint-upgrade tests, per-attempt fenced stale-worker takeover, Compose
-  and Swarm parsing, and a clean-install workload converging to a live Swarm
-  replica.
+  checkpoint-upgrade tests, per-attempt fenced stale-worker takeover while the
+  superseded worker is paused inside a scheduler call, Compose and Swarm
+  parsing, and a clean-install workload converging to a live Swarm replica.
 - `govulncheck` reports no reachable known vulnerability.
 - License policy passes; the SPDX JSON SBOM is attached to the release.
 - Build and runtime base images are pinned by manifest digest, and the runtime
