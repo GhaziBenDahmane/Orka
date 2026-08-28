@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var notificationEvents = []string{"deployment.failed", "backup.failed", "restore.failed"}
+var notificationEvents = []string{"deployment.failed", "backup.failed", "restore.failed", "audit.archive.failed"}
 
 func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Request) {
 	var input struct {

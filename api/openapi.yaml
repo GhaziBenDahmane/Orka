@@ -381,6 +381,105 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/audit-archives:
+    get:
+      operationId: get_v1_audit_archives
+      tags: [audit-archives]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_audit_archives
+      tags: [audit-archives]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/audit-archives/{archiveID}:
+    delete:
+      operationId: delete_v1_audit_archives_archiveID
+      tags: [audit-archives]
+      parameters:
+        - name: archiveID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/audit-archives/{archiveID}/batches:
+    get:
+      operationId: get_v1_audit_archives_archiveID_batches
+      tags: [audit-archives]
+      parameters:
+        - name: archiveID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/audit-archives/{archiveID}/run:
+    post:
+      operationId: post_v1_audit_archives_archiveID_run
+      tags: [audit-archives]
+      parameters:
+        - name: archiveID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/audit-events:
     get:
       operationId: get_v1_audit_events

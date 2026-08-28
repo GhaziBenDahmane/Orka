@@ -28,6 +28,10 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/audit-events?beforeId=…&limit=…` | Read a descending audit page |
 | GET | `/v1/audit-events/export?afterId=…&limit=…` | Export ascending NDJSON with integrity headers |
 | GET/PUT | `/v1/audit-retention` | Read or set the 30–3650 day retention policy |
+| GET/POST | `/v1/audit-archives` | List or configure S3 Object Lock audit archives |
+| DELETE | `/v1/audit-archives/{id}` | Disable an archive without deleting retained objects |
+| POST | `/v1/audit-archives/{id}/run` | Queue an archive batch or explicitly retry a failed batch |
+| GET | `/v1/audit-archives/{id}/batches` | Inspect immutable archive delivery history and hashes |
 | GET/PUT | `/v1/policy` | Organization maintenance mode and quotas |
 | GET/PUT | `/v1/projects/{id}/policy` | Project maintenance mode and quotas |
 | GET/PUT | `/v1/environments/{id}/policy` | Environment maintenance mode and quotas |
@@ -102,7 +106,12 @@ separately from users in the audit log.
 Audit exports are ordered by immutable event ID. Each response includes
 `X-Content-SHA256` for offline verification and `X-Next-After-ID` for resumable
 pagination. The default retention is 365 days; configured policies are pruned
-hourly by workers.
+hourly by workers. External archives require an HTTPS S3-compatible backup
+destination whose bucket has Object Lock enabled. Workers upload batches with
+COMPLIANCE retention and create a SHA-256 chain from each manifest to the
+previous object. Pruning stops at the least-progressed enabled archive, so an
+outage cannot silently erase unexported events. Failed ranges remain pinned
+until an administrator retries them.
 
 ## Workloads
 

@@ -164,6 +164,9 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 	case "restore.database":
 		resourceID, resourceType, eventType = payload["restoreId"], "database_restore", "restore.failed"
 		query = `SELECT p.organization_id FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1`
+	case "audit.archive":
+		resourceID, resourceType, eventType = payload["batchId"], "audit_archive_batch", "audit.archive.failed"
+		query = `SELECT a.organization_id FROM audit_archive_batches b JOIN audit_archive_destinations a ON a.id=b.destination_id WHERE b.id=$1`
 	default:
 		return "", "", "", uuid.Nil, ErrNotFound
 	}

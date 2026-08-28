@@ -1,8 +1,13 @@
 package backup
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"strings"
@@ -53,6 +58,17 @@ func (s *S3) Check(ctx context.Context) error {
 	return nil
 }
 
+func (s *S3) CheckObjectLock(ctx context.Context) error {
+	enabled, _, _, _, err := s.client.GetObjectLockConfig(ctx, s.bucket)
+	if err != nil {
+		return err
+	}
+	if enabled != "Enabled" {
+		return errors.New("S3 bucket object lock is not enabled")
+	}
+	return nil
+}
+
 func (s *S3) ObjectKey(name string) string {
 	if s.prefix == "" {
 		return name
@@ -63,6 +79,37 @@ func (s *S3) ObjectKey(name string) string {
 func (s *S3) Put(ctx context.Context, key, filename string) error {
 	_, err := s.client.FPutObject(ctx, s.bucket, key, filename, minio.PutObjectOptions{ContentType: "application/octet-stream"})
 	return err
+}
+
+func (s *S3) PutImmutable(ctx context.Context, key string, contents []byte, digest string, retainUntil time.Time) error {
+	options := minio.PutObjectOptions{ContentType: "application/x-ndjson", Mode: minio.Compliance, RetainUntilDate: retainUntil.UTC(), UserMetadata: map[string]string{"dockyard-sha256": digest}}
+	options.SetMatchETagExcept("*")
+	_, err := s.client.PutObject(ctx, s.bucket, s.ObjectKey(key), bytes.NewReader(contents), int64(len(contents)), options)
+	if err == nil {
+		return nil
+	}
+	response := minio.ToErrorResponse(err)
+	if response.Code != "PreconditionFailed" && response.Code != "ConditionalRequestConflict" {
+		return err
+	}
+	object, statErr := s.client.GetObject(ctx, s.bucket, s.ObjectKey(key), minio.GetObjectOptions{})
+	if statErr != nil {
+		return err
+	}
+	defer object.Close()
+	hash := sha256sumReader(object)
+	if hash != digest {
+		return fmt.Errorf("immutable audit object already exists with a different digest")
+	}
+	return nil
+}
+
+func sha256sumReader(reader io.Reader) string {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, reader); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func (s *S3) Get(ctx context.Context, key, filename string) error {

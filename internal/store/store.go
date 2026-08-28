@@ -1156,6 +1156,15 @@ func (s *Store) ListBackupDestinations(ctx context.Context, organizationID uuid.
 	return items, rows.Err()
 }
 
+func (s *Store) GetBackupDestination(ctx context.Context, organizationID, id uuid.UUID) (BackupDestination, error) {
+	var item BackupDestination
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,endpoint,region,bucket,prefix,use_tls,encrypted_credentials,created_at,updated_at FROM backup_destinations WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Endpoint, &item.Region, &item.Bucket, &item.Prefix, &item.UseTLS, &item.EncryptedCredentials, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BackupDestination{}, ErrNotFound
+	}
+	return item, err
+}
+
 func (s *Store) DeleteBackupDestination(ctx context.Context, organizationID, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM backup_destinations WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {

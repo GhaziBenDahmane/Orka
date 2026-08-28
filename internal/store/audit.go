@@ -82,6 +82,6 @@ func (s *Store) UpsertAuditRetentionPolicy(ctx context.Context, organizationID u
 }
 
 func (s *Store) PruneAuditEvents(ctx context.Context) (int64, error) {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM audit_events a USING audit_retention_policies p WHERE a.organization_id=p.organization_id AND a.created_at < now()-(p.retention_days * interval '1 day')`)
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM audit_events a USING audit_retention_policies p WHERE a.organization_id=p.organization_id AND a.created_at < now()-(p.retention_days * interval '1 day') AND (NOT EXISTS(SELECT 1 FROM audit_archive_destinations d WHERE d.organization_id=a.organization_id AND d.enabled) OR a.id<=(SELECT min(d.last_archived_id) FROM audit_archive_destinations d WHERE d.organization_id=a.organization_id AND d.enabled))`)
 	return tag.RowsAffected(), err
 }

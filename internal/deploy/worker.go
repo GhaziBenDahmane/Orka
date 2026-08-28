@@ -56,15 +56,43 @@ type job struct {
 func (w *Worker) Run(ctx context.Context) {
 	w.recoverStale(ctx)
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); w.scheduleBackups(ctx) }()
 	go func() { defer wg.Done(); w.pruneAuditEvents(ctx) }()
+	go func() { defer wg.Done(); w.scheduleAuditArchives(ctx) }()
 	for i := 0; i < w.Concurrency; i++ {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.loop(ctx) }()
 	}
 	<-ctx.Done()
 	wg.Wait()
+}
+
+func (w *Worker) scheduleAuditArchives(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		leader, leaseErr := w.Store.AcquireControllerLease(ctx, "audit-archiver", w.ID, 90*time.Second)
+		if leaseErr != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire audit archiver lease", "error", leaseErr)
+		} else if leader {
+			for ctx.Err() == nil {
+				_, err := w.Store.QueueNextAuditArchive(ctx)
+				if errors.Is(err, store.ErrNotFound) {
+					break
+				}
+				if err != nil {
+					w.Logger.Error("schedule audit archive", "error", err)
+					break
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (w *Worker) pruneAuditEvents(ctx context.Context) {
@@ -273,6 +301,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if j.Kind == "commit.status" {
 		return w.deliverCommitStatus(ctx, j)
+	}
+	if j.Kind == "audit.archive" {
+		return w.archiveAuditEvents(ctx, j)
 	}
 	if j.Kind != "deploy.compose" {
 		return fmt.Errorf("unsupported job kind %q", j.Kind)

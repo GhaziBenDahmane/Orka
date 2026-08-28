@@ -101,7 +101,9 @@ rotation, SCIM users/groups, group-to-role mapping, owner protection, inherited
 project/environment grants, resumable audit export, and configurable audit
 retention implemented.
 
-- Add external write-once audit archive delivery and retention-policy alerts.
+- External write-once audit archives use S3 Object Lock COMPLIANCE retention,
+  hash-chained manifests, durable retries, delivery inspection, failure
+  notifications, and a pruning barrier for unarchived events.
 
 Exit gate: IdP-initiated and SP-initiated conformance tests against Entra ID,
 Okta, Keycloak, and Google Workspace where applicable.

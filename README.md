@@ -17,7 +17,7 @@ The initial implementation includes:
 - public or authenticated HTTPS/SSH Git builds with pinned host keys, pushed to authenticated OCI registries;
 - signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks with durable commit-status callbacks;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
-- encrypted secrets and an audit trail.
+- encrypted secrets, a queryable audit trail, and hash-chained S3 Object Lock archives.
 - request correlation, optional OTLP tracing, and Prometheus operational metrics.
 - durable signed webhooks, Slack-compatible notifications, TLS SMTP email, PagerDuty, and Opsgenie alerts.
 - inherited organization/project/environment maintenance controls and resource quotas.
