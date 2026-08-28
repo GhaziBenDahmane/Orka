@@ -28,7 +28,7 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Pool.Close()
+	t.Cleanup(db.Pool.Close)
 
 	orgID, otherOrgID, ownerID, otherUserID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	token := "integration-" + uuid.NewString()

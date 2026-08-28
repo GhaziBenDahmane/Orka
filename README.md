@@ -38,6 +38,10 @@ Import the complete upstream Dokploy template checkout with:
 go run ./cmd/dockyard import-dokploy-templates /path/to/dokploy-templates
 ```
 
+For an idempotent control-plane migration, including a mandatory dry-run and
+encrypted environment re-keying, see
+[docs/migrating-from-dokploy.md](docs/migrating-from-dokploy.md).
+
 Bootstrap the first administrator:
 
 ```sh

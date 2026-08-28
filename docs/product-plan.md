@@ -140,12 +140,13 @@ state, duplicate destructive jobs, or expose credentials.
 
 ### 6. Product surface and migration
 
-Status: not implemented.
+Status: Compose-focused Dokploy dry-run/import tooling is implemented; the UI,
+application/database converters, CLI breadth, and providers remain.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
-- Idempotent Dokploy importer with discovery, dry run, mapping report,
-  resumability, secret handling, and rollback guidance.
+- Extend the idempotent Dokploy importer from Compose resources to generated
+  applications, managed databases, providers, and backup metadata.
 - Signed catalog releases and an external driver protocol with compatibility
   tests.
 

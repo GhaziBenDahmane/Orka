@@ -29,7 +29,7 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Pool.Close()
+	t.Cleanup(db.Pool.Close)
 	box, err := cryptox.New(bytes.Repeat([]byte{7}, 32))
 	if err != nil {
 		t.Fatal(err)

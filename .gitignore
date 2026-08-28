@@ -1,6 +1,6 @@
 /.env
 /bin/
+/dockyard
 /data/
 *.out
 coverage.html
-
