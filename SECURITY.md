@@ -40,8 +40,10 @@ only for a dedicated, isolated cluster whose workloads are fully trusted.
   are insufficient.
 - Rotating the master key currently requires an operator-controlled re-encrypt
   migration and maintenance window; do not simply replace it in place.
-- Use a dedicated PostgreSQL role and database, encrypted network transport
-  when PostgreSQL is remote, and network policy limiting access to controllers.
+- Use a dedicated PostgreSQL role and database, certificate-and-hostname
+  verified network transport when PostgreSQL is remote, and network policy
+  limiting access to controllers. The HA profile enforces
+  `sslmode=verify-full` instead of accepting encrypted-but-unverified modes.
 - Use HTTPS S3-compatible endpoints. Audit archives additionally require S3
   Object Lock in COMPLIANCE mode. Restrict credentials to the configured bucket
   and prefix.

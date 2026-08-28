@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 type Config struct {
 	ListenAddr              string
 	DatabaseURL             string
+	RequireDatabaseTLS      bool
 	MasterKey               []byte
 	DockerBin               string
 	WorkerConcurrency       int
@@ -63,6 +65,16 @@ func Load() (Config, error) {
 	if databaseURL == "" {
 		return Config{}, errors.New("DOCKYARD_DATABASE_URL is required")
 	}
+	requireDatabaseTLS, err := strconv.ParseBool(env("DOCKYARD_REQUIRE_DATABASE_TLS", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse DOCKYARD_REQUIRE_DATABASE_TLS: %w", err)
+	}
+	if requireDatabaseTLS {
+		parsed, parseErr := url.Parse(databaseURL)
+		if parseErr != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" || parsed.Query().Get("sslmode") != "verify-full" {
+			return Config{}, errors.New("DOCKYARD_DATABASE_URL must use a PostgreSQL URL with sslmode=verify-full when DOCKYARD_REQUIRE_DATABASE_TLS=true")
+		}
+	}
 	backupDirectory := env("DOCKYARD_BACKUP_DIRECTORY", "/var/lib/dockyard/backups")
 	if !filepath.IsAbs(backupDirectory) {
 		return Config{}, errors.New("DOCKYARD_BACKUP_DIRECTORY must be absolute")
@@ -107,6 +119,7 @@ func Load() (Config, error) {
 	return Config{
 		ListenAddr:              env("DOCKYARD_LISTEN_ADDR", ":8080"),
 		DatabaseURL:             databaseURL,
+		RequireDatabaseTLS:      requireDatabaseTLS,
 		MasterKey:               key,
 		DockerBin:               env("DOCKYARD_DOCKER_BIN", "docker"),
 		WorkerConcurrency:       concurrency,

@@ -56,8 +56,11 @@ replicas, publishes the mTLS agent API through Swarm ingress on port 8444, and
 requires every enabled or manually requested managed-database backup to use an
 S3-compatible destination. Startup fails if an older enabled policy still
 targets node-local storage. Configure and test remote backup destinations
-before switching profiles. PostgreSQL availability, replication, PITR,
-connection pooling, and failover remain the database provider's responsibility.
+before switching profiles. It also requires the external PostgreSQL URL to use
+`sslmode=verify-full`; install the provider CA in the controller image or use a
+libpq `sslrootcert` URL parameter when it is not publicly trusted. PostgreSQL
+availability, replication, PITR, connection pooling, and failover remain the
+database provider's responsibility.
 
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service

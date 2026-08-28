@@ -99,6 +99,9 @@ func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	if controller.Environment["DOCKYARD_REQUIRE_REMOTE_BACKUPS"] != "true" {
 		t.Fatal("HA deployment does not require remote backup storage")
 	}
+	if controller.Environment["DOCKYARD_REQUIRE_DATABASE_TLS"] != "true" {
+		t.Fatal("HA deployment does not require verified PostgreSQL TLS")
+	}
 	for _, name := range []string{"DOCKYARD_AGENT_CA_CERT_FILE", "DOCKYARD_AGENT_CA_KEY_FILE", "DOCKYARD_AGENT_SERVER_CERT_FILE", "DOCKYARD_AGENT_SERVER_KEY_FILE"} {
 		if controller.Environment[name] == "" {
 			t.Fatalf("HA deployment does not configure %s", name)
