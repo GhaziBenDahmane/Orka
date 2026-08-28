@@ -112,7 +112,10 @@ func TestProjectAndEnvironmentDeletionRequireEmptyChildren(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE (kind='delete.environment' AND payload->>'environmentId'=$1) OR (kind='delete.project' AND payload->>'projectId'=$2)`, environmentID.String(), projectID.String())
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID)
+	})
 
 	if _, err = db.GetProject(ctx, orgID, projectID); err != nil {
 		t.Fatal(err)
@@ -120,19 +123,21 @@ func TestProjectAndEnvironmentDeletionRequireEmptyChildren(t *testing.T) {
 	if _, err = db.GetEnvironment(ctx, orgID, environmentID); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.DeleteProject(ctx, orgID, projectID); !errors.Is(err, ErrBusy) {
-		t.Fatalf("project with environment: got %v, want ErrBusy", err)
-	}
 	if err = db.DeleteEnvironment(ctx, uuid.New(), environmentID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant delete: got %v, want ErrNotFound", err)
-	}
-	if err = db.DeleteEnvironment(ctx, orgID, environmentID); err != nil {
-		t.Fatal(err)
 	}
 	if err = db.DeleteProject(ctx, orgID, projectID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.GetProject(ctx, orgID, projectID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("deleted project: got %v, want ErrNotFound", err)
+	if err = db.DeleteProject(ctx, orgID, projectID); err != nil {
+		t.Fatalf("idempotent project deletion: %v", err)
+	}
+	var projectDeleting, environmentDeleting bool
+	var environmentJobs, projectJobs int
+	if err = db.Pool.QueryRow(ctx, `SELECT p.deletion_requested_at IS NOT NULL,e.deletion_requested_at IS NOT NULL FROM projects p JOIN environments e ON e.project_id=p.id WHERE p.id=$1 AND e.id=$2`, projectID, environmentID).Scan(&projectDeleting, &environmentDeleting); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE kind='delete.environment' AND payload->>'environmentId'=$1),count(*) FILTER(WHERE kind='delete.project' AND payload->>'projectId'=$2) FROM jobs`, environmentID.String(), projectID.String()).Scan(&environmentJobs, &projectJobs); err != nil || !projectDeleting || !environmentDeleting || environmentJobs != 1 || projectJobs != 1 {
+		t.Fatalf("deleting=%v/%v jobs=%d/%d err=%v", projectDeleting, environmentDeleting, environmentJobs, projectJobs, err)
 	}
 }

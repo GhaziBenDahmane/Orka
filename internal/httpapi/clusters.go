@@ -250,6 +250,25 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, item)
 }
 
+func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid cluster id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.QueueClusterDeletion(r.Context(), p.OrganizationID, clusterID); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "cluster_busy", "move or delete assigned environments before deleting the cluster")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "cluster.delete", "cluster", clusterID.String(), r.RemoteAddr, nil)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
+}
+
 func (s *Server) clusterNodes(w http.ResponseWriter, r *http.Request) {
 	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
 	if err != nil {

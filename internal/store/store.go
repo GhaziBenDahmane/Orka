@@ -569,18 +569,81 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var hasEnvironments bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM environments WHERE project_id=p.id) FROM projects p WHERE p.id=$1 AND p.organization_id=$2 FOR UPDATE`, projectID, organizationID).Scan(&hasEnvironments)
+	var deleting bool
+	err = tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM projects WHERE id=$1 AND organization_id=$2 FOR UPDATE`, projectID, organizationID).Scan(&deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if hasEnvironments {
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON d.id=(j.payload->>'deploymentId')::uuid JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id WHERE j.kind='deploy.compose' AND j.status IN ('pending','running') AND e.project_id=$1)`, projectID).Scan(&busy); err != nil {
+		return err
+	}
+	if busy {
 		return ErrBusy
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM projects WHERE id=$1`, projectID); err != nil {
+	if !deleting {
+		_, err = tx.Exec(ctx, `UPDATE projects SET deletion_requested_at=now() WHERE id=$1`, projectID)
+	}
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT s.id,COALESCE(s.stack_name,''),s.deletion_requested_at IS NOT NULL,e.id,e.deletion_requested_at IS NOT NULL FROM environments e LEFT JOIN compose_services s ON s.environment_id=e.id WHERE e.project_id=$1 ORDER BY e.id,s.id`, projectID)
+	if err != nil {
+		return err
+	}
+	type child struct {
+		serviceID           *uuid.UUID
+		stack               string
+		serviceDeleting     bool
+		environmentID       uuid.UUID
+		environmentDeleting bool
+	}
+	children := []child{}
+	for rows.Next() {
+		var c child
+		if err = rows.Scan(&c.serviceID, &c.stack, &c.serviceDeleting, &c.environmentID, &c.environmentDeleting); err != nil {
+			rows.Close()
+			return err
+		}
+		children = append(children, c)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	environments := map[uuid.UUID]bool{}
+	for _, c := range children {
+		environments[c.environmentID] = c.environmentDeleting
+		if c.serviceID != nil {
+			if !c.serviceDeleting {
+				_, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, *c.serviceID)
+			}
+			if err != nil {
+				return err
+			}
+			payload, _ := json.Marshal(map[string]string{"serviceId": c.serviceID.String(), "stackName": c.stack})
+			if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.compose',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, c.serviceID.String()); err != nil {
+				return err
+			}
+		}
+	}
+	for environmentID, environmentDeleting := range environments {
+		if !environmentDeleting {
+			_, err = tx.Exec(ctx, `UPDATE environments SET deletion_requested_at=now() WHERE id=$1`, environmentID)
+		}
+		if err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]string{"environmentId": environmentID.String()})
+		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.environment',$2,50 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.environment' AND payload->>'environmentId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, environmentID.String()); err != nil {
+			return err
+		}
+	}
+	payload, _ := json.Marshal(map[string]string{"projectId": projectID.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.project',$2,50 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.project' AND payload->>'projectId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, projectID.String()); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -612,7 +675,7 @@ func (s *Store) CreateEnvironmentOnCluster(ctx context.Context, organizationID, 
 		}
 	}
 	e := Environment{ID: uuid.New(), ProjectID: projectID, ClusterID: clusterID, Name: name, Slug: slug}
-	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug) SELECT $1,p.id,$3,$4,$5 FROM projects p WHERE p.id=$2 AND p.organization_id=$6 RETURNING created_at`, e.ID, projectID, clusterID, name, slug, organizationID).Scan(&e.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug) SELECT $1,p.id,$3,$4,$5 FROM projects p WHERE p.id=$2 AND p.organization_id=$6 AND p.deletion_requested_at IS NULL RETURNING created_at`, e.ID, projectID, clusterID, name, slug, organizationID).Scan(&e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	}
@@ -654,18 +717,63 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var hasServices bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services WHERE environment_id=e.id) FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2 FOR UPDATE OF e`, environmentID, organizationID).Scan(&hasServices)
+	var deleting bool
+	err = tx.QueryRow(ctx, `SELECT e.deletion_requested_at IS NOT NULL FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2 FOR UPDATE OF e`, environmentID, organizationID).Scan(&deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if hasServices {
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON d.id=(j.payload->>'deploymentId')::uuid JOIN compose_services s ON s.id=d.compose_service_id WHERE j.kind='deploy.compose' AND j.status IN ('pending','running') AND s.environment_id=$1)`, environmentID).Scan(&busy); err != nil {
+		return err
+	}
+	if busy {
 		return ErrBusy
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM environments WHERE id=$1`, environmentID); err != nil {
+	if !deleting {
+		_, err = tx.Exec(ctx, `UPDATE environments SET deletion_requested_at=now() WHERE id=$1`, environmentID)
+	}
+	if err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT id,stack_name,deletion_requested_at IS NOT NULL FROM compose_services WHERE environment_id=$1`, environmentID)
+	if err != nil {
+		return err
+	}
+	type serviceChild struct {
+		id       uuid.UUID
+		stack    string
+		deleting bool
+	}
+	services := []serviceChild{}
+	for rows.Next() {
+		var child serviceChild
+		if err = rows.Scan(&child.id, &child.stack, &child.deleting); err != nil {
+			rows.Close()
+			return err
+		}
+		services = append(services, child)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, child := range services {
+		if !child.deleting {
+			_, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, child.id)
+		}
+		if err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]string{"serviceId": child.id.String(), "stackName": child.stack})
+		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.compose',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, child.id.String()); err != nil {
+			return err
+		}
+	}
+	payload, _ := json.Marshal(map[string]string{"environmentId": environmentID.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.environment',$2,50 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.environment' AND payload->>'environmentId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, environmentID.String()); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -688,7 +796,7 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 	}
 	service.ID = uuid.New()
 	service.Revision = 1
-	err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}
@@ -889,7 +997,7 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	return d, nil
 }
 
-func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, serviceID uuid.UUID) error {
+func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, serviceID uuid.UUID, deleteVolumes ...bool) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -904,15 +1012,19 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 	if err != nil {
 		return err
 	}
+	if deleting {
+		payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": len(deleteVolumes) > 0 && deleteVolumes[0]})
+		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.compose',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, serviceID.String()); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
 	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, serviceID)
 	if err != nil {
 		return err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return err
-	}
-	if deleting {
-		return ErrBusy
 	}
 	var busy bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON j.kind='deploy.compose' AND d.id=(j.payload->>'deploymentId')::uuid WHERE d.compose_service_id=$1 AND j.status IN ('pending','running'))`, serviceID).Scan(&busy); err != nil {
@@ -924,7 +1036,7 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 	if _, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, serviceID); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]string{"serviceId": serviceID.String(), "stackName": stackName})
+	payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": len(deleteVolumes) > 0 && deleteVolumes[0]})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'delete.compose',$2,10)`, uuid.New(), payload); err != nil {
 		return err
 	}

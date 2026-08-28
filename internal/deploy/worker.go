@@ -290,6 +290,15 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if j.Kind == "delete.compose" {
 		return w.deleteComposeService(ctx, j)
 	}
+	if j.Kind == "delete.environment" {
+		return w.deleteEnvironment(ctx, j)
+	}
+	if j.Kind == "delete.project" {
+		return w.deleteProject(ctx, j)
+	}
+	if j.Kind == "delete.cluster" {
+		return w.deleteCluster(ctx, j)
+	}
 	if j.Kind == "backup.database" {
 		return w.backupDatabase(ctx, j)
 	}
@@ -412,8 +421,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 
 func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 	var payload struct {
-		ServiceID string `json:"serviceId"`
-		StackName string `json:"stackName"`
+		ServiceID     string `json:"serviceId"`
+		StackName     string `json:"stackName"`
+		DeleteVolumes bool   `json:"deleteVolumes"`
 	}
 	if err := json.Unmarshal(j.Payload, &payload); err != nil {
 		return err
@@ -428,6 +438,11 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 	}
 	if _, err = w.scheduler(clusterID).Remove(ctx, payload.StackName); err != nil {
 		return err
+	}
+	if payload.DeleteVolumes {
+		if _, err = w.scheduler(clusterID).RemoveVolumes(ctx, payload.StackName); err != nil {
+			return err
+		}
 	}
 	rows, err := w.Store.Pool.Query(ctx, `SELECT b.path,b.destination_id,b.object_key FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1`, serviceID)
 	if err != nil {
@@ -484,6 +499,87 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 		relative, relErr := filepath.Rel(root, filepath.Clean(artifact.path))
 		if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			_ = os.RemoveAll(filepath.Dir(artifact.path))
+		}
+	}
+	return nil
+}
+
+func (w *Worker) deleteEnvironment(ctx context.Context, j job) error {
+	var payload struct {
+		EnvironmentID string `json:"environmentId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	id, err := uuid.Parse(payload.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	tag, err := w.Store.Pool.Exec(ctx, `DELETE FROM environments e WHERE e.id=$1 AND e.deletion_requested_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM compose_services s WHERE s.environment_id=e.id)`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if checkErr := w.Store.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM environments WHERE id=$1)`, id).Scan(&exists); checkErr != nil {
+			return checkErr
+		}
+		if exists {
+			return errors.New("environment child finalizers are still running")
+		}
+	}
+	return nil
+}
+
+func (w *Worker) deleteProject(ctx context.Context, j job) error {
+	var payload struct {
+		ProjectID string `json:"projectId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	id, err := uuid.Parse(payload.ProjectID)
+	if err != nil {
+		return err
+	}
+	tag, err := w.Store.Pool.Exec(ctx, `DELETE FROM projects p WHERE p.id=$1 AND p.deletion_requested_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM environments e WHERE e.project_id=p.id)`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if checkErr := w.Store.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)`, id).Scan(&exists); checkErr != nil {
+			return checkErr
+		}
+		if exists {
+			return errors.New("project child finalizers are still running")
+		}
+	}
+	return nil
+}
+
+func (w *Worker) deleteCluster(ctx context.Context, j job) error {
+	var payload struct {
+		ClusterID string `json:"clusterId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	id, err := uuid.Parse(payload.ClusterID)
+	if err != nil {
+		return err
+	}
+	tag, err := w.Store.Pool.Exec(ctx, `DELETE FROM clusters c WHERE c.id=$1 AND c.deletion_requested_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM environments e WHERE e.cluster_id=c.id)`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		if checkErr := w.Store.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1)`, id).Scan(&exists); checkErr != nil {
+			return checkErr
+		}
+		if exists {
+			return errors.New("cluster still has assigned environments")
 		}
 	}
 	return nil

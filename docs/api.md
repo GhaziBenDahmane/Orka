@@ -122,7 +122,7 @@ until an administrator retries them.
 | GET/PUT/DELETE | `/v1/projects/{id}/grants…` | Manage per-user project roles |
 | GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
-| GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack |
+| GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup) |
 | PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build, registry target, and credentials |
 | POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |
@@ -141,6 +141,13 @@ is inherited by all of its environments, while a more privileged environment
 grant applies within that environment. Scoped roles elevate a member's
 organization role; they never reduce an owner or administrator's authority.
 Service accounts continue to use their organization-scoped role.
+
+Project and environment deletion is asynchronous and cascades through service
+stack finalizers. Repeating a delete safely resumes failed finalizers. Cluster
+deletion revokes its agent certificate and queued commands and is allowed only
+after environments have been moved or deleted. Named volumes are retained by
+default; `deleteVolumes=true` removes only volumes carrying Docker's matching
+stack-namespace label, after the stack has been removed.
 
 Provider integrations support GitHub, GitLab, Gitea, and Bitbucket. Secrets are
 shown once, encrypted at rest, and used to authenticate the raw request body.

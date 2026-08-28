@@ -92,13 +92,46 @@ func (s *Store) UpdateClusterState(ctx context.Context, organizationID, clusterI
 	}
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,created_at,updated_at`, clusterID, organizationID, state).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,created_at,updated_at`, clusterID, organizationID, state).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
 	_ = json.Unmarshal(labels, &item.Labels)
 	_ = json.Unmarshal(capacity, &item.Capacity)
 	return item, err
+}
+
+func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, clusterID uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var deleting, assigned bool
+	err = tx.QueryRow(ctx, `SELECT c.deletion_requested_at IS NOT NULL,EXISTS(SELECT 1 FROM environments e WHERE e.cluster_id=c.id) FROM clusters c WHERE c.id=$1 AND c.organization_id=$2 FOR UPDATE`, clusterID, organizationID).Scan(&deleting, &assigned)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if assigned {
+		return ErrBusy
+	}
+	if !deleting {
+		_, err = tx.Exec(ctx, `UPDATE clusters SET state='disabled',deletion_requested_at=now(),certificate_serial='',certificate_not_after=NULL,updated_at=now() WHERE id=$1`, clusterID)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='cluster deletion requested',finished_at=now() WHERE cluster_id=$1 AND status IN ('pending','leased')`, clusterID); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]string{"clusterId": clusterID.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.cluster',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.cluster' AND payload->>'clusterId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, clusterID.String()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uuid.UUID, serial string) error {

@@ -29,6 +29,7 @@ type Swarm struct {
 type Scheduler interface {
 	Deploy(context.Context, string, string, map[string]string) (string, error)
 	Remove(context.Context, string) (string, error)
+	RemoveVolumes(context.Context, string) (string, error)
 	Logs(context.Context, string, int) (string, error)
 	Nodes(context.Context) ([]Node, error)
 	RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error)
@@ -132,6 +133,28 @@ func (s Swarm) Remove(ctx context.Context, stackName string) (string, error) {
 		return output, nil
 	}
 	return output, err
+}
+
+func (s Swarm) RemoveVolumes(ctx context.Context, stackName string) (string, error) {
+	if !safeName.MatchString(stackName) {
+		return "", errors.New("invalid stack name")
+	}
+	output, err := s.run(ctx, "volume", "ls", "--filter", "label=com.docker.stack.namespace="+stackName, "--format", "{{.Name}}")
+	if err != nil {
+		return output, err
+	}
+	var combined strings.Builder
+	for _, volume := range strings.Fields(output) {
+		if !strings.HasPrefix(volume, stackName+"_") {
+			return combined.String(), fmt.Errorf("refusing to remove volume %q outside stack namespace", volume)
+		}
+		removed, removeErr := s.run(ctx, "volume", "rm", volume)
+		combined.WriteString(removed)
+		if removeErr != nil {
+			return combined.String(), removeErr
+		}
+	}
+	return combined.String(), nil
 }
 
 func (s Swarm) Logs(ctx context.Context, stackName string, tail int) (string, error) {

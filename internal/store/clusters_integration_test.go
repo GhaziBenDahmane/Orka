@@ -26,7 +26,10 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Cluster',$2)`, orgID, "cluster-"+orgID.String()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE kind='delete.cluster' AND payload->>'clusterId' IN (SELECT id::text FROM clusters WHERE organization_id=$1)`, orgID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID)
+	})
 	cluster, err := db.CreateCluster(ctx, Cluster{OrganizationID: orgID, Name: "Paris", Slug: "paris", Labels: map[string]any{"region": "eu-west"}})
 	if err != nil {
 		t.Fatal(err)
@@ -95,5 +98,32 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	items, err := db.ListClusters(ctx, orgID)
 	if err != nil || len(items) != 1 || items[0].State != "active" || items[0].CertificateNotAfter == nil || items[0].LastSeenAt == nil || items[0].AgentVersion != "1.2.3" {
 		t.Fatalf("clusters=%#v err=%v", items, err)
+	}
+	if err = db.QueueClusterDeletion(ctx, orgID, cluster.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueueClusterDeletion(ctx, orgID, cluster.ID); err != nil {
+		t.Fatalf("idempotent cluster deletion: %v", err)
+	}
+	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "6789ab"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("certificate remained active during deletion: %v", err)
+	}
+	var deletionJobs int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='delete.cluster' AND payload->>'clusterId'=$1 AND status='pending'`, cluster.ID.String()).Scan(&deletionJobs); err != nil || deletionJobs != 1 {
+		t.Fatalf("deletion jobs=%d err=%v", deletionJobs, err)
+	}
+	assignedCluster := uuid.New()
+	projectID, environmentID := uuid.New(), uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Assigned','assigned','active')`, assignedCluster, orgID); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Assigned','assigned')`, projectID, orgID)
+	}
+	if err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug) VALUES($1,$2,$3,'Assigned','assigned')`, environmentID, projectID, assignedCluster)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueueClusterDeletion(ctx, orgID, assignedCluster); !errors.Is(err, ErrBusy) {
+		t.Fatalf("assigned cluster deletion error=%v, want busy", err)
 	}
 }

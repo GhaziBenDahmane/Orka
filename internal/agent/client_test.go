@@ -28,9 +28,10 @@ func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environ
 	f.stack, f.compose, f.environment = stack, compose, environment
 	return "deployed", nil
 }
-func (*fakeScheduler) Remove(context.Context, string) (string, error)    { return "", nil }
-func (*fakeScheduler) Logs(context.Context, string, int) (string, error) { return "", nil }
-func (*fakeScheduler) Nodes(context.Context) ([]deploy.Node, error)      { return nil, nil }
+func (*fakeScheduler) Remove(context.Context, string) (string, error)        { return "", nil }
+func (*fakeScheduler) RemoveVolumes(context.Context, string) (string, error) { return "", nil }
+func (*fakeScheduler) Logs(context.Context, string, int) (string, error)     { return "", nil }
+func (*fakeScheduler) Nodes(context.Context) ([]deploy.Node, error)          { return nil, nil }
 func (f *fakeScheduler) RunContainerJob(_ context.Context, _, _, mount string, _ map[string]string, command []string) (string, error) {
 	if f.artifact != nil {
 		return "dumped", os.WriteFile(filepath.Join(mount, command[len(command)-1]), f.artifact, 0600)

@@ -326,6 +326,8 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		return c.swarm.Deploy(ctx, payload.StackName, payload.Compose, payload.Environment)
 	case "swarm.remove":
 		return c.swarm.Remove(ctx, payload.StackName)
+	case "swarm.prune-volumes":
+		return c.swarm.RemoveVolumes(ctx, payload.StackName)
 	case "swarm.logs":
 		return c.swarm.Logs(ctx, payload.StackName, payload.Tail)
 	case "swarm.nodes":

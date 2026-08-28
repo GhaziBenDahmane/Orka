@@ -127,8 +127,9 @@ durable provider build-status callbacks implemented.
   Prometheus alert pack are also implemented. Durable signed webhook,
   Slack-compatible, TLS SMTP, PagerDuty, and Opsgenie failure notifications
   are implemented.
-- Extend the implemented asynchronous service/stack finalizer model to
-  projects, environments, volumes, and clusters.
+- Resumable asynchronous finalizers cover services, projects, environments,
+  clusters, and opt-in stack-labelled volume cleanup. Parent deletion waits
+  for all child stacks and active deployments block the cascade.
 
 Exit gate: end-to-end push-to-deploy, cancellation, rollback, alert, and
 disaster-recovery scenarios pass under load.

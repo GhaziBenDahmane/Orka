@@ -14,6 +14,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,6 +110,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.listClusters)))
 	mux.Handle("POST /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.createCluster)))
 	mux.Handle("PATCH /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.updateCluster)))
+	mux.Handle("DELETE /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.deleteCluster)))
 	mux.Handle("POST /v1/clusters/{clusterID}/enrollment-tokens", s.requireRole("admin", http.HandlerFunc(s.createClusterEnrollmentToken)))
 	mux.Handle("GET /v1/clusters/{clusterID}/nodes", s.requireRole("admin", http.HandlerFunc(s.clusterNodes)))
 	mux.Handle("POST /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.createOIDCProvider)))
@@ -653,11 +655,15 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	if err = s.Store.DeleteProject(r.Context(), p.OrganizationID, id); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "project_busy", "cancel or wait for active deployments or an existing deletion")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
 	s.Store.Audit(r.Context(), &p, "project.delete", "project", id.String(), r.RemoteAddr, nil)
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -751,11 +757,15 @@ func (s *Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	if err = s.Store.DeleteEnvironment(r.Context(), p.OrganizationID, id); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "environment_busy", "cancel or wait for active deployments or an existing deletion")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
 	s.Store.Audit(r.Context(), &p, "environment.delete", "environment", id.String(), r.RemoteAddr, nil)
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 
 func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
@@ -1247,7 +1257,12 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.QueueServiceDeletion(r.Context(), p.OrganizationID, id); err != nil {
+	deleteVolumes, err := strconv.ParseBool(r.URL.Query().Get("deleteVolumes"))
+	if err != nil && r.URL.Query().Get("deleteVolumes") != "" {
+		writeError(w, 400, "invalid_delete_option", "deleteVolumes must be true or false")
+		return
+	}
+	if err = s.Store.QueueServiceDeletion(r.Context(), p.OrganizationID, id, deleteVolumes); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, 409, "service_busy", "cancel or wait for active deployments before deleting the service")
 			return
@@ -1255,7 +1270,7 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.delete", "compose_service", id.String(), r.RemoteAddr, nil)
+	s.Store.Audit(r.Context(), &p, "service.delete", "compose_service", id.String(), r.RemoteAddr, map[string]any{"deleteVolumes": deleteVolumes})
 	writeJSON(w, 202, map[string]string{"status": "deletion_queued"})
 }
 

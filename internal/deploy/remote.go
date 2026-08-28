@@ -27,6 +27,10 @@ func (s RemoteSwarm) Remove(ctx context.Context, stackName string) (string, erro
 	return s.run(ctx, "swarm.remove", map[string]any{"stackName": stackName})
 }
 
+func (s RemoteSwarm) RemoveVolumes(ctx context.Context, stackName string) (string, error) {
+	return s.run(ctx, "swarm.prune-volumes", map[string]any{"stackName": stackName})
+}
+
 func (s RemoteSwarm) Logs(ctx context.Context, stackName string, tail int) (string, error) {
 	return s.run(ctx, "swarm.logs", map[string]any{"stackName": stackName, "tail": tail})
 }
