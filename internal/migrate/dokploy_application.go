@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -233,11 +234,17 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		if item.BuildType != "dockerfile" {
 			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported by the Dockerfile build worker", item.BuildType)
 		}
-		if item.BuildArgs != "" || item.BuildSecrets != "" {
-			return preparedApplication{}, warnings, errors.New("build arguments and build secrets require manual source configuration")
+		buildArguments, err := parseDokployBuildSettings(item.BuildArgs, options.EncryptionKeys)
+		if err != nil {
+			return preparedApplication{}, warnings, fmt.Errorf("decode build arguments: %w", err)
 		}
-		if item.DockerBuildStage != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(item.DockerBuildStage) {
-			return preparedApplication{}, warnings, errors.New("Docker build stage is invalid")
+		buildSecrets, err := parseDokployBuildSettings(item.BuildSecrets, options.EncryptionKeys)
+		if err != nil {
+			return preparedApplication{}, warnings, fmt.Errorf("decode build secrets: %w", err)
+		}
+		buildConfig := store.ApplicationBuildConfig{Arguments: buildArguments, Secrets: buildSecrets}
+		if err = deploy.ValidateBuildSettings(item.DockerBuildStage, buildConfig); err != nil {
+			return preparedApplication{}, warnings, err
 		}
 		registryPrefix := strings.TrimSuffix(strings.TrimSpace(options.RegistryPrefix), "/")
 		registryImage := registryPrefix + "/" + slug
@@ -279,7 +286,7 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 			dockerfile = strings.TrimPrefix(dockerfile, prefix)
 		}
 		service["image"] = registryImage + ":pending"
-		source = &store.ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: repositoryURL, GitRef: gitRef, ContextDirectory: contextDirectory, Dockerfile: dockerfile, BuildTarget: item.DockerBuildStage, EnableSubmodules: item.EnableSubmodules, TargetService: "app", RegistryImage: registryImage}
+		source = &store.ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: repositoryURL, GitRef: gitRef, ContextDirectory: contextDirectory, Dockerfile: dockerfile, BuildTarget: item.DockerBuildStage, EnableSubmodules: item.EnableSubmodules, HasBuildArguments: len(buildArguments) > 0, HasBuildSecrets: len(buildSecrets) > 0, BuildArguments: buildArguments, BuildSecrets: buildSecrets, TargetService: "app", RegistryImage: registryImage}
 		if item.SourceType != "git" {
 			warnings = append(warnings, fmt.Sprintf("application %s provider credentials and webhooks are not imported; public clone access is required until they are recreated", item.ID))
 		}
@@ -293,6 +300,34 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		return preparedApplication{}, warnings, err
 	}
 	return preparedApplication{item: item, serviceID: serviceID, slug: slug, composeYAML: string(composeYAML), environment: environment, source: source}, warnings, nil
+}
+
+func parseDokployBuildSettings(value string, keys [][]byte) (map[string]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	plain, err := decryptDokploy(value, keys)
+	if err != nil {
+		return nil, err
+	}
+	settings := map[string]string{}
+	for index, line := range strings.Split(plain, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, setting, ok := strings.Cut(line, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			return nil, fmt.Errorf("line %d must use NAME=value syntax", index+1)
+		}
+		setting = strings.TrimSpace(setting)
+		if len(setting) >= 2 && ((setting[0] == '"' && setting[len(setting)-1] == '"') || (setting[0] == '\'' && setting[len(setting)-1] == '\'')) {
+			setting = setting[1 : len(setting)-1]
+		}
+		settings[name] = setting
+	}
+	return settings, nil
 }
 
 func cleanRepositoryPath(value string) (string, error) {

@@ -46,7 +46,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		`CREATE TABLE ` + quotedSchema + `.registry ("registryId" text PRIMARY KEY,"registryName" text NOT NULL,"registryUrl" text,username text NOT NULL,password text NOT NULL,"organizationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.compose ("composeId" text PRIMARY KEY,"environmentId" text NOT NULL,name text NOT NULL,"appName" text NOT NULL,"composeFile" text NOT NULL,env text)`,
 		`CREATE TABLE ` + quotedSchema + `.domain ("domainId" text PRIMARY KEY,"composeId" text,"applicationId" text,host text,path text,"serviceName" text,port integer,https boolean,enabled boolean,"customCertResolver" text)`,
-		`CREATE TABLE ` + quotedSchema + `.application ("applicationId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,env text,"sourceType" text,"buildType" text,"dockerImage" text,username text,password text,command text,args text[],replicas integer,repository text,owner text,branch text,"buildPath" text,dockerfile text,"dockerBuildStage" text,"enableSubmodules" boolean,"githubId" text,"gitlabId" text,"giteaId" text,"bitbucketId" text,"registryId" text,"buildRegistryId" text)`,
+		`CREATE TABLE ` + quotedSchema + `.application ("applicationId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,env text,"sourceType" text,"buildType" text,"dockerImage" text,username text,password text,command text,args text[],replicas integer,repository text,owner text,branch text,"buildPath" text,dockerfile text,"dockerBuildStage" text,"buildArgs" text,"buildSecrets" text,"enableSubmodules" boolean,"githubId" text,"gitlabId" text,"giteaId" text,"bitbucketId" text,"registryId" text,"buildRegistryId" text)`,
 		`CREATE TABLE ` + quotedSchema + `.destination ("destinationId" text PRIMARY KEY,name text NOT NULL,provider text,"accessKey" text NOT NULL,"secretAccessKey" text NOT NULL,bucket text NOT NULL,region text NOT NULL,endpoint text NOT NULL,"additionalFlags" text[],"organizationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.backup ("backupId" text PRIMARY KEY,schedule text NOT NULL,enabled boolean,database text NOT NULL,prefix text NOT NULL,"destinationId" text NOT NULL,"keepLatestCount" integer,"backupType" text NOT NULL,"databaseType" text NOT NULL,"composeId" text,"postgresId" text,"mariadbId" text,"mysqlId" text,"mongoId" text,"libsqlId" text)`,
 		`CREATE TABLE ` + quotedSchema + `.slack ("slackId" text PRIMARY KEY,"webhookUrl" text NOT NULL,channel text)`,
@@ -71,11 +71,14 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.project VALUES('p1','Imported Project','description','source-org'); INSERT INTO `+quotedSchema+`.environment VALUES('e1','p1','Production'); INSERT INTO `+quotedSchema+`.compose VALUES('c1','e1','Web','web','services:
   web:
     image: nginx:alpine
-','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1',NULL,'`+fixtureHost+`','/','web',80,true,true,'letsencrypt'),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt')`)
+','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","buildArgs","buildSecrets","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime','GO_VERSION=1.26','',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1',NULL,'`+fixtureHost+`','/','web',80,true,true,'letsencrypt'),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt')`)
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.postgres VALUES('pg1','e1','Imported DB','legacy-postgres','legacydb','legacyuser','legacy-secret','postgres:16','EXTRA=value')`)
 	}
 	sourceKey := bytes.Repeat([]byte{3}, 32)
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `UPDATE `+quotedSchema+`.application SET "buildSecrets"=$1 WHERE "applicationId"='a2'`, encryptDokployFixture(t, sourceKey, "NPM_TOKEN=legacy-build-secret"))
+	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.registry VALUES('reg1','Build Registry','registry.example.test','robot',$1,'source-org')`, encryptDokployFixture(t, sourceKey, "registry-secret"))
 	}
@@ -175,15 +178,19 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || !bytes.Contains(applicationEnvJSON, []byte(`"WORKERS":"2"`)) || !bytes.Contains([]byte(applicationCompose), []byte("ghcr.io/example/worker:1.2")) {
 		t.Fatalf("application was not converted correctly: compose=%s env=%s err=%v", applicationCompose, applicationEnvJSON, err)
 	}
-	var repositoryURL, registryImage, registryCredentialSecret, buildTarget string
+	var repositoryURL, registryImage, registryCredentialSecret, buildTarget, encryptedBuildConfig string
 	var enableSubmodules bool
 	var gitCredentialID *uuid.UUID
-	if err = destination.Pool.QueryRow(ctx, `SELECT a.repository_url,a.registry_image,a.git_credential_id,c.encrypted_secret,a.build_target,a.enable_submodules FROM application_sources a JOIN source_credentials c ON c.id=a.registry_credential_id WHERE a.compose_service_id=$1`, mappedID(options, "application-service", "a2")).Scan(&repositoryURL, &registryImage, &gitCredentialID, &registryCredentialSecret, &buildTarget, &enableSubmodules); err != nil {
+	if err = destination.Pool.QueryRow(ctx, `SELECT a.repository_url,a.registry_image,a.git_credential_id,c.encrypted_secret,a.build_target,a.enable_submodules,a.encrypted_build_config FROM application_sources a JOIN source_credentials c ON c.id=a.registry_credential_id WHERE a.compose_service_id=$1`, mappedID(options, "application-service", "a2")).Scan(&repositoryURL, &registryImage, &gitCredentialID, &registryCredentialSecret, &buildTarget, &enableSubmodules, &encryptedBuildConfig); err != nil {
 		t.Fatal(err)
 	}
 	registrySecret, err := box.Decrypt(registryCredentialSecret, "source-credential")
 	if repositoryURL != "https://github.com/example/api.git" || !strings.HasPrefix(registryImage, "registry.example.test/imports/") || gitCredentialID != nil || string(registrySecret) != "registry-secret" || buildTarget != "runtime" || !enableSubmodules || err != nil {
 		t.Fatalf("Git source was not converted: repository=%q registry=%q", repositoryURL, registryImage)
+	}
+	buildConfigJSON, err := box.Decrypt(encryptedBuildConfig, "application-build-config:"+mappedID(options, "application-service", "a2").String())
+	if err != nil || !bytes.Contains(buildConfigJSON, []byte(`"GO_VERSION":"1.26"`)) || !bytes.Contains(buildConfigJSON, []byte(`"NPM_TOKEN":"legacy-build-secret"`)) {
+		t.Fatalf("application build settings were not re-encrypted: %s err=%v", buildConfigJSON, err)
 	}
 	var migrationRecords int
 	if err = destination.Pool.QueryRow(ctx, `SELECT count(*) FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org' AND source_kind='application'`, targetOrg).Scan(&migrationRecords); err != nil || migrationRecords != 2 {

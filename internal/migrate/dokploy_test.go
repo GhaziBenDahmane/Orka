@@ -80,3 +80,19 @@ func TestMigrationApplicationReportDoesNotExposeCredentials(t *testing.T) {
 		t.Fatalf("migration report omitted the secret-presence flag: %s", text)
 	}
 }
+
+func TestPrepareGitApplicationMigratesBuildSettings(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	item := sourceApplication{
+		ID: "app-build", AppName: "Web", Name: "Web", SourceType: "git", BuildType: "dockerfile",
+		CustomGitURL: "https://git.example.test/acme/web.git", CustomGitBranch: "main", DockerBuildStage: "runtime",
+		BuildArgs: "GO_VERSION=1.26\nPUBLIC_FLAG=yes", BuildSecrets: encryptDokployFixture(t, key, "NPM_TOKEN=secret"), EnableSubmodules: true, Replicas: 1,
+	}
+	prepared, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports", EncryptionKeys: [][]byte{key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.source.BuildTarget != "runtime" || !prepared.source.EnableSubmodules || prepared.source.BuildArguments["GO_VERSION"] != "1.26" || prepared.source.BuildSecrets["NPM_TOKEN"] != "secret" {
+		t.Fatalf("build settings were not migrated: %#v", prepared.source)
+	}
+}

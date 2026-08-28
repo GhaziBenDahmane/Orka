@@ -445,7 +445,18 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 				id := credential.id
 				registryCredentialID = &id
 			}
-			_, err = tx.Exec(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,build_target,enable_submodules,target_service,registry_image,git_credential_id,registry_credential_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,build_target=excluded.build_target,enable_submodules=excluded.enable_submodules,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,updated_at=now()`, prepared.source.ComposeServiceID, prepared.source.RepositoryURL, prepared.source.GitRef, prepared.source.ContextDirectory, prepared.source.Dockerfile, prepared.source.BuildTarget, prepared.source.EnableSubmodules, prepared.source.TargetService, prepared.source.RegistryImage, gitCredentialID, registryCredentialID)
+			encryptedBuildConfig := ""
+			if len(prepared.source.BuildArguments) > 0 || len(prepared.source.BuildSecrets) > 0 {
+				data, marshalErr := json.Marshal(store.ApplicationBuildConfig{Arguments: prepared.source.BuildArguments, Secrets: prepared.source.BuildSecrets})
+				if marshalErr != nil {
+					return report, marshalErr
+				}
+				encryptedBuildConfig, err = box.Encrypt(data, "application-build-config:"+prepared.source.ComposeServiceID.String())
+				if err != nil {
+					return report, err
+				}
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,build_target,enable_submodules,encrypted_build_config,target_service,registry_image,git_credential_id,registry_credential_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,build_target=excluded.build_target,enable_submodules=excluded.enable_submodules,encrypted_build_config=excluded.encrypted_build_config,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,updated_at=now()`, prepared.source.ComposeServiceID, prepared.source.RepositoryURL, prepared.source.GitRef, prepared.source.ContextDirectory, prepared.source.Dockerfile, prepared.source.BuildTarget, prepared.source.EnableSubmodules, encryptedBuildConfig, prepared.source.TargetService, prepared.source.RegistryImage, gitCredentialID, registryCredentialID)
 			if err != nil {
 				return report, fmt.Errorf("import application source %s: %w", item.ID, err)
 			}
