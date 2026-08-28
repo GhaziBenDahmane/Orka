@@ -19,6 +19,7 @@ The initial implementation includes:
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets and an audit trail.
 - request correlation, optional OTLP tracing, and Prometheus operational metrics.
+- durable signed webhooks, Slack-compatible notifications, TLS SMTP email, PagerDuty, and Opsgenie alerts.
 - inherited organization/project/environment maintenance controls and resource quotas.
 - an embedded React console for core project, workload, template, database, and cluster workflows.
 

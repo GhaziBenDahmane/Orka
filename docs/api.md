@@ -42,7 +42,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
 | POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
-| GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable failure notification webhooks |
+| GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
 | PATCH | `/v1/clusters/{id}` | Activate, drain, or disable a cluster |
 | POST | `/v1/clusters/{id}/enrollment-tokens` | Issue a 15-minute one-time agent token |
@@ -63,7 +63,11 @@ also inherited and rejects new resources, configuration mutations, deletions,
 deployments, rollbacks, and webhook deployments with `503 maintenance_mode`;
 reads, cancellation, backups, and already-running jobs remain available.
 
-Notification endpoints support generic webhook and Slack-compatible payloads
+Notification endpoints support generic webhook, Slack-compatible payloads,
+TLS SMTP (`starttls` or implicit `tls`), PagerDuty Events API v2, and the
+Opsgenie Alerts API. SMTP passwords and provider integration keys are
+encrypted and never returned. Generic webhook signing secrets are revealed
+once. All providers use the same idempotent delivery records and retry queue.
 for `deployment.failed`, `backup.failed`, and `restore.failed`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from

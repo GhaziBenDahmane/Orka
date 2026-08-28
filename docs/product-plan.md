@@ -116,15 +116,15 @@ durable provider build-status callbacks implemented.
   credentials are implemented.
 - GitHub, GitLab, Gitea, and Bitbucket callbacks publish ordered pending and
   terminal statuses using snapshotted, host-pinned encrypted credentials.
-- Notification rules and providers for email, Slack-compatible webhooks, and
-  common incident systems.
+- Failure notification rules and durable providers for TLS email,
+  Slack-compatible webhooks, PagerDuty, and Opsgenie are implemented.
 - OpenTelemetry HTTP and worker traces, request/log correlation, and richer
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
   implemented. Hierarchical maintenance mode and transactionally enforced
   organization/project/environment resource quotas and a production
-  Prometheus alert pack are also implemented. Durable signed webhook and
-  Slack-compatible failure notifications are implemented; SMTP and native
-  incident-system adapters remain.
+  Prometheus alert pack are also implemented. Durable signed webhook,
+  Slack-compatible, TLS SMTP, PagerDuty, and Opsgenie failure notifications
+  are implemented.
 - Extend the implemented asynchronous service/stack finalizer model to
   projects, environments, volumes, and clusters.
 

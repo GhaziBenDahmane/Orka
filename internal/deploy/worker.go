@@ -1024,7 +1024,17 @@ func (w *Worker) deliverNotification(ctx context.Context, j job) error {
 		w.Store.FinishNotificationDelivery(ctx, id, 0, err)
 		return err
 	}
-	code, err := sendNotification(ctx, w.notificationClient(), string(urlBytes), secret, delivery)
+	var code int
+	switch endpoint.Kind {
+	case "webhook", "slack":
+		code, err = sendNotification(ctx, w.notificationClient(), string(urlBytes), secret, delivery)
+	case "pagerduty", "opsgenie":
+		code, err = sendIncidentNotification(ctx, w.notificationClient(), endpoint.Kind, string(urlBytes), string(secret), delivery)
+	case "smtp":
+		code, err = sendSMTPNotification(ctx, string(urlBytes), secret, delivery)
+	default:
+		err = fmt.Errorf("unsupported notification endpoint kind %q", endpoint.Kind)
+	}
 	w.Store.FinishNotificationDelivery(ctx, id, code, err)
 	return err
 }
