@@ -114,14 +114,75 @@ not use an application-source build record. Imported Git builds forward a
 matching registry credential to local or remote Swarm managers.
 
 Managed-database import creates the destination Compose service and database
-record, but it does not copy persistent volume contents. Back up every source
-database, restore it into the imported destination during a maintenance window,
-and validate application-level reads and writes before changing DNS or stopping
-Dokploy. Treat Redis and libSQL specially because their automated native
-backup/restore workflow is not yet verified by Dockyard.
+record, but the control-plane import does not copy persistent volume contents.
+Use the native transfer command below for PostgreSQL, MySQL, MariaDB, and
+MongoDB. Redis, libSQL, and other engines still require an operator-managed
+backup and restore.
+
+## Transfer managed database data
+
+Deploy the imported target database stacks and verify they are healthy before
+queuing data transfers. The target Swarm manager performs both the source dump
+and target restore on the target stack's attachable overlay network, so every
+source `host` and `port` in the manifest must be reachable from that network.
+
+Create a mode-0600 connection manifest outside the repository:
+
+```json
+{
+  "version": 1,
+  "connections": [
+    {
+      "sourceId": "dokploy-postgres-id",
+      "host": "old-postgres.internal",
+      "port": 5432,
+      "username": "migration",
+      "password": "replace-me",
+      "database": "app"
+    }
+  ]
+}
+```
+
+The `sourceId` is Dokploy's database identifier. Start with the default dry
+run. Prefer the environment variable for the Dokploy control-plane URL so its
+credentials do not appear in the process list:
+
+```sh
+export DOCKYARD_DOKPLOY_DATABASE_URL='postgres://dokploy:...@source/dokploy'
+dockyard migrate-dokploy-data \
+  --source-organization 'dokploy-organization-id' \
+  --target-organization 'dockyard-organization-uuid' \
+  --connections-file /secure/path/database-connections.json
+```
+
+For the final transfer, stop application writes or put the source application
+in maintenance mode, take a separate recovery backup, then explicitly confirm
+the destructive target restore:
+
+```sh
+dockyard migrate-dokploy-data \
+  --source-organization 'dokploy-organization-id' \
+  --target-organization 'dockyard-organization-uuid' \
+  --connections-file /secure/path/database-connections.json \
+  --dry-run=false \
+  --confirm 'dockyard-organization-uuid'
+```
+
+Each transfer is a durable, cancellable job. Inspect it with
+`GET /v1/database-migrations/{id}` and request cancellation with
+`POST /v1/database-migrations/{id}/cancel`. A retry repeats the native restore;
+PostgreSQL cleans existing objects, MySQL/MariaDB replay the dump, and MongoDB
+uses `--drop`. PostgreSQL custom dumps and MySQL/MariaDB
+`--single-transaction` provide consistent snapshots for their supported
+workloads. A MongoDB archive is not a globally transactional snapshot; quiesce
+writes before the final dump. Temporary dump files stay on the Swarm manager,
+are checksummed, and are removed after the attempt. Connection passwords are
+encrypted at rest and are not placed in command arguments, reports, or logs.
 
 Keep Dokploy running until every reported resource has a documented mapping,
 then perform a maintenance-window dry run, database backup, final import,
-database restore, DNS cutover, and application-level validation. The importer
-does not deploy stacks, copy volumes, restore database data, or modify DNS
-automatically.
+database transfer, DNS cutover, and application-level validation. The
+control-plane importer does not deploy stacks, copy volumes, restore database
+data, or modify DNS automatically; the separate data command queues the native
+database transfers only.

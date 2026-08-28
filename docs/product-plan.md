@@ -184,8 +184,9 @@ embedded React console for core workload, template, database, and cluster
   BuildKit secrets, same-origin Git submodules, and packaging of prebuilt static
   sites into a digest-pinned runtime, Nixpacks, and the production Railpack
   BuildKit frontend, Paketo and Heroku 24 Cloud Native Buildpacks, and custom
-  digest-pinned CNB builders are supported. Persistent database data migration
-  remains manual. The
+  digest-pinned CNB builders are supported. PostgreSQL, MySQL, MariaDB, and
+  MongoDB Dokploy data can be moved through confirmed, durable native transfer
+  jobs; other engines remain operator-assisted. The
 Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
 policies. The console provides credential, backup-destination, OIDC, SAML,

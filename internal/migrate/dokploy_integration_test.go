@@ -196,6 +196,36 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT count(*) FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org' AND source_kind='application'`, targetOrg).Scan(&migrationRecords); err != nil || migrationRecords != 2 {
 		t.Fatalf("migration metadata records=%d err=%v", migrationRecords, err)
 	}
+
+	transferManifest := DokployDatabaseTransferManifest{Version: 1, Connections: []DokployDatabaseSourceConnection{{SourceID: "pg1", Host: "legacy-postgres.internal", Port: 15432, Username: "transfer-user", Password: "transfer-secret", Database: "legacydb"}}}
+	transferOptions := options
+	transferOptions.DryRun = true
+	transferReport, err := QueueDokployDatabaseTransfers(ctx, destination, box, transferOptions, transferManifest)
+	if err != nil || transferReport.Planned != 1 || transferReport.Queued != 0 || transferReport.Items[0].DatabaseInstanceID != mappedID(options, "database:postgres", "pg1") {
+		t.Fatalf("database transfer dry run=%#v err=%v", transferReport, err)
+	}
+	encodedTransferReport, _ := json.Marshal(transferReport)
+	if bytes.Contains(encodedTransferReport, []byte("transfer-secret")) || bytes.Contains(encodedTransferReport, []byte("transfer-user")) {
+		t.Fatalf("database transfer report leaked connection credentials: %s", encodedTransferReport)
+	}
+	transferOptions.DryRun = false
+	transferReport, err = QueueDokployDatabaseTransfers(ctx, destination, box, transferOptions, transferManifest)
+	if err != nil || transferReport.Queued != 1 {
+		t.Fatalf("database transfer queue=%#v err=%v", transferReport, err)
+	}
+	var encryptedSource string
+	if err = destination.Pool.QueryRow(ctx, `SELECT encrypted_source_config FROM database_migrations WHERE id=$1`, transferReport.Items[0].ID).Scan(&encryptedSource); err != nil {
+		t.Fatal(err)
+	}
+	sourceJSON, err := box.Decrypt(encryptedSource, "database-migration-source:"+transferReport.Items[0].ID.String())
+	if err != nil || !bytes.Contains(sourceJSON, []byte(`"password":"transfer-secret"`)) || !bytes.Contains(sourceJSON, []byte(`"port":15432`)) {
+		t.Fatalf("database transfer source was not resource-bound and encrypted: %s err=%v", sourceJSON, err)
+	}
+	unknownManifest := transferManifest
+	unknownManifest.Connections = []DokployDatabaseSourceConnection{{SourceID: "not-owned", Host: "db.internal", Username: "u", Password: "p", Database: "d"}}
+	if _, err = QueueDokployDatabaseTransfers(ctx, destination, box, transferOptions, unknownManifest); err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("unknown source ownership error=%v", err)
+	}
 }
 
 func encryptDokployFixture(t *testing.T, key []byte, value string) string {

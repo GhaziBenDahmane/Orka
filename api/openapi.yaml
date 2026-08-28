@@ -1022,6 +1022,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/database-migrations/{migrationID}:
+    get:
+      operationId: get_v1_database_migrations_migrationID
+      tags: [database-migrations]
+      parameters:
+        - name: migrationID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/database-migrations/{migrationID}/cancel:
+    post:
+      operationId: post_v1_database_migrations_migrationID_cancel
+      tags: [database-migrations]
+      parameters:
+        - name: migrationID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/database-restores/{restoreID}:
     get:
       operationId: get_v1_database_restores_restoreID

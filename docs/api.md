@@ -87,7 +87,8 @@ Opsgenie Alerts API. SMTP passwords and provider integration keys are
 encrypted and never returned. Generic webhook signing secrets are revealed
 once. All providers use the same idempotent delivery records and retry queue
 for `deployment.failed`, `backup.failed`, `restore.failed`,
-`restore.drill.failed`, and `audit.archive.failed`. URLs and signing
+`restore.drill.failed`, `database.migration.failed`, and
+`audit.archive.failed`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are
@@ -223,6 +224,8 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
 | POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation |
+| GET | `/v1/database-migrations/{id}` | Inspect a Dokploy native data transfer |
+| POST | `/v1/database-migrations/{id}/cancel` | Request transfer cancellation |
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the

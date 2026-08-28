@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
@@ -74,6 +75,19 @@ type RemoteArtifactResult struct {
 	SizeBytes       int64  `json:"sizeBytes"`
 }
 
+type DatabaseTransferJob struct {
+	Network      string               `json:"network"`
+	ArtifactName string               `json:"artifactName"`
+	Backup       database.BackupPlan  `json:"backup"`
+	Restore      database.RestorePlan `json:"restore"`
+}
+
+type DatabaseTransferResult struct {
+	Output    string `json:"output"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"sizeBytes"`
+}
+
 func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) (RemoteArtifactResult, error) {
 	var result RemoteArtifactResult
 	output, err := s.run(ctx, "database.utility", job)
@@ -82,6 +96,21 @@ func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) 
 	}
 	if err = json.Unmarshal([]byte(output), &result); err != nil {
 		return result, fmt.Errorf("decode remote artifact result: %w", err)
+	}
+	return result, nil
+}
+
+func (s RemoteSwarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransferJob) (DatabaseTransferResult, error) {
+	var result DatabaseTransferResult
+	if s.Timeout < 2*time.Hour {
+		s.Timeout = 2 * time.Hour
+	}
+	output, err := s.run(ctx, "database.transfer", job)
+	if err != nil {
+		return result, err
+	}
+	if err = json.Unmarshal([]byte(output), &result); err != nil {
+		return result, fmt.Errorf("decode remote database transfer result: %w", err)
 	}
 	return result, nil
 }

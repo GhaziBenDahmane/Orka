@@ -362,6 +362,20 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		return c.swarm.RunContainerJob(ctx, payload.Network, payload.Image, "", payload.Environment, payload.Command)
 	case "database.utility":
 		return c.executeArtifactJob(ctx, cmd.Payload)
+	case "database.transfer":
+		var job deploy.DatabaseTransferJob
+		if err := json.Unmarshal(cmd.Payload, &job); err != nil {
+			return "", err
+		}
+		transferScheduler, ok := c.swarm.(interface {
+			RunDatabaseTransfer(context.Context, deploy.DatabaseTransferJob) (deploy.DatabaseTransferResult, error)
+		})
+		if !ok {
+			return "", errors.New("scheduler does not support database transfers")
+		}
+		result, err := transferScheduler.RunDatabaseTransfer(ctx, job)
+		encoded, _ := json.Marshal(result)
+		return string(encoded), err
 	case "agent.upgrade":
 		if !digestImagePattern.MatchString(payload.Image) {
 			return "", errors.New("agent upgrade image must be pinned by sha256 digest")

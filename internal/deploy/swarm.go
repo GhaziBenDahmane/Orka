@@ -259,6 +259,45 @@ func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource 
 	return s.runEnv(ctx, environment, args...)
 }
 
+func (s Swarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransferJob) (DatabaseTransferResult, error) {
+	var result DatabaseTransferResult
+	if filepath.Base(job.ArtifactName) != job.ArtifactName || job.ArtifactName == "." || job.ArtifactName == "" {
+		return result, errors.New("invalid database transfer artifact name")
+	}
+	directory, err := os.MkdirTemp("", "dockyard-database-transfer-*")
+	if err != nil {
+		return result, err
+	}
+	defer os.RemoveAll(directory)
+	if err = writePlanFiles(directory, job.Backup.Files); err != nil {
+		return result, err
+	}
+	backupOutput, err := s.RunContainerJob(ctx, job.Network, job.Backup.Image, directory, job.Backup.Environment, job.Backup.Command)
+	result.Output = backupOutput
+	removePlanFiles(directory, job.Backup.Files)
+	if err != nil {
+		return result, fmt.Errorf("source backup failed: %w", err)
+	}
+	artifactPath := filepath.Join(directory, job.ArtifactName)
+	result.SHA256, result.SizeBytes, err = checksumFile(artifactPath)
+	if err != nil || result.SizeBytes == 0 {
+		if err == nil {
+			err = errors.New("source backup produced an empty artifact")
+		}
+		return result, err
+	}
+	if err = writePlanFiles(directory, job.Restore.Files); err != nil {
+		return result, err
+	}
+	defer removePlanFiles(directory, job.Restore.Files)
+	restoreOutput, err := s.RunContainerJob(ctx, job.Network, job.Restore.Image, directory, job.Restore.Environment, job.Restore.Command)
+	result.Output += restoreOutput
+	if err != nil {
+		return result, fmt.Errorf("target restore failed: %w", err)
+	}
+	return result, nil
+}
+
 func (s Swarm) waitConverged(parent context.Context, stack string) (string, error) {
 	timeout := s.Timeout
 	if timeout == 0 {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -34,6 +35,12 @@ type BackupPlan struct {
 	Environment map[string]string
 	Extension   string
 	Files       map[string]string
+}
+type SourceConnection struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Database string `json:"database"`
+	Port     int    `json:"port,omitempty"`
 }
 type RestorePlan = BackupPlan
 type Registry struct{ drivers map[string]Driver }
@@ -89,14 +96,24 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 	}
 	switch engine {
 	case "postgres":
-		return BackupPlan{Image: "postgres:" + version, Command: []string{"pg_dump", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "--format=custom", "--file", "/backup/" + filename}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
+		command := []string{"pg_dump", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "--format=custom", "--file", "/backup/" + filename}
+		command = append(command, nativePortArguments(engine, credentials)...)
+		return BackupPlan{Image: "postgres:" + version, Command: command, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
 	case "mysql":
-		return BackupPlan{Image: "mysql:" + version, Command: []string{"mysqldump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--no-tablespaces", "--result-file=/backup/" + filename, credentials["database"]}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
+		command := []string{"mysqldump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--no-tablespaces", "--result-file=/backup/" + filename}
+		command = append(command, nativePortArguments(engine, credentials)...)
+		command = append(command, credentials["database"])
+		return BackupPlan{Image: "mysql:" + version, Command: command, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
 	case "mariadb":
-		return BackupPlan{Image: "mariadb:" + version, Command: []string{"mariadb-dump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--result-file=/backup/" + filename, credentials["database"]}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
+		command := []string{"mariadb-dump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--result-file=/backup/" + filename}
+		command = append(command, nativePortArguments(engine, credentials)...)
+		command = append(command, credentials["database"])
+		return BackupPlan{Image: "mariadb:" + version, Command: command, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
 	case "mongo":
 		configName := filename + ".config"
-		return BackupPlan{Image: "mongo:" + version, Command: []string{"mongodump", "--config=/backup/" + configName, "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--db", credentials["database"], "--archive=/backup/" + filename, "--gzip"}, Extension: "archive.gz", Files: map[string]string{configName: "password: " + mongoYAMLString(credentials["password"]) + "\n"}}, nil
+		command := []string{"mongodump", "--config=/backup/" + configName, "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--db", credentials["database"], "--archive=/backup/" + filename, "--gzip"}
+		command = append(command, nativePortArguments(engine, credentials)...)
+		return BackupPlan{Image: "mongo:" + version, Command: command, Extension: "archive.gz", Files: map[string]string{configName: "password: " + mongoYAMLString(credentials["password"]) + "\n"}}, nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
@@ -174,7 +191,23 @@ func validateNativePlan(version, host string, credentials map[string]string, fil
 			return fmt.Errorf("database credential %q is missing", key)
 		}
 	}
+	if value := credentials["port"]; value != "" {
+		port, err := strconv.Atoi(value)
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("database port must be between 1 and 65535")
+		}
+	}
 	return nil
+}
+
+func nativePortArguments(engine string, credentials map[string]string) []string {
+	if credentials["port"] == "" {
+		return nil
+	}
+	if engine == "postgres" || engine == "mongo" {
+		return []string{"--port", credentials["port"]}
+	}
+	return []string{"--port=" + credentials["port"]}
 }
 
 func mongoYAMLString(value string) string {

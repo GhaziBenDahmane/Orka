@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -288,6 +289,8 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 		key = "backupId"
 	case "restore.database":
 		key = "restoreId"
+	case "migrate.database":
+		key = "migrationId"
 	default:
 		return nil
 	}
@@ -303,6 +306,8 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 		query = `UPDATE database_backups SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
 	case "restore.database":
 		query = `UPDATE database_restores SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	case "migrate.database":
+		query = `UPDATE database_migrations SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
 	}
 	_, err = tx.Exec(ctx, query, id)
 	return err
@@ -402,6 +407,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if j.Kind == "restore.database" {
 		return w.restoreDatabase(ctx, j)
+	}
+	if j.Kind == "migrate.database" {
+		return w.migrateDatabase(ctx, j)
 	}
 	if j.Kind == "notify.webhook" {
 		return w.deliverNotification(ctx, j)
@@ -1202,6 +1210,118 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 	}
 	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
 	return err
+}
+
+type databaseTransferRunner interface {
+	RunDatabaseTransfer(context.Context, DatabaseTransferJob) (DatabaseTransferResult, error)
+}
+
+func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
+	var payload struct {
+		MigrationID string `json:"migrationId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	migrationID, err := uuid.Parse(payload.MigrationID)
+	if err != nil {
+		return err
+	}
+	var sourceEngine, sourceVersion, sourceHost, encryptedSource, targetEngine, targetVersion, targetHost, encryptedTarget, stackName, databaseStatus string
+	var clusterID *uuid.UUID
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE database_migrations m SET status='running',started_at=COALESCE(started_at,now()),error='' FROM database_instances d,compose_services s,environments e WHERE m.id=$1 AND d.id=m.database_instance_id AND s.id=d.compose_service_id AND e.id=d.environment_id RETURNING m.source_engine,m.source_version,m.source_host,m.encrypted_source_config,d.engine,d.version,d.slug,d.encrypted_credentials,s.stack_name,d.status,e.cluster_id`, migrationID).Scan(&sourceEngine, &sourceVersion, &sourceHost, &encryptedSource, &targetEngine, &targetVersion, &targetHost, &encryptedTarget, &stackName, &databaseStatus, &clusterID)
+	})
+	if err != nil {
+		return err
+	}
+	redactions := map[string]string{}
+	fail := func(cause error) error {
+		return w.failDatabaseMigration(ctx, j, migrationID, redactBuildError(cause, redactions))
+	}
+	if sourceEngine != targetEngine {
+		return fail(fmt.Errorf("source engine %q does not match target engine %q", sourceEngine, targetEngine))
+	}
+	if databaseStatus != "running" {
+		return fail(errors.New("target database must have a successful deployment before data migration"))
+	}
+	if w.Databases == nil {
+		return fail(errors.New("database registry is not configured"))
+	}
+	sourcePlain, err := w.Box.Decrypt(encryptedSource, "database-migration-source:"+migrationID.String())
+	if err != nil {
+		return fail(err)
+	}
+	defer clear(sourcePlain)
+	var sourceConnection database.SourceConnection
+	if err = json.Unmarshal(sourcePlain, &sourceConnection); err != nil {
+		return fail(err)
+	}
+	redactions["sourcePassword"] = sourceConnection.Password
+	targetPlain, err := w.Box.Decrypt(encryptedTarget, "database-credentials")
+	if err != nil {
+		return fail(err)
+	}
+	targetCredentials := map[string]string{}
+	if err = json.Unmarshal(targetPlain, &targetCredentials); err != nil {
+		clear(targetPlain)
+		return fail(err)
+	}
+	clear(targetPlain)
+	redactions["targetPassword"] = targetCredentials["password"]
+	sourceCredentials := map[string]string{"username": sourceConnection.Username, "password": sourceConnection.Password, "database": sourceConnection.Database}
+	if sourceConnection.Port > 0 {
+		sourceCredentials["port"] = fmt.Sprint(sourceConnection.Port)
+	}
+	extension, supported := w.Databases.BackupExtension(sourceEngine)
+	if !supported {
+		return fail(fmt.Errorf("native data migration is not implemented for database engine %q", sourceEngine))
+	}
+	artifactName := migrationID.String() + "." + extension
+	backupPlan, err := w.Databases.Backup(sourceEngine, sourceVersion, sourceHost, sourceCredentials, artifactName)
+	if err != nil {
+		return fail(err)
+	}
+	restorePlan, err := w.Databases.Restore(targetEngine, targetVersion, targetHost, targetCredentials, artifactName)
+	if err != nil {
+		return fail(err)
+	}
+	scheduler := w.scheduler(clusterID)
+	readiness, err := w.Databases.Readiness(targetEngine, targetVersion, targetHost, targetCredentials)
+	if err != nil {
+		return fail(err)
+	}
+	if _, err = scheduler.RunContainerJob(ctx, stackName+"_default", readiness.Image, "", readiness.Environment, readiness.Command); err != nil {
+		return fail(fmt.Errorf("target database is not ready: %w", err))
+	}
+	runner, ok := scheduler.(databaseTransferRunner)
+	if !ok {
+		return fail(errors.New("target scheduler does not support database transfer"))
+	}
+	transferCtx, cancel := context.WithTimeout(ctx, 2*time.Hour)
+	result, transferErr := runner.RunDatabaseTransfer(transferCtx, DatabaseTransferJob{Network: stackName + "_default", ArtifactName: artifactName, Backup: backupPlan, Restore: restorePlan})
+	cancel()
+	output := truncate(redactBuildText(result.Output, redactions), 64<<10)
+	if transferErr != nil {
+		return fail(transferErr)
+	}
+	if result.SizeBytes <= 0 || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(result.SHA256) {
+		return fail(errors.New("database transfer returned invalid checksum evidence"))
+	}
+	return w.updateResourceForJob(ctx, j, `UPDATE database_migrations SET status='succeeded',size_bytes=$2,sha256=$3,output=$4,error='',finished_at=now() WHERE id=$1`, migrationID, result.SizeBytes, result.SHA256, output)
+}
+
+func (w *Worker) failDatabaseMigration(ctx context.Context, j job, id uuid.UUID, migrationErr error) error {
+	query := `UPDATE database_migrations SET status='failed',error=$2,finished_at=now() WHERE id=$1`
+	if j.Attempts+1 < j.MaxAttempts {
+		// Keep the migration active while its durable job is waiting to retry.
+		// This preserves the one-transfer-per-target fence for destructive restores.
+		query = `UPDATE database_migrations SET status='running',error=$2,finished_at=NULL WHERE id=$1`
+	}
+	if err := w.updateResourceForJob(ctx, j, query, id, truncate(migrationErr.Error(), 8192)); err != nil {
+		return errors.Join(migrationErr, err)
+	}
+	return migrationErr
 }
 
 func (w *Worker) s3(ctx context.Context, id uuid.UUID) (*backupstore.S3, error) {

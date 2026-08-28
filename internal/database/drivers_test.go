@@ -59,6 +59,28 @@ func TestNativeBackupPlanRejectsUnsafeInput(t *testing.T) {
 	}
 }
 
+func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
+	registry := NewRegistry()
+	for _, tc := range []struct {
+		engine string
+		want   string
+	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}} {
+		port := "13306"
+		if tc.engine == "postgres" {
+			port = "15432"
+		} else if tc.engine == "mongo" {
+			port = "17017"
+		}
+		plan, err := registry.Backup(tc.engine, "17", "source.internal", map[string]string{"username": "user", "password": "secret", "database": "app", "port": port}, "123e4567-e89b-12d3-a456-426614174000.dump")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.engine, err)
+		}
+		if got := strings.Join(plan.Command, " "); !strings.Contains(got, tc.want) {
+			t.Fatalf("%s command %q does not contain %q", tc.engine, got, tc.want)
+		}
+	}
+}
+
 func TestRegistryUsesImportedCredentialsAndImage(t *testing.T) {
 	result, err := NewRegistry().Render("postgres", Request{Name: "data", Version: "16", Config: map[string]any{"username": "legacy", "password": "migrated-secret", "database": "legacy_db", "image": "registry.example.test/postgres:16.4"}})
 	if err != nil {

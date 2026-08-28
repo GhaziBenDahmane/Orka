@@ -32,7 +32,7 @@ var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data>")
 		os.Exit(2)
 	}
 	var err error
@@ -55,8 +55,10 @@ func main() {
 		err = validationErr
 	case "migrate-dokploy":
 		err = migrateDokploy(os.Args[2:])
+	case "migrate-dokploy-data":
+		err = migrateDokployData(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy|migrate-dokploy-data>")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -90,7 +92,7 @@ func envDefault(name, fallback string) string {
 
 func migrateDokploy(arguments []string) error {
 	flags := flag.NewFlagSet("migrate-dokploy", flag.ContinueOnError)
-	sourceURL := flags.String("source-url", "", "Dokploy PostgreSQL connection URL")
+	sourceURL := flags.String("source-url", os.Getenv("DOCKYARD_DOKPLOY_DATABASE_URL"), "Dokploy PostgreSQL connection URL (or DOCKYARD_DOKPLOY_DATABASE_URL)")
 	sourceOrganization := flags.String("source-organization", "", "Dokploy organization ID")
 	targetOrganization := flags.String("target-organization", "", "Dockyard organization UUID")
 	dryRun := flags.Bool("dry-run", true, "validate and report without writing")
@@ -131,6 +133,71 @@ func migrateDokploy(arguments []string) error {
 		return err
 	}
 	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, RegistryPrefix: *registryPrefix, DryRun: *dryRun, EncryptionKeys: keys})
+	_ = json.NewEncoder(os.Stdout).Encode(report)
+	return err
+}
+
+func migrateDokployData(arguments []string) error {
+	flags := flag.NewFlagSet("migrate-dokploy-data", flag.ContinueOnError)
+	sourceURL := flags.String("source-url", os.Getenv("DOCKYARD_DOKPLOY_DATABASE_URL"), "Dokploy PostgreSQL connection URL (or DOCKYARD_DOKPLOY_DATABASE_URL)")
+	sourceOrganization := flags.String("source-organization", "", "Dokploy organization ID")
+	targetOrganization := flags.String("target-organization", "", "Dockyard organization UUID")
+	connectionsFile := flags.String("connections-file", "", "mode-0600 JSON source connection manifest")
+	dryRun := flags.Bool("dry-run", true, "validate and report without queuing transfers")
+	confirm := flags.String("confirm", "", "target organization UUID required when --dry-run=false")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	targetID, err := uuid.Parse(*targetOrganization)
+	if err != nil {
+		return errors.New("--target-organization must be a UUID")
+	}
+	if *connectionsFile == "" {
+		return errors.New("--connections-file is required")
+	}
+	info, err := os.Lstat(*connectionsFile)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("connections file must be a regular file with no group or other permissions")
+	}
+	data, err := os.ReadFile(*connectionsFile)
+	if err != nil {
+		return err
+	}
+	if len(data) > 1<<20 {
+		return errors.New("connections file exceeds 1 MiB")
+	}
+	manifest, err := dockyardmigrate.ParseDokployDatabaseTransferManifest(data)
+	clear(data)
+	if err != nil {
+		return err
+	}
+	if !*dryRun && *confirm != targetID.String() {
+		return errors.New("--confirm must exactly match --target-organization when queuing destructive data restores")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	db, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Pool.Close()
+	box, err := cryptox.New(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	report, err := dockyardmigrate.QueueDokployDatabaseTransfers(ctx, db, box, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, DryRun: *dryRun}, manifest)
+	if err == nil && !*dryRun {
+		for _, item := range report.Items {
+			db.AuditOrganization(ctx, targetID, "database_migration.queue", "database_migration", item.ID.String(), "cli", map[string]any{"sourceKind": item.SourceKind, "sourceId": item.SourceID, "databaseInstanceId": item.DatabaseInstanceID})
+		}
+	}
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
 }

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 )
 
@@ -25,6 +26,12 @@ type fakeScheduler struct {
 	artifact           []byte
 	wantArtifact       []byte
 	nodes              []deploy.Node
+	transfer           *deploy.DatabaseTransferJob
+}
+
+func (f *fakeScheduler) RunDatabaseTransfer(_ context.Context, job deploy.DatabaseTransferJob) (deploy.DatabaseTransferResult, error) {
+	f.transfer = &job
+	return deploy.DatabaseTransferResult{SHA256: strings.Repeat("a", 64), SizeBytes: 42, Output: "restored"}, nil
 }
 
 func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environment map[string]string, registryCredential *deploy.Credential) (string, error) {
@@ -102,6 +109,23 @@ func TestExecuteDeployCommand(t *testing.T) {
 	}
 	if scheduler.stack != "demo" || scheduler.compose != "services: {}" || scheduler.environment["TOKEN"] != "secret" || scheduler.registryCredential == nil || scheduler.registryCredential.Secret != "registry-secret" {
 		t.Fatalf("unexpected dispatch: %#v", scheduler)
+	}
+}
+
+func TestExecuteDatabaseTransferCommand(t *testing.T) {
+	scheduler := &fakeScheduler{}
+	client := &Client{swarm: scheduler}
+	payload, _ := json.Marshal(deploy.DatabaseTransferJob{Network: "db_default", ArtifactName: "migration.dump", Backup: database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore"}}})
+	output, err := client.executeCommand(context.Background(), command{Kind: "database.transfer", Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheduler.transfer == nil || scheduler.transfer.Network != "db_default" || scheduler.transfer.ArtifactName != "migration.dump" {
+		t.Fatalf("transfer was not dispatched: %#v", scheduler.transfer)
+	}
+	var result deploy.DatabaseTransferResult
+	if err = json.Unmarshal([]byte(output), &result); err != nil || result.SizeBytes != 42 {
+		t.Fatalf("output=%q err=%v", output, err)
 	}
 }
 

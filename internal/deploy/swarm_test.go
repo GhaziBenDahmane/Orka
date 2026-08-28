@@ -2,12 +2,16 @@ package deploy
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bendahma/dokploy-go/internal/database"
 )
 
 func TestDeployForwardsRegistryAuthentication(t *testing.T) {
@@ -61,6 +65,48 @@ func TestRunContainerJobOverridesImageEntrypoint(t *testing.T) {
 	}
 	if strings.Contains(output, "secret") {
 		t.Fatal("environment secret leaked into command arguments")
+	}
+}
+
+func TestRunDatabaseTransferBacksUpChecksumsAndRestores(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	restoreMarker := filepath.Join(directory, "restored")
+	script := `#!/bin/sh
+mount=""
+entrypoint=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --volume) mount=${2%:/backup}; shift 2 ;;
+    --entrypoint) entrypoint=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$entrypoint" in
+  pg_dump) printf 'consistent native dump' > "$mount/transfer.dump"; printf 'backup complete' ;;
+  pg_restore) test "$(cat "$mount/transfer.dump")" = 'consistent native dump' || exit 9; touch "` + restoreMarker + `"; printf 'restore complete' ;;
+  *) exit 8 ;;
+esac
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	job := DatabaseTransferJob{
+		Network:      "database-stack_default",
+		ArtifactName: "transfer.dump",
+		Backup:       database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump", "--file", "/backup/transfer.dump"}, Environment: map[string]string{"PGPASSWORD": "source-secret"}},
+		Restore:      database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore", "/backup/transfer.dump"}, Environment: map[string]string{"PGPASSWORD": "target-secret"}},
+	}
+	result, err := (Swarm{DockerBin: docker}).RunDatabaseTransfer(context.Background(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash := fmt.Sprintf("%x", sha256.Sum256([]byte("consistent native dump")))
+	if result.SHA256 != wantHash || result.SizeBytes != int64(len("consistent native dump")) || !strings.Contains(result.Output, "backup complete") || !strings.Contains(result.Output, "restore complete") {
+		t.Fatalf("unexpected transfer result: %#v", result)
+	}
+	if _, err := os.Stat(restoreMarker); err != nil {
+		t.Fatal("restore was not invoked")
 	}
 }
 

@@ -169,6 +169,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/database-backups/{backupID}", s.requireResourceRole("viewer", "backup", "backupID", http.HandlerFunc(s.getDatabaseBackup)))
 	mux.Handle("POST /v1/database-backups/{backupID}/restore", s.requireResourceRole("admin", "backup", "backupID", http.HandlerFunc(s.restoreDatabaseBackup)))
 	mux.Handle("GET /v1/database-restores/{restoreID}", s.requireResourceRole("viewer", "restore", "restoreID", http.HandlerFunc(s.getDatabaseRestore)))
+	mux.Handle("GET /v1/database-migrations/{migrationID}", s.requireRole("admin", http.HandlerFunc(s.getDatabaseMigration)))
+	mux.Handle("POST /v1/database-migrations/{migrationID}/cancel", s.requireRole("admin", http.HandlerFunc(s.cancelDatabaseMigration)))
 	mux.Handle("GET /v1/templates", s.requireAuth(http.HandlerFunc(s.listTemplates)))
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireAuth(http.HandlerFunc(s.instantiateTemplate)))
