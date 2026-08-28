@@ -19,6 +19,7 @@ The initial implementation includes:
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets and an audit trail.
 - request correlation, optional OTLP tracing, and Prometheus operational metrics.
+- inherited organization/project/environment maintenance controls and resource quotas.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/roadmap.md](docs/roadmap.md). The detailed clean-room comparison, effort

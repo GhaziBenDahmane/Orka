@@ -21,6 +21,9 @@ services:
       DOCKYARD_MASTER_KEY_FILE: /run/secrets/dockyard_master_key
       DOCKYARD_TRAEFIK_NETWORK: dockyard-public
       DOCKYARD_BACKUP_DIRECTORY: /var/lib/dockyard/backups
+      DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT: ${DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE: ${DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE:-false}
+      DOCKYARD_OTEL_SERVICE_NAME: ${DOCKYARD_OTEL_SERVICE_NAME:-dockyard}
     secrets: [dockyard_database_url, dockyard_master_key]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

@@ -118,7 +118,9 @@ implemented.
   common incident systems.
 - OpenTelemetry HTTP and worker traces, request/log correlation, and richer
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
-  implemented. Alerts, maintenance mode, and resource quotas remain.
+  implemented. Hierarchical maintenance mode and transactionally enforced
+  organization/project/environment resource quotas are also implemented;
+  alerts remain.
 - Extend the implemented asynchronous service/stack finalizer model to
   projects, environments, volumes, and clusters.
 

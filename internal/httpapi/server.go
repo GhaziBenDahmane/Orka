@@ -85,6 +85,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/audit-events/export", s.requireRole("admin", http.HandlerFunc(s.exportAuditEvents)))
 	mux.Handle("GET /v1/audit-retention", s.requireRole("admin", http.HandlerFunc(s.getAuditRetention)))
 	mux.Handle("PUT /v1/audit-retention", s.requireRole("admin", http.HandlerFunc(s.putAuditRetention)))
+	mux.Handle("GET /v1/policy", s.requireRole("admin", http.HandlerFunc(s.getOrganizationPolicy)))
+	mux.Handle("PUT /v1/policy", s.requireRole("admin", http.HandlerFunc(s.putOrganizationPolicy)))
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
 	mux.Handle("DELETE /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.deleteSourceCredential)))
@@ -112,9 +114,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/projects/{projectID}/grants", s.requireRole("admin", http.HandlerFunc(s.listProjectGrants)))
 	mux.Handle("PUT /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.putProjectGrant)))
 	mux.Handle("DELETE /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteProjectGrant)))
+	mux.Handle("GET /v1/projects/{projectID}/policy", s.requireResourceRole("admin", "project", "projectID", http.HandlerFunc(s.getProjectPolicy)))
+	mux.Handle("PUT /v1/projects/{projectID}/policy", s.requireResourceRole("admin", "project", "projectID", http.HandlerFunc(s.putProjectPolicy)))
 	mux.Handle("GET /v1/environments/{environmentID}/grants", s.requireRole("admin", http.HandlerFunc(s.listEnvironmentGrants)))
 	mux.Handle("PUT /v1/environments/{environmentID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.putEnvironmentGrant)))
 	mux.Handle("DELETE /v1/environments/{environmentID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteEnvironmentGrant)))
+	mux.Handle("GET /v1/environments/{environmentID}/policy", s.requireResourceRole("admin", "environment", "environmentID", http.HandlerFunc(s.getEnvironmentPolicy)))
+	mux.Handle("PUT /v1/environments/{environmentID}/policy", s.requireResourceRole("admin", "environment", "environmentID", http.HandlerFunc(s.putEnvironmentPolicy)))
 	mux.Handle("POST /v1/projects/{projectID}/environments", s.requireResourceRole("developer", "project", "projectID", http.HandlerFunc(s.createEnvironment)))
 	mux.Handle("GET /v1/projects/{projectID}/environments", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.listEnvironments)))
 	mux.Handle("POST /v1/environments/{environmentID}/services", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createService)))
@@ -304,6 +310,95 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	s.Metrics.Handler(s.Store.Pool).ServeHTTP(w, r)
+}
+
+func (s *Server) getOrganizationPolicy(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	s.getPolicy(w, r, "organization", p.OrganizationID)
+}
+
+func (s *Server) putOrganizationPolicy(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	s.putPolicy(w, r, "organization", p.OrganizationID)
+}
+
+func (s *Server) getProjectPolicy(w http.ResponseWriter, r *http.Request) {
+	s.getPathPolicy(w, r, "project", "projectID", false)
+}
+
+func (s *Server) putProjectPolicy(w http.ResponseWriter, r *http.Request) {
+	s.getPathPolicy(w, r, "project", "projectID", true)
+}
+
+func (s *Server) getEnvironmentPolicy(w http.ResponseWriter, r *http.Request) {
+	s.getPathPolicy(w, r, "environment", "environmentID", false)
+}
+
+func (s *Server) putEnvironmentPolicy(w http.ResponseWriter, r *http.Request) {
+	s.getPathPolicy(w, r, "environment", "environmentID", true)
+}
+
+func (s *Server) getPathPolicy(w http.ResponseWriter, r *http.Request, scopeType, parameter string, put bool) {
+	id, err := uuid.Parse(r.PathValue(parameter))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid policy scope id")
+		return
+	}
+	if put {
+		s.putPolicy(w, r, scopeType, id)
+		return
+	}
+	s.getPolicy(w, r, scopeType, id)
+}
+
+func (s *Server) getPolicy(w http.ResponseWriter, r *http.Request, scopeType string, scopeID uuid.UUID) {
+	item, err := s.Store.GetResourcePolicy(r.Context(), principal(r).OrganizationID, scopeType, scopeID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, scopeType string, scopeID uuid.UUID) {
+	var input struct {
+		Maintenance       bool   `json:"maintenance"`
+		MaintenanceReason string `json:"maintenanceReason"`
+		MaxProjects       *int   `json:"maxProjects"`
+		MaxEnvironments   *int   `json:"maxEnvironments"`
+		MaxServices       *int   `json:"maxServices"`
+		MaxDatabases      *int   `json:"maxDatabases"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	if scopeType != "organization" && input.MaxProjects != nil {
+		writeError(w, 400, "invalid_policy", "maxProjects is only valid at organization scope")
+		return
+	}
+	if scopeType == "environment" && input.MaxEnvironments != nil {
+		writeError(w, 400, "invalid_policy", "maxEnvironments is not valid at environment scope")
+		return
+	}
+	for _, limit := range []*int{input.MaxProjects, input.MaxEnvironments, input.MaxServices, input.MaxDatabases} {
+		if limit != nil && (*limit < 1 || *limit > 1000000) {
+			writeError(w, 400, "invalid_policy", "quota values must be between 1 and 1000000")
+			return
+		}
+	}
+	input.MaintenanceReason = strings.TrimSpace(input.MaintenanceReason)
+	if len(input.MaintenanceReason) > 500 {
+		writeError(w, 400, "invalid_policy", "maintenanceReason is too long")
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.PutResourcePolicy(r.Context(), store.ResourcePolicy{OrganizationID: p.OrganizationID, ScopeType: scopeType, ScopeID: scopeID, Maintenance: input.Maintenance, MaintenanceReason: input.MaintenanceReason, MaxProjects: input.MaxProjects, MaxEnvironments: input.MaxEnvironments, MaxServices: input.MaxServices, MaxDatabases: input.MaxDatabases})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "policy.update", scopeType, scopeID.String(), r.RemoteAddr, map[string]any{"maintenance": item.Maintenance})
+	writeJSON(w, 200, item)
 }
 
 func (s *Server) auditEvents(w http.ResponseWriter, r *http.Request) {
@@ -1429,6 +1524,16 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
 func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrMaintenance) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusServiceUnavailable, "maintenance_mode", "resource is in maintenance mode")
+		return
+	}
+	var quota *store.QuotaExceededError
+	if errors.As(err, &quota) {
+		writeError(w, http.StatusConflict, "quota_exceeded", quota.Error())
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, 404, "not_found", "resource not found")
 		return

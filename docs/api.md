@@ -28,6 +28,9 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/audit-events?beforeId=…&limit=…` | Read a descending audit page |
 | GET | `/v1/audit-events/export?afterId=…&limit=…` | Export ascending NDJSON with integrity headers |
 | GET/PUT | `/v1/audit-retention` | Read or set the 30–3650 day retention policy |
+| GET/PUT | `/v1/policy` | Organization maintenance mode and quotas |
+| GET/PUT | `/v1/projects/{id}/policy` | Project maintenance mode and quotas |
+| GET/PUT | `/v1/environments/{id}/policy` | Environment maintenance mode and quotas |
 | GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
@@ -41,6 +44,14 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted Git and OCI registry credentials |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
+
+Policy limits are nullable: `maxProjects`, `maxEnvironments`, `maxServices`,
+and `maxDatabases`. Organization limits count all descendants, while project
+and environment limits count their own descendants. Every applicable scope is
+enforced, so a narrower policy cannot evade a parent quota. Maintenance mode is
+also inherited and rejects new resources, configuration mutations, deletions,
+deployments, rollbacks, and webhook deployments with `503 maintenance_mode`;
+reads, cancellation, backups, and already-running jobs remain available.
 
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in

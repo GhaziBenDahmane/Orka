@@ -516,9 +516,20 @@ func (s *Store) SetOrganizationAuthSettings(ctx context.Context, organizationID 
 }
 
 func (s *Store) CreateProject(ctx context.Context, organizationID uuid.UUID, name, slug, description string) (Project, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.enforcePolicy(ctx, tx, organizationID, nil, nil, "projects"); err != nil {
+		return Project{}, err
+	}
 	p := Project{ID: uuid.New(), OrganizationID: organizationID, Name: name, Slug: slug, Description: description}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,$3,$4,$5) RETURNING created_at`, p.ID, p.OrganizationID, p.Name, p.Slug, p.Description).Scan(&p.CreatedAt)
-	return p, err
+	err = tx.QueryRow(ctx, `INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,$3,$4,$5) RETURNING created_at`, p.ID, p.OrganizationID, p.Name, p.Slug, p.Description).Scan(&p.CreatedAt)
+	if err != nil {
+		return Project{}, err
+	}
+	return p, tx.Commit(ctx)
 }
 
 func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]Project, error) {
@@ -539,12 +550,26 @@ func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]P
 }
 
 func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string) (Environment, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Environment{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.validatePolicyScope(ctx, tx, organizationID, "project", projectID); err != nil {
+		return Environment{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, nil, "environments"); err != nil {
+		return Environment{}, err
+	}
 	e := Environment{ID: uuid.New(), ProjectID: projectID, Name: name, Slug: slug}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO environments(id,project_id,name,slug) SELECT $1,p.id,$3,$4 FROM projects p WHERE p.id=$2 AND p.organization_id=$5 RETURNING created_at`, e.ID, projectID, name, slug, organizationID).Scan(&e.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,name,slug) SELECT $1,p.id,$3,$4 FROM projects p WHERE p.id=$2 AND p.organization_id=$5 RETURNING created_at`, e.ID, projectID, name, slug, organizationID).Scan(&e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	}
-	return e, err
+	if err != nil {
+		return Environment{}, err
+	}
+	return e, tx.Commit(ctx)
 }
 
 func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID uuid.UUID) ([]Environment, error) {
@@ -565,26 +590,70 @@ func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID 
 }
 
 func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UUID, service ComposeService) (ComposeService, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	defer tx.Rollback(ctx)
+	var projectID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, service.EnvironmentID, organizationID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
+		return ComposeService{}, ErrNotFound
+	} else if err != nil {
+		return ComposeService{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &service.EnvironmentID, "services"); err != nil {
+		return ComposeService{}, err
+	}
 	service.ID = uuid.New()
 	service.Revision = 1
-	err := s.Pool.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}
-	return service, err
+	if err != nil {
+		return ComposeService{}, err
+	}
+	return service, tx.Commit(ctx)
 }
 
 func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uuid.UUID, composeYAML, encryptedEnv string) (ComposeService, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	defer tx.Rollback(ctx)
+	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, id)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return ComposeService{}, err
+	}
 	var service ComposeService
-	err := s.Pool.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}
-	return service, err
+	if err != nil {
+		return ComposeService{}, err
+	}
+	return service, tx.Commit(ctx)
 }
 
 func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid.UUID, source ApplicationSource) (ApplicationSource, error) {
-	err := s.Pool.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	defer tx.Rollback(ctx)
+	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, source.ComposeServiceID)
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return ApplicationSource{}, err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image,git_credential_id,registry_credential_id)
 		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
 		AND ($9::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$9 AND c.organization_id=$2 AND c.kind='git'))
@@ -594,7 +663,10 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}
-	return source, err
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	return source, tx.Commit(ctx)
 }
 
 func (s *Store) CreateSourceCredential(ctx context.Context, item SourceCredential) (SourceCredential, error) {
@@ -674,12 +746,27 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 }
 
 func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route) (Route, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Route{}, err
+	}
+	defer tx.Rollback(ctx)
+	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, r.ComposeServiceID)
+	if err != nil {
+		return Route{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return Route{}, err
+	}
 	r.ID = uuid.New()
-	err := s.Pool.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND p.organization_id=$9 RETURNING id`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.ID)
+	err = tx.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND p.organization_id=$9 RETURNING id`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Route{}, ErrNotFound
 	}
-	return r, err
+	if err != nil {
+		return Route{}, err
+	}
+	return r, tx.Commit(ctx)
 }
 
 func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string) (Deployment, error) {
@@ -694,11 +781,15 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	d.Status = "queued"
 	d.Trigger = trigger
 	var compose, env string
-	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2`, serviceID, organizationID).Scan(&d.Revision, &compose, &env)
+	var projectID, environmentID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2`, serviceID, organizationID).Scan(&d.Revision, &compose, &env, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
 	if err != nil {
+		return Deployment{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Deployment{}, err
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, d.Revision, compose, env, trigger, nullableUUID(actorID)).Scan(&d.CreatedAt)
@@ -728,6 +819,13 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 		return ErrNotFound
 	}
 	if err != nil {
+		return err
+	}
+	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, serviceID)
+	if err != nil {
+		return err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return err
 	}
 	if deleting {
@@ -851,14 +949,17 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 		return Deployment{}, err
 	}
 	defer tx.Rollback(ctx)
-	var serviceID uuid.UUID
+	var serviceID, organizationID, projectID, environmentID uuid.UUID
 	var revision int64
 	var compose, environment, provider string
-	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id WHERE i.id=$1 AND i.enabled FOR UPDATE OF i,s`, integrationID).Scan(&serviceID, &revision, &compose, &environment, &provider)
+	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider,p.organization_id,p.id,e.id FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.id=$1 AND i.enabled FOR UPDATE OF i,s`, integrationID).Scan(&serviceID, &revision, &compose, &environment, &provider, &organizationID, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
 	if err != nil {
+		return Deployment{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Deployment{}, err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM webhook_deliveries WHERE received_at<now()-interval '30 days'`); err != nil {
@@ -1033,14 +1134,17 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 		return Deployment{}, err
 	}
 	defer tx.Rollback(ctx)
-	var serviceID uuid.UUID
+	var serviceID, organizationID, projectID, environmentID uuid.UUID
 	var revision int64
 	var compose, env string
-	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env FROM deploy_tokens t JOIN compose_services s ON s.id=t.compose_service_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL`, tokenHash).Scan(&serviceID, &revision, &compose, &env)
+	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,p.organization_id,p.id,e.id FROM deploy_tokens t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL`, tokenHash).Scan(&serviceID, &revision, &compose, &env, &organizationID, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
 	if err != nil {
+		return Deployment{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Deployment{}, err
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "webhook"}
@@ -1084,11 +1188,15 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 	}
 	defer tx.Rollback(ctx)
 	var compose, encrypted string
-	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.env_snapshot FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND d.status='succeeded' ORDER BY d.finished_at DESC LIMIT 1`, serviceID, organizationID).Scan(&compose, &encrypted)
+	var projectID, environmentID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.env_snapshot,p.id,e.id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND d.status='succeeded' ORDER BY d.finished_at DESC LIMIT 1`, serviceID, organizationID).Scan(&compose, &encrypted, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
 	if err != nil {
+		return Deployment{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Deployment{}, err
 	}
 	var revision int64
@@ -1115,12 +1223,17 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 		return DatabaseInstance{}, err
 	}
 	defer tx.Rollback(ctx)
-	var allowed bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2)`, instance.EnvironmentID, organizationID).Scan(&allowed); err != nil {
+	var projectID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, instance.EnvironmentID, organizationID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
+		return DatabaseInstance{}, ErrNotFound
+	} else if err != nil {
 		return DatabaseInstance{}, err
 	}
-	if !allowed {
-		return DatabaseInstance{}, ErrNotFound
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &instance.EnvironmentID, "services"); err != nil {
+		return DatabaseInstance{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &instance.EnvironmentID, "databases"); err != nil {
+		return DatabaseInstance{}, err
 	}
 	service.ID = uuid.New()
 	service.EnvironmentID = instance.EnvironmentID

@@ -99,6 +99,7 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 		{"dockyard_deployment_last_duration_seconds", "Duration of the most recently finished deployment by final state.", `SELECT DISTINCT ON (status) status,extract(epoch FROM finished_at-started_at)::float8 FROM deployments WHERE started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY status,finished_at DESC`, []string{"status"}},
 		{"dockyard_database_backup_last_success_age_seconds", "Age of the most recent successful database backup.", `SELECT 'all',extract(epoch FROM now()-max(finished_at))::float8 FROM database_backups WHERE status='succeeded' HAVING max(finished_at) IS NOT NULL`, []string{"scope"}},
 		{"dockyard_database_restore_last_success_age_seconds", "Age of the most recent successful restore by kind.", `SELECT kind,extract(epoch FROM now()-max(finished_at))::float8 FROM database_restores WHERE status='succeeded' GROUP BY kind`, []string{"kind"}},
+		{"dockyard_maintenance_scopes", "Resource scopes currently in maintenance mode.", `SELECT scope_type,count(*)::float8 FROM resource_policies WHERE maintenance_enabled GROUP BY scope_type`, []string{"scope_type"}},
 	}
 	for _, f := range families {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", f.name, f.help, f.name)
