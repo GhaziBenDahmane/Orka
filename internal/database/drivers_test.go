@@ -86,3 +86,17 @@ func TestStoredConfigRemovesPasswords(t *testing.T) {
 		t.Fatalf("non-secret config was not retained: %#v", stored)
 	}
 }
+
+func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
+	registry := NewRegistry()
+	credentials := map[string]string{"username": "app", "password": "very-secret", "database": "app"}
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo"} {
+		plan, err := registry.Readiness(engine, "17", "verify", credentials)
+		if err != nil {
+			t.Fatalf("%s readiness: %v", engine, err)
+		}
+		if strings.Contains(strings.Join(plan.Command, " "), credentials["password"]) {
+			t.Fatalf("%s readiness command exposes password", engine)
+		}
+	}
+}

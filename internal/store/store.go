@@ -195,6 +195,7 @@ type DatabaseRestore struct {
 	ID               uuid.UUID  `json:"id"`
 	DatabaseBackupID uuid.UUID  `json:"databaseBackupId"`
 	Status           string     `json:"status"`
+	Kind             string     `json:"kind"`
 	Error            string     `json:"error,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	StartedAt        *time.Time `json:"startedAt,omitempty"`
@@ -206,6 +207,7 @@ type BackupPolicy struct {
 	IntervalSeconds    int        `json:"intervalSeconds"`
 	RetentionCount     int        `json:"retentionCount"`
 	Enabled            bool       `json:"enabled"`
+	VerifyRestore      bool       `json:"verifyRestore"`
 	DestinationID      *uuid.UUID `json:"destinationId,omitempty"`
 	NextRunAt          time.Time  `json:"nextRunAt"`
 	LastRunAt          *time.Time `json:"lastRunAt,omitempty"`
@@ -907,12 +909,12 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	return backup, nil
 }
 
-func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled bool, destinationID *uuid.UUID) (BackupPolicy, error) {
+func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled, verifyRestore bool, destinationID *uuid.UUID) (BackupPolicy, error) {
 	var item BackupPolicy
-	err := s.Pool.QueryRow(ctx, `INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id)
-		SELECT $1,d.id,$4,$5,$6,now()+($4::int * interval '1 second'),$7 FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$2 AND p.organization_id=$3 AND ($7::uuid IS NULL OR EXISTS(SELECT 1 FROM backup_destinations bd WHERE bd.id=$7 AND bd.organization_id=$3))
-		ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN now()+(excluded.interval_seconds * interval '1 second') ELSE backup_policies.next_run_at END,updated_at=now()
-		RETURNING id,database_instance_id,interval_seconds,retention_count,enabled,destination_id,next_run_at,last_run_at,created_at,updated_at`, uuid.New(), databaseID, organizationID, intervalSeconds, retentionCount, enabled, destinationID).Scan(&item.ID, &item.DatabaseInstanceID, &item.IntervalSeconds, &item.RetentionCount, &item.Enabled, &item.DestinationID, &item.NextRunAt, &item.LastRunAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore)
+		SELECT $1,d.id,$4,$5,$6,now()+($4::int * interval '1 second'),$7,$8 FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$2 AND p.organization_id=$3 AND ($7::uuid IS NULL OR EXISTS(SELECT 1 FROM backup_destinations bd WHERE bd.id=$7 AND bd.organization_id=$3))
+		ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,verify_restore=excluded.verify_restore,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN now()+(excluded.interval_seconds * interval '1 second') ELSE backup_policies.next_run_at END,updated_at=now()
+		RETURNING id,database_instance_id,interval_seconds,retention_count,enabled,verify_restore,destination_id,next_run_at,last_run_at,created_at,updated_at`, uuid.New(), databaseID, organizationID, intervalSeconds, retentionCount, enabled, destinationID, verifyRestore).Scan(&item.ID, &item.DatabaseInstanceID, &item.IntervalSeconds, &item.RetentionCount, &item.Enabled, &item.VerifyRestore, &item.DestinationID, &item.NextRunAt, &item.LastRunAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BackupPolicy{}, ErrNotFound
 	}
@@ -921,7 +923,7 @@ func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, database
 
 func (s *Store) GetBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID) (BackupPolicy, error) {
 	var item BackupPolicy
-	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.interval_seconds,b.retention_count,b.enabled,b.destination_id,b.next_run_at,b.last_run_at,b.created_at,b.updated_at FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.database_instance_id=$1 AND p.organization_id=$2`, databaseID, organizationID).Scan(&item.ID, &item.DatabaseInstanceID, &item.IntervalSeconds, &item.RetentionCount, &item.Enabled, &item.DestinationID, &item.NextRunAt, &item.LastRunAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.interval_seconds,b.retention_count,b.enabled,b.verify_restore,b.destination_id,b.next_run_at,b.last_run_at,b.created_at,b.updated_at FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.database_instance_id=$1 AND p.organization_id=$2`, databaseID, organizationID).Scan(&item.ID, &item.DatabaseInstanceID, &item.IntervalSeconds, &item.RetentionCount, &item.Enabled, &item.VerifyRestore, &item.DestinationID, &item.NextRunAt, &item.LastRunAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BackupPolicy{}, ErrNotFound
 	}
@@ -1003,7 +1005,8 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 		return DatabaseRestore{}, errors.New("restore confirmation must match database slug")
 	}
 	restore := DatabaseRestore{ID: uuid.New(), DatabaseBackupID: backupID, Status: "queued"}
-	if err = tx.QueryRow(ctx, `INSERT INTO database_restores(id,database_backup_id,status,actor_user_id) VALUES($1,$2,'queued',$3) RETURNING created_at`, restore.ID, backupID, nullableUUID(actorID)).Scan(&restore.CreatedAt); err != nil {
+	restore.Kind = "manual"
+	if err = tx.QueryRow(ctx, `INSERT INTO database_restores(id,database_backup_id,status,kind,actor_user_id) VALUES($1,$2,'queued','manual',$3) RETURNING created_at`, restore.ID, backupID, nullableUUID(actorID)).Scan(&restore.CreatedAt); err != nil {
 		return DatabaseRestore{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"restoreId": restore.ID.String()})
@@ -1017,7 +1020,7 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 }
 func (s *Store) GetDatabaseRestore(ctx context.Context, organizationID, id uuid.UUID) (DatabaseRestore, error) {
 	var item DatabaseRestore
-	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.database_backup_id,r.status,r.error,r.created_at,r.started_at,r.finished_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseBackupID, &item.Status, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.database_backup_id,r.status,r.kind,r.error,r.created_at,r.started_at,r.finished_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseBackupID, &item.Status, &item.Kind, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}

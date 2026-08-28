@@ -113,3 +113,8 @@ Every new local or S3 artifact is encrypted before storage with a random
 per-backup AES-256-GCM data key; only the master-key-wrapped data key is kept in
 PostgreSQL. Chunk authentication detects modification, reordering, and
 truncation, and restores also verify the original plaintext checksum.
+Set `verifyRestore` on a backup policy to enqueue one restore drill after each
+successful scheduled backup. Drills create a temporary isolated Swarm stack,
+restore the verified artifact with fresh credentials, record the result as a
+`kind: "drill"` restore, and always remove the temporary stack. They never
+target the production database service.

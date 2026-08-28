@@ -696,6 +696,7 @@ func (s *Server) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		IntervalSeconds int        `json:"intervalSeconds"`
 		RetentionCount  int        `json:"retentionCount"`
 		Enabled         bool       `json:"enabled"`
+		VerifyRestore   bool       `json:"verifyRestore"`
 		DestinationID   *uuid.UUID `json:"destinationId"`
 	}
 	if !decode(w, r, &in) {
@@ -706,12 +707,12 @@ func (s *Server) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertBackupPolicy(r.Context(), p.OrganizationID, id, in.IntervalSeconds, in.RetentionCount, in.Enabled, in.DestinationID)
+	item, err := s.Store.UpsertBackupPolicy(r.Context(), p.OrganizationID, id, in.IntervalSeconds, in.RetentionCount, in.Enabled, in.VerifyRestore, in.DestinationID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "backup_policy.update", "database", id.String(), r.RemoteAddr, map[string]any{"intervalSeconds": in.IntervalSeconds, "retentionCount": in.RetentionCount, "enabled": in.Enabled})
+	s.Store.Audit(r.Context(), &p, "backup_policy.update", "database", id.String(), r.RemoteAddr, map[string]any{"intervalSeconds": in.IntervalSeconds, "retentionCount": in.RetentionCount, "enabled": in.Enabled, "verifyRestore": in.VerifyRestore})
 	writeJSON(w, 200, item)
 }
 

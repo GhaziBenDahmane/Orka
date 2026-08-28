@@ -105,7 +105,8 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	var policyID, databaseID uuid.UUID
 	var destinationID *uuid.UUID
 	var intervalSeconds, retentionCount int
-	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count,destination_id FROM backup_policies WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID)
+	var verifyRestore bool
+	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count,destination_id,verify_restore FROM backup_policies WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID, &verifyRestore)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
@@ -116,7 +117,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id) VALUES($1,$2,'queued','native',$3)`, backupID, databaseID, destinationID); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"backupId": backupID.String(), "retentionCount": retentionCount})
+	payload, _ := json.Marshal(map[string]any{"backupId": backupID.String(), "retentionCount": retentionCount, "verifyRestore": verifyRestore})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'backup.database',$2)`, uuid.New(), payload); err != nil {
 		return err
 	}
@@ -410,6 +411,7 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	var payload struct {
 		BackupID       string `json:"backupId"`
 		RetentionCount int    `json:"retentionCount"`
+		VerifyRestore  bool   `json:"verifyRestore"`
 	}
 	if err := json.Unmarshal(j.Payload, &payload); err != nil {
 		return err
@@ -525,11 +527,23 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if payload.RetentionCount > 0 {
 		w.pruneBackups(ctx, backupID, payload.RetentionCount)
 	}
+	if payload.VerifyRestore {
+		if err = w.queueRestoreDrill(ctx, backupID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
+func (w *Worker) queueRestoreDrill(ctx context.Context, backupID uuid.UUID) error {
+	restoreID := uuid.New()
+	payload, _ := json.Marshal(map[string]string{"restoreId": restoreID.String()})
+	_, err := w.Store.Pool.Exec(ctx, `WITH inserted AS (INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'queued','drill') ON CONFLICT(database_backup_id) WHERE kind='drill' DO NOTHING RETURNING id) INSERT INTO jobs(id,kind,payload) SELECT $3,'restore.database',$4 FROM inserted`, restoreID, backupID, uuid.New(), payload)
+	return err
+}
+
 func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id AND r.kind='manual') ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
 	if err != nil {
 		w.Logger.Error("select expired backups", "error", err)
 		return
@@ -548,6 +562,26 @@ func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int)
 	}
 	rows.Close()
 	for _, item := range items {
+		tx, txErr := w.Store.Pool.Begin(ctx)
+		if txErr != nil {
+			w.Logger.Error("prune backup metadata", "backup", item.id, "error", txErr)
+			continue
+		}
+		if _, txErr = tx.Exec(ctx, `DELETE FROM database_restores WHERE database_backup_id=$1 AND kind='drill'`, item.id); txErr == nil {
+			var deleted uuid.UUID
+			txErr = tx.QueryRow(ctx, `DELETE FROM database_backups WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM database_restores WHERE database_backup_id=$1) RETURNING id`, item.id).Scan(&deleted)
+		}
+		if txErr == nil {
+			txErr = tx.Commit(ctx)
+		} else {
+			_ = tx.Rollback(ctx)
+		}
+		if txErr != nil {
+			if !errors.Is(txErr, pgx.ErrNoRows) {
+				w.Logger.Error("prune backup metadata", "backup", item.id, "error", txErr)
+			}
+			continue
+		}
 		if item.destinationID != nil && item.objectKey != "" {
 			remote, remoteErr := w.s3(ctx, *item.destinationID)
 			if remoteErr == nil {
@@ -561,7 +595,6 @@ func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int)
 		if item.path != "" {
 			_ = os.RemoveAll(filepath.Dir(item.path))
 		}
-		_, _ = w.Store.Pool.Exec(ctx, `DELETE FROM database_backups WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM database_restores WHERE database_backup_id=$1)`, item.id)
 	}
 }
 
@@ -582,10 +615,10 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		return err
 	}
 	var backupID uuid.UUID
-	var engine, version, stackName, serviceName, encryptedCredentials, path, expectedHash, plaintextHash, encryptedDataKey, objectKey string
+	var kind, engine, version, stackName, serviceName, encryptedCredentials, path, expectedHash, plaintextHash, encryptedDataKey, objectKey string
 	var artifactEncrypted bool
 	var destinationID *uuid.UUID
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING b.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key`, restoreID).Scan(&backupID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey)
+	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING r.kind,b.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key`, restoreID).Scan(&kind, &backupID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey)
 	if err != nil {
 		return err
 	}
@@ -643,13 +676,52 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 			return w.failRestore(ctx, restoreID, hashErr)
 		}
 	}
-	plain, err := w.Box.Decrypt(encryptedCredentials, "database-credentials")
-	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
-	}
 	credentials := map[string]string{}
-	if err = json.Unmarshal(plain, &credentials); err != nil {
-		return w.failRestore(ctx, restoreID, err)
+	if kind == "drill" {
+		drillName := "verify"
+		rendered, renderErr := w.Databases.Render(engine, database.Request{Name: drillName, Version: version})
+		if renderErr != nil {
+			return w.failRestore(ctx, restoreID, renderErr)
+		}
+		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
+		if _, err = w.Swarm.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment); err != nil {
+			return w.failRestore(ctx, restoreID, err)
+		}
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cleanupCancel()
+			if _, cleanupErr := w.Swarm.Remove(cleanupCtx, drillStack); cleanupErr != nil {
+				w.Logger.Error("remove restore drill stack", "stack", drillStack, "error", cleanupErr)
+			}
+		}()
+		stackName, serviceName, credentials = drillStack, drillName, rendered.Credentials
+		readiness, readinessErr := w.Databases.Readiness(engine, version, serviceName, credentials)
+		if readinessErr != nil {
+			return w.failRestore(ctx, restoreID, readinessErr)
+		}
+		ready := false
+		for attempt := 0; attempt < 12; attempt++ {
+			if _, readinessErr = w.Swarm.RunContainerJob(ctx, stackName+"_default", readiness.Image, "", readiness.Environment, readiness.Command); readinessErr == nil {
+				ready = true
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return w.failRestore(ctx, restoreID, ctx.Err())
+			case <-time.After(5 * time.Second):
+			}
+		}
+		if !ready {
+			return w.failRestore(ctx, restoreID, fmt.Errorf("restore drill database did not become ready: %w", readinessErr))
+		}
+	} else {
+		plain, decryptErr := w.Box.Decrypt(encryptedCredentials, "database-credentials")
+		if decryptErr != nil {
+			return w.failRestore(ctx, restoreID, decryptErr)
+		}
+		if err = json.Unmarshal(plain, &credentials); err != nil {
+			return w.failRestore(ctx, restoreID, err)
+		}
 	}
 	plan, err := w.Databases.Restore(engine, version, serviceName, credentials, filepath.Base(cleanPath))
 	if err != nil {

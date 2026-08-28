@@ -73,19 +73,19 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	if _, err = db.QueueDatabaseBackup(ctx, orgID, databaseID, userID, &foreign.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant backup destination error = %v, want not found", err)
 	}
-	if _, err = db.UpsertBackupPolicy(ctx, orgID, databaseID, 3600, 7, true, &foreign.ID); !errors.Is(err, ErrNotFound) {
+	if _, err = db.UpsertBackupPolicy(ctx, orgID, databaseID, 3600, 7, true, false, &foreign.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant policy destination error = %v, want not found", err)
 	}
 
-	policy, err := db.UpsertBackupPolicy(ctx, orgID, databaseID, 3600, 7, true, &owned.ID)
+	policy, err := db.UpsertBackupPolicy(ctx, orgID, databaseID, 3600, 7, true, true, &owned.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.DestinationID == nil || *policy.DestinationID != owned.ID {
+	if policy.DestinationID == nil || *policy.DestinationID != owned.ID || !policy.VerifyRestore {
 		t.Fatalf("policy destination = %v, want %s", policy.DestinationID, owned.ID)
 	}
 	storedPolicy, err := db.GetBackupPolicy(ctx, orgID, databaseID)
-	if err != nil || storedPolicy.DestinationID == nil || *storedPolicy.DestinationID != owned.ID {
+	if err != nil || storedPolicy.DestinationID == nil || *storedPolicy.DestinationID != owned.ID || !storedPolicy.VerifyRestore {
 		t.Fatalf("stored policy destination = %v, err = %v", storedPolicy.DestinationID, err)
 	}
 

@@ -131,6 +131,24 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 	}
 }
 
+func (r *Registry) Readiness(engine, version, host string, credentials map[string]string) (BackupPlan, error) {
+	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) {
+		return BackupPlan{}, errors.New("invalid database readiness parameters")
+	}
+	switch engine {
+	case "postgres":
+		return BackupPlan{Image: "postgres:" + version, Command: []string{"pg_isready", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"]}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}}, nil
+	case "mysql":
+		return BackupPlan{Image: "mysql:" + version, Command: []string{"mysqladmin", "--host", host, "--user", credentials["username"], "ping", "--silent"}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}}, nil
+	case "mariadb":
+		return BackupPlan{Image: "mariadb:" + version, Command: []string{"mariadb-admin", "--host", host, "--user", credentials["username"], "ping", "--silent"}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}}, nil
+	case "mongo":
+		return BackupPlan{Image: "mongo:" + version, Command: []string{"mongosh", "--quiet", "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--eval", "quit(db.runCommand({ping:1}).ok ? 0 : 1)"}, Environment: map[string]string{"MONGODB_PWD": credentials["password"]}}, nil
+	default:
+		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
+	}
+}
+
 func validateNativePlan(version, host string, credentials map[string]string, filename string) error {
 	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) || !regexp.MustCompile(`^[a-f0-9-]+\.(dump|sql|archive\.gz)$`).MatchString(filename) {
 		return errors.New("invalid native backup parameters")

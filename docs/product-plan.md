@@ -83,10 +83,10 @@ Status: core implementation complete; storage breadth remains.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
 - PostgreSQL, MySQL, MariaDB, and MongoDB native backup/restore, streaming
-  checksums, interval policies, and retention.
+  checksums, interval policies, retention, and opt-in isolated restore drills.
 - S3-compatible multipart storage with encrypted destination credentials and
   client-side, per-backup envelope encryption for local and remote artifacts.
-- Next: automated restore drills.
+- Next: scheduled drill alerting and published RPO/RTO measurements.
 
 Exit gate: automated restore verification and documented RPO/RTO for every
 database advertised as backup-capable.

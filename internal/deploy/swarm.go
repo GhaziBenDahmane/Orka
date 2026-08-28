@@ -175,7 +175,11 @@ func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource 
 	// short-lived tool as container root so it can access the controller-owned
 	// mode-0700 backup directory; the container has no Docker socket or host
 	// mounts other than that directory.
-	args := []string{"run", "--rm", "--user", "0:0", "--network", network, "--volume", mountSource + ":/backup", "--entrypoint", command[0]}
+	args := []string{"run", "--rm", "--user", "0:0", "--network", network}
+	if mountSource != "" {
+		args = append(args, "--volume", mountSource+":/backup")
+	}
+	args = append(args, "--entrypoint", command[0])
 	keys := make([]string, 0, len(environment))
 	for key := range environment {
 		keys = append(keys, key)
