@@ -86,6 +86,21 @@ func servicePolicyScope(ctx context.Context, tx pgx.Tx, organizationID, serviceI
 	return projectID, environmentID, err
 }
 
+func ensureEnvironmentClusterWritable(ctx context.Context, tx pgx.Tx, environmentID uuid.UUID) error {
+	var available bool
+	err := tx.QueryRow(ctx, `SELECT e.cluster_id IS NULL OR EXISTS(SELECT 1 FROM clusters c WHERE c.id=e.cluster_id AND c.state='active' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) FROM environments e WHERE e.id=$1`, environmentID).Scan(&available)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !available {
+		return ErrMaintenance
+	}
+	return nil
+}
+
 type policyQueryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }

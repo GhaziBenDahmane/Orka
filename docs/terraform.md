@@ -20,3 +20,8 @@ Project and environment replacement/deletion is intentionally refused while
 children remain. Terraform's dependency graph destroys managed services first.
 Service deletion waits for Dockyard's asynchronous Swarm finalizer, so state is
 not removed until the stack and owned backup artifacts are gone.
+
+An environment may set `cluster_id` directly, or use `placement_selector` and
+`minimum_nodes` for capacity-aware placement. Placement inputs are immutable;
+changing them replaces the environment so workloads cannot silently move
+between Swarms.

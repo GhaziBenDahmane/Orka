@@ -231,7 +231,9 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		State string `json:"state"`
+		State               string     `json:"state"`
+		MaintenanceStartsAt *time.Time `json:"maintenanceStartsAt"`
+		MaintenanceEndsAt   *time.Time `json:"maintenanceEndsAt"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -241,12 +243,12 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpdateClusterState(r.Context(), p.OrganizationID, clusterID, input.State)
+	item, err := s.Store.UpdateClusterConfiguration(r.Context(), p.OrganizationID, clusterID, input.State, input.MaintenanceStartsAt, input.MaintenanceEndsAt)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.state.update", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"state": input.State})
+	s.Store.Audit(r.Context(), &p, "cluster.state.update", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"state": input.State, "maintenanceStartsAt": input.MaintenanceStartsAt, "maintenanceEndsAt": input.MaintenanceEndsAt})
 	writeJSON(w, 200, item)
 }
 

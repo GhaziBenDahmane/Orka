@@ -7,7 +7,7 @@ export type Principal = {
 };
 
 export type Project = { id: string; name: string; slug: string; description: string };
-export type Environment = { id: string; projectId: string; name: string; slug: string; clusterId?: string };
+export type Environment = { id: string; projectId: string; name: string; slug: string; clusterId?: string; placementSelector?: Record<string, string>; minimumNodes?: number };
 export type Service = { id: string; environmentId: string; name: string; slug: string; revision: number; status: string; composeYaml?: string };
 export type Deployment = { id: string; revision: number; status: string; trigger: string; error?: string; output?: string; createdAt: string };
 export type Template = { id: string; key: string; version: string; name: string; description: string; source: string };
@@ -55,7 +55,7 @@ export const api = {
   projects: () => request<Envelope<Project>>("/v1/projects"),
   createProject: (body: { name: string; description: string }) => request<Project>("/v1/projects", { method: "POST", body: JSON.stringify(body) }),
   environments: (projectId: string) => request<Envelope<Environment>>(`/v1/projects/${projectId}/environments`),
-  createEnvironment: (projectId: string, name: string) => request<Environment>(`/v1/projects/${projectId}/environments`, { method: "POST", body: JSON.stringify({ name }) }),
+  createEnvironment: (projectId: string, name: string, placement?: { clusterId?: string; placementSelector?: Record<string, string>; minimumNodes?: number }) => request<Environment>(`/v1/projects/${projectId}/environments`, { method: "POST", body: JSON.stringify({ name, ...placement }) }),
   services: (environmentId: string) => request<Envelope<Service>>(`/v1/environments/${environmentId}/services`),
   service: (serviceId: string) => request<{ service: Service; routes: unknown[] }>(`/v1/services/${serviceId}`),
   createService: (environmentId: string, body: { name: string; composeYaml: string }) => request<Service>(`/v1/environments/${environmentId}/services`, { method: "POST", body: JSON.stringify(body) }),

@@ -60,6 +60,15 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
+Creating an environment accepts either an explicit `clusterId` or a
+`placementSelector` map plus `minimumNodes`. Automatic placement considers only
+active clusters with a heartbeat newer than two minutes, matching labels,
+sufficient reported node capacity, and no active maintenance window; it picks
+the least-loaded eligible cluster. `PATCH /v1/clusters/{id}` accepts
+`maintenanceStartsAt` and `maintenanceEndsAt` together. Deployments and remote
+commands are rejected during that interval, while reads and heartbeats remain
+available.
+
 Policy limits are nullable: `maxProjects`, `maxEnvironments`, `maxServices`,
 and `maxDatabases`. Organization limits count all descendants, while project
 and environment limits count their own descendants. Every applicable scope is

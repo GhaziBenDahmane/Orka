@@ -16,8 +16,10 @@ resource "dockyard_project" "example" {
 }
 
 resource "dockyard_environment" "production" {
-  project_id = dockyard_project.example.id
-  name       = "Production"
+  project_id        = dockyard_project.example.id
+  name              = "Production"
+  placement_selector = { region = "eu-west" }
+  minimum_nodes      = 3
 }
 
 resource "dockyard_service" "whoami" {

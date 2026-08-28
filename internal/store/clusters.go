@@ -24,6 +24,8 @@ type Cluster struct {
 	DockerVersion       string         `json:"dockerVersion"`
 	CertificateNotAfter *time.Time     `json:"certificateNotAfter,omitempty"`
 	LastSeenAt          *time.Time     `json:"lastSeenAt,omitempty"`
+	MaintenanceStartsAt *time.Time     `json:"maintenanceStartsAt,omitempty"`
+	MaintenanceEndsAt   *time.Time     `json:"maintenanceEndsAt,omitempty"`
 	CreatedAt           time.Time      `json:"createdAt"`
 	UpdatedAt           time.Time      `json:"updatedAt"`
 }
@@ -54,7 +56,7 @@ func (s *Store) CreateCluster(ctx context.Context, item Cluster) (Cluster, error
 }
 
 func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]Cluster, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +66,7 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 		var item Cluster
 		var labels []byte
 		var capacity []byte
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(labels, &item.Labels)
@@ -77,7 +79,7 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 func (s *Store) GetCluster(ctx context.Context, organizationID, clusterID uuid.UUID) (Cluster, error) {
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -87,12 +89,19 @@ func (s *Store) GetCluster(ctx context.Context, organizationID, clusterID uuid.U
 }
 
 func (s *Store) UpdateClusterState(ctx context.Context, organizationID, clusterID uuid.UUID, state string) (Cluster, error) {
+	return s.UpdateClusterConfiguration(ctx, organizationID, clusterID, state, nil, nil)
+}
+
+func (s *Store) UpdateClusterConfiguration(ctx context.Context, organizationID, clusterID uuid.UUID, state string, maintenanceStartsAt, maintenanceEndsAt *time.Time) (Cluster, error) {
 	if state != "active" && state != "draining" && state != "disabled" {
 		return Cluster{}, errors.New("invalid cluster state")
 	}
+	if (maintenanceStartsAt == nil) != (maintenanceEndsAt == nil) || maintenanceStartsAt != nil && !maintenanceEndsAt.After(*maintenanceStartsAt) {
+		return Cluster{}, errors.New("invalid maintenance window")
+	}
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,created_at,updated_at`, clusterID, organizationID, state).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -174,7 +183,7 @@ func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 
 func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string) (ClusterCommand, error) {
 	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: kind, Status: "pending"}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClusterCommand{}, ErrNotFound
 	}

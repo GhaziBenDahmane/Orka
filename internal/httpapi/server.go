@@ -704,9 +704,11 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name      string     `json:"name"`
-		Slug      string     `json:"slug"`
-		ClusterID *uuid.UUID `json:"clusterId"`
+		Name              string            `json:"name"`
+		Slug              string            `json:"slug"`
+		ClusterID         *uuid.UUID        `json:"clusterId"`
+		PlacementSelector map[string]string `json:"placementSelector"`
+		MinimumNodes      int               `json:"minimumNodes"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -714,13 +716,23 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	if in.Slug == "" {
 		in.Slug = slugify(in.Name)
 	}
-	if !slugPattern.MatchString(in.Slug) {
-		writeError(w, 400, "invalid_slug", "invalid slug")
+	if !slugPattern.MatchString(in.Slug) || len(in.PlacementSelector) > 32 || in.MinimumNodes < 0 || in.MinimumNodes > 10000 {
+		writeError(w, 400, "invalid_environment", "valid slug, at most 32 placement labels, and minimumNodes between 0 and 10000 are required")
 		return
 	}
+	for key, value := range in.PlacementSelector {
+		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 256 {
+			writeError(w, 400, "invalid_environment", "placement label keys and values exceed limits")
+			return
+		}
+	}
 	p := principal(r)
-	item, err := s.Store.CreateEnvironmentOnCluster(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug, in.ClusterID)
+	item, err := s.Store.CreateEnvironmentWithPlacement(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug, in.ClusterID, in.PlacementSelector, in.MinimumNodes)
 	if err != nil {
+		if errors.Is(err, store.ErrNoCapacity) {
+			writeError(w, http.StatusConflict, "no_cluster_capacity", err.Error())
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}

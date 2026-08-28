@@ -138,7 +138,8 @@ disaster-recovery scenarios pass under load.
 
 ### 5. Multi-cluster and high availability
 
-Status: in progress; scheduler abstraction, cluster inventory and placement,
+Status: in progress; scheduler abstraction, cluster inventory, label/capacity
+placement with heartbeat freshness, scheduled maintenance windows,
 one-time enrollment, rotating short-lived certificates, mTLS heartbeats, and
 fenced outbound command execution are implemented.
 Controller singleton loops use expiring database leader leases, while durable
@@ -147,8 +148,7 @@ the same PostgreSQL control plane.
 
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.
-- Add cluster inventory, placement policy, draining, maintenance windows,
-  agent upgrades, and capacity signals.
+- Add automated agent upgrades and richer CPU/memory capacity signals.
 - Run multiple stateless controllers and workers; prove job fencing and leader
   election behavior under partitions.
 

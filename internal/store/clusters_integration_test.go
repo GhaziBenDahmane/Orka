@@ -127,3 +127,68 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 		t.Fatalf("assigned cluster deletion error=%v, want busy", err)
 	}
 }
+
+func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	orgID, projectID, smallID, largeID, staleID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Placement',$2)`, orgID, "placement-"+orgID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, projectID, orgID); err != nil {
+		t.Fatal(err)
+	}
+	for _, cluster := range []struct {
+		id       uuid.UUID
+		nodes    int
+		lastSeen string
+	}{
+		{smallID, 2, "now()"}, {largeID, 5, "now()"}, {staleID, 20, "now()-interval '10 minutes'"},
+	} {
+		query := `INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,last_seen_at,certificate_not_after) VALUES($1,$2,$3,$4,'active','{"region":"eu"}',jsonb_build_object('nodes',$5::integer),` + cluster.lastSeen + `,now()+interval '1 day')`
+		if _, err = db.Pool.Exec(ctx, query, cluster.id, orgID, cluster.id.String(), "c-"+cluster.id.String(), cluster.nodes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment, err := db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Production", "production", nil, map[string]string{"region": "eu"}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if environment.ClusterID == nil || *environment.ClusterID != largeID || environment.MinimumNodes != 3 || environment.PlacementSelector["region"] != "eu" {
+		t.Fatalf("unexpected placement: %#v", environment)
+	}
+	serviceID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Web','web',$3,'services: {}')`, serviceID, environment.ID, "placement-"+serviceID.String()); err != nil {
+		t.Fatal(err)
+	}
+	maintenanceStart, maintenanceEnd := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)
+	configured, err := db.UpdateClusterConfiguration(ctx, orgID, largeID, "active", &maintenanceStart, &maintenanceEnd)
+	if err != nil || configured.MaintenanceEndsAt == nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueDeployment(ctx, orgID, serviceID, uuid.Nil, "manual"); !errors.Is(err, ErrMaintenance) {
+		t.Fatalf("deployment during maintenance error=%v", err)
+	}
+	if _, err = db.EnqueueClusterCommand(ctx, largeID, uuid.New(), "swarm.nodes", "encrypted"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("command during maintenance error=%v", err)
+	}
+	if _, err = db.UpdateClusterConfiguration(ctx, orgID, largeID, "active", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.UpdateClusterState(ctx, orgID, largeID, "draining"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Unavailable", "unavailable", nil, map[string]string{"region": "eu"}, 3); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("placement error=%v, want ErrNoCapacity", err)
+	}
+}
