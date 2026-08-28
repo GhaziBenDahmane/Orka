@@ -13,6 +13,10 @@ organization when a user belongs to more than one.
 | POST | `/v1/auth/login` | Exchange local credentials for a session |
 | POST | `/v1/auth/logout` | Revoke the current session |
 | GET | `/v1/me` | Return the current principal and role |
+| GET | `/v1/sessions` | List the caller's active device sessions |
+| DELETE | `/v1/sessions/{id}` | Revoke one of the caller's sessions |
+| POST | `/v1/sessions/revoke-others` | Revoke every session except the caller's |
+| GET/PUT | `/v1/sso/settings` | Read or enforce organization-wide SSO |
 | GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
@@ -33,6 +37,8 @@ email/name attribute mappings, a default role, and an opt-in
 signs authentication requests with RSA-SHA256, validates signed assertions,
 binds SP-initiated responses to one-time RelayState, and rejects assertion
 replays. Register the provider metadata URL with the IdP.
+Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
+Once enabled, local-password sessions cannot access that organization.
 
 ## Workloads
 

@@ -253,7 +253,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r.Context(), userID)
+	token, err := s.newSession(r, userID, "saml")
 	if err != nil {
 		writeError(w, 500, "session_failed", err.Error())
 		return

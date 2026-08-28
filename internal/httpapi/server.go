@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/mail"
 	"regexp"
@@ -61,6 +62,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/hooks/provider/{integrationID}", s.providerWebhook)
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.me)))
+	mux.Handle("GET /v1/sessions", s.requireAuth(http.HandlerFunc(s.listSessions)))
+	mux.Handle("DELETE /v1/sessions/{sessionID}", s.requireAuth(http.HandlerFunc(s.revokeSession)))
+	mux.Handle("POST /v1/sessions/revoke-others", s.requireAuth(http.HandlerFunc(s.revokeOtherSessions)))
+	mux.Handle("GET /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.getAuthSettings)))
+	mux.Handle("PUT /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.putAuthSettings)))
 	mux.Handle("GET /v1/audit-events", s.requireRole("admin", http.HandlerFunc(s.auditEvents)))
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
@@ -275,7 +281,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "bootstrap_failed", err.Error())
 		return
 	}
-	token, err := s.newSession(r.Context(), p.UserID)
+	token, err := s.newSession(r, p.UserID, "local")
 	if err != nil {
 		writeError(w, 500, "session_failed", err.Error())
 		return
@@ -298,7 +304,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
 		return
 	}
-	token, err := s.newSession(r.Context(), userID)
+	allowed, err := s.Store.LocalLoginAllowed(r.Context(), userID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if !allowed {
+		writeError(w, 403, "sso_required", "this account must sign in through its identity provider")
+		return
+	}
+	token, err := s.newSession(r, userID, "local")
 	if err != nil {
 		writeError(w, 500, "session_failed", err.Error())
 		return
@@ -306,12 +321,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]string{"token": token})
 }
 
-func (s *Server) newSession(ctx context.Context, userID uuid.UUID) (string, error) {
+func (s *Server) newSession(r *http.Request, userID uuid.UUID, method string) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
 	}
-	if err = s.Store.CreateSession(ctx, userID, cryptox.Digest(token), time.Now().Add(s.SessionTTL)); err != nil {
+	ipAddress := r.RemoteAddr
+	if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
+		ipAddress = host
+	}
+	if _, err = s.Store.CreateSessionWithMetadata(r.Context(), userID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128)); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -322,6 +341,76 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 func (s *Server) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, principal(r)) }
+
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	items, err := s.Store.ListSessions(r.Context(), p.UserID, p.SessionID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("sessionID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid session id")
+		return
+	}
+	if err = s.Store.RevokeSession(r.Context(), principal(r).UserID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	count, err := s.Store.RevokeOtherSessions(r.Context(), p.UserID, p.SessionID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]int64{"revoked": count})
+}
+
+func (s *Server) getAuthSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.Store.GetOrganizationAuthSettings(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, settings)
+}
+
+func (s *Server) putAuthSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		RequireSSO bool `json:"requireSso"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	p := principal(r)
+	settings, err := s.Store.SetOrganizationAuthSettings(r.Context(), p.OrganizationID, in.RequireSSO)
+	if errors.Is(err, store.ErrSSOProviderRequired) {
+		writeError(w, 409, "sso_provider_required", err.Error())
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.policy.update", "organization", p.OrganizationID.String(), r.RemoteAddr, map[string]any{"requireSso": settings.RequireSSO})
+	writeJSON(w, 200, settings)
+}
+
+func truncateText(value string, limit int) string {
+	if len(value) > limit {
+		return value[:limit]
+	}
+	return value
+}
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)

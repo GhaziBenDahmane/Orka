@@ -18,6 +18,7 @@ var ErrNotFound = errors.New("not found")
 var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
+var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
 
 type Store struct{ Pool *pgxpool.Pool }
 
@@ -39,10 +40,27 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 
 type Principal struct {
 	UserID         uuid.UUID `json:"userId"`
+	SessionID      uuid.UUID `json:"-"`
 	Email          string    `json:"email"`
 	OrganizationID uuid.UUID `json:"organizationId"`
 	Organization   string    `json:"organization"`
 	Role           string    `json:"role"`
+}
+
+type Session struct {
+	ID         uuid.UUID `json:"id"`
+	AuthMethod string    `json:"authMethod"`
+	UserAgent  string    `json:"userAgent"`
+	IPAddress  string    `json:"ipAddress"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	CreatedAt  time.Time `json:"createdAt"`
+	LastSeenAt time.Time `json:"lastSeenAt"`
+	Current    bool      `json:"current"`
+}
+
+type OrganizationAuthSettings struct {
+	RequireSSO bool      `json:"requireSso"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type Project struct {
@@ -288,9 +306,21 @@ func (s *Store) PasswordLogin(ctx context.Context, email string) (uuid.UUID, str
 	return id, hash, err
 }
 
+func (s *Store) LocalLoginAllowed(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var allowed bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m LEFT JOIN organization_auth_settings a ON a.organization_id=m.organization_id WHERE m.user_id=$1 AND NOT COALESCE(a.require_sso,false))`, userID).Scan(&allowed)
+	return allowed, err
+}
+
 func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, expires time.Time) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,$4)`, uuid.New(), userID, tokenHash, expires)
+	_, err := s.CreateSessionWithMetadata(ctx, userID, tokenHash, expires, "local", "", "")
 	return err
+}
+
+func (s *Store) CreateSessionWithMetadata(ctx context.Context, userID uuid.UUID, tokenHash []byte, expires time.Time, authMethod, userAgent, ipAddress string) (uuid.UUID, error) {
+	id := uuid.New()
+	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method,user_agent,ip_address) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, userID, tokenHash, expires, authMethod, userAgent, ipAddress)
+	return id, err
 }
 
 func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
@@ -299,7 +329,7 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organizationID *uuid.UUID) (Principal, error) {
-	query := `SELECT u.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL`
+	query := `SELECT u.id,s.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
 	args := []any{tokenHash}
 	if organizationID != nil {
 		query += ` AND o.id=$2`
@@ -307,7 +337,7 @@ func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organization
 	}
 	query += ` ORDER BY m.created_at LIMIT 1`
 	var p Principal
-	if err := s.Pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
+	if err := s.Pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.SessionID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Principal{}, ErrNotFound
 		}
@@ -315,6 +345,70 @@ func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organization
 	}
 	_, _ = s.Pool.Exec(ctx, `UPDATE sessions SET last_seen_at=now() WHERE token_hash=$1`, tokenHash)
 	return p, nil
+}
+
+func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID) ([]Session, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id,auth_method,user_agent,ip_address,expires_at,created_at,last_seen_at,id=$2 FROM sessions WHERE user_id=$1 AND expires_at>now() ORDER BY last_seen_at DESC`, userID, currentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Session{}
+	for rows.Next() {
+		var item Session
+		if err = rows.Scan(&item.ID, &item.AuthMethod, &item.UserAgent, &item.IPAddress, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &item.Current); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) RevokeSession(ctx context.Context, userID, sessionID uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM sessions WHERE id=$1 AND user_id=$2`, sessionID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) RevokeOtherSessions(ctx context.Context, userID, currentID uuid.UUID) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`, userID, currentID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *Store) GetOrganizationAuthSettings(ctx context.Context, organizationID uuid.UUID) (OrganizationAuthSettings, error) {
+	var settings OrganizationAuthSettings
+	err := s.Pool.QueryRow(ctx, `SELECT COALESCE(a.require_sso,false),COALESCE(a.updated_at,o.created_at) FROM organizations o LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE o.id=$1`, organizationID).Scan(&settings.RequireSSO, &settings.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrganizationAuthSettings{}, ErrNotFound
+	}
+	return settings, err
+}
+
+func (s *Store) SetOrganizationAuthSettings(ctx context.Context, organizationID uuid.UUID, requireSSO bool) (OrganizationAuthSettings, error) {
+	var settings OrganizationAuthSettings
+	err := s.Pool.QueryRow(ctx, `INSERT INTO organization_auth_settings(organization_id,require_sso)
+		SELECT o.id,$2 FROM organizations o WHERE o.id=$1 AND (NOT $2 OR EXISTS(SELECT 1 FROM oidc_providers WHERE organization_id=$1 AND enabled) OR EXISTS(SELECT 1 FROM saml_providers WHERE organization_id=$1 AND enabled))
+		ON CONFLICT(organization_id) DO UPDATE SET require_sso=excluded.require_sso,updated_at=now()
+		RETURNING require_sso,updated_at`, organizationID, requireSSO).Scan(&settings.RequireSSO, &settings.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var exists bool
+		if lookupErr := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1)`, organizationID).Scan(&exists); lookupErr != nil {
+			return OrganizationAuthSettings{}, lookupErr
+		}
+		if exists && requireSSO {
+			return OrganizationAuthSettings{}, ErrSSOProviderRequired
+		}
+		return OrganizationAuthSettings{}, ErrNotFound
+	}
+	return settings, err
 }
 
 func (s *Store) CreateProject(ctx context.Context, organizationID uuid.UUID, name, slug, description string) (Project, error) {
