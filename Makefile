@@ -1,10 +1,13 @@
-.PHONY: test test-database-recovery lint build run web generate-openapi check-openapi check-release-images
+.PHONY: test test-database-recovery test-keycloak-oidc lint build run web generate-openapi check-openapi check-release-images
 
 test:
 	go test ./...
 
 test-database-recovery:
 	DOCKYARD_TEST_DATABASE_RECOVERY=1 go test -timeout 35m -run TestNativeDatabaseRecoveryConformance -v -count=1 ./internal/database
+
+test-keycloak-oidc:
+	./scripts/ci/test-keycloak-oidc.sh
 
 lint:
 	go vet ./...

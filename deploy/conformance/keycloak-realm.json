@@ -1,0 +1,38 @@
+{
+  "realm": "dockyard-conformance",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "dockyard-conformance",
+      "name": "Dockyard conformance",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dockyard-conformance-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "publicClient": false,
+      "redirectUris": ["http://127.0.0.1:*/*"],
+      "webOrigins": ["+"]
+    }
+  ],
+  "users": [
+    {
+      "username": "conformance",
+      "email": "conformance@example.test",
+      "firstName": "OIDC",
+      "lastName": "Conformance",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "correct-horse-battery-staple",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

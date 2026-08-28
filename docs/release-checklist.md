@@ -46,7 +46,11 @@ links for every item below.
   JSON record per engine. Preserve the workflow artifact with the release;
   repeat on production-equivalent storage because CI timings are not SLOs.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
-  procedure. Verify tenant isolation with users from two organizations.
+  procedure. `make test-keycloak-oidc` provisions a real TLS-enabled Keycloak
+  realm and verifies discovery, authorization-code login, PKCE, nonce binding,
+  JIT provisioning, session authentication, and callback replay rejection.
+  Run the equivalent flow against Entra ID, Okta, and Google Workspace, and
+  verify tenant isolation with users from two organizations.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact
   storage into an isolated Swarm. Confirm audit-chain continuity.
 
