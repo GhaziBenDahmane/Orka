@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, APIError, BackupDestination, Cluster, Database, Deployment, Environment, OIDCProvider, Principal, Project, SAMLProvider, Service, SourceCredential, session, Template } from "./api";
+import { api, APIError, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, Deployment, Environment, NotificationEndpoint, OIDCProvider, Principal, Project, ResourcePolicy, SAMLProvider, Service, SourceCredential, session, Template } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -92,7 +92,7 @@ function Login({ onLogin }: { onLogin: (principal: Principal) => void }) {
   </main>;
 }
 
-type View = "workloads" | "templates" | "databases" | "clusters" | "settings";
+type View = "workloads" | "templates" | "databases" | "clusters" | "governance" | "audit" | "notifications" | "settings";
 
 function Console({ principal, onLogout }: { principal: Principal; onLogout: () => void }) {
   const [view, setView] = useState<View>("workloads");
@@ -136,6 +136,9 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
         <Nav active={view === "templates"} onClick={() => setView("templates")} icon="◇">Templates</Nav>
         <Nav active={view === "databases"} onClick={() => setView("databases")} icon="◉">Databases</Nav>
         {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "clusters"} onClick={() => setView("clusters")} icon="⌁">Clusters</Nav>}
+        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "governance"} onClick={() => setView("governance")} icon="◈">Governance</Nav>}
+        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "audit"} onClick={() => setView("audit")} icon="≡">Audit</Nav>}
+        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "notifications"} onClick={() => setView("notifications")} icon="◌">Notifications</Nav>}
         {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "settings"} onClick={() => setView("settings")} icon="⚙">Settings</Nav>}
       </nav>
       <div className="account"><div className="avatar">{principal.email.slice(0, 1).toUpperCase()}</div><div><strong>{principal.email}</strong><small>{principal.role}</small></div><button className="icon-button" onClick={logout} title="Sign out">↪</button></div>
@@ -148,6 +151,9 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
       {view === "templates" && <Templates environmentId={environmentId} reloadServices={loadServices} flash={flash} setError={setError} />}
       {view === "databases" && <Databases environmentId={environmentId} canAdmin={(["admin", "owner"] as string[]).includes(principal.role)} flash={flash} setError={setError} />}
       {view === "clusters" && <Clusters setError={setError} />}
+      {view === "governance" && <Governance principal={principal} projects={projects} projectId={projectId} environments={environments} environmentId={environmentId} flash={flash} setError={setError} />}
+      {view === "audit" && <Audit flash={flash} setError={setError} />}
+      {view === "notifications" && <Notifications flash={flash} setError={setError} />}
       {view === "settings" && <Settings flash={flash} setError={setError} />}
     </main>
   </div>;
@@ -232,6 +238,96 @@ function Clusters({ setError }: { setError: (s: string) => void }) {
   const [items, setItems] = useState<Cluster[]>([]);
   useEffect(() => { api.clusters().then(x => setItems(x.items)).catch(reason => setError(message(reason))); }, [setError]);
   return <><section className="section-head"><div><h2>Swarm clusters</h2><p className="muted">Outbound mTLS agents and local scheduler capacity.</p></div></section><div className="grid">{items.map(x => <article className="card cluster-card" key={x.id}><div className="cluster-top"><div className="service-icon">SW</div><Status value={x.state} /></div><h3>{x.name}</h3><p>{x.slug}</p><dl><div><dt>Agent</dt><dd>{x.agentVersion || "Not connected"}</dd></div><div><dt>Docker</dt><dd>{x.dockerVersion || "—"}</dd></div><div><dt>Last seen</dt><dd>{x.lastSeenAt ? new Date(x.lastSeenAt).toLocaleString() : "Never"}</dd></div></dl></article>)}</div>{!items.length && <Empty title="No remote clusters" text="The controller can still deploy to its local Swarm. Enroll an agent to add another cluster." />}</>;
+}
+
+type PolicyScope = "organization" | "project" | "environment";
+type PolicyDraft = { maintenance: boolean; maintenanceReason: string; maxProjects: string; maxEnvironments: string; maxServices: string; maxDatabases: string };
+
+const emptyPolicy: PolicyDraft = { maintenance: false, maintenanceReason: "", maxProjects: "", maxEnvironments: "", maxServices: "", maxDatabases: "" };
+
+function Governance({ principal, projects, projectId, environments, environmentId, flash, setError }: { principal: Principal; projects: Project[]; projectId: string; environments: Environment[]; environmentId: string; flash: (s: string) => void; setError: (s: string) => void }) {
+  const [scope, setScope] = useState<PolicyScope>("organization");
+  const [draft, setDraft] = useState<PolicyDraft>(emptyPolicy);
+  const [requireSso, setRequireSso] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const scopeId = scope === "organization" ? principal.organizationId : scope === "project" ? projectId : environmentId;
+
+  const applyPolicy = (item: ResourcePolicy) => setDraft({ maintenance: item.maintenance, maintenanceReason: item.maintenanceReason, maxProjects: item.maxProjects?.toString() ?? "", maxEnvironments: item.maxEnvironments?.toString() ?? "", maxServices: item.maxServices?.toString() ?? "", maxDatabases: item.maxDatabases?.toString() ?? "" });
+  useEffect(() => { api.authSettings().then(x => setRequireSso(x.requireSso)).catch(reason => setError(message(reason))); }, [setError]);
+  useEffect(() => {
+    if (!scopeId) { setDraft(emptyPolicy); return; }
+    api.policy(scope, scopeId).then(applyPolicy).catch(reason => setError(message(reason)));
+  }, [scope, scopeId, setError]);
+  const limit = (value: string) => value.trim() ? Number(value) : null;
+  async function savePolicy(event: FormEvent) {
+    event.preventDefault(); setBusy(true);
+    try {
+      const item = await api.putPolicy(scope, scopeId, { maintenance: draft.maintenance, maintenanceReason: draft.maintenanceReason, maxProjects: limit(draft.maxProjects), maxEnvironments: limit(draft.maxEnvironments), maxServices: limit(draft.maxServices), maxDatabases: limit(draft.maxDatabases) });
+      applyPolicy(item); flash(`${scope} policy saved`);
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  return <div className="settings-grid">
+    <section className="card settings-card"><p className="eyebrow">Resource guardrails</p><h2>Policy and quotas</h2><form onSubmit={savePolicy}>
+      <label>Scope<select value={scope} onChange={e => setScope(e.target.value as PolicyScope)}><option value="organization">Organization · {principal.organization}</option><option value="project" disabled={!projectId}>Project · {projects.find(x => x.id === projectId)?.name ?? "select under Workloads"}</option><option value="environment" disabled={!environmentId}>Environment · {environments.find(x => x.id === environmentId)?.name ?? "select under Workloads"}</option></select></label>
+      <label className="check"><input type="checkbox" checked={draft.maintenance} onChange={e => setDraft({ ...draft, maintenance: e.target.checked })} /> Block mutations for maintenance</label>
+      <label>Maintenance reason<textarea value={draft.maintenanceReason} maxLength={500} onChange={e => setDraft({ ...draft, maintenanceReason: e.target.value })} /></label>
+      <div className="field-row">{scope === "organization" && <label>Maximum projects<input type="number" min="1" max="1000000" placeholder="Unlimited" value={draft.maxProjects} onChange={e => setDraft({ ...draft, maxProjects: e.target.value })} /></label>} {scope !== "environment" && <label>Maximum environments<input type="number" min="1" max="1000000" placeholder="Unlimited" value={draft.maxEnvironments} onChange={e => setDraft({ ...draft, maxEnvironments: e.target.value })} /></label>}</div>
+      <div className="field-row"><label>Maximum services<input type="number" min="1" max="1000000" placeholder="Unlimited" value={draft.maxServices} onChange={e => setDraft({ ...draft, maxServices: e.target.value })} /></label><label>Maximum databases<input type="number" min="1" max="1000000" placeholder="Unlimited" value={draft.maxDatabases} onChange={e => setDraft({ ...draft, maxDatabases: e.target.value })} /></label></div>
+      <button className="primary" disabled={busy || !scopeId}>Save policy</button>
+    </form></section>
+    <section className="card settings-card"><p className="eyebrow">Authentication policy</p><h2>Mandatory SSO</h2><p className="muted">Require interactive users to authenticate through an enabled OIDC or SAML provider. Existing local sessions are revoked except for the owner break-glass account.</p><label className="check"><input type="checkbox" checked={requireSso} onChange={e => setRequireSso(e.target.checked)} /> Require SSO for this organization</label><button className="primary spaced-button" disabled={busy} onClick={() => { setBusy(true); api.putAuthSettings(requireSso).then(() => flash("Authentication policy saved")).catch(reason => setError(message(reason))).finally(() => setBusy(false)); }}>Save authentication policy</button></section>
+  </div>;
+}
+
+function Audit({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [retention, setRetention] = useState(365);
+  const [archives, setArchives] = useState<AuditArchive[]>([]);
+  const [destinations, setDestinations] = useState<BackupDestination[]>([]);
+  const [archive, setArchive] = useState({ name: "", backupDestinationId: "", objectPrefix: "audit", retentionDays: 365 });
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => {
+    const [eventResult, retentionResult, archiveResult, destinationResult] = await Promise.all([api.auditEvents(), api.auditRetention(), api.auditArchives(), api.backupDestinations()]);
+    setEvents(eventResult.items); setRetention(retentionResult.retentionDays); setArchives(archiveResult.items); setDestinations(destinationResult.items.filter(x => x.useTls));
+  }, []);
+  useEffect(() => { refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
+  async function run(action: () => Promise<unknown>, success: string) { setBusy(true); try { await action(); await refresh(); flash(success); } catch (reason) { setError(message(reason)); } finally { setBusy(false); } }
+  async function exportEvents() {
+    try { const file = await api.exportAudit(); const href = URL.createObjectURL(file.blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = file.filename; anchor.click(); URL.revokeObjectURL(href); flash(file.sha256 ? `Audit export downloaded · SHA-256 ${file.sha256.slice(0, 12)}…` : "Audit export downloaded"); } catch (reason) { setError(message(reason)); }
+  }
+  return <>
+    <section className="toolbar card"><label>Retention (days)<input type="number" min="30" max="3650" value={retention} onChange={e => setRetention(Number(e.target.value))} /></label><button className="primary" disabled={busy} onClick={() => void run(() => api.putAuditRetention(retention), "Audit retention saved")}>Save retention</button><button className="push" onClick={() => void exportEvents()}>Export NDJSON</button></section>
+    <section className="section-head"><div><h2>Audit events</h2><p className="muted">Tenant-scoped actions from users and service accounts.</p></div><span className="count">{events.length} loaded</span></section>
+    <section className="card audit-table"><div className="table-scroll"><table><thead><tr><th>Time</th><th>Action</th><th>Resource</th><th>Actor</th><th>Origin</th></tr></thead><tbody>{events.map(event => <tr key={event.id}><td>{new Date(event.createdAt).toLocaleString()}</td><td><code>{event.action}</code></td><td>{event.resourceType}<small>{event.resourceId || "—"}</small></td><td>{event.actorUserId?.slice(0, 8) ?? event.actorServiceAccountId?.slice(0, 8) ?? "system"}</td><td>{event.remoteAddr || "—"}</td></tr>)}</tbody></table></div>{!events.length && <p className="muted padded">No audit events yet.</p>} {events.length > 0 && <button className="load-more" onClick={() => api.auditEvents(events[events.length - 1].id).then(x => setEvents([...events, ...x.items])).catch(reason => setError(message(reason)))}>Load older events</button>}</section>
+    <section className="section-head spaced"><div><h2>Immutable archives</h2><p className="muted">Hash-chained batches stored in an S3 Object Lock bucket.</p></div></section>
+    <form className="card policy-form archive-form" onSubmit={event => { event.preventDefault(); void run(() => api.createAuditArchive(archive), "Audit archive verified and enabled"); }}><label>Name<input value={archive.name} onChange={e => setArchive({ ...archive, name: e.target.value })} required /></label><label>Destination<select value={archive.backupDestinationId} onChange={e => setArchive({ ...archive, backupDestinationId: e.target.value })} required><option value="">Select TLS destination</option>{destinations.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label><label>Object prefix<input value={archive.objectPrefix} onChange={e => setArchive({ ...archive, objectPrefix: e.target.value })} required /></label><label>Retention days<input type="number" min="30" max="3650" value={archive.retentionDays} onChange={e => setArchive({ ...archive, retentionDays: Number(e.target.value) })} /></label><button className="primary" disabled={busy}>Enable archive</button></form>
+    <div className="grid spaced">{archives.map(item => <article className="card database-card" key={item.id}><div><h3>{item.name}</h3><p>{item.objectPrefix} · {item.retentionDays} days · checkpoint #{item.lastArchivedId}</p></div><Status value={item.enabled ? "active" : "disabled"} /><div className="actions"><button disabled={!item.enabled || busy} onClick={() => void run(() => api.runAuditArchive(item.id), "Archive batch queued")}>Archive now</button><button className="danger-button" disabled={!item.enabled || busy} onClick={() => window.confirm(`Disable ${item.name}?`) && void run(() => api.disableAuditArchive(item.id), "Audit archive disabled")}>Disable</button></div></article>)}</div>
+  </>;
+}
+
+const notificationEvents = ["deployment.failed", "backup.failed", "restore.failed", "audit.archive.failed"];
+
+function Notifications({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {
+  const [items, setItems] = useState<NotificationEndpoint[]>([]);
+  const [input, setInput] = useState({ name: "", kind: "webhook", url: "https://", pagerDutyIntegrationKey: "", opsgenieApiKey: "", opsgenieRegion: "us", smtpHost: "", smtpPort: 587, smtpMode: "starttls", smtpUsername: "", smtpPassword: "", from: "", to: "", events: [...notificationEvents] });
+  const [signingSecret, setSigningSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => setItems((await api.notificationEndpoints()).items), []);
+  useEffect(() => { refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
+  async function create(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setSigningSecret("");
+    try { const result = await api.createNotificationEndpoint({ ...input, to: input.to.split(",").map(x => x.trim()).filter(Boolean) }); setSigningSecret(result.signingSecret ?? ""); await refresh(); flash("Notification endpoint enabled"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  const toggleEvent = (value: string) => setInput({ ...input, events: input.events.includes(value) ? input.events.filter(x => x !== value) : [...input.events, value] });
+  return <div className="notification-layout"><form className="card settings-card" onSubmit={create}><p className="eyebrow">Failure delivery</p><h2>Add notification endpoint</h2><label>Name<input value={input.name} onChange={e => setInput({ ...input, name: e.target.value })} required /></label><label>Provider<select value={input.kind} onChange={e => setInput({ ...input, kind: e.target.value })}><option value="webhook">Signed webhook</option><option value="slack">Slack-compatible webhook</option><option value="smtp">SMTP email</option><option value="pagerduty">PagerDuty</option><option value="opsgenie">Opsgenie</option></select></label>
+    {(input.kind === "webhook" || input.kind === "slack") && <label>HTTPS URL<input type="url" value={input.url} onChange={e => setInput({ ...input, url: e.target.value })} required /></label>}
+    {input.kind === "pagerduty" && <label>Integration key<input type="password" value={input.pagerDutyIntegrationKey} onChange={e => setInput({ ...input, pagerDutyIntegrationKey: e.target.value })} required /></label>}
+    {input.kind === "opsgenie" && <><label>API key<input type="password" value={input.opsgenieApiKey} onChange={e => setInput({ ...input, opsgenieApiKey: e.target.value })} required /></label><label>Region<select value={input.opsgenieRegion} onChange={e => setInput({ ...input, opsgenieRegion: e.target.value })}><option value="us">US</option><option value="eu">EU</option></select></label></>}
+    {input.kind === "smtp" && <><div className="field-row"><label>SMTP host<input value={input.smtpHost} onChange={e => setInput({ ...input, smtpHost: e.target.value })} required /></label><label>Port<input type="number" min="1" max="65535" value={input.smtpPort} onChange={e => setInput({ ...input, smtpPort: Number(e.target.value) })} /></label></div><label>TLS mode<select value={input.smtpMode} onChange={e => setInput({ ...input, smtpMode: e.target.value })}><option value="starttls">STARTTLS</option><option value="tls">Implicit TLS</option></select></label><div className="field-row"><label>Username<input value={input.smtpUsername} onChange={e => setInput({ ...input, smtpUsername: e.target.value })} /></label><label>Password<input type="password" value={input.smtpPassword} onChange={e => setInput({ ...input, smtpPassword: e.target.value })} /></label></div><label>From<input type="email" value={input.from} onChange={e => setInput({ ...input, from: e.target.value })} required /></label><label>Recipients<input placeholder="ops@example.com, oncall@example.com" value={input.to} onChange={e => setInput({ ...input, to: e.target.value })} required /></label></>}
+    <fieldset><legend>Failure events</legend>{notificationEvents.map(value => <label className="check" key={value}><input type="checkbox" checked={input.events.includes(value)} onChange={() => toggleEvent(value)} /> {value}</label>)}</fieldset><button className="primary" disabled={busy || !input.events.length}>Add endpoint</button></form>
+    <section><div className="grid">{items.map(item => <article className="card database-card" key={item.id}><div><h3>{item.name}</h3><p>{item.kind} · {item.events.join(", ")}</p></div><Status value={item.enabled ? "active" : "disabled"} />{item.enabled && <button className="danger-button" disabled={busy} onClick={() => window.confirm(`Disable ${item.name}?`) && void api.disableNotificationEndpoint(item.id).then(refresh).then(() => flash("Notification endpoint disabled")).catch(reason => setError(message(reason)))}>Disable</button>}</article>)}</div>{!items.length && <Empty title="No notification endpoints" text="Add a durable delivery target for deployment, backup, restore, and audit failures." />}{signingSecret && <section className="card credential-card signing-secret"><p className="eyebrow">Save now</p><h2>Webhook signing secret</h2><p className="muted">This secret is shown once and signs each request with HMAC-SHA256.</p><code>{signingSecret}</code></section>}</section>
+  </div>;
 }
 
 function Settings({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {

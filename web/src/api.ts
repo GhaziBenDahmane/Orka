@@ -18,6 +18,12 @@ export type OIDCProvider = { id: string; name: string; issuer: string; clientId:
 export type SAMLProvider = { id: string; name: string; domains: string[]; emailAttribute: string; nameAttribute: string; defaultRole: string; allowIdpInitiated: boolean; enabled: boolean };
 export type Database = { id: string; environmentId: string; composeServiceId: string; name: string; slug: string; engine: string; version: string; status: string };
 export type BackupPolicy = { id: string; databaseInstanceId: string; intervalSeconds: number; retentionCount: number; enabled: boolean; verifyRestore: boolean; destinationId?: string };
+export type ResourcePolicy = { organizationId: string; scopeType: "organization" | "project" | "environment"; scopeId: string; maintenance: boolean; maintenanceReason: string; maxProjects: number | null; maxEnvironments: number | null; maxServices: number | null; maxDatabases: number | null; updatedAt: string };
+export type AuthSettings = { organizationId: string; requireSso: boolean; updatedAt: string };
+export type AuditEvent = { id: number; actorUserId?: string; actorServiceAccountId?: string; action: string; resourceType: string; resourceId: string; remoteAddr: string; metadata: Record<string, unknown> | null; createdAt: string };
+export type AuditRetention = { organizationId: string; retentionDays: number; updatedAt: string };
+export type AuditArchive = { id: string; backupDestinationId: string; name: string; objectPrefix: string; retentionDays: number; enabled: boolean; lastArchivedId: number; lastChainHash?: string; updatedAt: string };
+export type NotificationEndpoint = { id: string; name: string; kind: "webhook" | "slack" | "smtp" | "pagerduty" | "opsgenie"; events: string[]; enabled: boolean; updatedAt: string };
 
 type Envelope<T> = { items: T[] };
 type ErrorEnvelope = { error?: { code?: string; message?: string } };
@@ -48,6 +54,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+async function download(path: string): Promise<{ blob: Blob; filename: string; sha256: string }> {
+  const headers = new Headers();
+  if (session.get()) headers.set("authorization", `Bearer ${session.get()}`);
+  const response = await fetch(path, { headers });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as ErrorEnvelope;
+    throw new APIError(response.status, body.error?.code ?? "request_failed", body.error?.message ?? `Request failed (${response.status})`);
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  return { blob: await response.blob(), filename: disposition.match(/filename="([^"]+)"/)?.[1] ?? "dockyard-audit.ndjson", sha256: response.headers.get("x-content-sha256") ?? "" };
 }
 
 export const api = {
@@ -92,4 +110,19 @@ export const api = {
   samlProviders: () => request<Envelope<SAMLProvider>>("/v1/sso/saml-providers"),
   createSAMLProvider: (body: { name: string; metadataXml: string; domains: string[]; emailAttribute: string; nameAttribute: string; defaultRole: string; allowIdpInitiated: boolean }) => request<SAMLProvider>("/v1/sso/saml-providers", { method: "POST", body: JSON.stringify(body) }),
   disableSAMLProvider: (id: string) => request<void>(`/v1/sso/saml-providers/${id}`, { method: "DELETE" }),
+  authSettings: () => request<AuthSettings>("/v1/sso/settings"),
+  putAuthSettings: (requireSso: boolean) => request<AuthSettings>("/v1/sso/settings", { method: "PUT", body: JSON.stringify({ requireSso }) }),
+  policy: (scope: "organization" | "project" | "environment", id = "") => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`),
+  putPolicy: (scope: "organization" | "project" | "environment", id: string, body: Pick<ResourcePolicy, "maintenance" | "maintenanceReason" | "maxProjects" | "maxEnvironments" | "maxServices" | "maxDatabases">) => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`, { method: "PUT", body: JSON.stringify(body) }),
+  auditEvents: (beforeId = 0, limit = 100) => request<Envelope<AuditEvent>>(`/v1/audit-events?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`),
+  auditRetention: () => request<AuditRetention>("/v1/audit-retention"),
+  putAuditRetention: (retentionDays: number) => request<AuditRetention>("/v1/audit-retention", { method: "PUT", body: JSON.stringify({ retentionDays }) }),
+  exportAudit: () => download("/v1/audit-events/export?limit=10000"),
+  auditArchives: () => request<Envelope<AuditArchive>>("/v1/audit-archives"),
+  createAuditArchive: (body: { name: string; backupDestinationId: string; objectPrefix: string; retentionDays: number }) => request<AuditArchive>("/v1/audit-archives", { method: "POST", body: JSON.stringify(body) }),
+  runAuditArchive: (id: string) => request<unknown>(`/v1/audit-archives/${id}/run`, { method: "POST", body: "{}" }),
+  disableAuditArchive: (id: string) => request<void>(`/v1/audit-archives/${id}`, { method: "DELETE" }),
+  notificationEndpoints: () => request<Envelope<NotificationEndpoint>>("/v1/notification-endpoints"),
+  createNotificationEndpoint: (body: Record<string, unknown>) => request<{ endpoint: NotificationEndpoint; signingSecret?: string }>("/v1/notification-endpoints", { method: "POST", body: JSON.stringify(body) }),
+  disableNotificationEndpoint: (id: string) => request<void>(`/v1/notification-endpoints/${id}`, { method: "DELETE" }),
 };
