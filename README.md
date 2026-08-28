@@ -62,6 +62,26 @@ state, and backup/restore state and age. Set
 `DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE=true` only for a trusted plaintext
 collector endpoint.
 
+## CLI
+
+Build `dockyardctl` with `make build` or use the copy included in the controller
+image. Login reads the password from standard input and stores the returned
+token in a mode-0600 user configuration file:
+
+```sh
+printf '%s\n' "$DOCKYARD_PASSWORD" | \
+  dockyardctl --url https://dockyard.example.com login admin@example.com
+dockyardctl projects
+dockyardctl create-environment PROJECT_ID '{"name":"Production","clusterId":null}'
+dockyardctl deploy SERVICE_ID
+```
+
+Core project, environment, service, database, template, deployment, log, and
+cluster operations have short commands. `dockyardctl request METHOD /v1/path
+'{"json":"body"}'` exposes the remaining API without waiting for a new CLI
+release. Environment variables `DOCKYARD_URL`, `DOCKYARD_TOKEN`, and
+`DOCKYARD_ORGANIZATION_ID` override saved configuration.
+
 ## License
 
 Apache-2.0. This project is an independent implementation and does not include

@@ -8,6 +8,7 @@ lint:
 
 build:
 	go build -o bin/dockyard ./cmd/dockyard
+	go build -o bin/dockyardctl ./cmd/dockyardctl
 
 run:
 	go run ./cmd/dockyard serve
