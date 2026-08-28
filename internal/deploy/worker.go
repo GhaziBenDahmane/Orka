@@ -27,7 +27,6 @@ import (
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Worker struct {
@@ -215,20 +214,96 @@ func (w *Worker) loop(ctx context.Context) {
 }
 
 func (w *Worker) recoverStale(ctx context.Context) {
-	// A worker may die after accepting a cancellation. Finalize those leases
-	// instead of making a cancelled destructive operation eligible for retry.
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE deployments d SET status='cancelled',error='cancelled by user',finished_at=now() FROM jobs j WHERE j.kind='deploy.compose' AND j.status='running' AND j.cancel_requested_at IS NOT NULL AND j.locked_at < now()-interval '1 minute' AND d.id=(j.payload->>'deploymentId')::uuid`)
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_backups b SET status='cancelled',error='cancelled by user',finished_at=now() FROM jobs j WHERE j.kind='backup.database' AND j.status='running' AND j.cancel_requested_at IS NOT NULL AND j.locked_at < now()-interval '1 minute' AND b.id=(j.payload->>'backupId')::uuid`)
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_restores r SET status='cancelled',error='cancelled by user',finished_at=now() FROM jobs j WHERE j.kind='restore.database' AND j.status='running' AND j.cancel_requested_at IS NOT NULL AND j.locked_at < now()-interval '1 minute' AND r.id=(j.payload->>'restoreId')::uuid`)
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE status='running' AND cancel_requested_at IS NOT NULL AND locked_at < now()-interval '1 minute'`)
-	result, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='pending',locked_at=NULL,locked_by=NULL,lease_id=NULL,run_after=now() WHERE status='running' AND cancel_requested_at IS NULL AND locked_at < now()-interval '1 minute'`)
+	tx, err := w.Store.Pool.Begin(ctx)
 	if err != nil {
 		w.Logger.Error("recover stale jobs", "error", err)
 		return
 	}
-	if result.RowsAffected() > 0 {
-		w.Logger.Warn("recovered stale jobs", "count", result.RowsAffected())
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT id,kind,payload,cancel_requested_at IS NOT NULL FROM jobs WHERE status='running' AND locked_at < now()-interval '1 minute' FOR UPDATE SKIP LOCKED`)
+	if err != nil {
+		w.Logger.Error("recover stale jobs", "error", err)
+		return
 	}
+	type expiredJob struct {
+		id        uuid.UUID
+		kind      string
+		payload   json.RawMessage
+		cancelled bool
+	}
+	var expired []expiredJob
+	for rows.Next() {
+		var item expiredJob
+		if err = rows.Scan(&item.id, &item.kind, &item.payload, &item.cancelled); err != nil {
+			rows.Close()
+			w.Logger.Error("recover stale jobs", "error", err)
+			return
+		}
+		expired = append(expired, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		w.Logger.Error("recover stale jobs", "error", err)
+		return
+	}
+	rows.Close()
+	retried := 0
+	for _, item := range expired {
+		if item.cancelled {
+			if err = markCancelledResourceTx(ctx, tx, item.kind, item.payload); err != nil {
+				w.Logger.Error("recover stale jobs", "error", err)
+				return
+			}
+			_, err = tx.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1`, item.id)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE jobs SET status='pending',locked_at=NULL,locked_by=NULL,lease_id=NULL,run_after=now() WHERE id=$1`, item.id)
+			retried++
+		}
+		if err != nil {
+			w.Logger.Error("recover stale jobs", "error", err)
+			return
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		w.Logger.Error("recover stale jobs", "error", err)
+		return
+	}
+	if retried > 0 {
+		w.Logger.Warn("recovered stale jobs", "count", retried)
+	}
+}
+
+func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPayload json.RawMessage) error {
+	var payload map[string]string
+	if json.Unmarshal(rawPayload, &payload) != nil {
+		return nil
+	}
+	var key string
+	switch kind {
+	case "deploy.compose":
+		key = "deploymentId"
+	case "backup.database":
+		key = "backupId"
+	case "restore.database":
+		key = "restoreId"
+	default:
+		return nil
+	}
+	id, err := uuid.Parse(payload[key])
+	if err != nil {
+		return nil
+	}
+	var query string
+	switch kind {
+	case "deploy.compose":
+		query = `UPDATE deployments SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	case "backup.database":
+		query = `UPDATE database_backups SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	case "restore.database":
+		query = `UPDATE database_restores SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	}
+	_, err = tx.Exec(ctx, query, id)
+	return err
 }
 
 // runClaimed keeps the lease alive and turns a database cancellation request into
@@ -1134,23 +1209,33 @@ func (w *Worker) markDeployment(ctx context.Context, j job, id uuid.UUID, status
 }
 
 func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
 	var cancellationRequested bool
-	if err := w.Store.Pool.QueryRow(ctx, `SELECT cancel_requested_at IS NOT NULL FROM jobs WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID).Scan(&cancellationRequested); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, `SELECT cancel_requested_at IS NOT NULL FROM jobs WHERE id=$1 AND status='running' AND lease_id=$2 FOR UPDATE`, j.ID, j.LeaseID).Scan(&cancellationRequested); errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrLeaseLost
 	} else if err != nil {
 		return err
 	}
-	var result pgconn.CommandTag
-	var err error
+	var query string
+	var args []any
 	if cancellationRequested {
-		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID)
+		query = `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`
+		args = []any{j.ID, j.LeaseID}
 	} else if jobErr == nil {
-		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID)
+		query = `UPDATE jobs SET status='succeeded',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`
+		args = []any{j.ID, j.LeaseID}
 	} else if j.Attempts+1 < j.MaxAttempts {
-		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='pending',run_after=now()+($3::int * interval '15 seconds'),last_error=$4,locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID, j.Attempts+1, truncate(jobErr.Error(), 8192))
+		query = `UPDATE jobs SET status='pending',run_after=now()+($3::int * interval '15 seconds'),last_error=$4,locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`
+		args = []any{j.ID, j.LeaseID, j.Attempts + 1, truncate(jobErr.Error(), 8192)}
 	} else {
-		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='failed',last_error=$3,finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID, truncate(jobErr.Error(), 8192))
+		query = `UPDATE jobs SET status='failed',last_error=$3,finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`
+		args = []any{j.ID, j.LeaseID, truncate(jobErr.Error(), 8192)}
 	}
+	result, err := tx.Exec(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -1158,7 +1243,22 @@ func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
 		return store.ErrLeaseLost
 	}
 	if cancellationRequested {
-		w.markJobResourceCancelled(ctx, j)
+		if err = markCancelledResourceTx(ctx, tx, j.Kind, j.Payload); err != nil {
+			return err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	if cancellationRequested && j.Kind == "deploy.compose" {
+		var payload map[string]string
+		if json.Unmarshal(j.Payload, &payload) == nil {
+			if deploymentID, parseErr := uuid.Parse(payload["deploymentId"]); parseErr == nil {
+				if statusErr := w.Store.QueueCommitStatus(ctx, deploymentID, "error"); statusErr != nil {
+					w.Logger.Error("queue cancelled deployment status", "deployment", deploymentID, "error", statusErr)
+				}
+			}
+		}
 	}
 	if jobErr != nil && j.Attempts+1 >= j.MaxAttempts && j.Kind != "notify.webhook" {
 		if notificationErr := w.Store.QueueFailureNotifications(ctx, j.Kind, j.Payload, jobErr); notificationErr != nil {
@@ -1238,23 +1338,6 @@ func sendNotification(ctx context.Context, client *http.Client, endpointURL stri
 		err = fmt.Errorf("notification endpoint returned HTTP %d", code)
 	}
 	return code, err
-}
-
-func (w *Worker) markJobResourceCancelled(ctx context.Context, j job) {
-	var payload map[string]string
-	if json.Unmarshal(j.Payload, &payload) != nil {
-		return
-	}
-	switch j.Kind {
-	case "deploy.compose":
-		if id, err := uuid.Parse(payload["deploymentId"]); err == nil {
-			_ = w.Store.FinishDeployment(ctx, id, "cancelled", "", "cancelled by user")
-		}
-	case "backup.database":
-		_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, payload["backupId"])
-	case "restore.database":
-		_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_restores SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, payload["restoreId"])
-	}
 }
 
 func truncate(value string, max int) string {

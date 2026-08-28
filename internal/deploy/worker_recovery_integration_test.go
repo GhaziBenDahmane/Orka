@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -181,5 +182,125 @@ func TestJobLeaseFencesStaleWorkerAfterTakeover(t *testing.T) {
 	}
 	if err = db.Pool.QueryRow(ctx, `SELECT value FROM job_resource_probe WHERE id=$1`, jobID).Scan(&resourceValue); err != nil || resourceValue != "current" {
 		t.Fatalf("resource transition was not preserved: value=%q err=%v", resourceValue, err)
+	}
+}
+
+func TestRecoverySkipsActiveLeaseTransition(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	jobID := uuid.New()
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,status,locked_at,locked_by,lease_id) VALUES($1,'test.fencing','{}','running',now()-interval '2 minutes','worker-a',$2)`, jobID, uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+	var leaseID uuid.UUID
+	if err := db.Pool.QueryRow(ctx, `SELECT lease_id FROM jobs WHERE id=$1`, jobID).Scan(&leaseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `CREATE TABLE job_resource_probe(id uuid PRIMARY KEY,value text NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO job_resource_probe VALUES($1,'succeeded')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+
+	transitionStarted := make(chan struct{})
+	releaseTransition := make(chan struct{})
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- db.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `UPDATE job_resource_probe SET value='running' WHERE id=$1`, jobID); err != nil {
+				return err
+			}
+			close(transitionStarted)
+			<-releaseTransition
+			return nil
+		})
+	}()
+	<-transitionStarted
+
+	recoveryDone := make(chan struct{})
+	go func() {
+		(&Worker{Store: db, ID: "worker-b", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).recoverStale(ctx)
+		close(recoveryDone)
+	}()
+	select {
+	case <-recoveryDone:
+	case <-time.After(2 * time.Second):
+		close(releaseTransition)
+		t.Fatal("recovery did not skip the resource transition's locked job")
+	}
+	close(releaseTransition)
+	if err := <-transitionDone; err != nil {
+		t.Fatal(err)
+	}
+	<-recoveryDone
+
+	var jobStatus, resourceStatus string
+	if err := db.Pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, jobID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT value FROM job_resource_probe WHERE id=$1`, jobID).Scan(&resourceStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "running" || resourceStatus != "running" {
+		t.Fatalf("active attempt was recovered: job=%s resource=%s", jobStatus, resourceStatus)
+	}
+}
+
+func TestFinishSerializesWithCancellation(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	deploymentID, jobID, leaseID := uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'finish-race','finish-race')`, []any{organizationID}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'finish-race','finish-race')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'finish-race','finish-race')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'finish-race','finish-race',$3,'services: {}')`, []any{serviceID, environmentID, "finish-race-" + serviceID.String()}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','running','manual')`, []any{deploymentID, serviceID}},
+		{`INSERT INTO jobs(id,kind,payload,status,locked_at,locked_by,lease_id) VALUES($1,'deploy.compose',jsonb_build_object('deploymentId',$2::text),'running',now(),'worker-a',$3)`, []any{jobID, deploymentID, leaseID}},
+	}
+	for _, statement := range statements {
+		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cancelTx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelTx.Rollback(ctx)
+	if _, err = cancelTx.Exec(ctx, `UPDATE jobs SET cancel_requested_at=now() WHERE id=$1`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	worker := &Worker{Store: db, ID: "worker-a", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	finishDone := make(chan error, 1)
+	go func() {
+		finishDone <- worker.finish(ctx, job{ID: jobID, LeaseID: leaseID, Kind: "deploy.compose", Payload: json.RawMessage(`{"deploymentId":"` + deploymentID.String() + `"}`)}, nil)
+	}()
+	select {
+	case finishErr := <-finishDone:
+		_ = cancelTx.Rollback(ctx)
+		t.Fatalf("finish bypassed the cancellation row lock: %v", finishErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err = cancelTx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-finishDone; err != nil {
+		t.Fatal(err)
+	}
+
+	var jobStatus, deploymentStatus string
+	if err = db.Pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, jobID).Scan(&jobStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT status FROM deployments WHERE id=$1`, deploymentID).Scan(&deploymentStatus); err != nil {
+		t.Fatal(err)
+	}
+	if jobStatus != "cancelled" || deploymentStatus != "cancelled" {
+		t.Fatalf("cancellation lost to finish: job=%s deployment=%s", jobStatus, deploymentStatus)
 	}
 }

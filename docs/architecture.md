@@ -85,3 +85,8 @@ operations remain at-least-once and must be idempotent. Singleton maintenance
 loops additionally use expiring, database-backed leader leases; only the
 current holder schedules backup policy runs or prunes audit history, and
 another replica takes over after expiry.
+
+The stale-job reaper locks each expired job before changing either the job or
+its resource, and skips rows currently held by a heartbeat or resource
+transition. Job completion likewise locks the job while resolving a concurrent
+cancellation, so cancellation cannot be lost to a success update.

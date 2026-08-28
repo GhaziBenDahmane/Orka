@@ -32,7 +32,9 @@ links for every item below.
   commit status, every enabled notification provider, and one remote-agent
   command. Kill a worker while a job is leased and verify fenced takeover. Hold
   the old attempt past lease expiry and verify it cannot regress a completed
-  resource to running or commit any resource completion after takeover.
+  resource to running or commit any resource completion after takeover. Race a
+  cancellation against completion and verify the job and resource both remain
+  cancelled.
 - Back up and restore each advertised backup-capable database engine. Record
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. On a Swarm manager, `make test-database-recovery`
