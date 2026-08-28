@@ -15,6 +15,7 @@ The initial implementation includes:
 - extensible managed-database drivers;
 - OIDC/PKCE and signed SAML 2.0 login, domain discovery, SCIM users/groups, and group-to-role mapping;
 - public or authenticated Git/Dockerfile builds pushed to authenticated OCI registries;
+- signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets and an audit trail.
 

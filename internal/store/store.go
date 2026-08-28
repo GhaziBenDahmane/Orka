@@ -10,12 +10,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var ErrNotFound = errors.New("not found")
 var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
+var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 
 type Store struct{ Pool *pgxpool.Pool }
 
@@ -223,6 +225,19 @@ type SourceCredential struct {
 	EncryptedSecret string    `json:"-"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+type WebhookIntegration struct {
+	ID               uuid.UUID `json:"id"`
+	OrganizationID   uuid.UUID `json:"organizationId"`
+	ComposeServiceID uuid.UUID `json:"composeServiceId"`
+	Name             string    `json:"name"`
+	Provider         string    `json:"provider"`
+	Branch           string    `json:"branch"`
+	EncryptedSecret  string    `json:"-"`
+	Enabled          bool      `json:"enabled"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 func (s *Store) HasUsers(ctx context.Context) (bool, error) {
@@ -579,6 +594,94 @@ func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) CreateWebhookIntegration(ctx context.Context, organizationID uuid.UUID, item WebhookIntegration) (WebhookIntegration, error) {
+	if item.ID == uuid.Nil {
+		item.ID = uuid.New()
+	}
+	err := s.Pool.QueryRow(ctx, `INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret)
+		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND p.organization_id=$7
+		RETURNING enabled,created_at,updated_at`, item.ID, item.ComposeServiceID, item.Name, item.Provider, item.Branch, item.EncryptedSecret, organizationID).Scan(&item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WebhookIntegration{}, ErrNotFound
+	}
+	item.OrganizationID = organizationID
+	return item, err
+}
+
+func (s *Store) ListWebhookIntegrations(ctx context.Context, organizationID, serviceID uuid.UUID) ([]WebhookIntegration, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT i.id,p.organization_id,i.compose_service_id,i.name,i.provider,i.branch,i.enabled,i.created_at,i.updated_at FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.compose_service_id=$1 AND p.organization_id=$2 ORDER BY i.name`, serviceID, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WebhookIntegration{}
+	for rows.Next() {
+		var item WebhookIntegration
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.ComposeServiceID, &item.Name, &item.Provider, &item.Branch, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetWebhookIntegration(ctx context.Context, id uuid.UUID) (WebhookIntegration, error) {
+	var item WebhookIntegration
+	err := s.Pool.QueryRow(ctx, `SELECT i.id,p.organization_id,i.compose_service_id,i.name,i.provider,i.branch,i.encrypted_secret,i.enabled,i.created_at,i.updated_at FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.id=$1 AND i.enabled`, id).Scan(&item.ID, &item.OrganizationID, &item.ComposeServiceID, &item.Name, &item.Provider, &item.Branch, &item.EncryptedSecret, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WebhookIntegration{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) DisableWebhookIntegration(ctx context.Context, organizationID, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE webhook_integrations i SET enabled=false,updated_at=now() FROM compose_services s,environments e,projects p WHERE i.id=$1 AND s.id=i.compose_service_id AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID string) (Deployment, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Deployment{}, err
+	}
+	defer tx.Rollback(ctx)
+	var serviceID uuid.UUID
+	var revision int64
+	var compose, environment, provider string
+	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id WHERE i.id=$1 AND i.enabled FOR UPDATE OF i,s`, integrationID).Scan(&serviceID, &revision, &compose, &environment, &provider)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Deployment{}, ErrNotFound
+	}
+	if err != nil {
+		return Deployment{}, err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM webhook_deliveries WHERE received_at<now()-interval '30 days'`); err != nil {
+		return Deployment{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO webhook_deliveries(integration_id,delivery_id) VALUES($1,$2)`, integrationID, deliveryID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return Deployment{}, ErrDuplicateDelivery
+		}
+		return Deployment{}, err
+	}
+	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: provider + "-webhook"}
+	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger) VALUES($1,$2,$3,$4,$5,'queued',$6) RETURNING created_at`, d.ID, serviceID, revision, compose, environment, d.Trigger).Scan(&d.CreatedAt); err != nil {
+		return Deployment{}, err
+	}
+	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'deploy.compose',$2)`, uuid.New(), payload); err != nil {
+		return Deployment{}, err
+	}
+	return d, tx.Commit(ctx)
 }
 
 func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databaseID, actorID uuid.UUID, destinationID *uuid.UUID) (DatabaseBackup, error) {
@@ -1153,4 +1256,9 @@ func (s *Store) Audit(ctx context.Context, p *Principal, action, resourceType, r
 		user = p.UserID
 	}
 	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)`, org, user, action, resourceType, resourceID, remoteAddr, b)
+}
+
+func (s *Store) AuditOrganization(ctx context.Context, organizationID uuid.UUID, action, resourceType, resourceID, remoteAddr string, metadata any) {
+	b, _ := json.Marshal(metadata)
+	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,NULL,$2,$3,$4,$5,$6)`, organizationID, action, resourceType, resourceID, remoteAddr, b)
 }

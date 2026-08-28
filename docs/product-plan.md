@@ -107,12 +107,13 @@ Okta, Keycloak, and Google Workspace where applicable.
 ### 4. Delivery integrations and operations
 
 Status: public/private HTTPS Git, private OCI registries, ephemeral build
-credentials, and generic deploy hooks implemented.
+credentials, generic deploy hooks, and signed/replay-safe provider webhooks
+implemented.
 
 - Add SSH deploy keys alongside the implemented encrypted HTTPS Git tokens and
   OCI registry credentials.
-- GitHub, GitLab, Gitea, and Bitbucket adapters with signature verification,
-  branch filtering, delivery replay protection, and build status callbacks.
+- Add build status callbacks to the GitHub, GitLab, Gitea, and Bitbucket
+  webhook adapters.
 - Notification rules and providers for email, Slack-compatible webhooks, and
   common incident systems.
 - OpenTelemetry traces/log correlation, richer Prometheus metrics, alerts,

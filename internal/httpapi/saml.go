@@ -258,7 +258,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "session_failed", err.Error())
 		return
 	}
-	s.Store.Audit(r.Context(), nil, "auth.saml.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
+	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.saml.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeJSON(w, 200, map[string]string{"token": token})
 }
 

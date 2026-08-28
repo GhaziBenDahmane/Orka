@@ -51,6 +51,14 @@ replays. Register the provider metadata URL with the IdP.
 | GET | `/v1/services/{id}/logs` | Read aggregated Swarm service logs |
 | POST | `/v1/services/{id}/deploy-tokens` | Create a CI deploy hook |
 | POST | `/v1/hooks/deploy/{token}` | Trigger a deployment from CI |
+| GET/POST | `/v1/services/{id}/webhooks` | List or create provider webhook integrations |
+| DELETE | `/v1/webhooks/{id}` | Disable a provider webhook integration |
+| POST | `/v1/hooks/provider/{id}` | Verify a provider push event and deploy |
+
+Provider integrations support GitHub, GitLab, Gitea, and Bitbucket. Secrets are
+shown once, encrypted at rest, and used to authenticate the raw request body.
+Only pushes to the configured branch are deployed; delivery IDs are retained
+for 30 days to reject replays.
 
 ## Catalog and databases
 

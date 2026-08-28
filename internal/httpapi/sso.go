@@ -204,7 +204,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "session_failed", err.Error())
 		return
 	}
-	s.Store.Audit(r.Context(), nil, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
+	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeJSON(w, 200, map[string]string{"token": token})
 }
 
