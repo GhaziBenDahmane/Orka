@@ -44,6 +44,8 @@ type Node struct {
 	Availability  string `json:"availability"`
 	ManagerStatus string `json:"managerStatus"`
 	EngineVersion string `json:"engineVersion"`
+	NanoCPUs      int64  `json:"nanoCpus"`
+	MemoryBytes   int64  `json:"memoryBytes"`
 }
 
 func (s Swarm) EnsureReady(ctx context.Context) error {
@@ -196,6 +198,20 @@ func (s Swarm) Nodes(ctx context.Context) ([]Node, error) {
 			return nil, err
 		}
 		items = append(items, Node{ID: raw["ID"], Hostname: raw["Hostname"], Status: raw["Status"], Availability: raw["Availability"], ManagerStatus: raw["ManagerStatus"], EngineVersion: raw["EngineVersion"]})
+	}
+	for index := range items {
+		resourceOutput, inspectErr := s.run(ctx, "node", "inspect", items[index].ID, "--format", "{{json .Description.Resources}}")
+		if inspectErr != nil {
+			return nil, fmt.Errorf("inspect node %s resources: %w", items[index].ID, inspectErr)
+		}
+		var resources struct {
+			NanoCPUs    int64 `json:"NanoCPUs"`
+			MemoryBytes int64 `json:"MemoryBytes"`
+		}
+		if err = json.Unmarshal([]byte(strings.TrimSpace(resourceOutput)), &resources); err != nil {
+			return nil, fmt.Errorf("decode node %s resources: %w", items[index].ID, err)
+		}
+		items[index].NanoCPUs, items[index].MemoryBytes = resources.NanoCPUs, resources.MemoryBytes
 	}
 	return items, nil
 }

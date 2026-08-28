@@ -75,14 +75,16 @@ type Project struct {
 }
 
 type Environment struct {
-	ID                uuid.UUID         `json:"id"`
-	ProjectID         uuid.UUID         `json:"projectId"`
-	ClusterID         *uuid.UUID        `json:"clusterId,omitempty"`
-	PlacementSelector map[string]string `json:"placementSelector,omitempty"`
-	MinimumNodes      int               `json:"minimumNodes,omitempty"`
-	Name              string            `json:"name"`
-	Slug              string            `json:"slug"`
-	CreatedAt         time.Time         `json:"createdAt"`
+	ID                 uuid.UUID         `json:"id"`
+	ProjectID          uuid.UUID         `json:"projectId"`
+	ClusterID          *uuid.UUID        `json:"clusterId,omitempty"`
+	PlacementSelector  map[string]string `json:"placementSelector,omitempty"`
+	MinimumNodes       int               `json:"minimumNodes,omitempty"`
+	MinimumNanoCPUs    int64             `json:"minimumNanoCpus,omitempty"`
+	MinimumMemoryBytes int64             `json:"minimumMemoryBytes,omitempty"`
+	Name               string            `json:"name"`
+	Slug               string            `json:"slug"`
+	CreatedAt          time.Time         `json:"createdAt"`
 }
 
 type ComposeService struct {
@@ -653,14 +655,14 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 }
 
 func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string) (Environment, error) {
-	return s.CreateEnvironmentWithPlacement(ctx, organizationID, projectID, name, slug, nil, nil, 0)
+	return s.CreateEnvironmentWithPlacement(ctx, organizationID, projectID, name, slug, nil, nil, 0, 0, 0)
 }
 
 func (s *Store) CreateEnvironmentOnCluster(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string, clusterID *uuid.UUID) (Environment, error) {
-	return s.CreateEnvironmentWithPlacement(ctx, organizationID, projectID, name, slug, clusterID, nil, 0)
+	return s.CreateEnvironmentWithPlacement(ctx, organizationID, projectID, name, slug, clusterID, nil, 0, 0, 0)
 }
 
-func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string, clusterID *uuid.UUID, selector map[string]string, minimumNodes int) (Environment, error) {
+func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string, clusterID *uuid.UUID, selector map[string]string, minimumNodes int, minimumNanoCPUs, minimumMemoryBytes int64) (Environment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Environment{}, err
@@ -676,9 +678,9 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 	if err != nil {
 		return Environment{}, err
 	}
-	if clusterID == nil && (len(selector) > 0 || minimumNodes > 0) {
+	if clusterID == nil && (len(selector) > 0 || minimumNodes > 0 || minimumNanoCPUs > 0 || minimumMemoryBytes > 0) {
 		var selected uuid.UUID
-		err = tx.QueryRow(ctx, `SELECT c.id FROM clusters c WHERE c.organization_id=$1 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false) AND c.labels@>$2::jsonb AND CASE WHEN jsonb_typeof(c.capacity->'nodes')='number' THEN (c.capacity->>'nodes')::integer ELSE 0 END >=$3 ORDER BY (SELECT count(*) FROM environments assigned WHERE assigned.cluster_id=c.id),CASE WHEN jsonb_typeof(c.capacity->'nodes')='number' THEN (c.capacity->>'nodes')::integer ELSE 0 END DESC,c.id LIMIT 1 FOR UPDATE OF c`, organizationID, selectorJSON, minimumNodes).Scan(&selected)
+		err = tx.QueryRow(ctx, `SELECT c.id FROM clusters c WHERE c.organization_id=$1 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false) AND c.labels@>$2::jsonb AND CASE WHEN jsonb_typeof(c.capacity->'schedulableNodes')='number' THEN (c.capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(c.capacity->'nodes')='number' THEN (c.capacity->>'nodes')::integer ELSE 0 END >=$3 AND CASE WHEN jsonb_typeof(c.capacity->'nanoCpus')='number' THEN (c.capacity->>'nanoCpus')::bigint ELSE 0 END >=$4 AND CASE WHEN jsonb_typeof(c.capacity->'memoryBytes')='number' THEN (c.capacity->>'memoryBytes')::bigint ELSE 0 END >=$5 ORDER BY (SELECT count(*) FROM environments assigned WHERE assigned.cluster_id=c.id),CASE WHEN jsonb_typeof(c.capacity->'schedulableNodes')='number' THEN (c.capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(c.capacity->'nodes')='number' THEN (c.capacity->>'nodes')::integer ELSE 0 END DESC,c.id LIMIT 1 FOR UPDATE OF c`, organizationID, selectorJSON, minimumNodes, minimumNanoCPUs, minimumMemoryBytes).Scan(&selected)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Environment{}, ErrNoCapacity
 		}
@@ -689,15 +691,15 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 	}
 	if clusterID != nil {
 		var clusterExists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND organization_id=$2 AND state='active' AND NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false) AND ($3::jsonb='{}'::jsonb OR labels@>$3::jsonb) AND CASE WHEN jsonb_typeof(capacity->'nodes')='number' THEN (capacity->>'nodes')::integer ELSE 0 END >=$4 AND (($3::jsonb='{}'::jsonb AND $4=0) OR last_seen_at>now()-interval '2 minutes'))`, *clusterID, organizationID, selectorJSON, minimumNodes).Scan(&clusterExists); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND organization_id=$2 AND state='active' AND NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false) AND ($3::jsonb='{}'::jsonb OR labels@>$3::jsonb) AND CASE WHEN jsonb_typeof(capacity->'schedulableNodes')='number' THEN (capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(capacity->'nodes')='number' THEN (capacity->>'nodes')::integer ELSE 0 END >=$4 AND CASE WHEN jsonb_typeof(capacity->'nanoCpus')='number' THEN (capacity->>'nanoCpus')::bigint ELSE 0 END >=$5 AND CASE WHEN jsonb_typeof(capacity->'memoryBytes')='number' THEN (capacity->>'memoryBytes')::bigint ELSE 0 END >=$6 AND (($3::jsonb='{}'::jsonb AND $4=0 AND $5=0 AND $6=0) OR last_seen_at>now()-interval '2 minutes'))`, *clusterID, organizationID, selectorJSON, minimumNodes, minimumNanoCPUs, minimumMemoryBytes).Scan(&clusterExists); err != nil {
 			return Environment{}, err
 		}
 		if !clusterExists {
 			return Environment{}, ErrNoCapacity
 		}
 	}
-	e := Environment{ID: uuid.New(), ProjectID: projectID, ClusterID: clusterID, PlacementSelector: selector, MinimumNodes: minimumNodes, Name: name, Slug: slug}
-	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug,placement_selector,minimum_nodes) SELECT $1,p.id,$3,$4,$5,$7,$8 FROM projects p WHERE p.id=$2 AND p.organization_id=$6 AND p.deletion_requested_at IS NULL RETURNING created_at`, e.ID, projectID, clusterID, name, slug, organizationID, selectorJSON, minimumNodes).Scan(&e.CreatedAt)
+	e := Environment{ID: uuid.New(), ProjectID: projectID, ClusterID: clusterID, PlacementSelector: selector, MinimumNodes: minimumNodes, MinimumNanoCPUs: minimumNanoCPUs, MinimumMemoryBytes: minimumMemoryBytes, Name: name, Slug: slug}
+	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug,placement_selector,minimum_nodes,minimum_nano_cpus,minimum_memory_bytes) SELECT $1,p.id,$3,$4,$5,$7,$8,$9,$10 FROM projects p WHERE p.id=$2 AND p.organization_id=$6 AND p.deletion_requested_at IS NULL RETURNING created_at`, e.ID, projectID, clusterID, name, slug, organizationID, selectorJSON, minimumNodes, minimumNanoCPUs, minimumMemoryBytes).Scan(&e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	}
@@ -708,7 +710,7 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 }
 
 func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID uuid.UUID) ([]Environment, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.project_id=$1 AND p.organization_id=$2 ORDER BY e.name`, projectID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.minimum_nano_cpus,e.minimum_memory_bytes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.project_id=$1 AND p.organization_id=$2 ORDER BY e.name`, projectID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -716,7 +718,7 @@ func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID 
 	items := []Environment{}
 	for rows.Next() {
 		var item Environment
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -726,7 +728,7 @@ func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID 
 
 func (s *Store) GetEnvironment(ctx context.Context, organizationID, environmentID uuid.UUID) (Environment, error) {
 	var item Environment
-	err := s.Pool.QueryRow(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, environmentID, organizationID).Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.Name, &item.Slug, &item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.minimum_nano_cpus,e.minimum_memory_bytes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, environmentID, organizationID).Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	}

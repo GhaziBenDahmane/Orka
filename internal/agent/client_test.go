@@ -23,6 +23,7 @@ type fakeScheduler struct {
 	environment    map[string]string
 	artifact       []byte
 	wantArtifact   []byte
+	nodes          []deploy.Node
 }
 
 func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environment map[string]string) (string, error) {
@@ -32,7 +33,7 @@ func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environ
 func (*fakeScheduler) Remove(context.Context, string) (string, error)        { return "", nil }
 func (*fakeScheduler) RemoveVolumes(context.Context, string) (string, error) { return "", nil }
 func (*fakeScheduler) Logs(context.Context, string, int) (string, error)     { return "", nil }
-func (*fakeScheduler) Nodes(context.Context) ([]deploy.Node, error)          { return nil, nil }
+func (f *fakeScheduler) Nodes(context.Context) ([]deploy.Node, error)        { return f.nodes, nil }
 func (f *fakeScheduler) RunContainerJob(_ context.Context, _, _, mount string, _ map[string]string, command []string) (string, error) {
 	if f.artifact != nil {
 		return "dumped", os.WriteFile(filepath.Join(mount, command[len(command)-1]), f.artifact, 0600)
@@ -134,5 +135,33 @@ func TestExecuteAgentUpgradeRequiresDigestAndFixedService(t *testing.T) {
 	}
 	if _, err := client.executeCommand(context.Background(), command{Kind: "agent.upgrade", Payload: []byte(`{"image":"registry.example/dockyard:latest"}`)}); err == nil {
 		t.Fatal("expected mutable agent image tag to be rejected")
+	}
+}
+
+func TestHeartbeatAggregatesActiveCapacity(t *testing.T) {
+	var body struct {
+		Capacity map[string]any `json:"capacity"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := &Client{
+		cfg:  Config{AgentURL: server.URL, Version: "1.2.3"},
+		http: server.Client(),
+		swarm: &fakeScheduler{nodes: []deploy.Node{
+			{Status: "Ready", Availability: "Active", ManagerStatus: "Leader", EngineVersion: "29", NanoCPUs: 4_000_000_000, MemoryBytes: 8_000_000_000},
+			{Status: "Down", Availability: "Active", EngineVersion: "29", NanoCPUs: 2_000_000_000, MemoryBytes: 4_000_000_000},
+			{Status: "Ready", Availability: "Drain", EngineVersion: "29", NanoCPUs: 8_000_000_000, MemoryBytes: 16_000_000_000},
+		}},
+	}
+	if err := client.heartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if body.Capacity["nodes"] != float64(3) || body.Capacity["readyNodes"] != float64(2) || body.Capacity["activeNodes"] != float64(2) || body.Capacity["schedulableNodes"] != float64(1) || body.Capacity["nanoCpus"] != float64(4_000_000_000) || body.Capacity["memoryBytes"] != float64(8_000_000_000) {
+		t.Fatalf("unexpected capacity: %#v", body.Capacity)
 	}
 }

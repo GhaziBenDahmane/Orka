@@ -20,6 +20,8 @@ resource "dockyard_environment" "production" {
   name              = "Production"
   placement_selector = { region = "eu-west" }
   minimum_nodes      = 3
+  minimum_nano_cpus  = 8000000000
+  minimum_memory_bytes = 17179869184
 }
 
 resource "dockyard_service" "whoami" {

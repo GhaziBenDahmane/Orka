@@ -1,0 +1,33 @@
+package deploy
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestNodesIncludesResourceCapacity(t *testing.T) {
+	docker := filepath.Join(t.TempDir(), "docker")
+	script := `#!/bin/sh
+if [ "$1" = node ] && [ "$2" = ls ]; then
+  echo '{"ID":"node-1","Hostname":"worker-1","Status":"Ready","Availability":"Active","ManagerStatus":"Leader","EngineVersion":"29.3.0"}'
+  exit 0
+fi
+if [ "$1" = node ] && [ "$2" = inspect ] && [ "$3" = node-1 ]; then
+  echo '{"NanoCPUs":8000000000,"MemoryBytes":17179869184}'
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := (Swarm{DockerBin: docker}).Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || nodes[0].NanoCPUs != 8_000_000_000 || nodes[0].MemoryBytes != 17_179_869_184 {
+		t.Fatalf("unexpected nodes: %#v", nodes)
+	}
+}

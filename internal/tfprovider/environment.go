@@ -19,22 +19,26 @@ import (
 
 type environmentResource struct{ client *apiclient.Client }
 type environmentModel struct {
-	ID                types.String `tfsdk:"id"`
-	ProjectID         types.String `tfsdk:"project_id"`
-	ClusterID         types.String `tfsdk:"cluster_id"`
-	PlacementSelector types.Map    `tfsdk:"placement_selector"`
-	MinimumNodes      types.Int64  `tfsdk:"minimum_nodes"`
-	Name              types.String `tfsdk:"name"`
-	Slug              types.String `tfsdk:"slug"`
+	ID                 types.String `tfsdk:"id"`
+	ProjectID          types.String `tfsdk:"project_id"`
+	ClusterID          types.String `tfsdk:"cluster_id"`
+	PlacementSelector  types.Map    `tfsdk:"placement_selector"`
+	MinimumNodes       types.Int64  `tfsdk:"minimum_nodes"`
+	MinimumNanoCPUs    types.Int64  `tfsdk:"minimum_nano_cpus"`
+	MinimumMemoryBytes types.Int64  `tfsdk:"minimum_memory_bytes"`
+	Name               types.String `tfsdk:"name"`
+	Slug               types.String `tfsdk:"slug"`
 }
 type environmentResponse struct {
-	ID                string            `json:"id"`
-	ProjectID         string            `json:"projectId"`
-	ClusterID         *string           `json:"clusterId"`
-	PlacementSelector map[string]string `json:"placementSelector"`
-	MinimumNodes      int64             `json:"minimumNodes"`
-	Name              string            `json:"name"`
-	Slug              string            `json:"slug"`
+	ID                 string            `json:"id"`
+	ProjectID          string            `json:"projectId"`
+	ClusterID          *string           `json:"clusterId"`
+	PlacementSelector  map[string]string `json:"placementSelector"`
+	MinimumNodes       int64             `json:"minimumNodes"`
+	MinimumNanoCPUs    int64             `json:"minimumNanoCpus"`
+	MinimumMemoryBytes int64             `json:"minimumMemoryBytes"`
+	Name               string            `json:"name"`
+	Slug               string            `json:"slug"`
 }
 
 func newEnvironmentResource() resource.Resource { return &environmentResource{} }
@@ -46,6 +50,7 @@ func (r *environmentResource) Schema(_ context.Context, _ resource.SchemaRequest
 	response.Schema = schema.Schema{Description: "A Dockyard deployment environment.", Attributes: map[string]schema.Attribute{
 		"id": schema.StringAttribute{Computed: true}, "project_id": schema.StringAttribute{Required: true, PlanModifiers: replace}, "cluster_id": schema.StringAttribute{Optional: true, PlanModifiers: replace},
 		"placement_selector": schema.MapAttribute{Optional: true, Computed: true, ElementType: types.StringType, PlanModifiers: []planmodifier.Map{mapplanmodifier.RequiresReplace()}}, "minimum_nodes": schema.Int64Attribute{Optional: true, Computed: true, PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}},
+		"minimum_nano_cpus": schema.Int64Attribute{Optional: true, Computed: true, PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}}, "minimum_memory_bytes": schema.Int64Attribute{Optional: true, Computed: true, PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}},
 		"name": schema.StringAttribute{Required: true, PlanModifiers: replace}, "slug": schema.StringAttribute{Optional: true, Computed: true, PlanModifiers: replace},
 	}}
 }
@@ -69,6 +74,12 @@ func (r *environmentResource) Create(ctx context.Context, request resource.Creat
 	}
 	if !plan.MinimumNodes.IsNull() && !plan.MinimumNodes.IsUnknown() {
 		body["minimumNodes"] = plan.MinimumNodes.ValueInt64()
+	}
+	if !plan.MinimumNanoCPUs.IsNull() && !plan.MinimumNanoCPUs.IsUnknown() {
+		body["minimumNanoCpus"] = plan.MinimumNanoCPUs.ValueInt64()
+	}
+	if !plan.MinimumMemoryBytes.IsNull() && !plan.MinimumMemoryBytes.IsUnknown() {
+		body["minimumMemoryBytes"] = plan.MinimumMemoryBytes.ValueInt64()
 	}
 	item, err := call[environmentResponse](ctx, r.client, http.MethodPost, "/v1/projects/"+plan.ProjectID.ValueString()+"/environments", body)
 	if err != nil {
@@ -123,6 +134,8 @@ func setEnvironment(model *environmentModel, item environmentResponse) {
 	}
 	model.PlacementSelector = types.MapValueMust(types.StringType, elements)
 	model.MinimumNodes = types.Int64Value(item.MinimumNodes)
+	model.MinimumNanoCPUs = types.Int64Value(item.MinimumNanoCPUs)
+	model.MinimumMemoryBytes = types.Int64Value(item.MinimumMemoryBytes)
 	if item.ClusterID == nil {
 		model.ClusterID = types.StringNull()
 	} else {

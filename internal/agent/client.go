@@ -269,7 +269,24 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	if len(nodes) > 0 {
 		dockerVersion = nodes[0].EngineVersion
 	}
-	return c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "dockerVersion": dockerVersion, "capacity": map[string]any{"nodes": len(nodes)}}, nil, "")
+	capacity := map[string]any{"nodes": len(nodes), "readyNodes": 0, "activeNodes": 0, "schedulableNodes": 0, "managers": 0, "nanoCpus": int64(0), "memoryBytes": int64(0)}
+	for _, node := range nodes {
+		if strings.EqualFold(node.Status, "ready") {
+			capacity["readyNodes"] = capacity["readyNodes"].(int) + 1
+		}
+		if strings.EqualFold(node.Availability, "active") {
+			capacity["activeNodes"] = capacity["activeNodes"].(int) + 1
+		}
+		if strings.EqualFold(node.Status, "ready") && strings.EqualFold(node.Availability, "active") {
+			capacity["schedulableNodes"] = capacity["schedulableNodes"].(int) + 1
+			capacity["nanoCpus"] = capacity["nanoCpus"].(int64) + node.NanoCPUs
+			capacity["memoryBytes"] = capacity["memoryBytes"].(int64) + node.MemoryBytes
+		}
+		if node.ManagerStatus != "" {
+			capacity["managers"] = capacity["managers"].(int) + 1
+		}
+	}
+	return c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "dockerVersion": dockerVersion, "capacity": capacity}, nil, "")
 }
 
 func (c *Client) claim(ctx context.Context) (*command, error) {

@@ -706,11 +706,13 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name              string            `json:"name"`
-		Slug              string            `json:"slug"`
-		ClusterID         *uuid.UUID        `json:"clusterId"`
-		PlacementSelector map[string]string `json:"placementSelector"`
-		MinimumNodes      int               `json:"minimumNodes"`
+		Name               string            `json:"name"`
+		Slug               string            `json:"slug"`
+		ClusterID          *uuid.UUID        `json:"clusterId"`
+		PlacementSelector  map[string]string `json:"placementSelector"`
+		MinimumNodes       int               `json:"minimumNodes"`
+		MinimumNanoCPUs    int64             `json:"minimumNanoCpus"`
+		MinimumMemoryBytes int64             `json:"minimumMemoryBytes"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -718,8 +720,8 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	if in.Slug == "" {
 		in.Slug = slugify(in.Name)
 	}
-	if !slugPattern.MatchString(in.Slug) || len(in.PlacementSelector) > 32 || in.MinimumNodes < 0 || in.MinimumNodes > 10000 {
-		writeError(w, 400, "invalid_environment", "valid slug, at most 32 placement labels, and minimumNodes between 0 and 10000 are required")
+	if !slugPattern.MatchString(in.Slug) || len(in.PlacementSelector) > 32 || in.MinimumNodes < 0 || in.MinimumNodes > 10_000 || in.MinimumNanoCPUs < 0 || in.MinimumNanoCPUs > 1_000_000_000_000 || in.MinimumMemoryBytes < 0 || in.MinimumMemoryBytes > 1_125_899_906_842_624 {
+		writeError(w, 400, "invalid_environment", "valid slug, at most 32 placement labels, minimumNodes between 0 and 10000, minimumNanoCpus up to 1000000000000, and minimumMemoryBytes up to 1125899906842624 are required")
 		return
 	}
 	for key, value := range in.PlacementSelector {
@@ -729,7 +731,7 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	item, err := s.Store.CreateEnvironmentWithPlacement(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug, in.ClusterID, in.PlacementSelector, in.MinimumNodes)
+	item, err := s.Store.CreateEnvironmentWithPlacement(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug, in.ClusterID, in.PlacementSelector, in.MinimumNodes, in.MinimumNanoCPUs, in.MinimumMemoryBytes)
 	if err != nil {
 		if errors.Is(err, store.ErrNoCapacity) {
 			writeError(w, http.StatusConflict, "no_cluster_capacity", err.Error())

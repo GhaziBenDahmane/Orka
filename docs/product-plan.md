@@ -149,7 +149,8 @@ the same PostgreSQL control plane.
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.
 - Digest-pinned, start-first agent upgrades are implemented as fenced,
-  encrypted asynchronous commands. Richer CPU/memory capacity signals remain.
+  encrypted asynchronous commands. Heartbeats report ready/active/manager node
+  counts plus active-node CPU and memory, all usable as placement constraints.
 - Run multiple stateless controllers and workers; prove job fencing and leader
   election behavior under partitions.
 

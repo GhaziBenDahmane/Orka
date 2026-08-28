@@ -155,16 +155,16 @@ func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
 	}{
 		{smallID, 2, "now()"}, {largeID, 5, "now()"}, {staleID, 20, "now()-interval '10 minutes'"},
 	} {
-		query := `INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,last_seen_at,certificate_not_after) VALUES($1,$2,$3,$4,'active','{"region":"eu"}',jsonb_build_object('nodes',$5::integer),` + cluster.lastSeen + `,now()+interval '1 day')`
+		query := `INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,last_seen_at,certificate_not_after) VALUES($1,$2,$3,$4,'active','{"region":"eu"}',jsonb_build_object('nodes',$5::integer,'nanoCpus',$5::bigint*2000000000,'memoryBytes',$5::bigint*4294967296),` + cluster.lastSeen + `,now()+interval '1 day')`
 		if _, err = db.Pool.Exec(ctx, query, cluster.id, orgID, cluster.id.String(), "c-"+cluster.id.String(), cluster.nodes); err != nil {
 			t.Fatal(err)
 		}
 	}
-	environment, err := db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Production", "production", nil, map[string]string{"region": "eu"}, 3)
+	environment, err := db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Production", "production", nil, map[string]string{"region": "eu"}, 3, 8_000_000_000, 16_000_000_000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if environment.ClusterID == nil || *environment.ClusterID != largeID || environment.MinimumNodes != 3 || environment.PlacementSelector["region"] != "eu" {
+	if environment.ClusterID == nil || *environment.ClusterID != largeID || environment.MinimumNodes != 3 || environment.MinimumNanoCPUs != 8_000_000_000 || environment.PlacementSelector["region"] != "eu" {
 		t.Fatalf("unexpected placement: %#v", environment)
 	}
 	serviceID := uuid.New()
@@ -188,7 +188,7 @@ func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
 	if _, err = db.UpdateClusterState(ctx, orgID, largeID, "draining"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Unavailable", "unavailable", nil, map[string]string{"region": "eu"}, 3); !errors.Is(err, ErrNoCapacity) {
+	if _, err = db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Unavailable", "unavailable", nil, map[string]string{"region": "eu"}, 3, 0, 0); !errors.Is(err, ErrNoCapacity) {
 		t.Fatalf("placement error=%v, want ErrNoCapacity", err)
 	}
 }
