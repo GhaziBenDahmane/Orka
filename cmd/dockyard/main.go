@@ -28,6 +28,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
@@ -76,7 +78,8 @@ func runAgent() error {
 		StateDirectory:      envDefault("DOCKYARD_AGENT_STATE_DIRECTORY", "/var/lib/dockyard-agent"),
 		DockerBin:           envDefault("DOCKYARD_DOCKER_BIN", "docker"),
 		Network:             envDefault("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
-		Version:             "dev",
+		Version:             version,
+		ServiceName:         envDefault("DOCKYARD_AGENT_SERVICE_NAME", "dockyard-agent_agent"),
 	})
 }
 
@@ -159,7 +162,7 @@ func serve() error {
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	shutdownTracing, err := observability.InitTracing(ctx, observability.TraceConfig{Endpoint: cfg.OTLPEndpoint, Insecure: cfg.OTLPInsecure, Service: cfg.ServiceName, Version: "dev"})
+	shutdownTracing, err := observability.InitTracing(ctx, observability.TraceConfig{Endpoint: cfg.OTLPEndpoint, Insecure: cfg.OTLPInsecure, Service: cfg.ServiceName, Version: version})
 	if err != nil {
 		return fmt.Errorf("initialize OpenTelemetry: %w", err)
 	}

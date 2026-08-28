@@ -113,6 +113,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.updateCluster)))
 	mux.Handle("DELETE /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.deleteCluster)))
 	mux.Handle("POST /v1/clusters/{clusterID}/enrollment-tokens", s.requireRole("admin", http.HandlerFunc(s.createClusterEnrollmentToken)))
+	mux.Handle("POST /v1/clusters/{clusterID}/agent-upgrades", s.requireRole("admin", http.HandlerFunc(s.upgradeClusterAgent)))
+	mux.Handle("GET /v1/clusters/{clusterID}/commands/{commandID}", s.requireRole("admin", http.HandlerFunc(s.getClusterCommand)))
 	mux.Handle("GET /v1/clusters/{clusterID}/nodes", s.requireRole("admin", http.HandlerFunc(s.clusterNodes)))
 	mux.Handle("POST /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.createOIDCProvider)))
 	mux.Handle("GET /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.listOIDCProviders)))

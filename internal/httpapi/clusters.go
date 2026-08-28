@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
+
+var pinnedAgentImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 type clusterContextKey string
 
@@ -308,6 +311,67 @@ func (s *Server) createClusterEnrollmentToken(w http.ResponseWriter, r *http.Req
 	}
 	s.Store.Audit(r.Context(), &p, "cluster.enrollment_token.create", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"expiresAt": expiresAt})
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expiresAt": expiresAt})
+}
+
+func (s *Server) upgradeClusterAgent(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid cluster id")
+		return
+	}
+	var input struct {
+		Image string `json:"image"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	input.Image = strings.TrimSpace(input.Image)
+	if !pinnedAgentImagePattern.MatchString(input.Image) {
+		writeError(w, http.StatusBadRequest, "invalid_image", "agent image must use repository@sha256:digest form")
+		return
+	}
+	p := principal(r)
+	if _, err = s.Store.GetCluster(r.Context(), p.OrganizationID, clusterID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	commandID := uuid.New()
+	payload, _ := json.Marshal(map[string]string{"image": input.Image})
+	encrypted, err := s.Box.Encrypt(payload, "cluster-command:"+commandID.String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encryption_failed", "upgrade command cannot be encrypted")
+		return
+	}
+	command, err := s.Store.EnqueueClusterCommand(r.Context(), clusterID, commandID, "agent.upgrade", encrypted)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "cluster.agent.upgrade", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"image": input.Image, "commandId": commandID})
+	writeJSON(w, http.StatusAccepted, command)
+}
+
+func (s *Server) getClusterCommand(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid cluster id")
+		return
+	}
+	commandID, err := uuid.Parse(r.PathValue("commandID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid command id")
+		return
+	}
+	if _, err = s.Store.GetCluster(r.Context(), principal(r).OrganizationID, clusterID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	command, err := s.Store.GetClusterCommand(r.Context(), clusterID, commandID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, command)
 }
 
 func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {

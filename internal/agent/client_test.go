@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
@@ -106,5 +107,32 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	client := &Client{swarm: &fakeScheduler{}}
 	if _, err := client.executeCommand(context.Background(), command{Kind: "shell.exec", Payload: []byte(`{}`)}); err == nil {
 		t.Fatal("expected unknown command to be rejected")
+	}
+}
+
+func TestExecuteAgentUpgradeRequiresDigestAndFixedService(t *testing.T) {
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "args")
+	dockerBin := filepath.Join(directory, "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + logPath + "\n"
+	if err := os.WriteFile(dockerBin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{cfg: Config{DockerBin: dockerBin, ServiceName: "dockyard-agent_agent"}}
+	image := "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)
+	payload, _ := json.Marshal(map[string]string{"image": image})
+	if _, err := client.executeCommand(context.Background(), command{Kind: "agent.upgrade", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "service\nupdate\n--detach=true\n--update-order\nstart-first\n--with-registry-auth\n--image\n" + image + "\ndockyard-agent_agent\n"
+	if string(arguments) != want {
+		t.Fatalf("docker arguments=%q want=%q", arguments, want)
+	}
+	if _, err := client.executeCommand(context.Background(), command{Kind: "agent.upgrade", Payload: []byte(`{"image":"registry.example/dockyard:latest"}`)}); err == nil {
+		t.Fatal("expected mutable agent image tag to be rejected")
 	}
 }

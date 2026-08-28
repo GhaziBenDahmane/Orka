@@ -179,7 +179,7 @@ func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
 	if _, err = db.QueueDeployment(ctx, orgID, serviceID, uuid.Nil, "manual"); !errors.Is(err, ErrMaintenance) {
 		t.Fatalf("deployment during maintenance error=%v", err)
 	}
-	if _, err = db.EnqueueClusterCommand(ctx, largeID, uuid.New(), "swarm.nodes", "encrypted"); !errors.Is(err, ErrNotFound) {
+	if _, err = db.EnqueueClusterCommand(ctx, largeID, uuid.New(), "swarm.deploy", "encrypted"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("command during maintenance error=%v", err)
 	}
 	if _, err = db.UpdateClusterConfiguration(ctx, orgID, largeID, "active", nil, nil); err != nil {

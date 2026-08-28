@@ -42,6 +42,12 @@ identity in the `agent-state` volume, verifies the controller using the
 enrollment CA, and uses mTLS for heartbeat and command polling. No inbound port
 or remote Docker socket is exposed on the managed cluster.
 
+Agents can be upgraded through `POST /v1/clusters/{id}/agent-upgrades` or
+`dockyardctl agent-upgrade CLUSTER_ID IMAGE@sha256:DIGEST`. Only immutable image
+digests are accepted. The agent performs a Swarm `start-first` service update;
+poll the returned command with `dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
+Set `DOCKYARD_AGENT_SERVICE_NAME` when the stack is not named `dockyard-agent`.
+
 Managed-database backup and restore on remote clusters requires an
 S3-compatible backup destination whose configured endpoint is reachable from
 both the controller and agent. Transfers use one-hour presigned URLs. Backup

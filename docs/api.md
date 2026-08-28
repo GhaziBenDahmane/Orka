@@ -51,6 +51,8 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
 | PATCH | `/v1/clusters/{id}` | Activate, drain, or disable a cluster |
 | POST | `/v1/clusters/{id}/enrollment-tokens` | Issue a 15-minute one-time agent token |
+| POST | `/v1/clusters/{id}/agent-upgrades` | Queue a digest-pinned rolling agent upgrade |
+| GET | `/v1/clusters/{id}/commands/{commandID}` | Inspect redacted asynchronous command state |
 | POST | `/v1/agent/enroll` | Exchange a token and CSR for a client certificate |
 | POST | `/v1/agent/heartbeat` | Report agent and Swarm capacity over the mTLS listener |
 | GET | `/v1/agent/commands/next` | Lease the next encrypted-at-rest Swarm command over mTLS |

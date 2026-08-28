@@ -183,7 +183,7 @@ func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 
 func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string) (ClusterCommand, error) {
 	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: kind, Status: "pending"}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND ($3 NOT IN ('swarm.deploy','container.run','database.utility') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClusterCommand{}, ErrNotFound
 	}

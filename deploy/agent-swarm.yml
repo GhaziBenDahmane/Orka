@@ -7,6 +7,7 @@ services:
       DOCKYARD_AGENT_URL: ${DOCKYARD_AGENT_URL}
       DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE: /run/secrets/dockyard_agent_enrollment_token
       DOCKYARD_AGENT_STATE_DIRECTORY: /var/lib/dockyard-agent
+      DOCKYARD_AGENT_SERVICE_NAME: ${DOCKYARD_AGENT_SERVICE_NAME:-dockyard-agent_agent}
       DOCKYARD_TRAEFIK_NETWORK: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
     secrets: [dockyard_agent_enrollment_token]
     volumes:

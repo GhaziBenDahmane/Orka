@@ -18,7 +18,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +38,7 @@ type Config struct {
 	DockerBin           string
 	Network             string
 	Version             string
+	ServiceName         string
 }
 
 type Client struct {
@@ -61,6 +64,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if cfg.Network == "" {
 		cfg.Network = "dockyard-public"
+	}
+	if !serviceNamePattern.MatchString(cfg.ServiceName) {
+		return errors.New("agent Swarm service name is required and must be a valid service name")
 	}
 	if err := os.MkdirAll(cfg.StateDirectory, 0700); err != nil {
 		return err
@@ -338,10 +344,19 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		return c.swarm.RunContainerJob(ctx, payload.Network, payload.Image, "", payload.Environment, payload.Command)
 	case "database.utility":
 		return c.executeArtifactJob(ctx, cmd.Payload)
+	case "agent.upgrade":
+		if !digestImagePattern.MatchString(payload.Image) {
+			return "", errors.New("agent upgrade image must be pinned by sha256 digest")
+		}
+		output, err := exec.CommandContext(ctx, c.cfg.DockerBin, "service", "update", "--detach=true", "--update-order", "start-first", "--with-registry-auth", "--image", payload.Image, c.cfg.ServiceName).CombinedOutput()
+		return string(output), err
 	default:
 		return "", fmt.Errorf("unsupported command kind %q", cmd.Kind)
 	}
 }
+
+var serviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+var digestImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (string, error) {
 	var job deploy.RemoteArtifactJob
