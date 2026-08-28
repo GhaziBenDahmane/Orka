@@ -2,11 +2,38 @@
 set -euo pipefail
 
 project="dockyard-smoke"
-base_url="http://127.0.0.1:8080"
+smoke_port="${DOCKYARD_SMOKE_PORT:-8080}"
+export DOCKYARD_HTTP_BIND="${DOCKYARD_HTTP_BIND:-127.0.0.1:$smoke_port}"
+base_url="http://127.0.0.1:$smoke_port"
+public_network="dockyard-public"
+initialized_swarm=false
+created_network=false
+stack_name=""
 cleanup() {
+  if [[ -n "$stack_name" ]]; then
+    docker stack rm "$stack_name" >/dev/null 2>&1 || true
+  fi
   docker compose --project-name "$project" down --volumes --remove-orphans
+  if [[ "$created_network" == true ]]; then
+    for _ in {1..30}; do
+      docker network rm "$public_network" >/dev/null 2>&1 && break
+      sleep 1
+    done
+  fi
+  if [[ "$initialized_swarm" == true ]]; then
+    docker swarm leave --force >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
+
+if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]]; then
+  docker swarm init --advertise-addr 127.0.0.1 >/dev/null
+  initialized_swarm=true
+fi
+if ! docker network inspect "$public_network" >/dev/null 2>&1; then
+  docker network create --driver overlay --attachable "$public_network" >/dev/null
+  created_network=true
+fi
 
 docker compose --project-name "$project" up --detach --build
 for _ in {1..90}; do
@@ -35,6 +62,25 @@ service_response="$(curl --fail --silent --show-error "${auth_headers[@]}" \
   --data '{"name":"Web","slug":"web","composeYaml":"services:\n  web:\n    image: nginx:1.29-alpine\n"}' \
   "$base_url/v1/environments/$environment_id/services")"
 service_id="$(jq --exit-status --raw-output '.id' <<<"$service_response")"
+stack_name="$(jq --exit-status --raw-output '.stackName' <<<"$service_response")"
+
+deployment_response="$(curl --fail --silent --show-error "${auth_headers[@]}" \
+  --data '{}' "$base_url/v1/services/$service_id/deployments")"
+deployment_id="$(jq --exit-status --raw-output '.id' <<<"$deployment_response")"
+for _ in {1..120}; do
+  deployment_response="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/deployments/$deployment_id")"
+  deployment_status="$(jq --exit-status --raw-output '.status' <<<"$deployment_response")"
+  if [[ "$deployment_status" == "succeeded" ]]; then
+    break
+  fi
+  if [[ "$deployment_status" == "failed" || "$deployment_status" == "cancelled" ]]; then
+    jq . <<<"$deployment_response" >&2
+    exit 1
+  fi
+  sleep 1
+done
+test "${deployment_status:-}" = "succeeded"
+docker stack services "$stack_name" --format '{{.Name}} {{.Replicas}}' | grep -E "^${stack_name}_web 1/1$"
 
 expected_migrations="$(find internal/store/migrations -maxdepth 1 -name '*.sql' | wc -l | tr -d ' ')"
 actual_migrations="$(docker compose --project-name "$project" exec -T postgres \

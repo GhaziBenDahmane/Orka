@@ -8,14 +8,15 @@ links for every item below.
 
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
-  checkpoint-upgrade tests, stale-worker takeover, Compose and Swarm parsing.
+  checkpoint-upgrade tests, stale-worker takeover, Compose and Swarm parsing,
+  and a clean-install workload converging to a live Swarm replica.
 - `govulncheck` reports no reachable known vulnerability.
 - License policy passes; the SPDX JSON SBOM is attached to the release.
 - The final container has no unfixed high or critical finding allowed by the
   project's exception register. Exceptions identify owner and expiry date.
 - A clean Compose installation bootstraps an owner, creates project,
-  environment, and service records, restarts the controller, and retains its
-  session and state.
+  environment, and service records, deploys the service to Swarm, verifies its
+  replica, restarts the controller, and retains its session and state.
 
 ## Staging gates
 
