@@ -16,6 +16,8 @@ export type SourceCredential = { id: string; kind: "git" | "git-ssh" | "registry
 export type BackupDestination = { id: string; name: string; endpoint: string; region: string; bucket: string; prefix: string; useTls: boolean };
 export type OIDCProvider = { id: string; name: string; issuer: string; clientId: string; domains: string[]; scopes: string[]; defaultRole: string; enabled: boolean };
 export type SAMLProvider = { id: string; name: string; domains: string[]; emailAttribute: string; nameAttribute: string; defaultRole: string; allowIdpInitiated: boolean; enabled: boolean };
+export type Database = { id: string; environmentId: string; composeServiceId: string; name: string; slug: string; engine: string; version: string; status: string };
+export type BackupPolicy = { id: string; databaseInstanceId: string; intervalSeconds: number; retentionCount: number; enabled: boolean; verifyRestore: boolean; destinationId?: string };
 
 type Envelope<T> = { items: T[] };
 type ErrorEnvelope = { error?: { code?: string; message?: string } };
@@ -71,6 +73,12 @@ export const api = {
   instantiateTemplate: (templateId: string, body: { environmentId: string; name: string; baseDomain: string }) => request<{ service: Service }>(`/v1/templates/${templateId}/instantiate`, { method: "POST", body: JSON.stringify(body) }),
   databaseEngines: () => request<{ items: string[]; backupCapable: string[] }>("/v1/database-engines"),
   createDatabase: (environmentId: string, body: { name: string; engine: string; version: string; config: Record<string, unknown> }) => request<{ database: { id: string; name: string }; credentials: Record<string, string>; internalUrl: string }>(`/v1/environments/${environmentId}/databases`, { method: "POST", body: JSON.stringify(body) }),
+  databases: (environmentId: string) => request<Envelope<Database>>(`/v1/environments/${environmentId}/databases`),
+  deleteDatabase: (databaseId: string) => request<void>(`/v1/databases/${databaseId}`, { method: "DELETE" }),
+  backupPolicy: (databaseId: string) => request<BackupPolicy>(`/v1/databases/${databaseId}/backup-policy`),
+  putBackupPolicy: (databaseId: string, body: { intervalSeconds: number; retentionCount: number; enabled: boolean; verifyRestore: boolean; destinationId?: string }) => request<BackupPolicy>(`/v1/databases/${databaseId}/backup-policy`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteBackupPolicy: (databaseId: string) => request<void>(`/v1/databases/${databaseId}/backup-policy`, { method: "DELETE" }),
+  backupDatabase: (databaseId: string, destinationId?: string) => request<{ id: string; status: string }>(`/v1/databases/${databaseId}/backups${destinationId ? `?destinationId=${encodeURIComponent(destinationId)}` : ""}`, { method: "POST", body: "{}" }),
   clusters: () => request<Envelope<Cluster>>("/v1/clusters"),
   sourceCredentials: () => request<Envelope<SourceCredential>>("/v1/source-credentials"),
   createSourceCredential: (body: { kind: string; name: string; server: string; username: string; secret?: string; privateKey?: string; knownHosts?: string }) => request<SourceCredential>("/v1/source-credentials", { method: "POST", body: JSON.stringify(body) }),

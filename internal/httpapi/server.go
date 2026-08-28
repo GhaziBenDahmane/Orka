@@ -156,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/environments/{environmentID}/services", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listServices)))
 	mux.Handle("GET /v1/database-engines", s.requireAuth(http.HandlerFunc(s.databaseEngines)))
 	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createDatabase)))
+	mux.Handle("GET /v1/environments/{environmentID}/databases", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listDatabases)))
 	mux.Handle("GET /v1/databases/{databaseID}", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getDatabase)))
 	mux.Handle("DELETE /v1/databases/{databaseID}", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.deleteDatabase)))
 	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireResourceRole("developer", "database", "databaseID", http.HandlerFunc(s.createDatabaseBackup)))
@@ -914,6 +915,20 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "database.create", "database", instance.ID.String(), r.RemoteAddr, map[string]any{"engine": in.Engine})
 	writeJSON(w, 201, map[string]any{"database": instance, "credentials": rendered.Credentials, "internalUrl": rendered.InternalURL})
+}
+
+func (s *Server) listDatabases(w http.ResponseWriter, r *http.Request) {
+	environmentID, err := uuid.Parse(r.PathValue("environmentID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid environment id")
+		return
+	}
+	items, err := s.Store.ListDatabases(r.Context(), principal(r).OrganizationID, environmentID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
 }
 
 func (s *Server) getDatabase(w http.ResponseWriter, r *http.Request) {

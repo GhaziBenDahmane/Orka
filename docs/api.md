@@ -187,6 +187,7 @@ queued so later source edits cannot redirect an in-flight secret.
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
 | POST | `/v1/databases/{id}/backups` | Queue a verified native backup |
 | GET/DELETE | `/v1/databases/{id}` | Inspect or asynchronously delete a managed database |
+| GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
 | POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation |
 

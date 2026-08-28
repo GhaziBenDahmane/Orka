@@ -1260,6 +1260,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
   /v1/environments/{environmentID}/databases:
+    get:
+      operationId: get_v1_environments_environmentID_databases
+      tags: [environments]
+      parameters:
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     post:
       operationId: post_v1_environments_environmentID_databases
       tags: [environments]
