@@ -86,6 +86,21 @@ func (s *Store) GetCluster(ctx context.Context, organizationID, clusterID uuid.U
 	return item, err
 }
 
+func (s *Store) UpdateClusterState(ctx context.Context, organizationID, clusterID uuid.UUID, state string) (Cluster, error) {
+	if state != "active" && state != "draining" && state != "disabled" {
+		return Cluster{}, errors.New("invalid cluster state")
+	}
+	var item Cluster
+	var labels, capacity []byte
+	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,created_at,updated_at`, clusterID, organizationID, state).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Cluster{}, ErrNotFound
+	}
+	_ = json.Unmarshal(labels, &item.Labels)
+	_ = json.Unmarshal(capacity, &item.Capacity)
+	return item, err
+}
+
 func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uuid.UUID, serial string) error {
 	var valid bool
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND state IN ('active','draining') AND certificate_serial=$2 AND certificate_not_after>now())`, clusterID, serial).Scan(&valid)

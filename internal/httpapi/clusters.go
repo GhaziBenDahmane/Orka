@@ -224,6 +224,32 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 
+func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid cluster id")
+		return
+	}
+	var input struct {
+		State string `json:"state"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	if !contains([]string{"active", "draining", "disabled"}, input.State) {
+		writeError(w, 400, "invalid_cluster_state", "state must be active, draining, or disabled")
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.UpdateClusterState(r.Context(), p.OrganizationID, clusterID, input.State)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "cluster.state.update", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"state": input.State})
+	writeJSON(w, 200, item)
+}
+
 func (s *Server) clusterNodes(w http.ResponseWriter, r *http.Request) {
 	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
 	if err != nil {

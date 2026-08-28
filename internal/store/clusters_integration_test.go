@@ -80,6 +80,15 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if _, err = db.ClaimClusterCommand(ctx, cluster.ID, time.Minute); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("empty queue error = %v", err)
 	}
+	if _, err = db.UpdateClusterState(ctx, orgID, cluster.ID, "draining"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.EnqueueClusterCommand(ctx, cluster.ID, uuid.New(), "swarm.nodes", "encrypted"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("enqueue on draining cluster error = %v", err)
+	}
+	if _, err = db.UpdateClusterState(ctx, orgID, cluster.ID, "active"); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "other", time.Now().Add(time.Hour)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("replay error = %v", err)
 	}

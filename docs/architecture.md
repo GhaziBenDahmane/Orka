@@ -59,3 +59,8 @@ Heartbeats use a separate optional TLS listener configured with
 `DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
 and matches its serial number against the cluster's current database record,
 so reenrollment immediately supersedes the previous identity.
+
+Multiple controller replicas coordinate durable jobs with row leases and
+`SKIP LOCKED`. Singleton maintenance loops additionally use expiring,
+database-backed leader leases; only the current holder schedules backup policy
+runs or prunes audit history, and another replica takes over after expiry.

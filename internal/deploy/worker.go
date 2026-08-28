@@ -70,8 +70,13 @@ func (w *Worker) pruneAuditEvents(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
-		if _, err := w.Store.PruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
-			w.Logger.Error("prune audit events", "error", err)
+		leader, leaseErr := w.Store.AcquireControllerLease(ctx, "audit-pruner", w.ID, 2*time.Hour)
+		if leaseErr != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire audit pruner lease", "error", leaseErr)
+		} else if leader {
+			if _, err := w.Store.PruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
+				w.Logger.Error("prune audit events", "error", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -85,14 +90,19 @@ func (w *Worker) scheduleBackups(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		for ctx.Err() == nil {
-			err := w.enqueueDueBackup(ctx)
-			if errors.Is(err, store.ErrNotFound) {
-				break
-			}
-			if err != nil {
-				w.Logger.Error("schedule backup", "error", err)
-				break
+		leader, leaseErr := w.Store.AcquireControllerLease(ctx, "backup-scheduler", w.ID, 90*time.Second)
+		if leaseErr != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire backup scheduler lease", "error", leaseErr)
+		} else if leader {
+			for ctx.Err() == nil {
+				err := w.enqueueDueBackup(ctx)
+				if errors.Is(err, store.ErrNotFound) {
+					break
+				}
+				if err != nil {
+					w.Logger.Error("schedule backup", "error", err)
+					break
+				}
 			}
 		}
 		select {

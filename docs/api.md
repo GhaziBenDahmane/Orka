@@ -44,6 +44,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted Git and OCI registry credentials |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable failure notification webhooks |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
+| PATCH | `/v1/clusters/{id}` | Activate, drain, or disable a cluster |
 | POST | `/v1/clusters/{id}/enrollment-tokens` | Issue a 15-minute one-time agent token |
 | POST | `/v1/agent/enroll` | Exchange a token and CSR for a client certificate |
 | POST | `/v1/agent/heartbeat` | Report agent and Swarm capacity over the mTLS listener |

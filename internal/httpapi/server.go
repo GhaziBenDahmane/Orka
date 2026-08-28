@@ -100,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))
 	mux.Handle("GET /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.listClusters)))
 	mux.Handle("POST /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.createCluster)))
+	mux.Handle("PATCH /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.updateCluster)))
 	mux.Handle("POST /v1/clusters/{clusterID}/enrollment-tokens", s.requireRole("admin", http.HandlerFunc(s.createClusterEnrollmentToken)))
 	mux.Handle("GET /v1/clusters/{clusterID}/nodes", s.requireRole("admin", http.HandlerFunc(s.clusterNodes)))
 	mux.Handle("POST /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.createOIDCProvider)))
