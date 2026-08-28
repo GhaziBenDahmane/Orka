@@ -96,3 +96,17 @@ func TestPrepareGitApplicationMigratesBuildSettings(t *testing.T) {
 		t.Fatalf("build settings were not migrated: %#v", prepared.source)
 	}
 }
+
+func TestPrepareStaticApplication(t *testing.T) {
+	item := sourceApplication{ID: "static-app", AppName: "Docs", Name: "Docs", SourceType: "git", BuildType: "static", CustomGitURL: "https://git.example.test/acme/docs.git", CustomGitBranch: "main", CustomGitBuild: "frontend", PublishDirectory: "frontend/dist", Replicas: 1}
+	prepared, warnings, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.source == nil || prepared.source.BuildType != "static" || prepared.source.ContextDirectory != "frontend" || prepared.source.OutputDirectory != "dist" {
+		t.Fatalf("static source was not migrated: %#v", prepared.source)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "must already exist") {
+		t.Fatalf("static migration warning missing: %#v", warnings)
+	}
+}

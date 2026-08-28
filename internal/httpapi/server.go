@@ -1413,6 +1413,8 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		GitRef               string             `json:"gitRef"`
 		ContextDirectory     string             `json:"contextDirectory"`
 		Dockerfile           string             `json:"dockerfile"`
+		BuildType            string             `json:"buildType"`
+		OutputDirectory      string             `json:"outputDirectory"`
 		BuildTarget          string             `json:"buildTarget"`
 		EnableSubmodules     bool               `json:"enableSubmodules"`
 		BuildArguments       *map[string]string `json:"buildArguments"`
@@ -1437,6 +1439,9 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	if in.Dockerfile == "" {
 		in.Dockerfile = "Dockerfile"
 	}
+	if in.BuildType == "" {
+		in.BuildType = "dockerfile"
+	}
 	buildConfig := store.ApplicationBuildConfig{}
 	if in.BuildArguments == nil || in.BuildSecrets == nil {
 		existing, existingErr := s.Store.GetApplicationSource(r.Context(), principal(r).OrganizationID, id)
@@ -1457,7 +1462,7 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	if in.BuildSecrets != nil {
 		buildConfig.Secrets = *in.BuildSecrets
 	}
-	if err = deploy.ValidateBuildSettings(in.BuildTarget, buildConfig); err != nil {
+	if err = deploy.ValidateBuildMode(in.BuildType, in.OutputDirectory, in.BuildTarget, buildConfig); err != nil {
 		writeError(w, 400, "invalid_build_settings", err.Error())
 		return
 	}
@@ -1483,7 +1488,7 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
+	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildType: in.BuildType, OutputDirectory: in.OutputDirectory, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
 	if err != nil {
 		writeStoreError(w, err)
 		return

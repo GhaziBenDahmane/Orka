@@ -180,8 +180,9 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
 a full raw-API escape hatch, generated route-level OpenAPI coverage, and an
 embedded React console for core workload, template, database, and cluster
   workflows are implemented. Docker target stages, build arguments, encrypted
-  BuildKit secrets, and same-origin Git submodules are supported. Nixpacks,
-  Railpack, buildpacks, and persistent database data migration remain manual. The
+  BuildKit secrets, same-origin Git submodules, and packaging of prebuilt static
+  sites into a digest-pinned runtime are supported. Nixpacks, Railpack,
+  buildpacks, and persistent database data migration remain manual. The
 Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
 policies. The console provides credential, backup-destination, OIDC, SAML,

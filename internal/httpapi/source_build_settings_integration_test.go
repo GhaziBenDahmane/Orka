@@ -154,4 +154,19 @@ func TestApplicationBuildSettingsAreEncryptedAndRedacted(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_build_config FROM application_sources WHERE compose_service_id=$1`, serviceID).Scan(&preserved); err != nil || preserved != "" {
 		t.Fatalf("build config was not cleared: ciphertext=%q err=%v", preserved, err)
 	}
+
+	staticBody := []byte(`{"repositoryUrl":"https://github.com/acme/api.git","gitRef":"release","contextDirectory":".","dockerfile":"Dockerfile","buildType":"static","outputDirectory":"dist","buildArguments":{},"buildSecrets":{},"targetService":"api","registryImage":"ghcr.io/acme/api"}`)
+	staticRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(staticBody))
+	staticRequest.Header.Set("Authorization", "Bearer "+token)
+	staticRequest.Header.Set("X-Organization-ID", organizationID.String())
+	staticRequest.Header.Set("Content-Type", "application/json")
+	staticResponse, err := http.DefaultClient.Do(staticRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staticData, _ := io.ReadAll(staticResponse.Body)
+	staticResponse.Body.Close()
+	if staticResponse.StatusCode != http.StatusOK || !bytes.Contains(staticData, []byte(`"buildType":"static"`)) || !bytes.Contains(staticData, []byte(`"outputDirectory":"dist"`)) {
+		t.Fatalf("static source update failed: status=%d body=%s", staticResponse.StatusCode, staticData)
+	}
 }

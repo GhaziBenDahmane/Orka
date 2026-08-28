@@ -184,6 +184,11 @@ relative URLs or the source repository's original protocol, hostname, and
 port. Omitting either build-settings map preserves its stored values; sending
 an empty object clears that map.
 
+Sources with `buildType=static` package an existing repository subdirectory
+from `outputDirectory` into a minimal Caddy image pinned by digest. Static mode
+does not execute repository build commands and rejects Docker targets,
+arguments, and secrets; the output directory must already contain the site.
+
 ## Catalog and databases
 
 | Method | Path | Purpose |

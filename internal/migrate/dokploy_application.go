@@ -60,6 +60,7 @@ type sourceApplication struct {
 	BuildArgs         string   `json:"buildArgs"`
 	BuildSecrets      string   `json:"buildSecrets"`
 	EnableSubmodules  bool     `json:"enableSubmodules"`
+	PublishDirectory  string   `json:"publishDirectory"`
 	MemoryReservation string   `json:"memoryReservation"`
 	MemoryLimit       string   `json:"memoryLimit"`
 	CPUReservation    string   `json:"cpuReservation"`
@@ -101,7 +102,8 @@ func dokployApplicationReport(item sourceApplication, targetID *uuid.UUID, statu
 			"repository": repository, "branch": branch, "buildPath": buildPath, "dockerfile": item.Dockerfile,
 			"dockerContextPath": item.DockerContextPath, "dockerBuildStage": item.DockerBuildStage,
 			"hasBuildArgs": item.BuildArgs != "", "hasBuildSecrets": item.BuildSecrets != "", "enableSubmodules": item.EnableSubmodules,
-			"replicas": item.Replicas, "memoryReservation": item.MemoryReservation, "memoryLimit": item.MemoryLimit,
+			"publishDirectory": item.PublishDirectory,
+			"replicas":         item.Replicas, "memoryReservation": item.MemoryReservation, "memoryLimit": item.MemoryLimit,
 			"cpuReservation": item.CPUReservation, "cpuLimit": item.CPULimit, "hasRegistryCredentials": item.Username != "" || item.Password != "",
 		},
 	}
@@ -231,8 +233,12 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 			warnings = append(warnings, fmt.Sprintf("application %s uses private image credentials; recreate registry credentials before deployment", item.ID))
 		}
 	case "git", "github", "gitlab", "gitea", "bitbucket":
-		if item.BuildType != "dockerfile" {
-			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported by the Dockerfile build worker", item.BuildType)
+		buildType := strings.ToLower(strings.TrimSpace(item.BuildType))
+		if buildType == "" {
+			buildType = "dockerfile"
+		}
+		if buildType != "dockerfile" && buildType != "static" {
+			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported", item.BuildType)
 		}
 		buildArguments, err := parseDokployBuildSettings(item.BuildArgs, options.EncryptionKeys)
 		if err != nil {
@@ -243,9 +249,6 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 			return preparedApplication{}, warnings, fmt.Errorf("decode build secrets: %w", err)
 		}
 		buildConfig := store.ApplicationBuildConfig{Arguments: buildArguments, Secrets: buildSecrets}
-		if err = deploy.ValidateBuildSettings(item.DockerBuildStage, buildConfig); err != nil {
-			return preparedApplication{}, warnings, err
-		}
 		registryPrefix := strings.TrimSuffix(strings.TrimSpace(options.RegistryPrefix), "/")
 		registryImage := registryPrefix + "/" + slug
 		if registryPrefix == "" || !migrationImagePattern.MatchString(registryImage) || strings.Contains(registryImage, "..") || strings.Contains(registryImage, "@") {
@@ -270,23 +273,38 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 				return preparedApplication{}, warnings, fmt.Errorf("invalid Docker context path: %w", err)
 			}
 		}
-		dockerfile := item.Dockerfile
-		if dockerfile == "" {
-			dockerfile = "Dockerfile"
-		}
-		dockerfile, err = cleanRepositoryPath(path.Join(buildDirectory, dockerfile))
-		if err != nil {
-			return preparedApplication{}, warnings, fmt.Errorf("invalid Dockerfile path: %w", err)
-		}
-		if contextDirectory != "." {
-			prefix := contextDirectory + "/"
-			if !strings.HasPrefix(dockerfile, prefix) {
-				return preparedApplication{}, warnings, errors.New("Dockerfile must be inside the configured Docker context")
+		dockerfile, outputDirectory := "Dockerfile", ""
+		if buildType == "dockerfile" {
+			dockerfile = item.Dockerfile
+			if dockerfile == "" {
+				dockerfile = "Dockerfile"
 			}
-			dockerfile = strings.TrimPrefix(dockerfile, prefix)
+			dockerfile, err = cleanRepositoryPath(path.Join(buildDirectory, dockerfile))
+			if err != nil {
+				return preparedApplication{}, warnings, fmt.Errorf("invalid Dockerfile path: %w", err)
+			}
+			if contextDirectory != "." {
+				prefix := contextDirectory + "/"
+				if !strings.HasPrefix(dockerfile, prefix) {
+					return preparedApplication{}, warnings, errors.New("Dockerfile must be inside the configured Docker context")
+				}
+				dockerfile = strings.TrimPrefix(dockerfile, prefix)
+			}
+		} else {
+			outputDirectory, err = cleanRepositoryPath(item.PublishDirectory)
+			if err != nil {
+				return preparedApplication{}, warnings, fmt.Errorf("invalid static publish directory: %w", err)
+			}
+			if contextDirectory != "." && strings.HasPrefix(outputDirectory, contextDirectory+"/") {
+				outputDirectory = strings.TrimPrefix(outputDirectory, contextDirectory+"/")
+			}
+			warnings = append(warnings, fmt.Sprintf("application %s static output must already exist in the Git repository; build commands are not executed", item.ID))
+		}
+		if err = deploy.ValidateBuildMode(buildType, outputDirectory, item.DockerBuildStage, buildConfig); err != nil {
+			return preparedApplication{}, warnings, err
 		}
 		service["image"] = registryImage + ":pending"
-		source = &store.ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: repositoryURL, GitRef: gitRef, ContextDirectory: contextDirectory, Dockerfile: dockerfile, BuildTarget: item.DockerBuildStage, EnableSubmodules: item.EnableSubmodules, HasBuildArguments: len(buildArguments) > 0, HasBuildSecrets: len(buildSecrets) > 0, BuildArguments: buildArguments, BuildSecrets: buildSecrets, TargetService: "app", RegistryImage: registryImage}
+		source = &store.ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: repositoryURL, GitRef: gitRef, ContextDirectory: contextDirectory, Dockerfile: dockerfile, BuildType: buildType, OutputDirectory: outputDirectory, BuildTarget: item.DockerBuildStage, EnableSubmodules: item.EnableSubmodules, HasBuildArguments: len(buildArguments) > 0, HasBuildSecrets: len(buildSecrets) > 0, BuildArguments: buildArguments, BuildSecrets: buildSecrets, TargetService: "app", RegistryImage: registryImage}
 		if item.SourceType != "git" {
 			warnings = append(warnings, fmt.Sprintf("application %s provider credentials and webhooks are not imported; public clone access is required until they are recreated", item.ID))
 		}

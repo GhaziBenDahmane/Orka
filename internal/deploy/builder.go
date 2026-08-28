@@ -20,7 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Builder struct{ GitBin, DockerBin string }
+type Builder struct{ GitBin, DockerBin, StaticImage string }
 
 type Credential struct {
 	Kind       string `json:"kind"`
@@ -38,6 +38,9 @@ var safeRef = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
 var registryImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$`)
 var buildSettingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 var buildTargetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256:[a-f0-9]{64}$`)
+
+const defaultStaticImage = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 
 func ValidateBuildSettings(target string, config store.ApplicationBuildConfig) error {
 	if target != "" && !buildTargetName.MatchString(target) {
@@ -69,8 +72,36 @@ func ValidateBuildSettings(target string, config store.ApplicationBuildConfig) e
 	return nil
 }
 
+func ValidateBuildMode(buildType, outputDirectory, target string, config store.ApplicationBuildConfig) error {
+	if buildType == "" {
+		buildType = "dockerfile"
+	}
+	if buildType != "dockerfile" && buildType != "static" {
+		return fmt.Errorf("unsupported build type %q", buildType)
+	}
+	if err := ValidateBuildSettings(target, config); err != nil {
+		return err
+	}
+	if buildType == "static" {
+		if target != "" || len(config.Arguments) > 0 || len(config.Secrets) > 0 {
+			return errors.New("static builds do not accept Docker targets, arguments, or secrets")
+		}
+		if outputDirectory == "" || outputDirectory == "." || filepath.IsAbs(outputDirectory) {
+			return errors.New("static builds require a relative output directory")
+		}
+		clean := filepath.Clean(outputDirectory)
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return errors.New("static output directory must stay inside the build context")
+		}
+	}
+	return nil
+}
+
 func (b Builder) Build(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, credentials BuildCredentials) (string, string, error) {
-	if err := ValidateBuildSettings(source.BuildTarget, store.ApplicationBuildConfig{Arguments: source.BuildArguments, Secrets: source.BuildSecrets}); err != nil {
+	if source.BuildType == "" {
+		source.BuildType = "dockerfile"
+	}
+	if err := ValidateBuildMode(source.BuildType, source.OutputDirectory, source.BuildTarget, store.ApplicationBuildConfig{Arguments: source.BuildArguments, Secrets: source.BuildSecrets}); err != nil {
 		return "", "", err
 	}
 	repo, err := url.Parse(source.RepositoryURL)
@@ -138,6 +169,20 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if err != nil {
 		return "", output, fmt.Errorf("invalid build context: %w", err)
 	}
+	tag := source.RegistryImage + ":" + deploymentID.String()
+	buildEnvironment := map[string]string{}
+	if credentials.Registry.Secret != "" {
+		configDir, configErr := writeDockerConfig(credentials.Registry)
+		if configErr != nil {
+			return "", output, configErr
+		}
+		defer os.RemoveAll(configDir)
+		buildEnvironment["DOCKER_CONFIG"] = configDir
+	}
+	if source.BuildType == "static" {
+		buildOutput, buildErr := b.buildStatic(ctx, contextPath, source.OutputDirectory, tag, buildEnvironment)
+		return tag, output + buildOutput, buildErr
+	}
 	dockerfilePath, err := safeJoin(contextPath, source.Dockerfile)
 	if err != nil {
 		return "", output, err
@@ -149,16 +194,6 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	info, err := os.Stat(dockerfilePath)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", output, fmt.Errorf("Dockerfile must be a regular file")
-	}
-	tag := source.RegistryImage + ":" + deploymentID.String()
-	buildEnvironment := map[string]string{}
-	if credentials.Registry.Secret != "" {
-		configDir, configErr := writeDockerConfig(credentials.Registry)
-		if configErr != nil {
-			return "", output, configErr
-		}
-		defer os.RemoveAll(configDir)
-		buildEnvironment["DOCKER_CONFIG"] = configDir
 	}
 	buildArgs := []string{"buildx", "build", "--pull", "--push", "--tag", tag, "--file", dockerfilePath}
 	if source.BuildTarget != "" {
@@ -183,6 +218,47 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	buildArgs = append(buildArgs, contextPath)
 	buildOutput, err := run(ctx, b.docker(), buildEnvironment, buildArgs...)
 	return tag, output + buildOutput, err
+}
+
+func (b Builder) buildStatic(ctx context.Context, contextPath, outputDirectory, tag string, environment map[string]string) (string, error) {
+	outputPath, err := safeJoin(contextPath, outputDirectory)
+	if err != nil {
+		return "", err
+	}
+	outputPath, err = resolveInside(contextPath, outputPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid static output directory: %w", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("static output directory must be a directory")
+	}
+	image := b.StaticImage
+	if image == "" {
+		image = defaultStaticImage
+	}
+	if !pinnedImage.MatchString(image) {
+		return "", errors.New("static runtime image must be pinned by sha256 digest")
+	}
+	dockerfile, err := os.CreateTemp("", "dockyard-static-*.Dockerfile")
+	if err != nil {
+		return "", err
+	}
+	dockerfilePath := dockerfile.Name()
+	defer os.Remove(dockerfilePath)
+	definition := "FROM " + image + "\nCOPY . /srv\nEXPOSE 80\nCMD [\"caddy\",\"file-server\",\"--root\",\"/srv\",\"--listen\",\":80\"]\n"
+	if _, err = dockerfile.WriteString(definition); err != nil {
+		dockerfile.Close()
+		return "", err
+	}
+	if err = dockerfile.Chmod(0600); err != nil {
+		dockerfile.Close()
+		return "", err
+	}
+	if err = dockerfile.Close(); err != nil {
+		return "", err
+	}
+	return run(ctx, b.docker(), environment, "buildx", "build", "--pull", "--push", "--tag", tag, "--file", dockerfilePath, outputPath)
 }
 
 func (b Builder) updateSubmodules(ctx context.Context, directory string, repository *url.URL, environment map[string]string) (string, error) {

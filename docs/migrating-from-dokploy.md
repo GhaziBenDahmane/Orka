@@ -74,7 +74,9 @@ Imported automatically:
 
 Reported for manual conversion:
 
-- Nixpacks, Railpack, Paketo/Heroku buildpack, static, and drop applications;
+- Nixpacks, Railpack, Paketo/Heroku buildpack, and drop applications;
+- static applications whose publish directory is generated during the build
+  rather than already committed to the repository;
 - Git applications with malformed build settings, non-HTTPS clone URLs, or
   provider-specific private access;
 - application mounts, published host ports, custom Swarm health/restart/update/

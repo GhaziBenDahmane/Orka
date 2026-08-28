@@ -244,6 +244,8 @@ type ApplicationSource struct {
 	GitRef               string            `json:"gitRef"`
 	ContextDirectory     string            `json:"contextDirectory"`
 	Dockerfile           string            `json:"dockerfile"`
+	BuildType            string            `json:"buildType"`
+	OutputDirectory      string            `json:"outputDirectory,omitempty"`
 	BuildTarget          string            `json:"buildTarget,omitempty"`
 	EnableSubmodules     bool              `json:"enableSubmodules"`
 	HasBuildArguments    bool              `json:"hasBuildArguments"`
@@ -883,14 +885,14 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ApplicationSource{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,build_target,enable_submodules,encrypted_build_config,target_service,registry_image,git_credential_id,registry_credential_id,status_provider,status_credential_id,status_context)
-		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
+	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,build_type,output_directory,build_target,enable_submodules,encrypted_build_config,target_service,registry_image,git_credential_id,registry_credential_id,status_provider,status_credential_id,status_context)
+		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
-		AND ($12::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$12 AND c.organization_id=$2 AND c.kind IN ('git','git-ssh')))
-		AND ($13::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$13 AND c.organization_id=$2 AND c.kind='registry'))
-		AND ($15::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$15 AND c.organization_id=$2 AND c.kind='git'))
-		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,build_target=excluded.build_target,enable_submodules=excluded.enable_submodules,encrypted_build_config=excluded.encrypted_build_config,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,status_provider=excluded.status_provider,status_credential_id=excluded.status_credential_id,status_context=excluded.status_context,updated_at=now()
-		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.BuildTarget, source.EnableSubmodules, source.EncryptedBuildConfig, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID, source.StatusProvider, source.StatusCredentialID, source.StatusContext).Scan(&source.UpdatedAt)
+		AND ($14::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$14 AND c.organization_id=$2 AND c.kind IN ('git','git-ssh')))
+		AND ($15::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$15 AND c.organization_id=$2 AND c.kind='registry'))
+		AND ($17::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$17 AND c.organization_id=$2 AND c.kind='git'))
+		ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,build_type=excluded.build_type,output_directory=excluded.output_directory,build_target=excluded.build_target,enable_submodules=excluded.enable_submodules,encrypted_build_config=excluded.encrypted_build_config,target_service=excluded.target_service,registry_image=excluded.registry_image,git_credential_id=excluded.git_credential_id,registry_credential_id=excluded.registry_credential_id,status_provider=excluded.status_provider,status_credential_id=excluded.status_credential_id,status_context=excluded.status_context,updated_at=now()
+		RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.BuildType, source.OutputDirectory, source.BuildTarget, source.EnableSubmodules, source.EncryptedBuildConfig, source.TargetService, source.RegistryImage, source.GitCredentialID, source.RegistryCredentialID, source.StatusProvider, source.StatusCredentialID, source.StatusContext).Scan(&source.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}
@@ -902,9 +904,9 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 
 func (s *Store) GetApplicationSource(ctx context.Context, organizationID, serviceID uuid.UUID) (ApplicationSource, error) {
 	var source ApplicationSource
-	err := s.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.git_credential_id,a.registry_credential_id,a.status_provider,a.status_credential_id,a.status_context,a.updated_at
+	err := s.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_type,a.output_directory,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.git_credential_id,a.registry_credential_id,a.status_provider,a.status_credential_id,a.status_context,a.updated_at
 		FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
-		WHERE a.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&source.ComposeServiceID, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.GitCredentialID, &source.RegistryCredentialID, &source.StatusProvider, &source.StatusCredentialID, &source.StatusContext, &source.UpdatedAt)
+		WHERE a.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&source.ComposeServiceID, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildType, &source.OutputDirectory, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.GitCredentialID, &source.RegistryCredentialID, &source.StatusProvider, &source.StatusCredentialID, &source.StatusContext, &source.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}

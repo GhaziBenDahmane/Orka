@@ -125,6 +125,58 @@ func TestValidateBuildSettings(t *testing.T) {
 	}
 }
 
+func TestValidateStaticBuild(t *testing.T) {
+	if err := ValidateBuildMode("static", "dist", "", store.ApplicationBuildConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	for name, output := range map[string]string{"empty": "", "context root": ".", "escape": "../dist", "absolute": "/dist"} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateBuildMode("static", output, "", store.ApplicationBuildConfig{}); err == nil {
+				t.Fatal("expected invalid static output directory")
+			}
+		})
+	}
+	if err := ValidateBuildMode("static", "dist", "runtime", store.ApplicationBuildConfig{}); err == nil {
+		t.Fatal("expected Docker target to be rejected for a static build")
+	}
+}
+
+func TestStaticBuildUsesPinnedRuntimeAndOutputDirectory(t *testing.T) {
+	directory := t.TempDir()
+	gitPath := filepath.Join(directory, "git")
+	dockerPath := filepath.Join(directory, "docker")
+	argsPath := filepath.Join(directory, "docker-args")
+	dockerfileCopy := filepath.Join(directory, "Dockerfile.generated")
+	t.Setenv("DOCKYARD_BUILD_TEST_LOG", argsPath)
+	t.Setenv("DOCKYARD_BUILD_TEST_DOCKERFILE", dockerfileCopy)
+	gitScript := "#!/bin/sh\nfor destination do :; done\nmkdir -p \"$destination/public\"\nprintf '<h1>ready</h1>\\n' >\"$destination/public/index.html\"\n"
+	dockerScript := "#!/bin/sh\nprintf '%s\\n' \"$@\" >\"$DOCKYARD_BUILD_TEST_LOG\"\nprevious=''\nfor value do\n  if [ \"$previous\" = '--file' ]; then cp \"$value\" \"$DOCKYARD_BUILD_TEST_DOCKERFILE\"; fi\n  previous=$value\ndone\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dockerPath, []byte(dockerScript), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test/acme/site.git", GitRef: "main", ContextDirectory: ".", BuildType: "static", OutputDirectory: "public", RegistryImage: "registry.example.test/acme/site"}
+	if _, _, err := (Builder{GitBin: gitPath, DockerBin: dockerPath}).Build(context.Background(), source, uuid.New(), BuildCredentials{}); err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(arguments), "buildx\nbuild\n") || !strings.HasSuffix(strings.TrimSpace(string(arguments)), "/public") {
+		t.Fatalf("unexpected static build arguments:\n%s", arguments)
+	}
+	definition, err := os.ReadFile(dockerfileCopy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(definition), "FROM "+defaultStaticImage) || !strings.Contains(string(definition), "COPY . /srv") {
+		t.Fatalf("unexpected generated Dockerfile:\n%s", definition)
+	}
+}
+
 func TestBuildUsesTargetArgumentsAndFileBackedSecrets(t *testing.T) {
 	directory := t.TempDir()
 	gitPath := filepath.Join(directory, "git")
