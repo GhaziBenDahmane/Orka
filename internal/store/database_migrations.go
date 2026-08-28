@@ -72,6 +72,23 @@ func (s *Store) GetDatabaseMigration(ctx context.Context, organizationID, id uui
 	return item, err
 }
 
+func (s *Store) ListDatabaseMigrations(ctx context.Context, organizationID, databaseInstanceID uuid.UUID) ([]DatabaseMigration, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.database_instance_id,m.source_kind,m.source_id,m.source_engine,m.source_version,m.source_host,m.status,m.size_bytes,m.sha256,m.output,m.error,m.created_at,m.started_at,m.finished_at FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.database_instance_id=$1 AND p.organization_id=$2 ORDER BY m.created_at DESC LIMIT 100`, databaseInstanceID, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DatabaseMigration{}
+	for rows.Next() {
+		var item DatabaseMigration
+		if err = rows.Scan(&item.ID, &item.DatabaseInstanceID, &item.SourceKind, &item.SourceID, &item.SourceEngine, &item.SourceVersion, &item.SourceHost, &item.Status, &item.SizeBytes, &item.SHA256, &item.Output, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) CancelDatabaseMigration(ctx context.Context, organizationID, id uuid.UUID) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {

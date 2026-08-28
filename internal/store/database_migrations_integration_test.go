@@ -39,6 +39,14 @@ func TestDatabaseMigrationQueueScopeUniquenessAndCancellation(t *testing.T) {
 	if queued.Status != "queued" || queued.EncryptedSourceConfig != "" {
 		t.Fatalf("unsafe or incomplete queue response: %#v", queued)
 	}
+	items, err := s.ListDatabaseMigrations(ctx, organizationID, databaseID)
+	if err != nil || len(items) != 1 || items[0].ID != queued.ID || items[0].EncryptedSourceConfig != "" {
+		t.Fatalf("migration history=%#v err=%v", items, err)
+	}
+	items, err = s.ListDatabaseMigrations(ctx, otherOrganizationID, databaseID)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("cross-organization history=%#v err=%v", items, err)
+	}
 	if _, err = s.QueueDatabaseMigration(ctx, organizationID, DatabaseMigration{DatabaseInstanceID: databaseID, SourceKind: "dokploy", SourceID: "second", SourceEngine: "postgres", SourceVersion: "17", SourceHost: "source.internal", EncryptedSourceConfig: "ciphertext"}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("concurrent queue error=%v, want ErrBusy", err)
 	}

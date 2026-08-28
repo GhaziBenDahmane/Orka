@@ -8,6 +8,20 @@ import (
 	"github.com/google/uuid"
 )
 
+func (s *Server) listDatabaseMigrations(w http.ResponseWriter, r *http.Request) {
+	databaseID, err := uuid.Parse(r.PathValue("databaseID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid database id")
+		return
+	}
+	items, err := s.Store.ListDatabaseMigrations(r.Context(), principal(r).OrganizationID, databaseID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) getDatabaseMigration(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("migrationID"))
 	if err != nil {

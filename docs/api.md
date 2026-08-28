@@ -224,6 +224,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
 | POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation |
+| GET | `/v1/databases/{id}/migrations` | List the latest 100 Dokploy data transfers |
 | GET | `/v1/database-migrations/{id}` | Inspect a Dokploy native data transfer |
 | POST | `/v1/database-migrations/{id}/cancel` | Request transfer cancellation |
 

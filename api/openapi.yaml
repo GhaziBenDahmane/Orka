@@ -1220,6 +1220,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/databases/{databaseID}/migrations:
+    get:
+      operationId: get_v1_databases_databaseID_migrations
+      tags: [databases]
+      parameters:
+        - name: databaseID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/deployments/{deploymentID}:
     get:
       operationId: get_v1_deployments_deploymentID

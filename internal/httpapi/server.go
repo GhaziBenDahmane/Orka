@@ -158,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createDatabase)))
 	mux.Handle("GET /v1/environments/{environmentID}/databases", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listDatabases)))
 	mux.Handle("GET /v1/databases/{databaseID}", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getDatabase)))
+	mux.Handle("GET /v1/databases/{databaseID}/migrations", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseMigrations)))
 	mux.Handle("DELETE /v1/databases/{databaseID}", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.deleteDatabase)))
 	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireResourceRole("developer", "database", "databaseID", http.HandlerFunc(s.createDatabaseBackup)))
 	mux.Handle("GET /v1/backup-destinations", s.requireRole("developer", http.HandlerFunc(s.listBackupDestinations)))
