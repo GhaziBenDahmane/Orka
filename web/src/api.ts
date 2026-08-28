@@ -5,6 +5,7 @@ export type Principal = {
   organization: string;
   role: "viewer" | "developer" | "admin" | "owner";
 };
+export type Role = Principal["role"];
 
 export type Project = { id: string; name: string; slug: string; description: string };
 export type Environment = { id: string; projectId: string; name: string; slug: string; clusterId?: string; placementSelector?: Record<string, string>; minimumNodes?: number; minimumNanoCpus?: number; minimumMemoryBytes?: number };
@@ -78,6 +79,7 @@ export const api = {
   login: (email: string, password: string) => request<{ token: string }>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
   me: () => request<Principal>("/v1/me"),
+  effectiveRole: (resourceType: string, resourceId: string) => request<{ role: Role }>(`/v1/authorization/effective-role?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`),
   discoverOIDC: (email: string) => request<Envelope<{ id: string; name: string }>>(`/v1/auth/sso/discover?email=${encodeURIComponent(email)}`),
   discoverSAML: (email: string) => request<Envelope<{ id: string; name: string }>>(`/v1/auth/saml/discover?email=${encodeURIComponent(email)}`),
   startOIDC: (providerId: string) => request<{ url: string }>(`/v1/auth/sso/${providerId}/start`),

@@ -19,6 +19,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | POST | `/v1/auth/login` | Exchange local credentials for a session |
 | POST | `/v1/auth/logout` | Revoke the current session |
 | GET | `/v1/me` | Return the current principal and role |
+| GET | `/v1/authorization/effective-role?resourceType=…&resourceId=…` | Resolve inherited project/environment RBAC for a resource |
 | GET | `/v1/sessions` | List the caller's active device sessions |
 | DELETE | `/v1/sessions/{id}` | Revoke one of the caller's sessions |
 | POST | `/v1/sessions/revoke-others` | Revoke every session except the caller's |

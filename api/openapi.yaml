@@ -732,6 +732,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/authorization/effective-role:
+    get:
+      operationId: get_v1_authorization_effective_role
+      tags: [authorization]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/backup-destinations:
     get:
       operationId: get_v1_backup_destinations

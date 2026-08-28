@@ -55,6 +55,10 @@ func TestEnvironmentGrantElevatesViewerForScopedMutation(t *testing.T) {
 	})
 	server := httptest.NewServer((&Server{Store: db, Box: box, Compiler: deploy.Compiler{PublicNetwork: "dockyard-public"}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	defer server.Close()
+	roleURL := server.URL + "/v1/authorization/effective-role?resourceType=environment&resourceId=" + environmentID.String()
+	if status, body := scopedAPIRequest(t, roleURL, viewerToken, orgID, http.MethodGet, nil); status != http.StatusOK || !bytes.Contains(body, []byte(`"role":"viewer"`)) {
+		t.Fatalf("effective role before grant = %d: %s", status, body)
+	}
 	serviceBody := map[string]any{"name": "API", "slug": "api", "composeYaml": "services:\n  app:\n    image: nginx:alpine\n"}
 	if status, _ := scopedAPIRequest(t, server.URL+"/v1/environments/"+environmentID.String()+"/services", viewerToken, orgID, http.MethodPost, serviceBody); status != http.StatusForbidden {
 		t.Fatalf("viewer create status before grant = %d", status)
@@ -62,6 +66,9 @@ func TestEnvironmentGrantElevatesViewerForScopedMutation(t *testing.T) {
 	grantURL := server.URL + "/v1/environments/" + environmentID.String() + "/grants/" + viewerID.String()
 	if status, body := scopedAPIRequest(t, grantURL, ownerToken, orgID, http.MethodPut, map[string]string{"role": "developer"}); status != http.StatusOK {
 		t.Fatalf("grant status = %d: %s", status, body)
+	}
+	if status, body := scopedAPIRequest(t, roleURL, viewerToken, orgID, http.MethodGet, nil); status != http.StatusOK || !bytes.Contains(body, []byte(`"role":"developer"`)) {
+		t.Fatalf("effective role after grant = %d: %s", status, body)
 	}
 	status, body := scopedAPIRequest(t, server.URL+"/v1/environments/"+environmentID.String()+"/services", viewerToken, orgID, http.MethodPost, serviceBody)
 	if status != http.StatusCreated {
@@ -77,6 +84,9 @@ func TestEnvironmentGrantElevatesViewerForScopedMutation(t *testing.T) {
 	}
 	if status, body = scopedAPIRequest(t, grantURL, ownerToken, orgID, http.MethodDelete, nil); status != http.StatusNoContent {
 		t.Fatalf("delete grant status = %d: %s", status, body)
+	}
+	if status, _ := scopedAPIRequest(t, server.URL+"/v1/authorization/effective-role?resourceType=invalid&resourceId="+environmentID.String(), viewerToken, orgID, http.MethodGet, nil); status != http.StatusBadRequest {
+		t.Fatalf("invalid resource type status = %d", status)
 	}
 	if status, _ = scopedAPIRequest(t, server.URL+"/v1/services/"+created.ID.String(), viewerToken, orgID, http.MethodPatch, patch); status != http.StatusForbidden {
 		t.Fatalf("viewer update status after grant removal = %d", status)

@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/agent/enroll", s.enrollClusterAgent)
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.me)))
+	mux.Handle("GET /v1/authorization/effective-role", s.requireAuth(http.HandlerFunc(s.getEffectiveRole)))
 	mux.Handle("GET /v1/sessions", s.requireAuth(http.HandlerFunc(s.listSessions)))
 	mux.Handle("DELETE /v1/sessions/{sessionID}", s.requireAuth(http.HandlerFunc(s.revokeSession)))
 	mux.Handle("POST /v1/sessions/revoke-others", s.requireAuth(http.HandlerFunc(s.revokeOtherSessions)))
@@ -174,8 +175,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/database-backups/{backupID}/restore", s.requireResourceRole("admin", "backup", "backupID", http.HandlerFunc(s.restoreDatabaseBackup)))
 	mux.Handle("GET /v1/database-restores/{restoreID}", s.requireResourceRole("viewer", "restore", "restoreID", http.HandlerFunc(s.getDatabaseRestore)))
 	mux.Handle("POST /v1/database-restores/{restoreID}/cancel", s.requireResourceRole("admin", "restore", "restoreID", http.HandlerFunc(s.cancelDatabaseRestore)))
-	mux.Handle("GET /v1/database-migrations/{migrationID}", s.requireRole("admin", http.HandlerFunc(s.getDatabaseMigration)))
-	mux.Handle("POST /v1/database-migrations/{migrationID}/cancel", s.requireRole("admin", http.HandlerFunc(s.cancelDatabaseMigration)))
+	mux.Handle("GET /v1/database-migrations/{migrationID}", s.requireResourceRole("viewer", "migration", "migrationID", http.HandlerFunc(s.getDatabaseMigration)))
+	mux.Handle("POST /v1/database-migrations/{migrationID}/cancel", s.requireResourceRole("admin", "migration", "migrationID", http.HandlerFunc(s.cancelDatabaseMigration)))
 	mux.Handle("GET /v1/templates", s.requireAuth(http.HandlerFunc(s.listTemplates)))
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireAuth(http.HandlerFunc(s.instantiateTemplate)))
@@ -564,6 +565,26 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 func (s *Server) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, principal(r)) }
+
+func (s *Server) getEffectiveRole(w http.ResponseWriter, r *http.Request) {
+	resourceType := strings.TrimSpace(r.URL.Query().Get("resourceType"))
+	validResourceTypes := map[string]bool{"project": true, "environment": true, "service": true, "database": true, "deployment": true, "backup": true, "restore": true, "migration": true, "webhook": true, "route": true}
+	if !validResourceTypes[resourceType] {
+		writeError(w, http.StatusBadRequest, "invalid_resource_type", "invalid resource type")
+		return
+	}
+	resourceID, err := uuid.Parse(r.URL.Query().Get("resourceId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid resource id")
+		return
+	}
+	role, err := s.Store.EffectiveResourceRole(r.Context(), principal(r), resourceType, resourceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"role": role})
+}
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
