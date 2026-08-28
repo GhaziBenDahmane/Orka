@@ -252,6 +252,40 @@ func TestRailpackUsesFrontendAndFileBackedSecrets(t *testing.T) {
 	}
 }
 
+func TestBuildpacksUsesPinnedBuilderAndPublish(t *testing.T) {
+	directory := t.TempDir()
+	gitPath, packPath := filepath.Join(directory, "git"), filepath.Join(directory, "pack")
+	logPath := filepath.Join(directory, "calls")
+	t.Setenv("DOCKYARD_BUILD_TEST_LOG", logPath)
+	gitScript := "#!/bin/sh\nfor destination do :; done\nmkdir -p \"$destination\"\n"
+	packScript := "#!/bin/sh\nprintf '%s\\n' \"$*\" >\"$DOCKYARD_BUILD_TEST_LOG\"\n"
+	for path, content := range map[string]string{gitPath: gitScript, packPath: packScript} {
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test/acme/app.git", GitRef: "main", ContextDirectory: ".", BuildType: "buildpacks", RegistryImage: "registry.example.test/acme/app", BuildArguments: map[string]string{"BP_JVM_VERSION": "21"}}
+	if _, _, err := (Builder{GitBin: gitPath, PackBin: packPath}).Build(context.Background(), source, uuid.New(), BuildCredentials{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := string(data)
+	for _, expected := range []string{"build registry.example.test/acme/app:", "--builder " + defaultBuildpackBuilder, "--publish", "--trust-builder", "--env BP_JVM_VERSION"} {
+		if !strings.Contains(arguments, expected) {
+			t.Errorf("pack arguments omit %q:\n%s", expected, arguments)
+		}
+	}
+	if strings.Contains(arguments, "BP_JVM_VERSION=21") {
+		t.Fatal("buildpack environment value leaked into process arguments")
+	}
+	if err := ValidateBuildMode("buildpacks", "", "", store.ApplicationBuildConfig{Secrets: map[string]string{"TOKEN": "secret"}}); err == nil {
+		t.Fatal("expected buildpack secrets to be rejected")
+	}
+}
+
 func TestBuildUsesTargetArgumentsAndFileBackedSecrets(t *testing.T) {
 	directory := t.TempDir()
 	gitPath := filepath.Join(directory, "git")

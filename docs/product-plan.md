@@ -182,8 +182,8 @@ embedded React console for core workload, template, database, and cluster
   workflows are implemented. Docker target stages, build arguments, encrypted
   BuildKit secrets, same-origin Git submodules, and packaging of prebuilt static
   sites into a digest-pinned runtime, Nixpacks, and the production Railpack
-  BuildKit frontend are supported. Paketo/Heroku buildpacks and persistent
-  database data migration remain manual. The
+  BuildKit frontend, and Paketo Cloud Native Buildpacks are supported. Custom
+  CNB/Heroku builders and persistent database data migration remain manual. The
 Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
 policies. The console provides credential, backup-destination, OIDC, SAML,

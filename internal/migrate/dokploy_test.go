@@ -121,3 +121,21 @@ func TestPrepareRailpackApplication(t *testing.T) {
 		t.Fatalf("Railpack source was not migrated: %#v", prepared.source)
 	}
 }
+
+func TestPreparePaketoApplication(t *testing.T) {
+	item := sourceApplication{ID: "paketo-app", AppName: "API", Name: "API", SourceType: "git", BuildType: "paketo_buildpacks", CustomGitURL: "https://git.example.test/acme/api.git", CustomGitBranch: "main", BuildArgs: "BP_JVM_VERSION=21", Replicas: 1}
+	prepared, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.source == nil || prepared.source.BuildType != "buildpacks" || prepared.source.BuildArguments["BP_JVM_VERSION"] != "21" {
+		t.Fatalf("Paketo source was not migrated: %#v", prepared.source)
+	}
+}
+
+func TestPrepareHerokuBuildpackRemainsManual(t *testing.T) {
+	item := sourceApplication{ID: "heroku-app", AppName: "API", Name: "API", SourceType: "git", BuildType: "heroku_buildpacks", CustomGitURL: "https://git.example.test/acme/api.git", CustomGitBranch: "main", Replicas: 1}
+	if _, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected Heroku buildpack to require manual conversion, got %v", err)
+	}
+}

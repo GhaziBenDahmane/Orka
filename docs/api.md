@@ -198,6 +198,11 @@ digest-pinned BuildKit frontend through `docker buildx`. Arguments and secrets
 are passed to planning by name through the process environment and mounted into
 build steps from short-lived mode-0600 files; values never enter command-line
 arguments. Per-deployment cache keys prevent cross-tenant cache sharing.
+`buildType=buildpacks` uses the checksum-pinned `pack` CLI and a digest-pinned
+Paketo Jammy base builder, publishing directly to the configured registry.
+Build environment values are inherited by name rather than placed in process
+arguments. Build secrets are rejected because the CNB lifecycle does not offer
+the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 
 ## Catalog and databases
 

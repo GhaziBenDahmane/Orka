@@ -74,7 +74,8 @@ Imported automatically:
 
 Reported for manual conversion:
 
-- Paketo/Heroku buildpack and drop applications;
+- drop applications and buildpack applications that require a non-Paketo
+  builder or build-time secrets;
 - static applications whose publish directory is generated during the build
   rather than already committed to the repository;
 - Git applications with malformed build settings, non-HTTPS clone URLs, or

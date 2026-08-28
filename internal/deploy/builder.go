@@ -21,7 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Builder struct{ GitBin, DockerBin, NixpacksBin, RailpackBin, RailpackFrontend, StaticImage string }
+type Builder struct{ GitBin, DockerBin, NixpacksBin, RailpackBin, PackBin, RailpackFrontend, BuildpackBuilder, StaticImage string }
 
 type Credential struct {
 	Kind       string `json:"kind"`
@@ -43,6 +43,7 @@ var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256
 
 const defaultStaticImage = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 const defaultRailpackFrontend = "ghcr.io/railwayapp/railpack-frontend:v0.38.0@sha256:b66c90368efcf6f2966cfa504cdbde93af7ba6092d676e0c7604cbc5ddf3acec"
+const defaultBuildpackBuilder = "paketobuildpacks/builder-jammy-base:0.4.629@sha256:129bda8835db00b4fe0b2fdf0a545e493f6f0403cbeb9f89ea6125a7a93a69d0"
 
 func ValidateBuildSettings(target string, config store.ApplicationBuildConfig) error {
 	if target != "" && !buildTargetName.MatchString(target) {
@@ -78,7 +79,7 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 	if buildType == "" {
 		buildType = "dockerfile"
 	}
-	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" {
+	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" && buildType != "buildpacks" {
 		return fmt.Errorf("unsupported build type %q", buildType)
 	}
 	if err := ValidateBuildSettings(target, config); err != nil {
@@ -106,6 +107,14 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 	}
 	if buildType == "railpack" && (target != "" || outputDirectory != "") {
 		return errors.New("Railpack builds do not accept Docker targets or static output directories")
+	}
+	if buildType == "buildpacks" {
+		if target != "" || outputDirectory != "" {
+			return errors.New("buildpack builds do not accept Docker targets or static output directories")
+		}
+		if len(config.Secrets) > 0 {
+			return errors.New("buildpack secrets are not supported because the lifecycle does not guarantee ephemeral secret mounts")
+		}
 	}
 	return nil
 }
@@ -202,6 +211,10 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	}
 	if source.BuildType == "railpack" {
 		buildOutput, buildErr := b.buildRailpack(ctx, contextPath, tag, deploymentID, buildEnvironment, source.BuildArguments, source.BuildSecrets)
+		return tag, output + buildOutput, buildErr
+	}
+	if source.BuildType == "buildpacks" {
+		buildOutput, buildErr := b.buildBuildpacks(ctx, contextPath, tag, buildEnvironment, source.BuildArguments)
 		return tag, output + buildOutput, buildErr
 	}
 	dockerfilePath, err := safeJoin(contextPath, source.Dockerfile)
@@ -315,6 +328,26 @@ func (b Builder) buildRailpack(ctx context.Context, contextPath, tag string, dep
 	buildArgumentsCLI = append(buildArgumentsCLI, contextPath)
 	buildOutput, err := run(ctx, b.docker(), environment, buildArgumentsCLI...)
 	return redactBuildText(output+buildOutput, buildSecrets), redactBuildError(err, buildSecrets)
+}
+
+func (b Builder) buildBuildpacks(ctx context.Context, contextPath, tag string, environment, buildArguments map[string]string) (string, error) {
+	builder := b.BuildpackBuilder
+	if builder == "" {
+		builder = defaultBuildpackBuilder
+	}
+	if !pinnedImage.MatchString(builder) {
+		return "", errors.New("buildpack builder image must be pinned by sha256 digest")
+	}
+	buildEnvironment := make(map[string]string, len(environment)+len(buildArguments))
+	for name, value := range environment {
+		buildEnvironment[name] = value
+	}
+	arguments := []string{"build", tag, "--path", contextPath, "--builder", builder, "--publish", "--trust-builder"}
+	for _, name := range sortedKeys(buildArguments) {
+		buildEnvironment[name] = buildArguments[name]
+		arguments = append(arguments, "--env", name)
+	}
+	return run(ctx, b.pack(), buildEnvironment, arguments...)
 }
 
 func redactBuildText(value string, secrets map[string]string) string {
@@ -533,6 +566,12 @@ func (b Builder) railpack() string {
 		return "railpack"
 	}
 	return b.RailpackBin
+}
+func (b Builder) pack() string {
+	if b.PackBin == "" {
+		return "pack"
+	}
+	return b.PackBin
 }
 func run(ctx context.Context, binary string, environment map[string]string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)

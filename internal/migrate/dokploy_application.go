@@ -237,7 +237,10 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		if buildType == "" {
 			buildType = "dockerfile"
 		}
-		if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" {
+		if buildType == "paketo" || buildType == "paketo_buildpacks" || buildType == "buildpack" {
+			buildType = "buildpacks"
+		}
+		if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" && buildType != "buildpacks" {
 			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported", item.BuildType)
 		}
 		buildArguments, err := parseDokployBuildSettings(item.BuildArgs, options.EncryptionKeys)

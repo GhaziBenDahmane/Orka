@@ -4,6 +4,7 @@ ARG VERSION=dev
 ARG TARGETARCH
 ARG NIXPACKS_VERSION=v1.41.0
 ARG RAILPACK_VERSION=v0.38.0
+ARG PACK_VERSION=v0.40.9
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -40,6 +41,18 @@ RUN --mount=type=secret,id=build_ca,required=false \
     && tar -xzf /tmp/railpack.tar.gz -C /out \
     && chmod 0755 /out/railpack \
     && rm /tmp/railpack.tar.gz
+RUN --mount=type=secret,id=build_ca,required=false \
+    case "$TARGETARCH" in \
+      amd64) artifact=linux; checksum=dc0ee1e931cf8a106d7555a01a214864f9acb60b77adf15d69b74df4404758e9 ;; \
+      arm64) artifact=linux-arm64; checksum=091ccb213823656c727731537ef8f1000eb4dc3ec61641506653e7f9d6da0c5e ;; \
+      *) echo "unsupported pack architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && url="https://github.com/buildpacks/pack/releases/download/${PACK_VERSION}/pack-${PACK_VERSION}-${artifact}.tgz" \
+    && if [ -s /run/secrets/build_ca ]; then SSL_CERT_FILE=/run/secrets/build_ca wget -qO /tmp/pack.tgz "$url"; else wget -qO /tmp/pack.tgz "$url"; fi \
+    && echo "$checksum  /tmp/pack.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/pack.tgz -C /out \
+    && chmod 0755 /out/pack \
+    && rm /tmp/pack.tgz
 
 FROM docker:29-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe
 RUN command -v git >/dev/null && test -s /etc/ssl/certs/ca-certificates.crt
@@ -47,5 +60,6 @@ COPY --from=build /out/dockyard /usr/local/bin/dockyard
 COPY --from=build /out/dockyardctl /usr/local/bin/dockyardctl
 COPY --from=build /out/nixpacks /usr/local/bin/nixpacks
 COPY --from=build /out/railpack /usr/local/bin/railpack
+COPY --from=build /out/pack /usr/local/bin/pack
 ENTRYPOINT ["dockyard"]
 CMD ["serve"]
