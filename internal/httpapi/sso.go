@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
@@ -12,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
+
+const oidcRequestTimeout = 15 * time.Second
 
 func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -114,7 +119,9 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	discovery, err := oidc.NewProvider(r.Context(), provider.Issuer)
+	providerContext, cancel := context.WithTimeout(r.Context(), oidcRequestTimeout)
+	defer cancel()
+	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
 		writeError(w, 502, "oidc_discovery_failed", err.Error())
 		return
@@ -125,12 +132,17 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	verifier := oauth2.GenerateVerifier()
-	if err = s.Store.CreateOIDCState(r.Context(), cryptox.Digest(state), provider.ID, verifier); err != nil {
+	nonce, err := auth.NewToken()
+	if err != nil {
+		writeError(w, 500, "nonce_failed", err.Error())
+		return
+	}
+	if err = s.Store.CreateOIDCState(r.Context(), cryptox.Digest(state), provider.ID, verifier, nonce); err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	cfg := oauth2.Config{ClientID: provider.ClientID, Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}
-	writeJSON(w, 200, map[string]string{"url": cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))})
+	writeJSON(w, 200, map[string]string{"url": cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce))})
 }
 
 func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +151,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_callback", "state and code are required")
 		return
 	}
-	providerID, verifierValue, err := s.Store.ConsumeOIDCState(r.Context(), cryptox.Digest(stateValue))
+	providerID, verifierValue, nonce, err := s.Store.ConsumeOIDCState(r.Context(), cryptox.Digest(stateValue))
 	if err != nil {
 		writeError(w, 400, "invalid_state", "state is invalid or expired")
 		return
@@ -154,13 +166,15 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "decryption_failed", err.Error())
 		return
 	}
-	discovery, err := oidc.NewProvider(r.Context(), provider.Issuer)
+	providerContext, cancel := context.WithTimeout(r.Context(), oidcRequestTimeout)
+	defer cancel()
+	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
 		writeError(w, 502, "oidc_discovery_failed", err.Error())
 		return
 	}
 	cfg := oauth2.Config{ClientID: provider.ClientID, ClientSecret: string(secret), Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}
-	oauthToken, err := cfg.Exchange(r.Context(), code, oauth2.VerifierOption(verifierValue))
+	oauthToken, err := cfg.Exchange(providerContext, code, oauth2.VerifierOption(verifierValue))
 	if err != nil {
 		writeError(w, 401, "oidc_exchange_failed", "identity provider rejected the authorization code")
 		return
@@ -170,7 +184,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "missing_id_token", "identity provider did not return an ID token")
 		return
 	}
-	idToken, err := discovery.Verifier(&oidc.Config{ClientID: provider.ClientID}).Verify(r.Context(), rawIDToken)
+	idToken, err := discovery.Verifier(&oidc.Config{ClientID: provider.ClientID}).Verify(providerContext, rawIDToken)
 	if err != nil {
 		writeError(w, 401, "invalid_id_token", "identity token verification failed")
 		return
@@ -180,9 +194,14 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		Email         string `json:"email"`
 		EmailVerified *bool  `json:"email_verified"`
 		Name          string `json:"name"`
+		Nonce         string `json:"nonce"`
 	}
 	if err = idToken.Claims(&claims); err != nil || claims.Subject == "" || claims.Email == "" {
 		writeError(w, 401, "invalid_claims", "identity token lacks required claims")
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(nonce)) != 1 {
+		writeError(w, 401, "invalid_nonce", "identity token nonce does not match the login request")
 		return
 	}
 	if claims.EmailVerified != nil && !*claims.EmailVerified {

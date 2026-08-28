@@ -1687,27 +1687,27 @@ func (s *Store) DiscoverOIDC(ctx context.Context, domain string) ([]OIDCProvider
 	return items, rows.Err()
 }
 
-func (s *Store) CreateOIDCState(ctx context.Context, hash []byte, providerID uuid.UUID, verifier string) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO oidc_states(token_hash,provider_id,code_verifier,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')`, hash, providerID, verifier)
+func (s *Store) CreateOIDCState(ctx context.Context, hash []byte, providerID uuid.UUID, verifier, nonce string) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO oidc_states(token_hash,provider_id,code_verifier,nonce,expires_at) VALUES($1,$2,$3,$4,now()+interval '10 minutes')`, hash, providerID, verifier, nonce)
 	return err
 }
 
-func (s *Store) ConsumeOIDCState(ctx context.Context, hash []byte) (uuid.UUID, string, error) {
+func (s *Store) ConsumeOIDCState(ctx context.Context, hash []byte) (uuid.UUID, string, string, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return uuid.Nil, "", err
+		return uuid.Nil, "", "", err
 	}
 	defer tx.Rollback(ctx)
 	var providerID uuid.UUID
-	var verifier string
-	err = tx.QueryRow(ctx, `DELETE FROM oidc_states WHERE token_hash=$1 AND expires_at>now() RETURNING provider_id,code_verifier`, hash).Scan(&providerID, &verifier)
+	var verifier, nonce string
+	err = tx.QueryRow(ctx, `DELETE FROM oidc_states WHERE token_hash=$1 AND expires_at>now() RETURNING provider_id,code_verifier,nonce`, hash).Scan(&providerID, &verifier, &nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, "", ErrNotFound
+		return uuid.Nil, "", "", ErrNotFound
 	}
 	if err != nil {
-		return uuid.Nil, "", err
+		return uuid.Nil, "", "", err
 	}
-	return providerID, verifier, tx.Commit(ctx)
+	return providerID, verifier, nonce, tx.Commit(ctx)
 }
 
 func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email, name string) (uuid.UUID, error) {
