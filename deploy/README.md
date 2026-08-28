@@ -41,3 +41,9 @@ The token is used once. The agent generates its private key locally, stores its
 identity in the `agent-state` volume, verifies the controller using the
 enrollment CA, and uses mTLS for heartbeat and command polling. No inbound port
 or remote Docker socket is exposed on the managed cluster.
+
+Managed-database backup and restore on remote clusters requires an
+S3-compatible backup destination whose configured endpoint is reachable from
+both the controller and agent. Transfers use one-hour presigned URLs. Backup
+bytes are encrypted on the agent before upload; object-storage credentials and
+plaintext backup data are never sent to the agent API or controller.
