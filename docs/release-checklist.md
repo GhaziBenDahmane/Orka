@@ -8,7 +8,8 @@ links for every item below.
 
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
-  checkpoint-upgrade tests, per-attempt fenced stale-worker takeover while the
+  checkpoint-upgrade tests, high-contention exactly-once queue claiming across
+  multiple workers, per-attempt fenced stale-worker takeover while the
   superseded worker is paused inside a scheduler call, Compose and Swarm
   parsing, and a clean-install workload converging to a live Swarm replica.
 - `govulncheck` reports no reachable known vulnerability.
