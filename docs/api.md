@@ -72,8 +72,9 @@ Notification endpoints support generic webhook, Slack-compatible payloads,
 TLS SMTP (`starttls` or implicit `tls`), PagerDuty Events API v2, and the
 Opsgenie Alerts API. SMTP passwords and provider integration keys are
 encrypted and never returned. Generic webhook signing secrets are revealed
-once. All providers use the same idempotent delivery records and retry queue.
-for `deployment.failed`, `backup.failed`, and `restore.failed`. URLs and signing
+once. All providers use the same idempotent delivery records and retry queue
+for `deployment.failed`, `backup.failed`, `restore.failed`,
+`restore.drill.failed`, and `audit.archive.failed`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are
@@ -191,3 +192,8 @@ successful scheduled backup. Drills create a temporary isolated Swarm stack,
 restore the verified artifact with fresh credentials, record the result as a
 `kind: "drill"` restore, and always remove the temporary stack. They never
 target the production database service.
+Prometheus exposes the latest successful drill duration and an overdue signal
+per database. A drill is overdue after twice the configured backup interval,
+with a 24-hour minimum; the supplied alert rules page on that signal. Together,
+backup age and drill duration are the measured inputs for deployment-specific
+RPO and RTO objectives.

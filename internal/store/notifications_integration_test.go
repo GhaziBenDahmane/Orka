@@ -59,3 +59,44 @@ func TestFailureNotificationsAreFilteredAndDeduplicated(t *testing.T) {
 		t.Fatalf("deliveries=%d jobs=%d, want one deduplicated delivery", deliveries, jobs)
 	}
 }
+
+func TestRestoreDrillFailureUsesDedicatedEvent(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	orgID, projectID, environmentID, databaseID, backupID, restoreID, endpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Drill alert',$2)`, []any{orgID, "drill-alert-" + orgID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, orgID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'DB','db','postgres','17','secret')`, []any{databaseID, environmentID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format) VALUES($1,$2,'succeeded','native')`, []any{backupID, databaseID}},
+		{`INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'failed','drill')`, []any{restoreID, backupID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'drills','webhook','url','secret',ARRAY['restore.drill.failed'])`, []any{endpointID, orgID}},
+	}
+	for _, statement := range statements {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
+	payload, _ := json.Marshal(map[string]string{"restoreId": restoreID.String()})
+	if err := db.QueueFailureNotifications(ctx, "restore.database", payload, errors.New("drill failed")); err != nil {
+		t.Fatal(err)
+	}
+	var event string
+	if err := db.Pool.QueryRow(ctx, `SELECT event_type FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&event); err != nil || event != "restore.drill.failed" {
+		t.Fatalf("event=%q err=%v", event, err)
+	}
+}

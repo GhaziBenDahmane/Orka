@@ -53,6 +53,15 @@ groups:
           summary: No successful Dockyard database backup in 24 hours
           description: Review backup policies, queue health, and remote storage availability.
 
+      - alert: DockyardRestoreDrillOverdue
+        expr: dockyard_restore_drill_overdue == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: A scheduled database restore drill is overdue
+          description: Database {{ $labels.database }} has no successful restore drill within twice its configured backup interval (minimum 24 hours).
+
       - alert: DockyardMaintenanceModeLeftEnabled
         expr: sum(dockyard_maintenance_scopes) > 0
         for: 4h

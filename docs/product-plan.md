@@ -88,7 +88,9 @@ Status: core implementation complete; storage breadth remains.
   client-side, per-backup envelope encryption for local and remote artifacts.
 - Remote backup and restore execution through outbound agents using short-lived
   presigned transfers, per-backup encryption, and end-to-end checksum checks.
-- Next: scheduled drill alerting and published RPO/RTO measurements.
+- Scheduled drill failure notifications, overdue alerts, and per-database
+  recovery-duration metrics are implemented. Production RPO/RTO values still
+  require measured operator drills and publication for each supported engine.
 
 Exit gate: automated restore verification and documented RPO/RTO for every
 database advertised as backup-capable.

@@ -2,9 +2,15 @@ package observability
 
 import (
 	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bendahma/dokploy-go/internal/store"
 )
 
 func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
@@ -23,6 +29,30 @@ func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("missing %q in metrics:\n%s", expected, text)
+		}
+	}
+}
+
+func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Pool.Close()
+	recorder := httptest.NewRecorder()
+	NewMetrics().Handler(db.Pool).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue"} {
+		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
+			t.Errorf("missing metric family %s", metric)
 		}
 	}
 }
