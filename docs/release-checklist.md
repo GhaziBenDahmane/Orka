@@ -57,6 +57,9 @@ links for every item below.
 - Run `scripts/ci/check-image-digests.sh controller` (or `agent`) against the
   exact environment used for `docker stack deploy`; production manifests do
   not provide mutable-tag fallbacks.
+- Confirm Swarm reports healthy replacement tasks and a completed update. Force
+  one candidate task to fail its health check and verify automatic rollback
+  before promoting the image digest.
 - Roll forward for application defects. If schema rollback is required, stop
   all controllers/workers and restore the pre-upgrade database plus matching
   master key and artifacts before starting the previous image.

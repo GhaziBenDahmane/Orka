@@ -23,6 +23,12 @@ DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
 The controller is constrained to a manager because it uses the manager Docker
 API to deploy stacks. The outbound mTLS agent described below keeps the same
 Swarm adapter while removing direct control-plane access to remote sockets.
+Controller updates are `start-first` and health-gated; a failed task update is
+rolled back automatically. PostgreSQL and Traefik use `stop-first` updates
+because their local volume and host-mode listener cannot safely overlap on one
+node. Watch `docker service ps dockyard_dockyard` and
+`docker service inspect dockyard_dockyard --pretty` until the update completes
+before removing the previous image.
 
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
@@ -61,7 +67,8 @@ or remote Docker socket is exposed on the managed cluster.
 Agents can be upgraded through `POST /v1/clusters/{id}/agent-upgrades` or
 `dockyardctl agent-upgrade CLUSTER_ID IMAGE@sha256:DIGEST`. Only immutable image
 digests are accepted. The agent performs a Swarm `start-first` service update;
-poll the returned command with `dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
+the service update automatically rolls back if the replacement task fails.
+Poll the returned command with `dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
 Set `DOCKYARD_AGENT_SERVICE_NAME` when the stack is not named `dockyard-agent`.
 
 Managed-database backup and restore on remote clusters requires an

@@ -22,6 +22,12 @@ services:
       DOCKYARD_TRAEFIK_NETWORK: dockyard-public
     ports:
       - "${DOCKYARD_HTTP_BIND:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/backups:/var/lib/dockyard/backups

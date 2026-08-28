@@ -19,6 +19,15 @@ services:
         constraints: [node.role == manager]
       restart_policy:
         condition: on-failure
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+        monitor: 30s
 
 volumes:
   agent-state: {}
