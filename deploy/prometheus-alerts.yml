@@ -36,6 +36,14 @@ groups:
           summary: Dockyard background operation failed
           description: One or more {{ $labels.kind }} operations failed in the last ten minutes.
 
+      - alert: DockyardNotificationDeliveryFailures
+        expr: increase(dockyard_operations_total{kind="notify.webhook",status="failed"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard notification delivery attempt failed
+          description: A notification endpoint rejected a delivery or was unavailable; the durable queue will retry it.
+
       - alert: DockyardBackupStale
         expr: dockyard_database_backup_last_success_age_seconds{scope="all"} > 86400
         for: 15m

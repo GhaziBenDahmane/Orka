@@ -42,6 +42,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
 | POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted Git and OCI registry credentials |
+| GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable failure notification webhooks |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
@@ -52,6 +53,13 @@ enforced, so a narrower policy cannot evade a parent quota. Maintenance mode is
 also inherited and rejects new resources, configuration mutations, deletions,
 deployments, rollbacks, and webhook deployments with `503 maintenance_mode`;
 reads, cancellation, backups, and already-running jobs remain available.
+
+Notification endpoints support generic webhook and Slack-compatible payloads
+for `deployment.failed`, `backup.failed`, and `restore.failed`. URLs and signing
+secrets are encrypted at rest. The secret is returned once at creation; generic
+receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
+`X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are
+deduplicated per endpoint/event/resource and retried as leased durable jobs.
 
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in

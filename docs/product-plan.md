@@ -120,8 +120,9 @@ implemented.
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
   implemented. Hierarchical maintenance mode and transactionally enforced
   organization/project/environment resource quotas and a production
-  Prometheus alert pack are also implemented. Native notification delivery
-  remains.
+  Prometheus alert pack are also implemented. Durable signed webhook and
+  Slack-compatible failure notifications are implemented; SMTP and native
+  incident-system adapters remain.
 - Extend the implemented asynchronous service/stack finalizer model to
   projects, environments, volumes, and clusters.
 

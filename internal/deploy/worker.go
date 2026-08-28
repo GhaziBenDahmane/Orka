@@ -1,7 +1,9 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,17 +29,18 @@ import (
 )
 
 type Worker struct {
-	Store           *store.Store
-	Box             *cryptox.Box
-	Compiler        Compiler
-	Swarm           Swarm
-	Concurrency     int
-	Logger          *slog.Logger
-	ID              string
-	Databases       *database.Registry
-	BackupDirectory string
-	Builder         Builder
-	Metrics         *observability.Metrics
+	Store              *store.Store
+	Box                *cryptox.Box
+	Compiler           Compiler
+	Swarm              Swarm
+	Concurrency        int
+	Logger             *slog.Logger
+	ID                 string
+	Databases          *database.Registry
+	BackupDirectory    string
+	Builder            Builder
+	Metrics            *observability.Metrics
+	NotificationClient *http.Client
 }
 
 type job struct {
@@ -248,6 +252,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if j.Kind == "restore.database" {
 		return w.restoreDatabase(ctx, j)
+	}
+	if j.Kind == "notify.webhook" {
+		return w.deliverNotification(ctx, j)
 	}
 	if j.Kind != "deploy.compose" {
 		return fmt.Errorf("unsupported job kind %q", j.Kind)
@@ -803,7 +810,77 @@ func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
 		return err
 	}
 	_, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='failed',last_error=$2,finished_at=now(),locked_at=NULL,locked_by=NULL WHERE id=$1`, j.ID, truncate(jobErr.Error(), 8192))
+	if err == nil && j.Kind != "notify.webhook" {
+		if notificationErr := w.Store.QueueFailureNotifications(ctx, j.Kind, j.Payload, jobErr); notificationErr != nil {
+			w.Logger.Error("queue failure notification", "job", j.ID, "error", notificationErr)
+		}
+	}
 	return err
+}
+
+func (w *Worker) deliverNotification(ctx context.Context, j job) error {
+	var payload struct {
+		DeliveryID string `json:"deliveryId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	id, err := uuid.Parse(payload.DeliveryID)
+	if err != nil {
+		return err
+	}
+	delivery, endpoint, err := w.Store.GetNotificationDelivery(ctx, id)
+	if err != nil {
+		return err
+	}
+	urlBytes, err := w.Box.Decrypt(endpoint.EncryptedURL, "notification-url:"+endpoint.ID.String())
+	if err != nil {
+		w.Store.FinishNotificationDelivery(ctx, id, 0, err)
+		return err
+	}
+	secret, err := w.Box.Decrypt(endpoint.EncryptedSecret, "notification-secret:"+endpoint.ID.String())
+	if err != nil {
+		w.Store.FinishNotificationDelivery(ctx, id, 0, err)
+		return err
+	}
+	code, err := sendNotification(ctx, w.notificationClient(), string(urlBytes), secret, delivery)
+	w.Store.FinishNotificationDelivery(ctx, id, code, err)
+	return err
+}
+
+func (w *Worker) notificationClient() *http.Client {
+	if w.NotificationClient != nil {
+		return w.NotificationClient
+	}
+	return &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("notification redirects are disabled") }}
+}
+
+func sendNotification(ctx context.Context, client *http.Client, endpointURL string, secret []byte, delivery store.NotificationDelivery) (int, error) {
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(timestamp + "."))
+	_, _ = mac.Write(delivery.Payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(delivery.Payload))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Dockyard-Notifications/1.0")
+	req.Header.Set("X-Dockyard-Event", delivery.EventType)
+	req.Header.Set("X-Dockyard-Delivery", delivery.ID.String())
+	req.Header.Set("X-Dockyard-Timestamp", timestamp)
+	req.Header.Set("X-Dockyard-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	response, err := client.Do(req)
+	code := 0
+	if response != nil {
+		code = response.StatusCode
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		_ = response.Body.Close()
+	}
+	if err == nil && (code < 200 || code >= 300) {
+		err = fmt.Errorf("notification endpoint returned HTTP %d", code)
+	}
+	return code, err
 }
 
 func (w *Worker) markJobResourceCancelled(ctx context.Context, j job) {
