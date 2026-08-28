@@ -3,6 +3,10 @@ package migrate
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"os"
 	"strings"
@@ -64,12 +68,19 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.project VALUES('p1','Imported Project','description','source-org'); INSERT INTO `+quotedSchema+`.environment VALUES('e1','p1','Production'); INSERT INTO `+quotedSchema+`.compose VALUES('c1','e1','Web','web','services:
   web:
     image: nginx:alpine
-','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.registry VALUES('reg1','Build Registry','registry.example.test','robot','registry-secret','source-org'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','gh1','reg1'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1',NULL,'`+fixtureHost+`','/','web',80,true,true,'letsencrypt'),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt')`)
+','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','gh1','reg1'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1',NULL,'`+fixtureHost+`','/','web',80,true,true,'letsencrypt'),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt')`)
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.postgres VALUES('pg1','e1','Imported DB','legacy-postgres','legacydb','legacyuser','legacy-secret','postgres:16','EXTRA=value')`)
 	}
+	sourceKey := bytes.Repeat([]byte{3}, 32)
 	if err == nil {
-		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.destination VALUES('dst1','Archive','s3','legacy-access','legacy-secret-key','migration-bucket','eu-west-1','https://s3.example.test',ARRAY[]::text[],'source-org'); INSERT INTO `+quotedSchema+`.backup VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres',NULL,'pg1',NULL,NULL,NULL,NULL)`)
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.registry VALUES('reg1','Build Registry','registry.example.test','robot',$1,'source-org')`, encryptDokployFixture(t, sourceKey, "registry-secret"))
+	}
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.destination VALUES('dst1','Archive','s3',$1,$2,'migration-bucket','eu-west-1','https://s3.example.test',ARRAY[]::text[],'source-org')`, encryptDokployFixture(t, sourceKey, "legacy-access"), encryptDokployFixture(t, sourceKey, "legacy-secret-key"))
+	}
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.backup VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres',NULL,'pg1',NULL,NULL,NULL,NULL)`)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -87,13 +98,17 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	query := parsed.Query()
 	query.Set("options", "-csearch_path="+schema)
 	parsed.RawQuery = query.Encode()
-	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", DryRun: true}
+	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
 	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 1 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 1 || report.SourceCredentials != 2 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
 	if len(report.Resources) != 6 || report.Resources[0].SourceKind != "application" || report.Resources[2].SourceKind != "backup_destination" || report.Resources[3].SourceKind != "backup_policy" || report.Resources[4].SourceKind != "source_credential" {
 		t.Fatalf("migration parity resources = %#v", report.Resources)
+	}
+	encodedReport, _ := json.Marshal(report)
+	if bytes.Contains(encodedReport, []byte("legacy-secret")) || bytes.Contains(encodedReport, []byte("registry-secret")) {
+		t.Fatal("dry-run report leaked source credentials")
 	}
 	options.DryRun = false
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
@@ -155,4 +170,21 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT count(*) FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org' AND source_kind='application'`, targetOrg).Scan(&migrationRecords); err != nil || migrationRecords != 2 {
 		t.Fatalf("migration metadata records=%d err=%v", migrationRecords, err)
 	}
+}
+
+func encryptDokployFixture(t *testing.T, key []byte, value string) string {
+	t.Helper()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{7}, aead.NonceSize())
+	sealed := aead.Seal(nil, nonce, []byte(value), nil)
+	tagStart := len(sealed) - aead.Overhead()
+	payload := append(append(append([]byte{}, nonce...), sealed[tagStart:]...), sealed[:tagStart]...)
+	return "enc:v1:" + base64.StdEncoding.EncodeToString(payload)
 }
