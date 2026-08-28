@@ -20,7 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Builder struct{ GitBin, DockerBin, StaticImage string }
+type Builder struct{ GitBin, DockerBin, NixpacksBin, StaticImage string }
 
 type Credential struct {
 	Kind       string `json:"kind"`
@@ -76,7 +76,7 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 	if buildType == "" {
 		buildType = "dockerfile"
 	}
-	if buildType != "dockerfile" && buildType != "static" {
+	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" {
 		return fmt.Errorf("unsupported build type %q", buildType)
 	}
 	if err := ValidateBuildSettings(target, config); err != nil {
@@ -92,6 +92,14 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 		clean := filepath.Clean(outputDirectory)
 		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 			return errors.New("static output directory must stay inside the build context")
+		}
+	}
+	if buildType == "nixpacks" {
+		if target != "" || outputDirectory != "" {
+			return errors.New("Nixpacks builds do not accept Docker targets or static output directories")
+		}
+		if len(config.Secrets) > 0 {
+			return errors.New("Nixpacks build secrets are not supported because its CLI cannot provide BuildKit secret mounts")
 		}
 	}
 	return nil
@@ -183,6 +191,10 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		buildOutput, buildErr := b.buildStatic(ctx, contextPath, source.OutputDirectory, tag, buildEnvironment)
 		return tag, output + buildOutput, buildErr
 	}
+	if source.BuildType == "nixpacks" {
+		buildOutput, buildErr := b.buildNixpacks(ctx, contextPath, tag, buildEnvironment, source.BuildArguments)
+		return tag, output + buildOutput, buildErr
+	}
 	dockerfilePath, err := safeJoin(contextPath, source.Dockerfile)
 	if err != nil {
 		return "", output, err
@@ -218,6 +230,21 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	buildArgs = append(buildArgs, contextPath)
 	buildOutput, err := run(ctx, b.docker(), buildEnvironment, buildArgs...)
 	return tag, output + buildOutput, err
+}
+
+func (b Builder) buildNixpacks(ctx context.Context, contextPath, tag string, environment map[string]string, buildArguments map[string]string) (string, error) {
+	arguments := []string{"build", contextPath, "--name", tag}
+	for _, name := range sortedKeys(buildArguments) {
+		// Nixpacks calls these environment variables; like Docker build args,
+		// they are explicitly non-secret and may enter image metadata.
+		arguments = append(arguments, "--env", name+"="+buildArguments[name])
+	}
+	output, err := run(ctx, b.nixpacks(), environment, arguments...)
+	if err != nil {
+		return output, err
+	}
+	pushOutput, err := run(ctx, b.docker(), environment, "push", tag)
+	return output + pushOutput, err
 }
 
 func (b Builder) buildStatic(ctx context.Context, contextPath, outputDirectory, tag string, environment map[string]string) (string, error) {
@@ -407,6 +434,13 @@ func (b Builder) docker() string {
 		return "docker"
 	}
 	return b.DockerBin
+}
+
+func (b Builder) nixpacks() string {
+	if b.NixpacksBin == "" {
+		return "nixpacks"
+	}
+	return b.NixpacksBin
 }
 func run(ctx context.Context, binary string, environment map[string]string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)

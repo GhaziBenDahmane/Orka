@@ -188,6 +188,11 @@ Sources with `buildType=static` package an existing repository subdirectory
 from `outputDirectory` into a minimal Caddy image pinned by digest. Static mode
 does not execute repository build commands and rejects Docker targets,
 arguments, and secrets; the output directory must already contain the site.
+`buildType=nixpacks` uses the pinned Nixpacks CLI bundled in the controller,
+then pushes the generated image through the configured registry credentials.
+Build arguments are passed as documented non-secret Nixpacks environment
+values. Build secrets are rejected because the Nixpacks CLI does not expose
+BuildKit secret mounts.
 
 ## Catalog and databases
 

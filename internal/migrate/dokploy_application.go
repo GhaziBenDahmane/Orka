@@ -237,7 +237,7 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		if buildType == "" {
 			buildType = "dockerfile"
 		}
-		if buildType != "dockerfile" && buildType != "static" {
+		if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" {
 			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported", item.BuildType)
 		}
 		buildArguments, err := parseDokployBuildSettings(item.BuildArgs, options.EncryptionKeys)
@@ -290,7 +290,7 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 				}
 				dockerfile = strings.TrimPrefix(dockerfile, prefix)
 			}
-		} else {
+		} else if buildType == "static" {
 			outputDirectory, err = cleanRepositoryPath(item.PublishDirectory)
 			if err != nil {
 				return preparedApplication{}, warnings, fmt.Errorf("invalid static publish directory: %w", err)

@@ -177,6 +177,36 @@ func TestStaticBuildUsesPinnedRuntimeAndOutputDirectory(t *testing.T) {
 	}
 }
 
+func TestNixpacksBuildAndPush(t *testing.T) {
+	directory := t.TempDir()
+	gitPath, nixpacksPath, dockerPath := filepath.Join(directory, "git"), filepath.Join(directory, "nixpacks"), filepath.Join(directory, "docker")
+	logPath := filepath.Join(directory, "calls")
+	t.Setenv("DOCKYARD_BUILD_TEST_LOG", logPath)
+	gitScript := "#!/bin/sh\nfor destination do :; done\nmkdir -p \"$destination\"\n"
+	toolScript := "#!/bin/sh\nprintf '%s:%s\\n' \"$(basename \"$0\")\" \"$*\" >>\"$DOCKYARD_BUILD_TEST_LOG\"\n"
+	for path, content := range map[string]string{gitPath: gitScript, nixpacksPath: toolScript, dockerPath: toolScript} {
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test/acme/app.git", GitRef: "main", ContextDirectory: ".", BuildType: "nixpacks", RegistryImage: "registry.example.test/acme/app", BuildArguments: map[string]string{"NODE_VERSION": "24"}}
+	tag, _, err := (Builder{GitBin: gitPath, NixpacksBin: nixpacksPath, DockerBin: dockerPath}).Build(context.Background(), source, uuid.MustParse("00000000-0000-0000-0000-000000000124"), BuildCredentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := string(data)
+	if !strings.Contains(calls, "nixpacks:build ") || !strings.Contains(calls, "--name "+tag) || !strings.Contains(calls, "--env NODE_VERSION=24") || !strings.Contains(calls, "docker:push "+tag) {
+		t.Fatalf("unexpected build calls:\n%s", calls)
+	}
+	if err := ValidateBuildMode("nixpacks", "", "", store.ApplicationBuildConfig{Secrets: map[string]string{"TOKEN": "secret"}}); err == nil {
+		t.Fatal("expected Nixpacks secrets to be rejected")
+	}
+}
+
 func TestBuildUsesTargetArgumentsAndFileBackedSecrets(t *testing.T) {
 	directory := t.TempDir()
 	gitPath := filepath.Join(directory, "git")
