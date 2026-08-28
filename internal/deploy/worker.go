@@ -27,6 +27,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Worker struct {
@@ -47,6 +48,7 @@ type Worker struct {
 
 type job struct {
 	ID          uuid.UUID
+	LeaseID     uuid.UUID
 	Kind        string
 	Payload     []byte
 	Attempts    int
@@ -218,8 +220,8 @@ func (w *Worker) recoverStale(ctx context.Context) {
 	_, _ = w.Store.Pool.Exec(ctx, `UPDATE deployments d SET status='cancelled',error='cancelled by user',finished_at=now() FROM jobs j WHERE j.kind='deploy.compose' AND j.status='running' AND j.cancel_requested_at IS NOT NULL AND j.locked_at < now()-interval '1 minute' AND d.id=(j.payload->>'deploymentId')::uuid`)
 	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_backups b SET status='cancelled',error='cancelled by user',finished_at=now() FROM jobs j WHERE j.kind='backup.database' AND j.status='running' AND j.cancel_requested_at IS NOT NULL AND j.locked_at < now()-interval '1 minute' AND b.id=(j.payload->>'backupId')::uuid`)
 	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_restores r SET status='cancelled',error='cancelled by user',finished_at=now() FROM jobs j WHERE j.kind='restore.database' AND j.status='running' AND j.cancel_requested_at IS NOT NULL AND j.locked_at < now()-interval '1 minute' AND r.id=(j.payload->>'restoreId')::uuid`)
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL WHERE status='running' AND cancel_requested_at IS NOT NULL AND locked_at < now()-interval '1 minute'`)
-	result, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='pending',locked_at=NULL,locked_by=NULL,run_after=now() WHERE status='running' AND cancel_requested_at IS NULL AND locked_at < now()-interval '1 minute'`)
+	_, _ = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE status='running' AND cancel_requested_at IS NOT NULL AND locked_at < now()-interval '1 minute'`)
+	result, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='pending',locked_at=NULL,locked_by=NULL,lease_id=NULL,run_after=now() WHERE status='running' AND cancel_requested_at IS NULL AND locked_at < now()-interval '1 minute'`)
 	if err != nil {
 		w.Logger.Error("recover stale jobs", "error", err)
 		return
@@ -244,12 +246,12 @@ func (w *Worker) runClaimed(parent context.Context, j job) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				result, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET locked_at=now() WHERE id=$1 AND status='running' AND cancel_requested_at IS NULL`, j.ID)
+				owned, err := w.renewJobLease(ctx, j)
 				if err != nil {
 					w.Logger.Error("heartbeat job", "job", j.ID, "error", err)
 					continue
 				}
-				if result.RowsAffected() == 0 {
+				if !owned {
 					cancel()
 					return
 				}
@@ -279,11 +281,17 @@ func (w *Worker) claim(ctx context.Context) (job, error) {
 	if err != nil {
 		return job{}, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE jobs SET status='running',attempts=attempts+1,locked_at=now(),locked_by=$2 WHERE id=$1`, j.ID, w.ID)
+	j.LeaseID = uuid.New()
+	_, err = tx.Exec(ctx, `UPDATE jobs SET status='running',attempts=attempts+1,locked_at=now(),locked_by=$2,lease_id=$3 WHERE id=$1`, j.ID, w.ID, j.LeaseID)
 	if err != nil {
 		return job{}, err
 	}
 	return j, tx.Commit(ctx)
+}
+
+func (w *Worker) renewJobLease(ctx context.Context, j job) (bool, error) {
+	result, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET locked_at=now() WHERE id=$1 AND status='running' AND lease_id=$2 AND cancel_requested_at IS NULL`, j.ID, j.LeaseID)
+	return result.RowsAffected() == 1, err
 }
 
 func (w *Worker) execute(ctx context.Context, j job) error {
@@ -1104,29 +1112,37 @@ func (w *Worker) markDeployment(ctx context.Context, id uuid.UUID, status, outpu
 
 func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
 	var cancellationRequested bool
-	if err := w.Store.Pool.QueryRow(ctx, `SELECT cancel_requested_at IS NOT NULL OR status='cancelled' FROM jobs WHERE id=$1`, j.ID).Scan(&cancellationRequested); err != nil {
+	if err := w.Store.Pool.QueryRow(ctx, `SELECT cancel_requested_at IS NOT NULL FROM jobs WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID).Scan(&cancellationRequested); errors.Is(err, pgx.ErrNoRows) {
+		return store.ErrLeaseLost
+	} else if err != nil {
 		return err
+	}
+	var result pgconn.CommandTag
+	var err error
+	if cancellationRequested {
+		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID)
+	} else if jobErr == nil {
+		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID)
+	} else if j.Attempts+1 < j.MaxAttempts {
+		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='pending',run_after=now()+($3::int * interval '15 seconds'),last_error=$4,locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID, j.Attempts+1, truncate(jobErr.Error(), 8192))
+	} else {
+		result, err = w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='failed',last_error=$3,finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1 AND status='running' AND lease_id=$2`, j.ID, j.LeaseID, truncate(jobErr.Error(), 8192))
+	}
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return store.ErrLeaseLost
 	}
 	if cancellationRequested {
 		w.markJobResourceCancelled(ctx, j)
-		_, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now(),locked_at=NULL,locked_by=NULL WHERE id=$1`, j.ID)
-		return err
 	}
-	if jobErr == nil {
-		_, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now(),locked_at=NULL,locked_by=NULL WHERE id=$1`, j.ID)
-		return err
-	}
-	if j.Attempts+1 < j.MaxAttempts {
-		_, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='pending',run_after=now()+($2::int * interval '15 seconds'),last_error=$3,locked_at=NULL,locked_by=NULL WHERE id=$1`, j.ID, j.Attempts+1, truncate(jobErr.Error(), 8192))
-		return err
-	}
-	_, err := w.Store.Pool.Exec(ctx, `UPDATE jobs SET status='failed',last_error=$2,finished_at=now(),locked_at=NULL,locked_by=NULL WHERE id=$1`, j.ID, truncate(jobErr.Error(), 8192))
-	if err == nil && j.Kind != "notify.webhook" {
+	if jobErr != nil && j.Attempts+1 >= j.MaxAttempts && j.Kind != "notify.webhook" {
 		if notificationErr := w.Store.QueueFailureNotifications(ctx, j.Kind, j.Payload, jobErr); notificationErr != nil {
 			w.Logger.Error("queue failure notification", "job", j.ID, "error", notificationErr)
 		}
 	}
-	return err
+	return nil
 }
 
 func (w *Worker) deliverNotification(ctx context.Context, j job) error {

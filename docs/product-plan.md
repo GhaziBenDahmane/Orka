@@ -148,8 +148,11 @@ placement with heartbeat freshness, scheduled maintenance windows,
 one-time enrollment, rotating short-lived certificates, mTLS heartbeats, and
 fenced outbound command execution are implemented.
 Controller singleton loops use expiring database leader leases, while durable
-jobs and agent commands use independent fencing so stateless replicas can share
-the same PostgreSQL control plane.
+jobs and agent commands use independent per-attempt UUID fencing so stateless
+replicas can share the same PostgreSQL control plane. Integration tests force
+lease expiry and prove that a stale worker cannot heartbeat or commit terminal
+job state after takeover, including when both processes use the same worker
+name.
 
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.

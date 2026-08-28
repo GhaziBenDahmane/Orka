@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -104,5 +105,54 @@ func TestRecoverStaleJobsFinalizesCancellationAndAllowsTakeover(t *testing.T) {
 	}
 	if status != "running" || lockedBy != "worker-b" || attempts != 1 {
 		t.Fatalf("takeover status=%s locked_by=%s attempts=%d", status, lockedBy, attempts)
+	}
+}
+
+func TestJobLeaseFencesStaleWorkerAfterTakeover(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	jobID := uuid.New()
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'test.fencing','{}')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	firstWorker := &Worker{Store: db, ID: "worker-a", Logger: logger}
+	firstLease, err := firstWorker.claim(ctx)
+	if err != nil || firstLease.ID != jobID || firstLease.LeaseID == uuid.Nil {
+		t.Fatalf("first lease=%#v err=%v", firstLease, err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET locked_at=now()-interval '2 minutes' WHERE id=$1`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	// A restarted replica may reuse its configured worker name. The per-attempt
+	// token, rather than locked_by, must still fence its predecessor.
+	secondWorker := &Worker{Store: db, ID: "worker-a", Logger: logger}
+	secondWorker.recoverStale(ctx)
+	secondLease, err := secondWorker.claim(ctx)
+	if err != nil || secondLease.ID != jobID || secondLease.LeaseID == uuid.Nil || secondLease.LeaseID == firstLease.LeaseID {
+		t.Fatalf("second lease=%#v err=%v", secondLease, err)
+	}
+	if owned, err := firstWorker.renewJobLease(ctx, firstLease); err != nil || owned {
+		t.Fatalf("stale heartbeat owned=%t err=%v", owned, err)
+	}
+	if err = firstWorker.finish(ctx, firstLease, nil); !errors.Is(err, store.ErrLeaseLost) {
+		t.Fatalf("stale finish error=%v, want lease lost", err)
+	}
+	var status, lockedBy string
+	var leaseID uuid.UUID
+	if err = db.Pool.QueryRow(ctx, `SELECT status,locked_by,lease_id FROM jobs WHERE id=$1`, jobID).Scan(&status, &lockedBy, &leaseID); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || lockedBy != "worker-a" || leaseID != secondLease.LeaseID {
+		t.Fatalf("replacement lease changed: status=%s worker=%s lease=%s", status, lockedBy, leaseID)
+	}
+	if err = secondWorker.finish(ctx, secondLease, nil); err != nil {
+		t.Fatal(err)
+	}
+	var leaseCleared bool
+	if err = db.Pool.QueryRow(ctx, `SELECT status,lease_id IS NULL FROM jobs WHERE id=$1`, jobID).Scan(&status, &leaseCleared); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" || !leaseCleared {
+		t.Fatalf("completed status=%s lease_cleared=%t", status, leaseCleared)
 	}
 }
