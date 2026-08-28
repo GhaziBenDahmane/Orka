@@ -162,9 +162,11 @@ func (s *Store) queueAuditArchive(ctx context.Context, organizationID, destinati
 	return item, tx.Commit(ctx)
 }
 
-func (s *Store) GetAuditArchiveBatch(ctx context.Context, id uuid.UUID) (AuditArchiveBatch, error) {
+func (s *Store) GetAuditArchiveBatchForJob(ctx context.Context, jobID, leaseID, id uuid.UUID) (AuditArchiveBatch, error) {
 	var item AuditArchiveBatch
-	err := s.Pool.QueryRow(ctx, `UPDATE audit_archive_batches b SET status='running',started_at=COALESCE(started_at,now()) FROM audit_archive_destinations a,backup_destinations d WHERE b.id=$1 AND a.id=b.destination_id AND d.id=a.backup_destination_id AND a.enabled RETURNING b.id,b.destination_id,a.organization_id,b.first_event_id,b.last_event_id,b.previous_sha256,b.object_key,a.retention_days,b.created_at,d.id,d.organization_id,d.name,d.endpoint,d.region,d.bucket,d.prefix,d.use_tls,d.encrypted_credentials,d.created_at,d.updated_at`, id).Scan(&item.ID, &item.DestinationID, &item.OrganizationID, &item.FirstEventID, &item.LastEventID, &item.PreviousSHA256, &item.ObjectKey, &item.RetentionDays, &item.CreatedAt, &item.BackupDestination.ID, &item.BackupDestination.OrganizationID, &item.BackupDestination.Name, &item.BackupDestination.Endpoint, &item.BackupDestination.Region, &item.BackupDestination.Bucket, &item.BackupDestination.Prefix, &item.BackupDestination.UseTLS, &item.BackupDestination.EncryptedCredentials, &item.BackupDestination.CreatedAt, &item.BackupDestination.UpdatedAt)
+	err := s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE audit_archive_batches b SET status='running',started_at=COALESCE(started_at,now()) FROM audit_archive_destinations a,backup_destinations d WHERE b.id=$1 AND a.id=b.destination_id AND d.id=a.backup_destination_id AND a.enabled RETURNING b.id,b.destination_id,a.organization_id,b.first_event_id,b.last_event_id,b.previous_sha256,b.object_key,a.retention_days,b.created_at,d.id,d.organization_id,d.name,d.endpoint,d.region,d.bucket,d.prefix,d.use_tls,d.encrypted_credentials,d.created_at,d.updated_at`, id).Scan(&item.ID, &item.DestinationID, &item.OrganizationID, &item.FirstEventID, &item.LastEventID, &item.PreviousSHA256, &item.ObjectKey, &item.RetentionDays, &item.CreatedAt, &item.BackupDestination.ID, &item.BackupDestination.OrganizationID, &item.BackupDestination.Name, &item.BackupDestination.Endpoint, &item.BackupDestination.Region, &item.BackupDestination.Bucket, &item.BackupDestination.Prefix, &item.BackupDestination.UseTLS, &item.BackupDestination.EncryptedCredentials, &item.BackupDestination.CreatedAt, &item.BackupDestination.UpdatedAt)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AuditArchiveBatch{}, ErrNotFound
 	}
@@ -172,19 +174,32 @@ func (s *Store) GetAuditArchiveBatch(ctx context.Context, id uuid.UUID) (AuditAr
 }
 
 func (s *Store) FinishAuditArchiveBatch(ctx context.Context, id uuid.UUID, digest string, size int64, archiveErr error) error {
-	if archiveErr != nil {
-		_, err := s.Pool.Exec(ctx, `UPDATE audit_archive_batches SET status='failed',last_error=$2,finished_at=now() WHERE id=$1`, id, truncateStore(archiveErr.Error(), 8192))
-		return err
-	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = finishAuditArchiveBatchTx(ctx, tx, id, digest, size, archiveErr); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) FinishAuditArchiveBatchForJob(ctx context.Context, jobID, leaseID, id uuid.UUID, digest string, size int64, archiveErr error) error {
+	return s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+		return finishAuditArchiveBatchTx(ctx, tx, id, digest, size, archiveErr)
+	})
+}
+
+func finishAuditArchiveBatchTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, digest string, size int64, archiveErr error) error {
+	if archiveErr != nil {
+		_, err := tx.Exec(ctx, `UPDATE audit_archive_batches SET status='failed',last_error=$2,finished_at=now() WHERE id=$1`, id, truncateStore(archiveErr.Error(), 8192))
+		return err
+	}
 	var destinationID uuid.UUID
 	var lastID int64
 	var previous string
-	if err = tx.QueryRow(ctx, `UPDATE audit_archive_batches SET status='succeeded',sha256=$2,size_bytes=$3,last_error='',finished_at=now() WHERE id=$1 RETURNING destination_id,last_event_id,previous_sha256`, id, digest, size).Scan(&destinationID, &lastID, &previous); err != nil {
+	if err := tx.QueryRow(ctx, `UPDATE audit_archive_batches SET status='succeeded',sha256=$2,size_bytes=$3,last_error='',finished_at=now() WHERE id=$1 RETURNING destination_id,last_event_id,previous_sha256`, id, digest, size).Scan(&destinationID, &lastID, &previous); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE audit_archive_destinations SET last_archived_id=$2,last_chain_hash=$3,updated_at=now() WHERE id=$1 AND last_archived_id<$2 AND last_chain_hash=$4`, destinationID, lastID, digest, previous)
@@ -194,7 +209,7 @@ func (s *Store) FinishAuditArchiveBatch(ctx context.Context, id uuid.UUID, diges
 	if tag.RowsAffected() != 1 {
 		return errors.New("audit archive chain checkpoint changed")
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) ListAuditArchiveBatches(ctx context.Context, organizationID, destinationID uuid.UUID) ([]AuditArchiveBatch, error) {

@@ -87,10 +87,12 @@ func (s *Store) DeleteNotificationEndpoint(ctx context.Context, organizationID, 
 	return tx.Commit(ctx)
 }
 
-func (s *Store) GetNotificationDelivery(ctx context.Context, id uuid.UUID) (NotificationDelivery, NotificationEndpoint, error) {
+func (s *Store) GetNotificationDeliveryForJob(ctx context.Context, jobID, leaseID, id uuid.UUID) (NotificationDelivery, NotificationEndpoint, error) {
 	var d NotificationDelivery
 	var endpoint NotificationEndpoint
-	err := s.Pool.QueryRow(ctx, `UPDATE notification_deliveries d SET status='running',started_at=COALESCE(started_at,now()) FROM notification_endpoints e WHERE d.id=$1 AND e.id=d.endpoint_id AND e.enabled RETURNING d.id,d.endpoint_id,d.event_type,d.resource_type,d.resource_id,d.payload,d.status,d.created_at,e.kind,e.encrypted_url,e.encrypted_secret`, id).Scan(&d.ID, &d.EndpointID, &d.EventType, &d.ResourceType, &d.ResourceID, &d.Payload, &d.Status, &d.CreatedAt, &endpoint.Kind, &endpoint.EncryptedURL, &endpoint.EncryptedSecret)
+	err := s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE notification_deliveries d SET status='running',started_at=COALESCE(started_at,now()) FROM notification_endpoints e WHERE d.id=$1 AND e.id=d.endpoint_id AND e.enabled RETURNING d.id,d.endpoint_id,d.event_type,d.resource_type,d.resource_id,d.payload,d.status,d.created_at,e.kind,e.encrypted_url,e.encrypted_secret`, id).Scan(&d.ID, &d.EndpointID, &d.EventType, &d.ResourceType, &d.ResourceID, &d.Payload, &d.Status, &d.CreatedAt, &endpoint.Kind, &endpoint.EncryptedURL, &endpoint.EncryptedSecret)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return NotificationDelivery{}, NotificationEndpoint{}, ErrNotFound
 	}
@@ -104,6 +106,17 @@ func (s *Store) FinishNotificationDelivery(ctx context.Context, id uuid.UUID, co
 		return
 	}
 	_, _ = s.Pool.Exec(ctx, `UPDATE notification_deliveries SET status='failed',response_code=NULLIF($2,0),last_error=$3,finished_at=now() WHERE id=$1`, id, code, truncateStore(deliveryErr.Error(), 8192))
+}
+
+func (s *Store) FinishNotificationDeliveryForJob(ctx context.Context, jobID, leaseID, id uuid.UUID, code int, deliveryErr error) error {
+	return s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+		if deliveryErr == nil {
+			_, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status='succeeded',response_code=$2,last_error='',finished_at=now() WHERE id=$1`, id, code)
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status='failed',response_code=NULLIF($2,0),last_error=$3,finished_at=now() WHERE id=$1`, id, code, truncateStore(deliveryErr.Error(), 8192))
+		return err
+	})
 }
 
 func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, rawPayload []byte, cause error) error {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -134,6 +135,29 @@ func TestJobLeaseFencesStaleWorkerAfterTakeover(t *testing.T) {
 	if owned, err := firstWorker.renewJobLease(ctx, firstLease); err != nil || owned {
 		t.Fatalf("stale heartbeat owned=%t err=%v", owned, err)
 	}
+	if _, err = db.Pool.Exec(ctx, `CREATE TABLE job_resource_probe(id uuid PRIMARY KEY,value text NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO job_resource_probe VALUES($1,'succeeded')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	err = db.WithJobLease(ctx, firstLease.ID, firstLease.LeaseID, func(tx pgx.Tx) error {
+		_, updateErr := tx.Exec(ctx, `UPDATE job_resource_probe SET value='running' WHERE id=$1`, jobID)
+		return updateErr
+	})
+	if !errors.Is(err, store.ErrLeaseLost) {
+		t.Fatalf("stale resource transition error=%v, want lease lost", err)
+	}
+	var resourceValue string
+	if err = db.Pool.QueryRow(ctx, `SELECT value FROM job_resource_probe WHERE id=$1`, jobID).Scan(&resourceValue); err != nil || resourceValue != "succeeded" {
+		t.Fatalf("resource changed by stale worker: value=%q err=%v", resourceValue, err)
+	}
+	if err = db.WithJobLease(ctx, secondLease.ID, secondLease.LeaseID, func(tx pgx.Tx) error {
+		_, updateErr := tx.Exec(ctx, `UPDATE job_resource_probe SET value='current' WHERE id=$1`, jobID)
+		return updateErr
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err = firstWorker.finish(ctx, firstLease, nil); !errors.Is(err, store.ErrLeaseLost) {
 		t.Fatalf("stale finish error=%v, want lease lost", err)
 	}
@@ -154,5 +178,8 @@ func TestJobLeaseFencesStaleWorkerAfterTakeover(t *testing.T) {
 	}
 	if status != "succeeded" || !leaseCleared {
 		t.Fatalf("completed status=%s lease_cleared=%t", status, leaseCleared)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT value FROM job_resource_probe WHERE id=$1`, jobID).Scan(&resourceValue); err != nil || resourceValue != "current" {
+		t.Fatalf("resource transition was not preserved: value=%q err=%v", resourceValue, err)
 	}
 }

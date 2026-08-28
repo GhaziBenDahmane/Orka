@@ -30,7 +30,9 @@ links for every item below.
   queue recovery, and existing stack reconciliation.
 - Exercise deploy, cancellation, failed deploy, rollback, provider webhook and
   commit status, every enabled notification provider, and one remote-agent
-  command. Kill a worker while a job is leased and verify fenced takeover.
+  command. Kill a worker while a job is leased and verify fenced takeover. Hold
+  the old attempt past lease expiry and verify it cannot regress a completed
+  resource to running or commit any resource completion after takeover.
 - Back up and restore each advertised backup-capable database engine. Record
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. On a Swarm manager, `make test-database-recovery`

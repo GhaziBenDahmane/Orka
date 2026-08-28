@@ -152,7 +152,10 @@ jobs and agent commands use independent per-attempt UUID fencing so stateless
 replicas can share the same PostgreSQL control plane. Integration tests force
 lease expiry and prove that a stale worker cannot heartbeat or commit terminal
 job state after takeover, including when both processes use the same worker
-name.
+name. User-visible resource start and completion transitions are transactionally
+coupled to that job ownership, preventing stale attempts from regressing or
+finalizing deployments, backups, restores, notification deliveries, commit
+statuses, and audit archives.
 
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.

@@ -36,32 +36,32 @@ func (w *Worker) archiveAuditEvents(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	batch, err := w.Store.GetAuditArchiveBatch(ctx, id)
+	batch, err := w.Store.GetAuditArchiveBatchForJob(ctx, j.ID, j.LeaseID, id)
 	if err != nil {
 		return err
 	}
 	events, err := w.Store.ListAuditEvents(ctx, batch.OrganizationID, batch.FirstEventID-1, 1000, true)
 	if err != nil {
-		return w.failAuditArchive(ctx, id, err)
+		return w.failAuditArchive(ctx, j, id, err)
 	}
 	for len(events) > 0 && events[len(events)-1].ID > batch.LastEventID {
 		events = events[:len(events)-1]
 	}
 	if len(events) == 0 || events[0].ID != batch.FirstEventID || events[len(events)-1].ID != batch.LastEventID {
-		return w.failAuditArchive(ctx, id, errors.New("audit archive event range is incomplete"))
+		return w.failAuditArchive(ctx, j, id, errors.New("audit archive event range is incomplete"))
 	}
 	contents, digest, err := encodeAuditArchive(batch, events)
 	if err != nil {
-		return w.failAuditArchive(ctx, id, err)
+		return w.failAuditArchive(ctx, j, id, err)
 	}
 	destination, err := w.s3(ctx, batch.BackupDestination.ID)
 	if err == nil {
 		err = destination.PutImmutable(ctx, batch.ObjectKey, contents, digest, time.Now().UTC().AddDate(0, 0, batch.RetentionDays))
 	}
 	if err != nil {
-		return w.failAuditArchive(ctx, id, err)
+		return w.failAuditArchive(ctx, j, id, err)
 	}
-	if err = w.Store.FinishAuditArchiveBatch(ctx, id, digest, int64(len(contents)), nil); err != nil {
+	if err = w.Store.FinishAuditArchiveBatchForJob(ctx, j.ID, j.LeaseID, id, digest, int64(len(contents)), nil); err != nil {
 		return err
 	}
 	return nil
@@ -86,7 +86,6 @@ func encodeAuditArchive(batch store.AuditArchiveBatch, events []store.AuditEvent
 	return contents.Bytes(), hex.EncodeToString(digest[:]), nil
 }
 
-func (w *Worker) failAuditArchive(ctx context.Context, id uuid.UUID, archiveErr error) error {
-	_ = w.Store.FinishAuditArchiveBatch(ctx, id, "", 0, archiveErr)
-	return archiveErr
+func (w *Worker) failAuditArchive(ctx context.Context, j job, id uuid.UUID, archiveErr error) error {
+	return errors.Join(archiveErr, w.Store.FinishAuditArchiveBatchForJob(ctx, j.ID, j.LeaseID, id, "", 0, archiveErr))
 }

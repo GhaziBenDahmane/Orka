@@ -27,19 +27,17 @@ func (w *Worker) deliverCommitStatus(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	delivery, err := w.Store.GetCommitStatusDelivery(ctx, id)
+	delivery, err := w.Store.GetCommitStatusDeliveryForJob(ctx, j.ID, j.LeaseID, id)
 	if err != nil {
 		return err
 	}
 	token, err := w.Box.Decrypt(delivery.EncryptedCredential, "source-credential")
 	if err != nil {
-		w.Store.FinishCommitStatusDelivery(ctx, id, 0, err)
-		return err
+		return errors.Join(err, w.Store.FinishCommitStatusDeliveryForJob(ctx, j.ID, j.LeaseID, id, 0, err))
 	}
 	req, err := commitStatusRequest(ctx, delivery, string(token))
 	if err != nil {
-		w.Store.FinishCommitStatusDelivery(ctx, id, 0, err)
-		return err
+		return errors.Join(err, w.Store.FinishCommitStatusDeliveryForJob(ctx, j.ID, j.LeaseID, id, 0, err))
 	}
 	response, err := w.notificationClient().Do(req)
 	code := 0
@@ -51,8 +49,7 @@ func (w *Worker) deliverCommitStatus(ctx context.Context, j job) error {
 	if err == nil && (code < 200 || code >= 300) {
 		err = fmt.Errorf("commit status provider returned HTTP %d", code)
 	}
-	w.Store.FinishCommitStatusDelivery(ctx, id, code, err)
-	return err
+	return errors.Join(err, w.Store.FinishCommitStatusDeliveryForJob(ctx, j.ID, j.LeaseID, id, code, err))
 }
 
 func commitStatusRequest(ctx context.Context, delivery store.CommitStatusDelivery, token string) (*http.Request, error) {

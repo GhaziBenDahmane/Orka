@@ -294,6 +294,19 @@ func (w *Worker) renewJobLease(ctx context.Context, j job) (bool, error) {
 	return result.RowsAffected() == 1, err
 }
 
+func (w *Worker) updateResourceForJob(ctx context.Context, j job, query string, args ...any) error {
+	return w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		result, err := tx.Exec(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 1 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
+}
+
 func (w *Worker) execute(ctx context.Context, j job) error {
 	if j.Kind == "delete.compose" {
 		return w.deleteComposeService(ctx, j)
@@ -337,7 +350,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	var stack, compose, encrypted string
 	var clusterID *uuid.UUID
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.stack_name,d.compose_snapshot,d.env_snapshot,e.cluster_id`, id).Scan(&stack, &compose, &encrypted, &clusterID)
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.stack_name,d.compose_snapshot,d.env_snapshot,e.cluster_id`, id).Scan(&stack, &compose, &encrypted, &clusterID)
+	})
 	if err != nil {
 		return err
 	}
@@ -357,7 +372,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	rows.Close()
 	compiled, err := w.Compiler.Compile(compose, routes)
 	if err != nil {
-		w.markDeployment(ctx, id, "failed", "", err)
+		w.markDeployment(ctx, j, id, "failed", "", err)
 		return err
 	}
 	env := map[string]string{}
@@ -423,9 +438,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if err == nil {
 		var output string
 		output, err = w.scheduler(clusterID).Deploy(ctx, stack, compiled, env, deploymentRegistryCredential)
-		w.markDeployment(ctx, id, map[bool]string{true: "failed", false: "succeeded"}[err != nil], buildOutput+output, err)
+		w.markDeployment(ctx, j, id, map[bool]string{true: "failed", false: "succeeded"}[err != nil], buildOutput+output, err)
 	} else {
-		w.markDeployment(ctx, id, "failed", buildOutput, err)
+		w.markDeployment(ctx, j, id, "failed", buildOutput, err)
 	}
 	return err
 }
@@ -619,37 +634,39 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	var engine, version, stackName, serviceName, encrypted string
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
+	})
 	if err != nil {
 		return err
 	}
 	plain, err := w.Box.Decrypt(encrypted, "database-credentials")
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	credentials := map[string]string{}
 	if err = json.Unmarshal(plain, &credentials); err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	extension, supported := w.Databases.BackupExtension(engine)
 	if !supported {
-		return w.failBackup(ctx, backupID, fmt.Errorf("verified backups are not implemented for database engine %q", engine))
+		return w.failBackup(ctx, j, backupID, fmt.Errorf("verified backups are not implemented for database engine %q", engine))
 	}
 	filename := backupID.String() + "." + extension
 	plan, err := w.Databases.Backup(engine, version, serviceName, credentials, filename)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	if clusterID != nil {
 		remote, ok := w.scheduler(clusterID).(RemoteSwarm)
 		if !ok {
-			return w.failBackup(ctx, backupID, errors.New("remote cluster scheduler does not support artifact transport"))
+			return w.failBackup(ctx, j, backupID, errors.New("remote cluster scheduler does not support artifact transport"))
 		}
-		return w.backupDatabaseRemote(ctx, backupID, serviceName, stackName, filename, plan, destinationID, payload.RetentionCount, payload.VerifyRestore, remote)
+		return w.backupDatabaseRemote(ctx, j, backupID, serviceName, stackName, filename, plan, destinationID, payload.RetentionCount, payload.VerifyRestore, remote)
 	}
 	directory := filepath.Join(w.BackupDirectory, backupID.String())
 	if err = os.MkdirAll(directory, 0700); err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	keepLocalArtifact := false
 	defer func() {
@@ -658,44 +675,44 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		}
 	}()
 	if err = writePlanFiles(directory, plan.Files); err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	defer removePlanFiles(directory, plan.Files)
 	jobCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	_, err = w.Swarm.RunContainerJob(jobCtx, stackName+"_default", plan.Image, directory, plan.Environment, plan.Command)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	plainPath := filepath.Join(directory, filename)
 	defer os.Remove(plainPath)
 	plainSum, _, err := checksumFile(plainPath)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	encryptedPath := plainPath + ".enc"
 	dataKey := make([]byte, 32)
 	if _, err = rand.Read(dataKey); err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	artifactBox, err := cryptox.New(dataKey)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	wrappedDataKey, err := w.Box.Encrypt(dataKey, "backup-data-key:"+backupID.String())
 	clear(dataKey)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	if err = encryptBackupFile(artifactBox, plainPath, encryptedPath, backupID); err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	if err = os.Remove(plainPath); err != nil {
-		return w.failBackup(ctx, backupID, fmt.Errorf("remove plaintext backup: %w", err))
+		return w.failBackup(ctx, j, backupID, fmt.Errorf("remove plaintext backup: %w", err))
 	}
 	sum, size, err := checksumFile(encryptedPath)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	storedPath, objectKey := encryptedPath, ""
 	var remote *backupstore.S3
@@ -703,15 +720,15 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		var remoteErr error
 		remote, remoteErr = w.s3(ctx, *destinationID)
 		if remoteErr != nil {
-			return w.failBackup(ctx, backupID, remoteErr)
+			return w.failBackup(ctx, j, backupID, remoteErr)
 		}
 		objectKey = remote.ObjectKey(serviceName + "/" + filename + ".enc")
 		if remoteErr = remote.Put(ctx, objectKey, encryptedPath); remoteErr != nil {
-			return w.failBackup(ctx, backupID, remoteErr)
+			return w.failBackup(ctx, j, backupID, remoteErr)
 		}
 		storedPath = ""
 	}
-	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,encrypted=true,plaintext_sha256=$6,encrypted_data_key=$7,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum, plainSum, wrappedDataKey)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,encrypted=true,plaintext_sha256=$6,encrypted_data_key=$7,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum, plainSum, wrappedDataKey)
 	if err != nil {
 		// The object is not referenced until the metadata update commits. Remove
 		// it with a fresh context when cancellation or a transient database error
@@ -739,34 +756,34 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	return nil
 }
 
-func (w *Worker) backupDatabaseRemote(ctx context.Context, backupID uuid.UUID, serviceName, stackName, filename string, plan database.BackupPlan, destinationID *uuid.UUID, retention int, verify bool, remote RemoteSwarm) error {
+func (w *Worker) backupDatabaseRemote(ctx context.Context, j job, backupID uuid.UUID, serviceName, stackName, filename string, plan database.BackupPlan, destinationID *uuid.UUID, retention int, verify bool, remote RemoteSwarm) error {
 	if destinationID == nil {
-		return w.failBackup(ctx, backupID, errors.New("remote database backups require an S3-compatible destination"))
+		return w.failBackup(ctx, j, backupID, errors.New("remote database backups require an S3-compatible destination"))
 	}
 	storage, err := w.s3(ctx, *destinationID)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	objectKey := storage.ObjectKey(serviceName + "/" + filename + ".enc")
 	putURL, err := storage.PresignedPut(ctx, objectKey, time.Hour)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	dataKey := make([]byte, 32)
 	if _, err = rand.Read(dataKey); err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	wrapped, err := w.Box.Encrypt(dataKey, "backup-data-key:"+backupID.String())
 	if err != nil {
 		clear(dataKey)
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	result, err := remote.RunArtifactJob(ctx, RemoteArtifactJob{Mode: "upload", Network: stackName + "_default", Image: plan.Image, Environment: plan.Environment, Command: plan.Command, Files: plan.Files, ArtifactName: filename, TransferURL: putURL, EncryptionKey: base64.RawStdEncoding.EncodeToString(dataKey), EncryptionAAD: "database-backup:" + backupID.String()})
 	clear(dataKey)
 	if err != nil {
-		return w.failBackup(ctx, backupID, err)
+		return w.failBackup(ctx, j, backupID, err)
 	}
-	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',path='',object_key=$2,size_bytes=$3,sha256=$4,encrypted=true,plaintext_sha256=$5,encrypted_data_key=$6,finished_at=now() WHERE id=$1`, backupID, objectKey, result.SizeBytes, result.SHA256, result.PlaintextSHA256, wrapped)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='succeeded',path='',object_key=$2,size_bytes=$3,sha256=$4,encrypted=true,plaintext_sha256=$5,encrypted_data_key=$6,finished_at=now() WHERE id=$1`, backupID, objectKey, result.SizeBytes, result.SHA256, result.PlaintextSHA256, wrapped)
 	if err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -845,8 +862,10 @@ func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int)
 	}
 }
 
-func (w *Worker) failBackup(ctx context.Context, id uuid.UUID, backupErr error) error {
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(backupErr.Error(), 8192))
+func (w *Worker) failBackup(ctx context.Context, j job, id uuid.UUID, backupErr error) error {
+	if err := w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(backupErr.Error(), 8192)); err != nil {
+		return errors.Join(backupErr, err)
+	}
 	return backupErr
 }
 
@@ -867,61 +886,63 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	var expectedSize *int64
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
+	})
 	if err != nil {
 		return err
 	}
 	if clusterID != nil {
 		remote, ok := w.scheduler(clusterID).(RemoteSwarm)
 		if !ok {
-			return w.failRestore(ctx, restoreID, errors.New("remote cluster scheduler does not support artifact transport"))
+			return w.failRestore(ctx, j, restoreID, errors.New("remote cluster scheduler does not support artifact transport"))
 		}
-		return w.restoreDatabaseRemote(ctx, restoreID, backupID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey, expectedSize, destinationID, artifactEncrypted, remote)
+		return w.restoreDatabaseRemote(ctx, j, restoreID, backupID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey, expectedSize, destinationID, artifactEncrypted, remote)
 	}
 	cleanRoot := filepath.Clean(w.BackupDirectory)
 	cleanPath := filepath.Clean(path)
 	if destinationID != nil {
 		directory := filepath.Join(cleanRoot, "restore-"+restoreID.String())
 		if err = os.MkdirAll(directory, 0700); err != nil {
-			return w.failRestore(ctx, restoreID, err)
+			return w.failRestore(ctx, j, restoreID, err)
 		}
 		defer os.RemoveAll(directory)
 		cleanPath = filepath.Join(directory, filepath.Base(objectKey))
 		remote, remoteErr := w.s3(ctx, *destinationID)
 		if remoteErr != nil {
-			return w.failRestore(ctx, restoreID, remoteErr)
+			return w.failRestore(ctx, j, restoreID, remoteErr)
 		}
 		if remoteErr = remote.Get(ctx, objectKey, cleanPath); remoteErr != nil {
-			return w.failRestore(ctx, restoreID, remoteErr)
+			return w.failRestore(ctx, j, restoreID, remoteErr)
 		}
 	}
 	relative, err := filepath.Rel(cleanRoot, cleanPath)
 	if err != nil || strings.HasPrefix(relative, "..") {
-		return w.failRestore(ctx, restoreID, errors.New("backup path escapes configured directory"))
+		return w.failRestore(ctx, j, restoreID, errors.New("backup path escapes configured directory"))
 	}
 	actualHash, _, err := checksumFile(cleanPath)
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	if actualHash != expectedHash {
-		return w.failRestore(ctx, restoreID, errors.New("backup checksum mismatch"))
+		return w.failRestore(ctx, j, restoreID, errors.New("backup checksum mismatch"))
 	}
 	if artifactEncrypted {
 		dataKey, keyErr := w.Box.Decrypt(encryptedDataKey, "backup-data-key:"+backupID.String())
 		if keyErr != nil {
-			return w.failRestore(ctx, restoreID, keyErr)
+			return w.failRestore(ctx, j, restoreID, keyErr)
 		}
 		artifactBox, keyErr := cryptox.New(dataKey)
 		clear(dataKey)
 		if keyErr != nil {
-			return w.failRestore(ctx, restoreID, keyErr)
+			return w.failRestore(ctx, j, restoreID, keyErr)
 		}
 		decryptedPath := strings.TrimSuffix(cleanPath, ".enc")
 		if decryptedPath == cleanPath {
 			decryptedPath += ".plain"
 		}
 		if err = decryptBackupFile(artifactBox, cleanPath, decryptedPath, backupID); err != nil {
-			return w.failRestore(ctx, restoreID, err)
+			return w.failRestore(ctx, j, restoreID, err)
 		}
 		defer os.Remove(decryptedPath)
 		cleanPath = decryptedPath
@@ -929,7 +950,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 			if hashErr == nil {
 				hashErr = errors.New("backup plaintext checksum mismatch")
 			}
-			return w.failRestore(ctx, restoreID, hashErr)
+			return w.failRestore(ctx, j, restoreID, hashErr)
 		}
 	}
 	credentials := map[string]string{}
@@ -937,11 +958,11 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		drillName := "verify"
 		rendered, renderErr := w.Databases.Render(engine, database.Request{Name: drillName, Version: version})
 		if renderErr != nil {
-			return w.failRestore(ctx, restoreID, renderErr)
+			return w.failRestore(ctx, j, restoreID, renderErr)
 		}
 		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
 		if _, err = w.Swarm.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment, nil); err != nil {
-			return w.failRestore(ctx, restoreID, err)
+			return w.failRestore(ctx, j, restoreID, err)
 		}
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -953,7 +974,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		stackName, serviceName, credentials = drillStack, drillName, rendered.Credentials
 		readiness, readinessErr := w.Databases.Readiness(engine, version, serviceName, credentials)
 		if readinessErr != nil {
-			return w.failRestore(ctx, restoreID, readinessErr)
+			return w.failRestore(ctx, j, restoreID, readinessErr)
 		}
 		ready := false
 		for attempt := 0; attempt < 12; attempt++ {
@@ -963,55 +984,55 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 			}
 			select {
 			case <-ctx.Done():
-				return w.failRestore(ctx, restoreID, ctx.Err())
+				return w.failRestore(ctx, j, restoreID, ctx.Err())
 			case <-time.After(5 * time.Second):
 			}
 		}
 		if !ready {
-			return w.failRestore(ctx, restoreID, fmt.Errorf("restore drill database did not become ready: %w", readinessErr))
+			return w.failRestore(ctx, j, restoreID, fmt.Errorf("restore drill database did not become ready: %w", readinessErr))
 		}
 	} else {
 		plain, decryptErr := w.Box.Decrypt(encryptedCredentials, "database-credentials")
 		if decryptErr != nil {
-			return w.failRestore(ctx, restoreID, decryptErr)
+			return w.failRestore(ctx, j, restoreID, decryptErr)
 		}
 		if err = json.Unmarshal(plain, &credentials); err != nil {
-			return w.failRestore(ctx, restoreID, err)
+			return w.failRestore(ctx, j, restoreID, err)
 		}
 	}
 	plan, err := w.Databases.Restore(engine, version, serviceName, credentials, filepath.Base(cleanPath))
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	if err = writePlanFiles(filepath.Dir(cleanPath), plan.Files); err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	defer removePlanFiles(filepath.Dir(cleanPath), plan.Files)
 	jobCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	_, err = w.Swarm.RunContainerJob(jobCtx, stackName+"_default", plan.Image, filepath.Dir(cleanPath), plan.Environment, plan.Command)
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
-	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
 	return err
 }
 
-func (w *Worker) restoreDatabaseRemote(ctx context.Context, restoreID, backupID uuid.UUID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey string, expectedSize *int64, destinationID *uuid.UUID, encrypted bool, remote RemoteSwarm) error {
+func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, backupID uuid.UUID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey string, expectedSize *int64, destinationID *uuid.UUID, encrypted bool, remote RemoteSwarm) error {
 	if destinationID == nil || objectKey == "" || !encrypted {
-		return w.failRestore(ctx, restoreID, errors.New("remote restores require an encrypted S3 backup"))
+		return w.failRestore(ctx, j, restoreID, errors.New("remote restores require an encrypted S3 backup"))
 	}
 	storage, err := w.s3(ctx, *destinationID)
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	getURL, err := storage.PresignedGet(ctx, objectKey, time.Hour)
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	dataKey, err := w.Box.Decrypt(encryptedDataKey, "backup-data-key:"+backupID.String())
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	defer clear(dataKey)
 	credentials := map[string]string{}
@@ -1019,11 +1040,11 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, restoreID, backupID 
 		drillName := "verify"
 		rendered, renderErr := w.Databases.Render(engine, database.Request{Name: drillName, Version: version})
 		if renderErr != nil {
-			return w.failRestore(ctx, restoreID, renderErr)
+			return w.failRestore(ctx, j, restoreID, renderErr)
 		}
 		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
 		if _, err = remote.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment, nil); err != nil {
-			return w.failRestore(ctx, restoreID, err)
+			return w.failRestore(ctx, j, restoreID, err)
 		}
 		defer func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1035,7 +1056,7 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, restoreID, backupID 
 		stackName, serviceName, credentials = drillStack, drillName, rendered.Credentials
 		readiness, readinessErr := w.Databases.Readiness(engine, version, serviceName, credentials)
 		if readinessErr != nil {
-			return w.failRestore(ctx, restoreID, readinessErr)
+			return w.failRestore(ctx, j, restoreID, readinessErr)
 		}
 		ready := false
 		for attempt := 0; attempt < 12; attempt++ {
@@ -1045,26 +1066,26 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, restoreID, backupID 
 			}
 			select {
 			case <-ctx.Done():
-				return w.failRestore(ctx, restoreID, ctx.Err())
+				return w.failRestore(ctx, j, restoreID, ctx.Err())
 			case <-time.After(5 * time.Second):
 			}
 		}
 		if !ready {
-			return w.failRestore(ctx, restoreID, fmt.Errorf("remote restore drill database did not become ready: %w", readinessErr))
+			return w.failRestore(ctx, j, restoreID, fmt.Errorf("remote restore drill database did not become ready: %w", readinessErr))
 		}
 	} else {
 		plain, decryptErr := w.Box.Decrypt(encryptedCredentials, "database-credentials")
 		if decryptErr != nil {
-			return w.failRestore(ctx, restoreID, decryptErr)
+			return w.failRestore(ctx, j, restoreID, decryptErr)
 		}
 		if err = json.Unmarshal(plain, &credentials); err != nil {
-			return w.failRestore(ctx, restoreID, err)
+			return w.failRestore(ctx, j, restoreID, err)
 		}
 	}
 	artifactName := strings.TrimSuffix(filepath.Base(objectKey), ".enc")
 	plan, err := w.Databases.Restore(engine, version, serviceName, credentials, artifactName)
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	size := int64(0)
 	if expectedSize != nil {
@@ -1072,9 +1093,9 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, restoreID, backupID 
 	}
 	_, err = remote.RunArtifactJob(ctx, RemoteArtifactJob{Mode: "download", Network: stackName + "_default", Image: plan.Image, Environment: plan.Environment, Command: plan.Command, Files: plan.Files, ArtifactName: artifactName, TransferURL: getURL, EncryptionKey: base64.RawStdEncoding.EncodeToString(dataKey), EncryptionAAD: "database-backup:" + backupID.String(), SHA256: expectedHash, PlaintextSHA256: plaintextHash, SizeBytes: size})
 	if err != nil {
-		return w.failRestore(ctx, restoreID, err)
+		return w.failRestore(ctx, j, restoreID, err)
 	}
-	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
 	return err
 }
 
@@ -1095,17 +1116,19 @@ func (w *Worker) s3(ctx context.Context, id uuid.UUID) (*backupstore.S3, error) 
 	}
 	return backupstore.NewS3(backupstore.S3Config{Endpoint: endpoint, Region: region, Bucket: bucket, Prefix: prefix, UseTLS: useTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"]})
 }
-func (w *Worker) failRestore(ctx context.Context, id uuid.UUID, restoreErr error) error {
-	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(restoreErr.Error(), 8192))
+func (w *Worker) failRestore(ctx context.Context, j job, id uuid.UUID, restoreErr error) error {
+	if err := w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(restoreErr.Error(), 8192)); err != nil {
+		return errors.Join(restoreErr, err)
+	}
 	return restoreErr
 }
 
-func (w *Worker) markDeployment(ctx context.Context, id uuid.UUID, status, output string, deployErr error) {
+func (w *Worker) markDeployment(ctx context.Context, j job, id uuid.UUID, status, output string, deployErr error) {
 	message := ""
 	if deployErr != nil {
 		message = deployErr.Error()
 	}
-	if err := w.Store.FinishDeployment(ctx, id, status, output, message); err != nil {
+	if err := w.Store.FinishDeploymentForJob(ctx, j.ID, j.LeaseID, id, status, output, message); err != nil {
 		w.Logger.Error("finish deployment", "deployment", id, "error", err)
 	}
 }
@@ -1156,19 +1179,17 @@ func (w *Worker) deliverNotification(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	delivery, endpoint, err := w.Store.GetNotificationDelivery(ctx, id)
+	delivery, endpoint, err := w.Store.GetNotificationDeliveryForJob(ctx, j.ID, j.LeaseID, id)
 	if err != nil {
 		return err
 	}
 	urlBytes, err := w.Box.Decrypt(endpoint.EncryptedURL, "notification-url:"+endpoint.ID.String())
 	if err != nil {
-		w.Store.FinishNotificationDelivery(ctx, id, 0, err)
-		return err
+		return errors.Join(err, w.Store.FinishNotificationDeliveryForJob(ctx, j.ID, j.LeaseID, id, 0, err))
 	}
 	secret, err := w.Box.Decrypt(endpoint.EncryptedSecret, "notification-secret:"+endpoint.ID.String())
 	if err != nil {
-		w.Store.FinishNotificationDelivery(ctx, id, 0, err)
-		return err
+		return errors.Join(err, w.Store.FinishNotificationDeliveryForJob(ctx, j.ID, j.LeaseID, id, 0, err))
 	}
 	var code int
 	switch endpoint.Kind {
@@ -1181,8 +1202,7 @@ func (w *Worker) deliverNotification(ctx context.Context, j job) error {
 	default:
 		err = fmt.Errorf("unsupported notification endpoint kind %q", endpoint.Kind)
 	}
-	w.Store.FinishNotificationDelivery(ctx, id, code, err)
-	return err
+	return errors.Join(err, w.Store.FinishNotificationDeliveryForJob(ctx, j.ID, j.LeaseID, id, code, err))
 }
 
 func (w *Worker) notificationClient() *http.Client {

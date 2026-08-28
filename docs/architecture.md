@@ -75,9 +75,13 @@ directory and are removed when the command completes.
 
 Multiple controller replicas coordinate durable jobs with `SKIP LOCKED` and a
 fresh UUID fencing token for every execution attempt. Heartbeats and terminal
-state transitions must present that token, so a paused worker cannot renew or
-finish work after another replica recovers the expired attempt—even when the
-replacement uses the same configured worker name. Singleton maintenance loops
-additionally use expiring, database-backed leader leases; only the current
-holder schedules backup policy runs or prunes audit history, and another
-replica takes over after expiry.
+job state transitions must present that token. Resource start and completion
+transitions for deployments, backups, restores, notifications, commit statuses,
+and audit archives lock the owning job and update the resource in one database
+transaction. A paused worker therefore cannot restart or finish a resource
+after another replica recovers the expired attempt—even when the replacement
+uses the same configured worker name. External Swarm, provider, and object-store
+operations remain at-least-once and must be idempotent. Singleton maintenance
+loops additionally use expiring, database-backed leader leases; only the
+current holder schedules backup policy runs or prunes audit history, and
+another replica takes over after expiry.

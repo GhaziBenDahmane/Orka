@@ -139,8 +139,11 @@ esac
 		t.Fatal(err)
 	}
 	backupID = backup.ID
-	backupPayload, _ := json.Marshal(map[string]string{"backupId": backup.ID.String()})
-	if err = worker.backupDatabase(ctx, job{Payload: backupPayload}); err != nil {
+	backupJob := leaseResourceJob(t, ctx, db, "backup.database", "backupId", backup.ID)
+	if err = worker.backupDatabase(ctx, backupJob); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.finish(ctx, backupJob, nil); err != nil {
 		t.Fatal(err)
 	}
 	backup, err = db.GetDatabaseBackup(ctx, orgID, backup.ID)
@@ -168,8 +171,11 @@ esac
 		t.Fatal(err)
 	}
 	restoreID = restore.ID
-	restorePayload, _ := json.Marshal(map[string]string{"restoreId": restore.ID.String()})
-	if err = worker.restoreDatabase(ctx, job{Payload: restorePayload}); err != nil {
+	restoreJob := leaseResourceJob(t, ctx, db, "restore.database", "restoreId", restore.ID)
+	if err = worker.restoreDatabase(ctx, restoreJob); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.finish(ctx, restoreJob, nil); err != nil {
 		t.Fatal(err)
 	}
 	restore, err = db.GetDatabaseRestore(ctx, orgID, restore.ID)

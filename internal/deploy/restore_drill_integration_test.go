@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -99,8 +98,11 @@ while [ "$#" -gt 0 ]; do case "$1" in --volume) shift; mount="${1%%:*}" ;; --ent
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='restore.database' AND payload->>'restoreId'=$1`, restoreID.String()).Scan(&drillJobs); err != nil || drillJobs != 1 {
 		t.Fatalf("restore drill jobs = %d, err = %v", drillJobs, err)
 	}
-	payload, _ := json.Marshal(map[string]string{"restoreId": restoreID.String()})
-	if err = worker.restoreDatabase(ctx, job{Payload: payload}); err != nil {
+	leasedJob := leaseResourceJob(t, ctx, db, "restore.database", "restoreId", restoreID)
+	if err = worker.restoreDatabase(ctx, leasedJob); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.finish(ctx, leasedJob, nil); err != nil {
 		t.Fatal(err)
 	}
 	restore, err := db.GetDatabaseRestore(ctx, orgID, restoreID)
