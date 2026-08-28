@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	backupstore "github.com/bendahma/dokploy-go/internal/backup"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -85,8 +86,9 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	}
 	defer tx.Rollback(ctx)
 	var policyID, databaseID uuid.UUID
+	var destinationID *uuid.UUID
 	var intervalSeconds, retentionCount int
-	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count FROM backup_policies WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount)
+	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count,destination_id FROM backup_policies WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
@@ -94,7 +96,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 		return err
 	}
 	backupID := uuid.New()
-	if _, err = tx.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format) VALUES($1,$2,'queued','native')`, backupID, databaseID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id) VALUES($1,$2,'queued','native',$3)`, backupID, databaseID, destinationID); err != nil {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]any{"backupId": backupID.String(), "retentionCount": retentionCount})
@@ -327,20 +329,35 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 	if _, err = w.Swarm.Remove(ctx, payload.StackName); err != nil {
 		return err
 	}
-	rows, err := w.Store.Pool.Query(ctx, `SELECT b.path FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1 AND b.path<>''`, serviceID)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT b.path,b.destination_id,b.object_key FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1`, serviceID)
 	if err != nil {
 		return err
 	}
-	paths := []string{}
+	type backupArtifact struct {
+		path, objectKey string
+		destinationID   *uuid.UUID
+	}
+	artifacts := []backupArtifact{}
 	for rows.Next() {
-		var path string
-		if err = rows.Scan(&path); err != nil {
+		var artifact backupArtifact
+		if err = rows.Scan(&artifact.path, &artifact.destinationID, &artifact.objectKey); err != nil {
 			rows.Close()
 			return err
 		}
-		paths = append(paths, path)
+		artifacts = append(artifacts, artifact)
 	}
 	rows.Close()
+	for _, artifact := range artifacts {
+		if artifact.destinationID != nil && artifact.objectKey != "" {
+			remote, remoteErr := w.s3(ctx, *artifact.destinationID)
+			if remoteErr != nil {
+				return remoteErr
+			}
+			if remoteErr = remote.Delete(ctx, artifact.objectKey); remoteErr != nil {
+				return remoteErr
+			}
+		}
+	}
 	tx, err := w.Store.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -360,10 +377,13 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 		return err
 	}
 	root := filepath.Clean(w.BackupDirectory)
-	for _, path := range paths {
-		relative, relErr := filepath.Rel(root, filepath.Clean(path))
+	for _, artifact := range artifacts {
+		if artifact.path == "" {
+			continue
+		}
+		relative, relErr := filepath.Rel(root, filepath.Clean(artifact.path))
 		if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			_ = os.RemoveAll(filepath.Dir(path))
+			_ = os.RemoveAll(filepath.Dir(artifact.path))
 		}
 	}
 	return nil
@@ -382,7 +402,8 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		return err
 	}
 	var engine, version, stackName, serviceName, encrypted string
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials`, backupID).Scan(&engine, &version, &stackName, &serviceName, &encrypted)
+	var destinationID *uuid.UUID
+	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id`, backupID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &destinationID)
 	if err != nil {
 		return err
 	}
@@ -422,32 +443,73 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
-	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',path=$2,size_bytes=$3,sha256=$4,finished_at=now() WHERE id=$1`, backupID, path, size, sum)
-	if err == nil && payload.RetentionCount > 0 {
+	storedPath, objectKey := path, ""
+	var remote *backupstore.S3
+	if destinationID != nil {
+		var remoteErr error
+		remote, remoteErr = w.s3(ctx, *destinationID)
+		if remoteErr != nil {
+			return w.failBackup(ctx, backupID, remoteErr)
+		}
+		objectKey = remote.ObjectKey(serviceName + "/" + filename)
+		if remoteErr = remote.Put(ctx, objectKey, path); remoteErr != nil {
+			return w.failBackup(ctx, backupID, remoteErr)
+		}
+		storedPath = ""
+	}
+	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum)
+	if err != nil {
+		// The object is not referenced until the metadata update commits. Remove
+		// it with a fresh context when cancellation or a transient database error
+		// happens after a successful upload.
+		if remote != nil {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			if cleanupErr := remote.Delete(cleanupCtx, objectKey); cleanupErr != nil {
+				w.Logger.Error("delete uncommitted remote backup", "backup", backupID, "error", cleanupErr)
+			}
+		}
+		return err
+	}
+	if remote != nil {
+		_ = os.RemoveAll(directory)
+	}
+	if payload.RetentionCount > 0 {
 		w.pruneBackups(ctx, backupID, payload.RetentionCount)
 	}
-	return err
+	return nil
 }
 
 func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
 	if err != nil {
 		w.Logger.Error("select expired backups", "error", err)
 		return
 	}
 	type expired struct {
-		id   uuid.UUID
-		path string
+		id              uuid.UUID
+		path, objectKey string
+		destinationID   *uuid.UUID
 	}
 	items := []expired{}
 	for rows.Next() {
 		var item expired
-		if err = rows.Scan(&item.id, &item.path); err == nil {
+		if err = rows.Scan(&item.id, &item.path, &item.destinationID, &item.objectKey); err == nil {
 			items = append(items, item)
 		}
 	}
 	rows.Close()
 	for _, item := range items {
+		if item.destinationID != nil && item.objectKey != "" {
+			remote, remoteErr := w.s3(ctx, *item.destinationID)
+			if remoteErr == nil {
+				remoteErr = remote.Delete(ctx, item.objectKey)
+			}
+			if remoteErr != nil {
+				w.Logger.Error("delete expired remote backup", "backup", item.id, "error", remoteErr)
+				continue
+			}
+		}
 		if item.path != "" {
 			_ = os.RemoveAll(filepath.Dir(item.path))
 		}
@@ -471,13 +533,29 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	var engine, version, stackName, serviceName, encrypted, path, expectedHash string
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256`, restoreID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &path, &expectedHash)
+	var engine, version, stackName, serviceName, encrypted, path, expectedHash, objectKey string
+	var destinationID *uuid.UUID
+	err = w.Store.Pool.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.destination_id,b.object_key`, restoreID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &path, &expectedHash, &destinationID, &objectKey)
 	if err != nil {
 		return err
 	}
 	cleanRoot := filepath.Clean(w.BackupDirectory)
 	cleanPath := filepath.Clean(path)
+	if destinationID != nil {
+		directory := filepath.Join(cleanRoot, "restore-"+restoreID.String())
+		if err = os.MkdirAll(directory, 0700); err != nil {
+			return w.failRestore(ctx, restoreID, err)
+		}
+		defer os.RemoveAll(directory)
+		cleanPath = filepath.Join(directory, filepath.Base(objectKey))
+		remote, remoteErr := w.s3(ctx, *destinationID)
+		if remoteErr != nil {
+			return w.failRestore(ctx, restoreID, remoteErr)
+		}
+		if remoteErr = remote.Get(ctx, objectKey, cleanPath); remoteErr != nil {
+			return w.failRestore(ctx, restoreID, remoteErr)
+		}
+	}
 	relative, err := filepath.Rel(cleanRoot, cleanPath)
 	if err != nil || strings.HasPrefix(relative, "..") {
 		return w.failRestore(ctx, restoreID, errors.New("backup path escapes configured directory"))
@@ -513,6 +591,24 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	}
 	_, err = w.Store.Pool.Exec(ctx, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
 	return err
+}
+
+func (w *Worker) s3(ctx context.Context, id uuid.UUID) (*backupstore.S3, error) {
+	var endpoint, region, bucket, prefix, encrypted string
+	var useTLS bool
+	err := w.Store.Pool.QueryRow(ctx, `SELECT endpoint,region,bucket,prefix,use_tls,encrypted_credentials FROM backup_destinations WHERE id=$1`, id).Scan(&endpoint, &region, &bucket, &prefix, &useTLS, &encrypted)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := w.Box.Decrypt(encrypted, "backup-destination")
+	if err != nil {
+		return nil, err
+	}
+	var credentials map[string]string
+	if err = json.Unmarshal(plain, &credentials); err != nil {
+		return nil, err
+	}
+	return backupstore.NewS3(backupstore.S3Config{Endpoint: endpoint, Region: region, Bucket: bucket, Prefix: prefix, UseTLS: useTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"]})
 }
 func (w *Worker) failRestore(ctx context.Context, id uuid.UUID, restoreErr error) error {
 	_, _ = w.Store.Pool.Exec(ctx, `UPDATE database_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`, id, truncate(restoreErr.Error(), 8192))

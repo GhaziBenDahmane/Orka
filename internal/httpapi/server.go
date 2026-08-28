@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
+	backupstore "github.com/bendahma/dokploy-go/internal/backup"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
@@ -84,6 +85,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/database-engines", s.requireAuth(http.HandlerFunc(s.databaseEngines)))
 	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireRole("developer", http.HandlerFunc(s.createDatabase)))
 	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireRole("developer", http.HandlerFunc(s.createDatabaseBackup)))
+	mux.Handle("GET /v1/backup-destinations", s.requireRole("developer", http.HandlerFunc(s.listBackupDestinations)))
+	mux.Handle("POST /v1/backup-destinations", s.requireRole("admin", http.HandlerFunc(s.createBackupDestination)))
+	mux.Handle("DELETE /v1/backup-destinations/{destinationID}", s.requireRole("admin", http.HandlerFunc(s.deleteBackupDestination)))
 	mux.Handle("GET /v1/databases/{databaseID}/backup-policy", s.requireAuth(http.HandlerFunc(s.getBackupPolicy)))
 	mux.Handle("PUT /v1/databases/{databaseID}/backup-policy", s.requireRole("admin", http.HandlerFunc(s.putBackupPolicy)))
 	mux.Handle("DELETE /v1/databases/{databaseID}/backup-policy", s.requireRole("admin", http.HandlerFunc(s.deleteBackupPolicy)))
@@ -514,7 +518,16 @@ func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	backup, err := s.Store.QueueDatabaseBackup(r.Context(), p.OrganizationID, id, p.UserID)
+	var destinationID *uuid.UUID
+	if raw := r.URL.Query().Get("destinationId"); raw != "" {
+		parsed, parseErr := uuid.Parse(raw)
+		if parseErr != nil {
+			writeError(w, 400, "invalid_id", "invalid destination id")
+			return
+		}
+		destinationID = &parsed
+	}
+	backup, err := s.Store.QueueDatabaseBackup(r.Context(), p.OrganizationID, id, p.UserID, destinationID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -544,9 +557,10 @@ func (s *Server) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		IntervalSeconds int  `json:"intervalSeconds"`
-		RetentionCount  int  `json:"retentionCount"`
-		Enabled         bool `json:"enabled"`
+		IntervalSeconds int        `json:"intervalSeconds"`
+		RetentionCount  int        `json:"retentionCount"`
+		Enabled         bool       `json:"enabled"`
+		DestinationID   *uuid.UUID `json:"destinationId"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -556,13 +570,83 @@ func (s *Server) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertBackupPolicy(r.Context(), p.OrganizationID, id, in.IntervalSeconds, in.RetentionCount, in.Enabled)
+	item, err := s.Store.UpsertBackupPolicy(r.Context(), p.OrganizationID, id, in.IntervalSeconds, in.RetentionCount, in.Enabled, in.DestinationID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	s.Store.Audit(r.Context(), &p, "backup_policy.update", "database", id.String(), r.RemoteAddr, map[string]any{"intervalSeconds": in.IntervalSeconds, "retentionCount": in.RetentionCount, "enabled": in.Enabled})
 	writeJSON(w, 200, item)
+}
+
+func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name         string `json:"name"`
+		Endpoint     string `json:"endpoint"`
+		Region       string `json:"region"`
+		Bucket       string `json:"bucket"`
+		Prefix       string `json:"prefix"`
+		UseTLS       bool   `json:"useTls"`
+		AccessKey    string `json:"accessKey"`
+		SecretKey    string `json:"secretKey"`
+		SessionToken string `json:"sessionToken"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" || in.AccessKey == "" || in.SecretKey == "" {
+		writeError(w, 400, "invalid_destination", "name, accessKey, and secretKey are required")
+		return
+	}
+	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS})
+	if err != nil {
+		writeError(w, 400, "invalid_destination", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err = client.Check(ctx); err != nil {
+		writeError(w, 400, "destination_unreachable", err.Error())
+		return
+	}
+	secretJSON, _ := json.Marshal(map[string]string{"accessKey": in.AccessKey, "secretKey": in.SecretKey, "sessionToken": in.SessionToken})
+	encrypted, err := s.Box.Encrypt(secretJSON, "backup-destination")
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.CreateBackupDestination(r.Context(), store.BackupDestination{OrganizationID: p.OrganizationID, Name: strings.TrimSpace(in.Name), Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "backup_destination.create", "backup_destination", item.ID.String(), r.RemoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket})
+	writeJSON(w, 201, item)
+}
+
+func (s *Server) listBackupDestinations(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListBackupDestinations(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) deleteBackupDestination(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("destinationID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid destination id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.DeleteBackupDestination(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "backup_destination.delete", "backup_destination", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(204)
 }
 
 func (s *Server) deleteBackupPolicy(w http.ResponseWriter, r *http.Request) {

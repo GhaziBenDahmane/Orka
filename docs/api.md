@@ -49,6 +49,7 @@ organization when a user belongs to more than one.
 | POST | `/v1/templates/{id}/instantiate` | Create a service, secrets, files and routes |
 | GET | `/v1/database-engines` | List built-in database drivers |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
+| GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
 | POST | `/v1/databases/{id}/backups` | Queue a verified native backup |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
 | POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation |
@@ -58,3 +59,6 @@ Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
 The engine response includes `backupCapable`; native verified backup/restore is
 currently available for PostgreSQL, MySQL, MariaDB, and MongoDB.
+Pass `destinationId` to a backup request or backup policy to upload through an
+S3-compatible multipart client. Restores download to an isolated temporary
+directory and verify the stored SHA-256 checksum before invoking native tools.

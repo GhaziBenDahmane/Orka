@@ -23,12 +23,26 @@ jobs:
           --health-retries 20
     env:
       DOCKYARD_TEST_DATABASE_URL: postgres://dockyard:dockyard@127.0.0.1:5432/dockyard_test?sslmode=disable
+      DOCKYARD_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      DOCKYARD_TEST_S3_ACCESS_KEY: minioadmin
+      DOCKYARD_TEST_S3_SECRET_KEY: minioadmin123
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
           cache: true
+      - name: Start S3-compatible test storage
+        run: |
+          docker run -d --name dockyard-minio-test -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin123 \
+            minio/minio:latest server /data
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          exit 1
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build ./cmd/dockyard
