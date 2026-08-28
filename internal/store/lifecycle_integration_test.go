@@ -87,3 +87,52 @@ func TestDeploymentCancellationAndDeletionQueue(t *testing.T) {
 		t.Fatalf("deletion queued = %v, err = %v", deletionQueued, err)
 	}
 }
+
+func TestProjectAndEnvironmentDeletionRequireEmptyChildren(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	orgID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	_, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Lifecycle delete',$2)`, orgID, "lifecycle-delete-"+orgID.String())
+	if err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, projectID, orgID)
+	}
+	if err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, environmentID, projectID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
+
+	if _, err = db.GetProject(ctx, orgID, projectID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.GetEnvironment(ctx, orgID, environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DeleteProject(ctx, orgID, projectID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("project with environment: got %v, want ErrBusy", err)
+	}
+	if err = db.DeleteEnvironment(ctx, uuid.New(), environmentID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant delete: got %v, want ErrNotFound", err)
+	}
+	if err = db.DeleteEnvironment(ctx, orgID, environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DeleteProject(ctx, orgID, projectID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.GetProject(ctx, orgID, projectID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted project: got %v, want ErrNotFound", err)
+	}
+}

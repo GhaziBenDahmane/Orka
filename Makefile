@@ -9,6 +9,7 @@ lint:
 build:
 	go build -o bin/dockyard ./cmd/dockyard
 	go build -o bin/dockyardctl ./cmd/dockyardctl
+	go build -o bin/terraform-provider-dockyard ./cmd/terraform-provider-dockyard
 
 web:
 	cd web && npm ci && npm run build

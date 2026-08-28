@@ -1011,6 +1011,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/environments/{environmentID}:
+    delete:
+      operationId: delete_v1_environments_environmentID
+      tags: [environments]
+      parameters:
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    get:
+      operationId: get_v1_environments_environmentID
+      tags: [environments]
+      parameters:
+        - name: environmentID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/environments/{environmentID}/databases:
     post:
       operationId: post_v1_environments_environmentID_databases
@@ -1383,6 +1422,45 @@ paths:
             schema:
               type: object
               additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/projects/{projectID}:
+    delete:
+      operationId: delete_v1_projects_projectID
+      tags: [projects]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    get:
+      operationId: get_v1_projects_projectID
+      tags: [projects]
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         '2XX':
           description: Successful response

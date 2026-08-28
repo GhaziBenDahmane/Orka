@@ -550,6 +550,38 @@ func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]P
 	return items, rows.Err()
 }
 
+func (s *Store) GetProject(ctx context.Context, organizationID, projectID uuid.UUID) (Project, error) {
+	var item Project
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,description,created_at FROM projects WHERE id=$1 AND organization_id=$2`, projectID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.Description, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Project{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var hasEnvironments bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM environments WHERE project_id=p.id) FROM projects p WHERE p.id=$1 AND p.organization_id=$2 FOR UPDATE`, projectID, organizationID).Scan(&hasEnvironments)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if hasEnvironments {
+		return ErrBusy
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM projects WHERE id=$1`, projectID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string) (Environment, error) {
 	return s.CreateEnvironmentOnCluster(ctx, organizationID, projectID, name, slug, nil)
 }
@@ -601,6 +633,38 @@ func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID 
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) GetEnvironment(ctx context.Context, organizationID, environmentID uuid.UUID) (Environment, error) {
+	var item Environment
+	err := s.Pool.QueryRow(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, environmentID, organizationID).Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.Name, &item.Slug, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Environment{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environmentID uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var hasServices bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services WHERE environment_id=e.id) FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2 FOR UPDATE OF e`, environmentID, organizationID).Scan(&hasServices)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if hasServices {
+		return ErrBusy
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM environments WHERE id=$1`, environmentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UUID, service ComposeService) (ComposeService, error) {

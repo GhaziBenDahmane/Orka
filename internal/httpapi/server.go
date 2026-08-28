@@ -125,6 +125,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /scim/v2/Groups/{groupID}", s.scimGroup)
 	mux.Handle("GET /v1/projects", s.requireAuth(http.HandlerFunc(s.listProjects)))
 	mux.Handle("POST /v1/projects", s.requireRole("developer", http.HandlerFunc(s.createProject)))
+	mux.Handle("GET /v1/projects/{projectID}", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.getProject)))
+	mux.Handle("DELETE /v1/projects/{projectID}", s.requireResourceRole("admin", "project", "projectID", http.HandlerFunc(s.deleteProject)))
 	mux.Handle("GET /v1/projects/{projectID}/grants", s.requireRole("admin", http.HandlerFunc(s.listProjectGrants)))
 	mux.Handle("PUT /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.putProjectGrant)))
 	mux.Handle("DELETE /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteProjectGrant)))
@@ -137,6 +139,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /v1/environments/{environmentID}/policy", s.requireResourceRole("admin", "environment", "environmentID", http.HandlerFunc(s.putEnvironmentPolicy)))
 	mux.Handle("POST /v1/projects/{projectID}/environments", s.requireResourceRole("developer", "project", "projectID", http.HandlerFunc(s.createEnvironment)))
 	mux.Handle("GET /v1/projects/{projectID}/environments", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.listEnvironments)))
+	mux.Handle("GET /v1/environments/{environmentID}", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.getEnvironment)))
+	mux.Handle("DELETE /v1/environments/{environmentID}", s.requireResourceRole("admin", "environment", "environmentID", http.HandlerFunc(s.deleteEnvironment)))
 	mux.Handle("POST /v1/environments/{environmentID}/services", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createService)))
 	mux.Handle("GET /v1/environments/{environmentID}/services", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listServices)))
 	mux.Handle("GET /v1/database-engines", s.requireAuth(http.HandlerFunc(s.databaseEngines)))
@@ -622,6 +626,33 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
+func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid project id")
+		return
+	}
+	item, err := s.Store.GetProject(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid project id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.DeleteProject(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "project.delete", "project", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name        string `json:"name"`
@@ -690,6 +721,35 @@ func (s *Server) listEnvironments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) getEnvironment(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("environmentID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid environment id")
+		return
+	}
+	item, err := s.Store.GetEnvironment(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("environmentID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid environment id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.DeleteEnvironment(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "environment.delete", "environment", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
@@ -1574,6 +1634,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, 404, "not_found", "resource not found")
+		return
+	}
+	if errors.Is(err, store.ErrBusy) {
+		writeError(w, http.StatusConflict, "resource_not_empty", "delete child resources first")
 		return
 	}
 	var pgErr *pgconn.PgError

@@ -86,6 +86,12 @@ cluster operations have short commands. `dockyardctl request METHOD /v1/path
 release. Environment variables `DOCKYARD_URL`, `DOCKYARD_TOKEN`, and
 `DOCKYARD_ORGANIZATION_ID` override saved configuration.
 
+## Terraform / OpenTofu
+
+`terraform-provider-dockyard` manages projects, environments, and Compose
+services, including waiting for asynchronous Swarm cleanup during destroy. See
+[docs/terraform.md](docs/terraform.md) and [examples/terraform/main.tf](examples/terraform/main.tf).
+
 ## License
 
 Apache-2.0. This project is an independent implementation and does not include
