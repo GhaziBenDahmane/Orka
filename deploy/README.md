@@ -76,3 +76,42 @@ S3-compatible backup destination whose configured endpoint is reachable from
 both the controller and agent. Transfers use one-hour presigned URLs. Backup
 bytes are encrypted on the agent before upload; object-storage credentials and
 plaintext backup data are never sent to the agent API or controller.
+
+## Control-plane backup and recovery
+
+For the bundled PostgreSQL service, run the backup script on the Swarm node
+hosting `dockyard_postgres`. Supply the exact deployed image reference and an
+escrowed copy of the master key:
+
+```sh
+export DOCKYARD_IMAGE='ghcr.io/example/dockyard@sha256:...'
+export DOCKYARD_MASTER_KEY_FILE=/secure/escrow/dockyard-master-key
+scripts/backup-control-plane.sh /secure/backups/dockyard-2026-08-28
+```
+
+The new directory contains a custom-format PostgreSQL dump and a JSON manifest
+with the dump checksum and size, schema version, image digest, and fingerprints
+of the master key and optional agent CA certificate. It never contains either
+secret. Copy the bundle, master key, agent CA keypair, artifact storage, stack
+configuration, and image digest to independently protected storage.
+
+Restore only on the node hosting the PostgreSQL task, with all controller
+replicas stopped. The script refuses to proceed unless the controller service
+is scaled to zero, the destructive confirmation value is exact, every bundle
+integrity check passes, and the supplied key/CA fingerprints match:
+
+```sh
+docker service scale dockyard_dockyard=0
+export DOCKYARD_RESTORE_CONFIRM='restore:dockyard'
+export DOCKYARD_IMAGE='ghcr.io/example/dockyard@sha256:...'
+export DOCKYARD_MASTER_KEY_FILE=/secure/escrow/dockyard-master-key
+scripts/restore-control-plane.sh /secure/backups/dockyard-2026-08-28
+docker service scale dockyard_dockyard=1
+```
+
+The restore recreates the `dockyard` database and restores it in one
+transaction, then checks the restored migration version. Start the exact image
+recorded in the manifest, verify login and representative secret decryption,
+and perform a managed-database restore drill before upgrading. Deployments
+using external PostgreSQL should use the provider's consistent snapshot/PITR
+mechanism and preserve the same recovery-set metadata and secret escrow.

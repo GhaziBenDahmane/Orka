@@ -21,7 +21,10 @@ links for every item below.
 - A clean Compose installation bootstraps an owner, creates project,
   environment, and service records, deploys the service to Swarm, verifies its
   replica, persists an undeployed revision across a controller restart, and
-  rolls back to the last successful immutable snapshot on the live Swarm.
+  rolls back to the last successful immutable snapshot on the live Swarm. The
+  smoke test then backs up the control plane, rejects active-controller,
+  modified-dump, and wrong-key restores, deletes live data, restores the dump,
+  and verifies the authenticated workload state after restart.
 
 ## Staging gates
 

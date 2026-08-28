@@ -9,6 +9,7 @@ public_network="dockyard-public"
 initialized_swarm=false
 created_network=false
 stack_name=""
+recovery_root="$(mktemp -d)"
 cleanup() {
   if [[ -n "$stack_name" ]]; then
     docker stack rm "$stack_name" >/dev/null 2>&1 || true
@@ -23,6 +24,7 @@ cleanup() {
   if [[ "$initialized_swarm" == true ]]; then
     docker swarm leave --force >/dev/null 2>&1 || true
   fi
+  rm -rf -- "$recovery_root"
 }
 trap cleanup EXIT
 
@@ -134,3 +136,69 @@ jq --exit-status '.trigger == "rollback" and .revision == 3' <<<"$rollback_respo
 rolled_back_service="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id")"
 jq --exit-status '.service.revision == 3 and (.service.composeYaml | contains("nginx:1.29-alpine")) and (.service.composeYaml | contains("nginx:1.28-alpine") | not)' <<<"$rolled_back_service" >/dev/null
 docker service inspect "${stack_name}_web" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' | grep -E '^nginx:1\.29-alpine(@sha256:[a-f0-9]{64})?$'
+
+# Exercise a complete control-plane recovery using the same PostgreSQL tools as
+# the bundled production stack. The backup intentionally excludes the master
+# key and records only its fingerprint.
+controller_image_id="$(docker image inspect "$project-dockyard" --format '{{.Id}}')"
+DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/backup-control-plane.sh "$recovery_root/control-plane"
+test ! -e "$recovery_root/control-plane/master-key.bin"
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/control-plane" >/dev/null 2>&1; then
+  echo "restore unexpectedly ran while the controller was active" >&2
+  exit 1
+fi
+docker compose --project-name "$project" stop dockyard
+cp -a "$recovery_root/control-plane" "$recovery_root/tampered"
+printf 'tampered' >>"$recovery_root/tampered/database.dump"
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/tampered" >/dev/null 2>&1; then
+  echo "restore unexpectedly accepted a modified database dump" >&2
+  exit 1
+fi
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/control-plane" >/dev/null 2>&1; then
+  echo "restore unexpectedly accepted the wrong master key" >&2
+  exit 1
+fi
+docker compose --project-name "$project" exec -T postgres \
+  psql --username dockyard --dbname dockyard --command "DELETE FROM projects WHERE id='$project_id'" >/dev/null
+remaining_projects="$(docker compose --project-name "$project" exec -T postgres \
+  psql --username dockyard --dbname dockyard --tuples-only --no-align \
+  --command "SELECT count(*) FROM projects WHERE id='$project_id'")"
+test "$remaining_projects" = "0"
+DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/control-plane"
+docker compose --project-name "$project" start dockyard
+for _ in {1..60}; do
+  if curl --fail --silent "$base_url/healthz" >/dev/null; then
+    break
+  fi
+  sleep 2
+done
+curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id" |
+  jq --exit-status --arg id "$service_id" '.service.id == $id and .service.revision == 3' >/dev/null

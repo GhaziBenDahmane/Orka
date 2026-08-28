@@ -66,6 +66,14 @@ database restore drill. Upgrade only after that baseline succeeds. Never roll
 back the binary across irreversible schema migrations; restore the pre-upgrade
 PostgreSQL snapshot and matching secrets instead.
 
+For the bundled Swarm PostgreSQL service,
+`scripts/backup-control-plane.sh` creates a secret-free, checksummed recovery
+bundle and `scripts/restore-control-plane.sh` verifies the dump, image, schema,
+master-key fingerprint, and optional agent-CA fingerprint before destructive
+restore. The restore command also refuses to run while the controller service
+is active. These checks detect a mismatched recovery set; they do not replace
+encrypted, access-controlled off-site storage for the bundle and escrowed keys.
+
 Recommended starting objectives are PostgreSQL point-in-time recovery with a
 15-minute RPO and a four-hour control-plane RTO. These are operator targets,
 not product guarantees, until measured drills for the deployment are recorded.

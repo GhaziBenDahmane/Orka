@@ -60,6 +60,10 @@ jobs:
       - run: go build ./cmd/dockyard
       - run: go build ./cmd/terraform-provider-dockyard
       - run: docker compose config --quiet
+      - name: Check operational scripts
+        run: |
+          sh -n scripts/backup-control-plane.sh scripts/restore-control-plane.sh scripts/ci/check-image-digests.sh
+          bash -n scripts/ci/smoke-compose.sh
       - name: Validate immutable production images
         env:
           DOCKYARD_IMAGE: example/dockyard@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
