@@ -19,6 +19,7 @@ organization when a user belongs to more than one.
 | GET | `/v1/auth/sso/callback` | Verify the ID token and create a session |
 | POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
+| GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
 ## Workloads
 
@@ -27,7 +28,7 @@ organization when a user belongs to more than one.
 | GET/POST | `/v1/projects` | List or create projects |
 | GET/POST | `/v1/projects/{id}/environments` | List or create environments |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
-| GET/PATCH | `/v1/services/{id}` | Read or revise a Compose service |
+| GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack |
 | PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build and registry target |
 | POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |

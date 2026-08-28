@@ -92,12 +92,13 @@ database advertised as backup-capable.
 
 ### 3. Enterprise identity and policy
 
-Status: OIDC/PKCE and SCIM users implemented.
+Status: OIDC/PKCE, SCIM users/groups, group-to-role mapping, and owner
+protection implemented.
 
 - Add SAML 2.0 using a maintained, audited library; do not implement XML
   signature validation in-house.
-- Add SCIM Groups, group-to-role mappings, service accounts, token rotation,
-  mandatory SSO, and session/device administration.
+- Add service accounts, token rotation, mandatory SSO, and session/device
+  administration.
 - Extend RBAC from organization roles to project/environment grants.
 - Add immutable audit export and configurable retention.
 
@@ -115,8 +116,8 @@ Status: public HTTPS Git and generic deploy hooks implemented.
   common incident systems.
 - OpenTelemetry traces/log correlation, richer Prometheus metrics, alerts,
   maintenance mode, and resource quotas.
-- Complete deletion/finalizer flows so database data is never removed merely
-  because an API row disappeared.
+- Extend the implemented asynchronous service/stack finalizer model to
+  projects, environments, volumes, and clusters.
 
 Exit gate: end-to-end push-to-deploy, cancellation, rollback, alert, and
 disaster-recovery scenarios pass under load.

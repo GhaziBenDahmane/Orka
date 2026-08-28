@@ -67,6 +67,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /scim/v2/Users/{userID}", s.scimUser)
 	mux.HandleFunc("PATCH /scim/v2/Users/{userID}", s.scimUser)
 	mux.HandleFunc("DELETE /scim/v2/Users/{userID}", s.scimUser)
+	mux.HandleFunc("GET /scim/v2/Groups", s.scimGroups)
+	mux.HandleFunc("POST /scim/v2/Groups", s.scimGroups)
+	mux.HandleFunc("GET /scim/v2/Groups/{groupID}", s.scimGroup)
+	mux.HandleFunc("PATCH /scim/v2/Groups/{groupID}", s.scimGroup)
+	mux.HandleFunc("DELETE /scim/v2/Groups/{groupID}", s.scimGroup)
 	mux.Handle("GET /v1/projects", s.requireAuth(http.HandlerFunc(s.listProjects)))
 	mux.Handle("POST /v1/projects", s.requireRole("developer", http.HandlerFunc(s.createProject)))
 	mux.Handle("POST /v1/projects/{projectID}/environments", s.requireRole("developer", http.HandlerFunc(s.createEnvironment)))
@@ -86,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireRole("developer", http.HandlerFunc(s.instantiateTemplate)))
 	mux.Handle("GET /v1/services/{serviceID}", s.requireAuth(http.HandlerFunc(s.getService)))
+	mux.Handle("DELETE /v1/services/{serviceID}", s.requireRole("admin", http.HandlerFunc(s.deleteService)))
 	mux.Handle("PATCH /v1/services/{serviceID}", s.requireRole("developer", http.HandlerFunc(s.updateService)))
 	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireRole("developer", http.HandlerFunc(s.upsertSource)))
 	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireRole("developer", http.HandlerFunc(s.addRoute)))
@@ -761,6 +767,25 @@ func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"service": item, "routes": routes})
+}
+
+func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid service id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.QueueServiceDeletion(r.Context(), p.OrganizationID, id); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, 409, "service_busy", "cancel or wait for active deployments before deleting the service")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "service.delete", "compose_service", id.String(), r.RemoteAddr, nil)
+	writeJSON(w, 202, map[string]string{"status": "deletion_queued"})
 }
 
 func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {

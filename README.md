@@ -13,7 +13,7 @@ The initial implementation includes:
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;
 - extensible managed-database drivers;
-- OIDC/PKCE login, domain discovery, and SCIM user provisioning;
+- OIDC/PKCE login, domain discovery, SCIM users/groups, and group-to-role mapping;
 - public Git/Dockerfile builds pushed to an OCI registry;
 - checksummed PostgreSQL backup, confirmed restore, scheduling, and retention jobs;
 - encrypted secrets and an audit trail.

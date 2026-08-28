@@ -153,7 +153,10 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 	}
 	active := in.Active == nil || *in.Active
 	if active {
-		_, err = tx.Exec(r.Context(), `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=excluded.role`, orgID, userID, role)
+		_, err = tx.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET default_role=excluded.default_role`, orgID, userID, role)
+		if err == nil {
+			_, err = tx.Exec(r.Context(), `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=CASE WHEN memberships.role='owner' THEN 'owner' ELSE excluded.role END`, orgID, userID, role)
+		}
 	}
 	if err != nil {
 		scimError(w, 500, "membership cannot be provisioned")
@@ -190,13 +193,34 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 		}
 		scimJSON(w, 200, makeSCIMUser(userID, email, name, true, s.PublicURL))
 	case http.MethodDelete:
-		tag, err := s.Store.Pool.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+		var currentRole string
+		if err = s.Store.Pool.QueryRow(r.Context(), `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID).Scan(&currentRole); err != nil {
+			scimError(w, 404, "user not found")
+			return
+		}
+		if currentRole == "owner" {
+			scimError(w, 409, "organization owners cannot be deprovisioned through SCIM")
+			return
+		}
+		tx, txErr := s.Store.Pool.Begin(r.Context())
+		if txErr != nil {
+			scimError(w, 500, "delete failed")
+			return
+		}
+		defer tx.Rollback(r.Context())
+		_, _ = tx.Exec(r.Context(), `DELETE FROM scim_group_members gm USING scim_groups g WHERE gm.group_id=g.id AND g.organization_id=$1 AND gm.user_id=$2`, orgID, userID)
+		_, _ = tx.Exec(r.Context(), `DELETE FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+		tag, err := tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
 		if err != nil {
 			scimError(w, 500, "delete failed")
 			return
 		}
 		if tag.RowsAffected() == 0 {
 			scimError(w, 404, "user not found")
+			return
+		}
+		if err = tx.Commit(r.Context()); err != nil {
+			scimError(w, 500, "delete failed")
 			return
 		}
 		w.WriteHeader(204)
@@ -231,8 +255,17 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 				return
 			}
 			if !active {
+				var isOwner bool
+				_ = s.Store.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2 AND role='owner')`, orgID, userID).Scan(&isOwner)
+				if isOwner {
+					scimError(w, 409, "organization owners cannot be deprovisioned through SCIM")
+					return
+				}
+				_, _ = s.Store.Pool.Exec(r.Context(), `DELETE FROM scim_group_members gm USING scim_groups g WHERE gm.group_id=g.id AND g.organization_id=$1 AND gm.user_id=$2`, orgID, userID)
+				_, _ = s.Store.Pool.Exec(r.Context(), `DELETE FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
 				_, _ = s.Store.Pool.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
 			} else {
+				_, _ = s.Store.Pool.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO NOTHING`, orgID, userID, role)
 				_, _ = s.Store.Pool.Exec(r.Context(), `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, orgID, userID, role)
 			}
 		case "displayname":

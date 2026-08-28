@@ -114,7 +114,11 @@ func (s Swarm) Remove(ctx context.Context, stackName string) (string, error) {
 	if !safeName.MatchString(stackName) {
 		return "", errors.New("invalid stack name")
 	}
-	return s.run(ctx, "stack", "rm", stackName)
+	output, err := s.run(ctx, "stack", "rm", stackName)
+	if err != nil && (strings.Contains(output, "Nothing found in stack") || strings.Contains(err.Error(), "Nothing found in stack")) {
+		return output, nil
+	}
+	return output, err
 }
 
 func (s Swarm) Logs(ctx context.Context, stackName string, tail int) (string, error) {

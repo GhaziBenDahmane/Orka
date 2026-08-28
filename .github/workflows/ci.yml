@@ -7,6 +7,22 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: dockyard
+          POSTGRES_PASSWORD: dockyard
+          POSTGRES_DB: dockyard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dockyard -d dockyard_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DOCKYARD_TEST_DATABASE_URL: postgres://dockyard:dockyard@127.0.0.1:5432/dockyard_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -15,6 +15,7 @@ import (
 
 var ErrNotFound = errors.New("not found")
 var ErrNotCancellable = errors.New("resource is not cancellable")
+var ErrBusy = errors.New("resource has an operation in progress")
 
 type Store struct{ Pool *pgxpool.Pool }
 
@@ -318,7 +319,7 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 
 func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uuid.UUID, composeYAML, encryptedEnv string) (ComposeService, error) {
 	var service ComposeService
-	err := s.Pool.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}
@@ -326,7 +327,7 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 }
 
 func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid.UUID, source ApplicationSource) (ApplicationSource, error) {
-	err := s.Pool.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image) SELECT s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,updated_at=now() RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage).Scan(&source.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,repository_url,git_ref,context_directory,dockerfile,target_service,registry_image) SELECT s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ON CONFLICT(compose_service_id) DO UPDATE SET repository_url=excluded.repository_url,git_ref=excluded.git_ref,context_directory=excluded.context_directory,dockerfile=excluded.dockerfile,target_service=excluded.target_service,registry_image=excluded.registry_image,updated_at=now() RETURNING updated_at`, source.ComposeServiceID, organizationID, source.RepositoryURL, source.GitRef, source.ContextDirectory, source.Dockerfile, source.TargetService, source.RegistryImage).Scan(&source.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ApplicationSource{}, ErrNotFound
 	}
@@ -359,7 +360,7 @@ func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.U
 }
 
 func (s *Store) ListComposeServices(ctx context.Context, organizationID, environmentID uuid.UUID) ([]ComposeService, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.environment_id=$1 AND p.organization_id=$2 ORDER BY s.name`, environmentID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.environment_id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ORDER BY s.name`, environmentID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +378,7 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 
 func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route) (Route, error) {
 	r.ID = uuid.New()
-	err := s.Pool.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND p.organization_id=$9 RETURNING id`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.ID)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND p.organization_id=$9 RETURNING id`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Route{}, ErrNotFound
 	}
@@ -396,7 +397,7 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	d.Status = "queued"
 	d.Trigger = trigger
 	var compose, env string
-	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&d.Revision, &compose, &env)
+	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2`, serviceID, organizationID).Scan(&d.Revision, &compose, &env)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -415,6 +416,41 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 		return Deployment{}, err
 	}
 	return d, nil
+}
+
+func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, serviceID uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var stackName string
+	var deleting bool
+	err = tx.QueryRow(ctx, `SELECT s.stack_name,s.deletion_requested_at IS NOT NULL FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&stackName, &deleting)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if deleting {
+		return ErrBusy
+	}
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON j.kind='deploy.compose' AND d.id=(j.payload->>'deploymentId')::uuid WHERE d.compose_service_id=$1 AND j.status IN ('pending','running'))`, serviceID).Scan(&busy); err != nil {
+		return err
+	}
+	if busy {
+		return ErrBusy
+	}
+	if _, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, serviceID); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]string{"serviceId": serviceID.String(), "stackName": stackName})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'delete.compose',$2,10)`, uuid.New(), payload); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CancelDeployment(ctx context.Context, organizationID, deploymentID uuid.UUID) error {

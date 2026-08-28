@@ -208,6 +208,9 @@ func (w *Worker) claim(ctx context.Context) (job, error) {
 }
 
 func (w *Worker) execute(ctx context.Context, j job) error {
+	if j.Kind == "delete.compose" {
+		return w.deleteComposeService(ctx, j)
+	}
 	if j.Kind == "backup.database" {
 		return w.backupDatabase(ctx, j)
 	}
@@ -287,6 +290,63 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		w.markDeployment(ctx, id, "failed", buildOutput, err)
 	}
 	return err
+}
+
+func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
+	var payload struct {
+		ServiceID string `json:"serviceId"`
+		StackName string `json:"stackName"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	serviceID, err := uuid.Parse(payload.ServiceID)
+	if err != nil {
+		return err
+	}
+	if _, err = w.Swarm.Remove(ctx, payload.StackName); err != nil {
+		return err
+	}
+	rows, err := w.Store.Pool.Query(ctx, `SELECT b.path FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1 AND b.path<>''`, serviceID)
+	if err != nil {
+		return err
+	}
+	paths := []string{}
+	for rows.Next() {
+		var path string
+		if err = rows.Scan(&path); err != nil {
+			rows.Close()
+			return err
+		}
+		paths = append(paths, path)
+	}
+	rows.Close()
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `DELETE FROM database_instances WHERE compose_service_id=$1`, serviceID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM compose_services WHERE id=$1`, serviceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	root := filepath.Clean(w.BackupDirectory)
+	for _, path := range paths {
+		relative, relErr := filepath.Rel(root, filepath.Clean(path))
+		if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			_ = os.RemoveAll(filepath.Dir(path))
+		}
+	}
+	return nil
 }
 
 func (w *Worker) backupDatabase(ctx context.Context, j job) error {

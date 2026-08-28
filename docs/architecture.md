@@ -18,6 +18,11 @@ Docker Compose remains the portable workload definition.
 7. Rollback creates a new deployment from the last successful snapshot. History
    is never edited in place.
 
+Deletion is also asynchronous. The API first marks a service as deleting and
+queues a finalizer. The worker removes the Swarm stack before deleting database
+records and locally retained backups. A busy service must be cancelled or
+allowed to finish before deletion can begin.
+
 ## Trust boundaries
 
 - Passwords use Argon2id. Session tokens are random and only their SHA-256
