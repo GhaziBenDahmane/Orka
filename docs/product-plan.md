@@ -119,8 +119,9 @@ implemented.
 - OpenTelemetry HTTP and worker traces, request/log correlation, and richer
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
   implemented. Hierarchical maintenance mode and transactionally enforced
-  organization/project/environment resource quotas are also implemented;
-  alerts remain.
+  organization/project/environment resource quotas and a production
+  Prometheus alert pack are also implemented. Native notification delivery
+  remains.
 - Extend the implemented asynchronous service/stack finalizer model to
   projects, environments, volumes, and clusters.
 

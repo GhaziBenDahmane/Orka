@@ -1,0 +1,55 @@
+groups:
+  - name: dockyard-control-plane
+    rules:
+      - alert: DockyardControllerDown
+        expr: up{job="dockyard"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Dockyard controller is unavailable
+          description: Prometheus has been unable to scrape Dockyard for two minutes.
+
+      - alert: DockyardStaleJobLease
+        expr: dockyard_job_stale_leases > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard worker lease is stale
+          description: At least one running job has stopped heartbeating and may require recovery.
+
+      - alert: DockyardQueueBacklog
+        expr: max(dockyard_job_oldest_age_seconds{status="pending"}) > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Dockyard jobs are waiting too long
+          description: The oldest pending job has been queued for more than five minutes.
+
+      - alert: DockyardOperationFailures
+        expr: sum(increase(dockyard_operations_total{status="failed"}[10m])) by (kind) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Dockyard background operation failed
+          description: One or more {{ $labels.kind }} operations failed in the last ten minutes.
+
+      - alert: DockyardBackupStale
+        expr: dockyard_database_backup_last_success_age_seconds{scope="all"} > 86400
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful Dockyard database backup in 24 hours
+          description: Review backup policies, queue health, and remote storage availability.
+
+      - alert: DockyardMaintenanceModeLeftEnabled
+        expr: sum(dockyard_maintenance_scopes) > 0
+        for: 4h
+        labels:
+          severity: warning
+        annotations:
+          summary: Dockyard maintenance mode has remained enabled
+          description: At least one resource scope has been in maintenance mode for four hours.
