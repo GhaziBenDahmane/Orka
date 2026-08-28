@@ -12,11 +12,15 @@ links for every item below.
   and a clean-install workload converging to a live Swarm replica.
 - `govulncheck` reports no reachable known vulnerability.
 - License policy passes; the SPDX JSON SBOM is attached to the release.
+- Build and runtime base images are pinned by manifest digest, and the runtime
+  image verifies its Git client and CA trust store without downloading mutable
+  operating-system packages during the release build.
 - The final container has no unfixed high or critical finding allowed by the
   project's exception register. Exceptions identify owner and expiry date.
 - A clean Compose installation bootstraps an owner, creates project,
   environment, and service records, deploys the service to Swarm, verifies its
-  replica, restarts the controller, and retains its session and state.
+  replica, persists an undeployed revision across a controller restart, and
+  rolls back to the last successful immutable snapshot on the live Swarm.
 
 ## Staging gates
 

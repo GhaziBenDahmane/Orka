@@ -205,7 +205,7 @@ complete.
 
 Release automation now covers migration checksums, fresh and checkpoint
 upgrades, stale-worker takeover, API security classification, clean Compose
-installation, live Swarm convergence, restart persistence,
-vulnerability/license checks, an SPDX SBOM, and container scanning. The staging-only conformance, load, real-provider,
-full Dokploy cutover, and measured disaster-recovery gates remain open; see
-`docs/release-checklist.md`.
+installation, live Swarm convergence, restart persistence, immutable rollback,
+vulnerability/license checks, an SPDX SBOM, and container scanning. The
+staging-only conformance, load, real-provider, full Dokploy cutover, and
+measured disaster-recovery gates remain open; see `docs/release-checklist.md`.

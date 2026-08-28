@@ -27,4 +27,5 @@ check-openapi: generate-openapi
 	git diff --exit-code -- api/openapi.yaml
 
 check-release-images:
+	./scripts/ci/check-image-digests.sh build
 	./scripts/ci/check-image-digests.sh controller

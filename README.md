@@ -37,6 +37,14 @@ set -a; . ./.env; set +a
 go run ./cmd/dockyard serve
 ```
 
+Behind a TLS-inspecting corporate proxy, pass a PEM trust bundle containing
+its root certificate to container builds without adding it to the runtime
+image:
+
+```sh
+docker build --secret id=build_ca,src=/path/to/corporate-ca.crt .
+```
+
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Run `make web` after changing files under `web/`.
 

@@ -66,6 +66,7 @@ jobs:
           POSTGRES_IMAGE: postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           TRAEFIK_IMAGE: traefik@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
         run: |
+          scripts/ci/check-image-digests.sh build
           scripts/ci/check-image-digests.sh controller
           scripts/ci/check-image-digests.sh agent
           DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml >/dev/null

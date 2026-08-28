@@ -35,7 +35,16 @@ if ! docker network inspect "$public_network" >/dev/null 2>&1; then
   created_network=true
 fi
 
-docker compose --project-name "$project" up --detach --build
+if [[ "${DOCKYARD_SMOKE_PREBUILT:-false}" == "true" ]]; then
+  docker image inspect "$project-dockyard" >/dev/null
+  docker compose --project-name "$project" up --detach --no-build
+elif [[ -n "${DOCKYARD_BUILD_CA_CERT:-}" ]]; then
+  test -r "$DOCKYARD_BUILD_CA_CERT"
+  docker build --secret "id=build_ca,src=$DOCKYARD_BUILD_CA_CERT" --tag "$project-dockyard" .
+  docker compose --project-name "$project" up --detach --no-build
+else
+  docker compose --project-name "$project" up --detach --build
+fi
 for _ in {1..90}; do
   if curl --fail --silent "$base_url/healthz" >/dev/null; then
     break
@@ -88,6 +97,11 @@ actual_migrations="$(docker compose --project-name "$project" exec -T postgres \
   --command 'SELECT count(*) FROM schema_migrations')"
 test "$actual_migrations" = "$expected_migrations"
 
+updated_service="$(curl --fail --silent --show-error --request PATCH "${auth_headers[@]}" \
+  --data '{"composeYaml":"services:\n  web:\n    image: nginx:1.28-alpine\n","environment":{"ROLLBACK_PROBE":"changed"}}' \
+  "$base_url/v1/services/$service_id")"
+jq --exit-status '.revision == 2 and (.composeYaml | contains("nginx:1.28-alpine"))' <<<"$updated_service" >/dev/null
+
 docker compose --project-name "$project" restart dockyard
 for _ in {1..60}; do
   if curl --fail --silent "$base_url/healthz" >/dev/null; then
@@ -96,4 +110,27 @@ for _ in {1..60}; do
   sleep 2
 done
 curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/me" | jq --exit-status --arg id "$organization_id" '.organizationId == $id' >/dev/null
-curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id" | jq --exit-status --arg id "$service_id" '.id == $id' >/dev/null
+persisted_service="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id")"
+jq --exit-status --arg id "$service_id" '.service.id == $id and .service.revision == 2 and (.service.composeYaml | contains("nginx:1.28-alpine"))' <<<"$persisted_service" >/dev/null
+
+rollback_response="$(curl --fail --silent --show-error "${auth_headers[@]}" \
+  --data '{}' "$base_url/v1/services/$service_id/rollback")"
+rollback_id="$(jq --exit-status --raw-output '.id' <<<"$rollback_response")"
+for _ in {1..120}; do
+  rollback_response="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/deployments/$rollback_id")"
+  rollback_status="$(jq --exit-status --raw-output '.status' <<<"$rollback_response")"
+  if [[ "$rollback_status" == "succeeded" ]]; then
+    break
+  fi
+  if [[ "$rollback_status" == "failed" || "$rollback_status" == "cancelled" ]]; then
+    jq . <<<"$rollback_response" >&2
+    exit 1
+  fi
+  sleep 1
+done
+test "${rollback_status:-}" = "succeeded"
+jq --exit-status '.trigger == "rollback" and .revision == 3' <<<"$rollback_response" >/dev/null
+
+rolled_back_service="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id")"
+jq --exit-status '.service.revision == 3 and (.service.composeYaml | contains("nginx:1.29-alpine")) and (.service.composeYaml | contains("nginx:1.28-alpine") | not)' <<<"$rolled_back_service" >/dev/null
+docker service inspect "${stack_name}_web" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' | grep -E '^nginx:1\.29-alpine(@sha256:[a-f0-9]{64})?$'
