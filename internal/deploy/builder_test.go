@@ -207,6 +207,51 @@ func TestNixpacksBuildAndPush(t *testing.T) {
 	}
 }
 
+func TestRailpackUsesFrontendAndFileBackedSecrets(t *testing.T) {
+	directory := t.TempDir()
+	gitPath, railpackPath, dockerPath := filepath.Join(directory, "git"), filepath.Join(directory, "railpack"), filepath.Join(directory, "docker")
+	logPath := filepath.Join(directory, "calls")
+	t.Setenv("DOCKYARD_BUILD_TEST_LOG", logPath)
+	gitScript := "#!/bin/sh\nfor destination do :; done\nmkdir -p \"$destination\"\n"
+	railpackScript := "#!/bin/sh\nprintf 'railpack:%s\\n' \"$*\" >>\"$DOCKYARD_BUILD_TEST_LOG\"\nprintf 'malicious output: %s\\n' \"$NPM_TOKEN\"\nprevious=''\nfor value do\n  if [ \"$previous\" = '--plan-out' ]; then printf '{}\\n' >\"$value\"; fi\n  previous=$value\ndone\n"
+	dockerScript := "#!/bin/sh\nprintf 'docker:%s\\n' \"$*\" >>\"$DOCKYARD_BUILD_TEST_LOG\"\n"
+	for path, content := range map[string]string{gitPath: gitScript, railpackPath: railpackScript, dockerPath: dockerScript} {
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test/acme/app.git", GitRef: "main", ContextDirectory: ".", BuildType: "railpack", RegistryImage: "registry.example.test/acme/app", BuildArguments: map[string]string{"NODE_VERSION": "24"}, BuildSecrets: map[string]string{"NPM_TOKEN": "never-log-this"}}
+	_, output, err := (Builder{GitBin: gitPath, RailpackBin: railpackPath, DockerBin: dockerPath}).Build(context.Background(), source, uuid.New(), BuildCredentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output, "never-log-this") || !strings.Contains(output, "[REDACTED]") {
+		t.Fatalf("Railpack output was not redacted: %s", output)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := string(data)
+	for _, expected := range []string{"railpack:prepare ", "--env NODE_VERSION", "--env NPM_TOKEN", "BUILDKIT_SYNTAX=" + defaultRailpackFrontend, "--secret id=NPM_TOKEN,src=", "--push"} {
+		if !strings.Contains(calls, expected) {
+			t.Errorf("calls omit %q:\n%s", expected, calls)
+		}
+	}
+	if strings.Contains(calls, "never-log-this") {
+		t.Fatal("Railpack secret leaked into process arguments")
+	}
+	marker := "id=NPM_TOKEN,src="
+	start := strings.Index(calls, marker)
+	if start < 0 {
+		t.Fatal("Railpack secret mount argument missing")
+	}
+	secretPath := strings.Fields(calls[start+len(marker):])[0]
+	if _, err := os.Stat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("temporary Railpack secret was not removed: %v", err)
+	}
+}
+
 func TestBuildUsesTargetArgumentsAndFileBackedSecrets(t *testing.T) {
 	directory := t.TempDir()
 	gitPath := filepath.Join(directory, "git")

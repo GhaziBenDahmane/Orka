@@ -169,4 +169,19 @@ func TestApplicationBuildSettingsAreEncryptedAndRedacted(t *testing.T) {
 	if staticResponse.StatusCode != http.StatusOK || !bytes.Contains(staticData, []byte(`"buildType":"static"`)) || !bytes.Contains(staticData, []byte(`"outputDirectory":"dist"`)) {
 		t.Fatalf("static source update failed: status=%d body=%s", staticResponse.StatusCode, staticData)
 	}
+
+	railpackBody := []byte(`{"repositoryUrl":"https://github.com/acme/api.git","gitRef":"release","contextDirectory":".","dockerfile":"Dockerfile","buildType":"railpack","buildArguments":{"NODE_VERSION":"24"},"buildSecrets":{"NPM_TOKEN":"railpack-secret"},"targetService":"api","registryImage":"ghcr.io/acme/api"}`)
+	railpackRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(railpackBody))
+	railpackRequest.Header.Set("Authorization", "Bearer "+token)
+	railpackRequest.Header.Set("X-Organization-ID", organizationID.String())
+	railpackRequest.Header.Set("Content-Type", "application/json")
+	railpackResponse, err := http.DefaultClient.Do(railpackRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	railpackData, _ := io.ReadAll(railpackResponse.Body)
+	railpackResponse.Body.Close()
+	if railpackResponse.StatusCode != http.StatusOK || !bytes.Contains(railpackData, []byte(`"buildType":"railpack"`)) || !bytes.Contains(railpackData, []byte(`"hasBuildSecrets":true`)) || bytes.Contains(railpackData, []byte("railpack-secret")) {
+		t.Fatalf("Railpack source update failed or leaked a secret: status=%d body=%s", railpackResponse.StatusCode, railpackData)
+	}
 }

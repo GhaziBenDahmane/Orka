@@ -3,6 +3,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Builder struct{ GitBin, DockerBin, NixpacksBin, StaticImage string }
+type Builder struct{ GitBin, DockerBin, NixpacksBin, RailpackBin, RailpackFrontend, StaticImage string }
 
 type Credential struct {
 	Kind       string `json:"kind"`
@@ -41,6 +42,7 @@ var buildTargetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256:[a-f0-9]{64}$`)
 
 const defaultStaticImage = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+const defaultRailpackFrontend = "ghcr.io/railwayapp/railpack-frontend:v0.38.0@sha256:b66c90368efcf6f2966cfa504cdbde93af7ba6092d676e0c7604cbc5ddf3acec"
 
 func ValidateBuildSettings(target string, config store.ApplicationBuildConfig) error {
 	if target != "" && !buildTargetName.MatchString(target) {
@@ -76,7 +78,7 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 	if buildType == "" {
 		buildType = "dockerfile"
 	}
-	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" {
+	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" {
 		return fmt.Errorf("unsupported build type %q", buildType)
 	}
 	if err := ValidateBuildSettings(target, config); err != nil {
@@ -101,6 +103,9 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 		if len(config.Secrets) > 0 {
 			return errors.New("Nixpacks build secrets are not supported because its CLI cannot provide BuildKit secret mounts")
 		}
+	}
+	if buildType == "railpack" && (target != "" || outputDirectory != "") {
+		return errors.New("Railpack builds do not accept Docker targets or static output directories")
 	}
 	return nil
 }
@@ -195,6 +200,10 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		buildOutput, buildErr := b.buildNixpacks(ctx, contextPath, tag, buildEnvironment, source.BuildArguments)
 		return tag, output + buildOutput, buildErr
 	}
+	if source.BuildType == "railpack" {
+		buildOutput, buildErr := b.buildRailpack(ctx, contextPath, tag, deploymentID, buildEnvironment, source.BuildArguments, source.BuildSecrets)
+		return tag, output + buildOutput, buildErr
+	}
 	dockerfilePath, err := safeJoin(contextPath, source.Dockerfile)
 	if err != nil {
 		return "", output, err
@@ -229,7 +238,7 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	}
 	buildArgs = append(buildArgs, contextPath)
 	buildOutput, err := run(ctx, b.docker(), buildEnvironment, buildArgs...)
-	return tag, output + buildOutput, err
+	return tag, redactBuildText(output+buildOutput, source.BuildSecrets), redactBuildError(err, source.BuildSecrets)
 }
 
 func (b Builder) buildNixpacks(ctx context.Context, contextPath, tag string, environment map[string]string, buildArguments map[string]string) (string, error) {
@@ -245,6 +254,83 @@ func (b Builder) buildNixpacks(ctx context.Context, contextPath, tag string, env
 	}
 	pushOutput, err := run(ctx, b.docker(), environment, "push", tag)
 	return output + pushOutput, err
+}
+
+func (b Builder) buildRailpack(ctx context.Context, contextPath, tag string, deploymentID uuid.UUID, environment map[string]string, buildArguments, buildSecrets map[string]string) (string, error) {
+	frontend := b.RailpackFrontend
+	if frontend == "" {
+		frontend = defaultRailpackFrontend
+	}
+	if !pinnedImage.MatchString(frontend) {
+		return "", errors.New("Railpack frontend image must be pinned by sha256 digest")
+	}
+	plan, err := os.CreateTemp("", "dockyard-railpack-plan-*.json")
+	if err != nil {
+		return "", err
+	}
+	planPath := plan.Name()
+	if err = plan.Close(); err != nil {
+		os.Remove(planPath)
+		return "", err
+	}
+	defer os.Remove(planPath)
+	variables := make(map[string]string, len(buildArguments)+len(buildSecrets))
+	for name, value := range buildArguments {
+		variables[name] = value
+	}
+	for name, value := range buildSecrets {
+		variables[name] = value
+	}
+	prepareEnvironment := make(map[string]string, len(environment)+len(variables))
+	for name, value := range environment {
+		prepareEnvironment[name] = value
+	}
+	prepareArguments := []string{"prepare", contextPath, "--plan-out", planPath, "--hide-pretty-plan"}
+	for _, name := range sortedKeys(variables) {
+		prepareEnvironment[name] = variables[name]
+		prepareArguments = append(prepareArguments, "--env", name)
+	}
+	output, err := run(ctx, b.railpack(), prepareEnvironment, prepareArguments...)
+	if err != nil {
+		return redactBuildText(output, buildSecrets), redactBuildError(err, buildSecrets)
+	}
+	secretDirectory, err := writeBuildSecrets(variables)
+	if err != nil {
+		return output, err
+	}
+	if secretDirectory != "" {
+		defer os.RemoveAll(secretDirectory)
+	}
+	hash := sha256.New()
+	for _, name := range sortedKeys(variables) {
+		hash.Write([]byte(name))
+		hash.Write([]byte{0})
+		hash.Write([]byte(variables[name]))
+		hash.Write([]byte{0})
+	}
+	buildArgumentsCLI := []string{"buildx", "build", "--pull", "--push", "--tag", tag, "--file", planPath, "--build-arg", "BUILDKIT_SYNTAX=" + frontend, "--build-arg", "cache-key=" + deploymentID.String(), "--build-arg", "secrets-hash=" + fmt.Sprintf("%x", hash.Sum(nil))}
+	for _, name := range sortedKeys(variables) {
+		buildArgumentsCLI = append(buildArgumentsCLI, "--secret", "id="+name+",src="+filepath.Join(secretDirectory, name))
+	}
+	buildArgumentsCLI = append(buildArgumentsCLI, contextPath)
+	buildOutput, err := run(ctx, b.docker(), environment, buildArgumentsCLI...)
+	return redactBuildText(output+buildOutput, buildSecrets), redactBuildError(err, buildSecrets)
+}
+
+func redactBuildText(value string, secrets map[string]string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[REDACTED]")
+		}
+	}
+	return value
+}
+
+func redactBuildError(err error, secrets map[string]string) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(redactBuildText(err.Error(), secrets))
 }
 
 func (b Builder) buildStatic(ctx context.Context, contextPath, outputDirectory, tag string, environment map[string]string) (string, error) {
@@ -441,6 +527,12 @@ func (b Builder) nixpacks() string {
 		return "nixpacks"
 	}
 	return b.NixpacksBin
+}
+func (b Builder) railpack() string {
+	if b.RailpackBin == "" {
+		return "railpack"
+	}
+	return b.RailpackBin
 }
 func run(ctx context.Context, binary string, environment map[string]string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)

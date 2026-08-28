@@ -110,3 +110,14 @@ func TestPrepareStaticApplication(t *testing.T) {
 		t.Fatalf("static migration warning missing: %#v", warnings)
 	}
 }
+
+func TestPrepareRailpackApplication(t *testing.T) {
+	item := sourceApplication{ID: "railpack-app", AppName: "API", Name: "API", SourceType: "git", BuildType: "railpack", CustomGitURL: "https://git.example.test/acme/api.git", CustomGitBranch: "main", BuildArgs: "NODE_VERSION=24", BuildSecrets: "NPM_TOKEN=secret", Replicas: 1}
+	prepared, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.source == nil || prepared.source.BuildType != "railpack" || prepared.source.BuildArguments["NODE_VERSION"] != "24" || prepared.source.BuildSecrets["NPM_TOKEN"] != "secret" {
+		t.Fatalf("Railpack source was not migrated: %#v", prepared.source)
+	}
+}

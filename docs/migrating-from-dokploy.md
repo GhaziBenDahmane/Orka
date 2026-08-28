@@ -74,7 +74,7 @@ Imported automatically:
 
 Reported for manual conversion:
 
-- Railpack, Paketo/Heroku buildpack, and drop applications;
+- Paketo/Heroku buildpack and drop applications;
 - static applications whose publish directory is generated during the build
   rather than already committed to the repository;
 - Git applications with malformed build settings, non-HTTPS clone URLs, or

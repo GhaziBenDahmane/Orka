@@ -193,6 +193,11 @@ then pushes the generated image through the configured registry credentials.
 Build arguments are passed as documented non-secret Nixpacks environment
 values. Build secrets are rejected because the Nixpacks CLI does not expose
 BuildKit secret mounts.
+`buildType=railpack` runs the pinned Railpack planner and its matching,
+digest-pinned BuildKit frontend through `docker buildx`. Arguments and secrets
+are passed to planning by name through the process environment and mounted into
+build steps from short-lived mode-0600 files; values never enter command-line
+arguments. Per-deployment cache keys prevent cross-tenant cache sharing.
 
 ## Catalog and databases
 
