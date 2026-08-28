@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: dockyard
+      POSTGRES_PASSWORD: dockyard
+      POSTGRES_DB: dockyard
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dockyard"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:54329:5432"
+  dockyard:
+    build: .
+    environment:
+      DOCKYARD_DATABASE_URL: postgres://dockyard:dockyard@postgres:5432/dockyard?sslmode=disable
+      DOCKYARD_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DOCKYARD_TRAEFIK_NETWORK: dockyard-public
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/backups:/var/lib/dockyard/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  postgres-data: {}

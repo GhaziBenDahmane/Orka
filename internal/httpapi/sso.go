@@ -1,0 +1,218 @@
+package httpapi
+
+import (
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
+	"golang.org/x/oauth2"
+)
+
+func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name         string   `json:"name"`
+		Issuer       string   `json:"issuer"`
+		ClientID     string   `json:"clientId"`
+		ClientSecret string   `json:"clientSecret"`
+		Domains      []string `json:"domains"`
+		Scopes       []string `json:"scopes"`
+		DefaultRole  string   `json:"defaultRole"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	issuer, err := url.Parse(in.Issuer)
+	if err != nil || issuer.Scheme != "https" || issuer.Host == "" {
+		writeError(w, 400, "invalid_issuer", "issuer must be an absolute HTTPS URL")
+		return
+	}
+	if in.Name == "" || in.ClientID == "" || in.ClientSecret == "" || len(in.Domains) == 0 {
+		writeError(w, 400, "invalid_provider", "name, client credentials and domains are required")
+		return
+	}
+	if in.DefaultRole == "" {
+		in.DefaultRole = "developer"
+	}
+	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
+		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
+		return
+	}
+	for i, domain := range in.Domains {
+		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
+		if !strings.Contains(in.Domains[i], ".") {
+			writeError(w, 400, "invalid_domain", "valid email domains are required")
+			return
+		}
+	}
+	id := uuid.New()
+	encrypted, err := s.Box.Encrypt([]byte(in.ClientSecret), "oidc-client-secret:"+id.String())
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	principal := principal(r)
+	provider, err := s.Store.CreateOIDCProvider(r.Context(), store.OIDCProvider{ID: id, OrganizationID: principal.OrganizationID, Name: in.Name, Issuer: strings.TrimRight(in.Issuer, "/"), ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &principal, "sso.oidc.create", "oidc_provider", id.String(), r.RemoteAddr, nil)
+	writeJSON(w, 201, provider)
+}
+
+func (s *Server) listOIDCProviders(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListOIDCProviders(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+func (s *Server) deleteOIDCProvider(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.DisableOIDCProvider(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.oidc.disable", "oidc_provider", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(204)
+}
+
+func (s *Server) discoverOIDC(w http.ResponseWriter, r *http.Request) {
+	email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 || parts[1] == "" {
+		writeError(w, 400, "invalid_email", "valid email required")
+		return
+	}
+	providers, err := s.Store.DiscoverOIDC(r.Context(), parts[1])
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": providers})
+}
+
+func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	provider, err := s.Store.GetOIDCProvider(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	discovery, err := oidc.NewProvider(r.Context(), provider.Issuer)
+	if err != nil {
+		writeError(w, 502, "oidc_discovery_failed", err.Error())
+		return
+	}
+	state, err := auth.NewToken()
+	if err != nil {
+		writeError(w, 500, "state_failed", err.Error())
+		return
+	}
+	verifier := oauth2.GenerateVerifier()
+	if err = s.Store.CreateOIDCState(r.Context(), cryptox.Digest(state), provider.ID, verifier); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	cfg := oauth2.Config{ClientID: provider.ClientID, Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}
+	writeJSON(w, 200, map[string]string{"url": cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))})
+}
+
+func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
+	stateValue, code := r.URL.Query().Get("state"), r.URL.Query().Get("code")
+	if stateValue == "" || code == "" {
+		writeError(w, 400, "invalid_callback", "state and code are required")
+		return
+	}
+	providerID, verifierValue, err := s.Store.ConsumeOIDCState(r.Context(), cryptox.Digest(stateValue))
+	if err != nil {
+		writeError(w, 400, "invalid_state", "state is invalid or expired")
+		return
+	}
+	provider, err := s.Store.GetOIDCProvider(r.Context(), providerID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	secret, err := s.Box.Decrypt(provider.EncryptedClientSecret, "oidc-client-secret:"+provider.ID.String())
+	if err != nil {
+		writeError(w, 500, "decryption_failed", err.Error())
+		return
+	}
+	discovery, err := oidc.NewProvider(r.Context(), provider.Issuer)
+	if err != nil {
+		writeError(w, 502, "oidc_discovery_failed", err.Error())
+		return
+	}
+	cfg := oauth2.Config{ClientID: provider.ClientID, ClientSecret: string(secret), Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}
+	oauthToken, err := cfg.Exchange(r.Context(), code, oauth2.VerifierOption(verifierValue))
+	if err != nil {
+		writeError(w, 401, "oidc_exchange_failed", "identity provider rejected the authorization code")
+		return
+	}
+	rawIDToken, ok := oauthToken.Extra("id_token").(string)
+	if !ok {
+		writeError(w, 401, "missing_id_token", "identity provider did not return an ID token")
+		return
+	}
+	idToken, err := discovery.Verifier(&oidc.Config{ClientID: provider.ClientID}).Verify(r.Context(), rawIDToken)
+	if err != nil {
+		writeError(w, 401, "invalid_id_token", "identity token verification failed")
+		return
+	}
+	var claims struct {
+		Subject       string `json:"sub"`
+		Email         string `json:"email"`
+		EmailVerified *bool  `json:"email_verified"`
+		Name          string `json:"name"`
+	}
+	if err = idToken.Claims(&claims); err != nil || claims.Subject == "" || claims.Email == "" {
+		writeError(w, 401, "invalid_claims", "identity token lacks required claims")
+		return
+	}
+	if claims.EmailVerified != nil && !*claims.EmailVerified {
+		writeError(w, 403, "email_unverified", "verified email is required")
+		return
+	}
+	domain := strings.ToLower(strings.SplitN(claims.Email, "@", 2)[1])
+	if !contains(provider.Domains, domain) {
+		writeError(w, 403, "domain_not_allowed", "email domain is not allowed")
+		return
+	}
+	userID, err := s.Store.JITOIDCUser(r.Context(), provider, claims.Subject, claims.Email, claims.Name)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	token, err := s.newSession(r.Context(), userID)
+	if err != nil {
+		writeError(w, 500, "session_failed", err.Error())
+		return
+	}
+	s.Store.Audit(r.Context(), nil, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
+	writeJSON(w, 200, map[string]string{"token": token})
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if strings.EqualFold(item, want) {
+			return true
+		}
+	}
+	return false
+}
