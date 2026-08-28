@@ -43,6 +43,10 @@ deployments, backups, restores, restore drills, and operation durations.
 | POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted Git and OCI registry credentials |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable failure notification webhooks |
+| GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
+| POST | `/v1/clusters/{id}/enrollment-tokens` | Issue a 15-minute one-time agent token |
+| POST | `/v1/agent/enroll` | Exchange a token and CSR for a client certificate |
+| POST | `/v1/agent/heartbeat` | Report agent and Swarm capacity over the mTLS listener |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
@@ -60,6 +64,16 @@ secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are
 deduplicated per endpoint/event/resource and retried as leased durable jobs.
+
+Agent enrollment is disabled unless both `DOCKYARD_AGENT_CA_CERT` and
+`DOCKYARD_AGENT_CA_KEY` (or their `_FILE` variants) are configured. The
+enrollment token is stored only as a SHA-256 digest, expires after 15 minutes,
+and is consumed atomically. The issued client certificate is bound to the
+cluster ID and expires after seven days by default.
+Heartbeat traffic is accepted only on the optional dedicated agent listener;
+the client certificate must chain to the configured CA and its serial must
+match the cluster's latest enrollment, allowing immediate supersession during
+rotation.
 
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in

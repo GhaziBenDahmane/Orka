@@ -12,19 +12,25 @@ import (
 )
 
 type Config struct {
-	ListenAddr        string
-	DatabaseURL       string
-	MasterKey         []byte
-	DockerBin         string
-	WorkerConcurrency int
-	SessionTTL        time.Duration
-	TraefikNetwork    string
-	UnsafeWorkloads   bool
-	PublicURL         string
-	BackupDirectory   string
-	OTLPEndpoint      string
-	OTLPInsecure      bool
-	ServiceName       string
+	ListenAddr          string
+	DatabaseURL         string
+	MasterKey           []byte
+	DockerBin           string
+	WorkerConcurrency   int
+	SessionTTL          time.Duration
+	TraefikNetwork      string
+	UnsafeWorkloads     bool
+	PublicURL           string
+	BackupDirectory     string
+	OTLPEndpoint        string
+	OTLPInsecure        bool
+	ServiceName         string
+	AgentCACertificate  []byte
+	AgentCAKey          []byte
+	AgentCertificateTTL time.Duration
+	AgentListenAddr     string
+	AgentServerCertFile string
+	AgentServerKeyFile  string
 }
 
 func Load() (Config, error) {
@@ -67,20 +73,47 @@ func Load() (Config, error) {
 	if otlpEndpoint == "" {
 		otlpEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	}
+	agentCACertificate, err := secretEnv("DOCKYARD_AGENT_CA_CERT")
+	if err != nil {
+		return Config{}, err
+	}
+	agentCAKey, err := secretEnv("DOCKYARD_AGENT_CA_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+	if (agentCACertificate == "") != (agentCAKey == "") {
+		return Config{}, errors.New("DOCKYARD_AGENT_CA_CERT and DOCKYARD_AGENT_CA_KEY must be configured together")
+	}
+	agentListenAddr := strings.TrimSpace(os.Getenv("DOCKYARD_AGENT_LISTEN_ADDR"))
+	agentServerCertFile := strings.TrimSpace(os.Getenv("DOCKYARD_AGENT_SERVER_CERT_FILE"))
+	agentServerKeyFile := strings.TrimSpace(os.Getenv("DOCKYARD_AGENT_SERVER_KEY_FILE"))
+	if agentListenAddr != "" && (agentCACertificate == "" || agentServerCertFile == "" || agentServerKeyFile == "") {
+		return Config{}, errors.New("agent listener requires CA, server certificate, and server key configuration")
+	}
+	agentCertificateTTL, err := time.ParseDuration(env("DOCKYARD_AGENT_CERTIFICATE_TTL", "168h"))
+	if err != nil || agentCertificateTTL < 5*time.Minute || agentCertificateTTL > 30*24*time.Hour {
+		return Config{}, errors.New("DOCKYARD_AGENT_CERTIFICATE_TTL must be between 5m and 720h")
+	}
 	return Config{
-		ListenAddr:        env("DOCKYARD_LISTEN_ADDR", ":8080"),
-		DatabaseURL:       databaseURL,
-		MasterKey:         key,
-		DockerBin:         env("DOCKYARD_DOCKER_BIN", "docker"),
-		WorkerConcurrency: concurrency,
-		SessionTTL:        ttl,
-		TraefikNetwork:    env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
-		UnsafeWorkloads:   unsafeWorkloads,
-		PublicURL:         strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
-		BackupDirectory:   filepath.Clean(backupDirectory),
-		OTLPEndpoint:      otlpEndpoint,
-		OTLPInsecure:      otlpInsecure,
-		ServiceName:       env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
+		ListenAddr:          env("DOCKYARD_LISTEN_ADDR", ":8080"),
+		DatabaseURL:         databaseURL,
+		MasterKey:           key,
+		DockerBin:           env("DOCKYARD_DOCKER_BIN", "docker"),
+		WorkerConcurrency:   concurrency,
+		SessionTTL:          ttl,
+		TraefikNetwork:      env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		UnsafeWorkloads:     unsafeWorkloads,
+		PublicURL:           strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
+		BackupDirectory:     filepath.Clean(backupDirectory),
+		OTLPEndpoint:        otlpEndpoint,
+		OTLPInsecure:        otlpInsecure,
+		ServiceName:         env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
+		AgentCACertificate:  []byte(agentCACertificate),
+		AgentCAKey:          []byte(agentCAKey),
+		AgentCertificateTTL: agentCertificateTTL,
+		AgentListenAddr:     agentListenAddr,
+		AgentServerCertFile: agentServerCertFile,
+		AgentServerKeyFile:  agentServerKeyFile,
 	}, nil
 }
 

@@ -32,15 +32,18 @@ import (
 )
 
 type Server struct {
-	Store      *store.Store
-	Box        *cryptox.Box
-	Compiler   deploy.Compiler
-	Databases  *database.Registry
-	Swarm      deploy.Scheduler
-	SessionTTL time.Duration
-	Logger     *slog.Logger
-	PublicURL  string
-	Metrics    *observability.Metrics
+	Store               *store.Store
+	Box                 *cryptox.Box
+	Compiler            deploy.Compiler
+	Databases           *database.Registry
+	Swarm               deploy.Scheduler
+	SessionTTL          time.Duration
+	Logger              *slog.Logger
+	PublicURL           string
+	Metrics             *observability.Metrics
+	AgentCACertificate  []byte
+	AgentCAKey          []byte
+	AgentCertificateTTL time.Duration
 }
 
 type contextKey string
@@ -70,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/auth/saml/{providerID}/acs", s.callbackSAML)
 	mux.HandleFunc("POST /v1/hooks/deploy/{token}", s.deployWebhook)
 	mux.HandleFunc("POST /v1/hooks/provider/{integrationID}", s.providerWebhook)
+	mux.HandleFunc("POST /v1/agent/enroll", s.enrollClusterAgent)
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.me)))
 	mux.Handle("GET /v1/sessions", s.requireAuth(http.HandlerFunc(s.listSessions)))
@@ -94,6 +98,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/notification-endpoints", s.requireRole("admin", http.HandlerFunc(s.createNotificationEndpoint)))
 	mux.Handle("DELETE /v1/notification-endpoints/{endpointID}", s.requireRole("admin", http.HandlerFunc(s.deleteNotificationEndpoint)))
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))
+	mux.Handle("GET /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.listClusters)))
+	mux.Handle("POST /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.createCluster)))
+	mux.Handle("POST /v1/clusters/{clusterID}/enrollment-tokens", s.requireRole("admin", http.HandlerFunc(s.createClusterEnrollmentToken)))
 	mux.Handle("POST /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.createOIDCProvider)))
 	mux.Handle("GET /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.listOIDCProviders)))
 	mux.Handle("DELETE /v1/sso/oidc-providers/{providerID}", s.requireRole("admin", http.HandlerFunc(s.deleteOIDCProvider)))

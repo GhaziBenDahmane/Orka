@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -158,18 +159,37 @@ func serve() error {
 	metrics := observability.NewMetrics()
 	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
 	go worker.Run(ctx)
-	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics}
+	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, AgentCACertificate: cfg.AgentCACertificate, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL}
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+	servers := []*http.Server{httpServer}
+	var agentServer *http.Server
+	if cfg.AgentListenAddr != "" {
+		clientCAs, tlsErr := httpapi.AgentTLSConfig(cfg.AgentCACertificate)
+		if tlsErr != nil {
+			return tlsErr
+		}
+		agentServer = &http.Server{Addr: cfg.AgentListenAddr, Handler: api.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 2 * time.Minute, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs}}
+		servers = append(servers, agentServer)
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
+		for _, server := range servers {
+			_ = server.Shutdown(shutdownCtx)
+		}
 	}()
 	logger.Info("dockyard listening", "address", cfg.ListenAddr)
-	err = httpServer.ListenAndServe()
+	serverErrors := make(chan error, len(servers))
+	go func() { serverErrors <- httpServer.ListenAndServe() }()
+	if agentServer != nil {
+		logger.Info("dockyard agent API listening", "address", cfg.AgentListenAddr)
+		go func() { serverErrors <- agentServer.ListenAndServeTLS(cfg.AgentServerCertFile, cfg.AgentServerKeyFile) }()
+	}
+	err = <-serverErrors
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
+	stop()
 	return err
 }

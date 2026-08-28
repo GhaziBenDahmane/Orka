@@ -53,3 +53,9 @@ a dedicated Dockyard CA. Enrollment accepts a proof-of-possession CSR, ignores
 caller-supplied certificate identities, and binds the certificate to
 `spiffe://dockyard/cluster/{uuid}`. Agent certificates are client-auth only and
 capped by the CA lifetime; rotation reuses the same verified cluster identity.
+
+Heartbeats use a separate optional TLS listener configured with
+`DOCKYARD_AGENT_LISTEN_ADDR`, `DOCKYARD_AGENT_SERVER_CERT_FILE`, and
+`DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
+and matches its serial number against the cluster's current database record,
+so reenrollment immediately supersedes the previous identity.
