@@ -6,7 +6,10 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_project`
 - `dockyard_environment`
 - `dockyard_service`
+- `dockyard_route`
 - `dockyard_database`
+- `dockyard_source_credential`
+- `dockyard_backup_destination`
 - `dockyard_backup_policy`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -32,6 +35,12 @@ between Swarms.
 `dockyard_backup_policy` manages the single native-backup policy associated
 with a database. Its import ID is the database UUID (not the policy UUID), for
 example `terraform import dockyard_backup_policy.primary DATABASE_UUID`.
+Backup destinations verify bucket access during creation. Access keys, secret
+keys, and optional session tokens are sensitive and are never returned by the
+API, so the provider retains them from configuration in state.
+Source credentials similarly retain secret material only in sensitive state;
+use `secret` for Git HTTPS and registry credentials, or `private_key` plus
+`known_hosts` for host-pinned SSH credentials.
 
 Managed databases are replacement-oriented because changing an engine,
 version, or credential-bearing driver configuration in place is unsafe.

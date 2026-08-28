@@ -1862,6 +1862,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/routes/{routeID}:
+    delete:
+      operationId: delete_v1_routes_routeID
+      tags: [routes]
+      parameters:
+        - name: routeID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    get:
+      operationId: get_v1_routes_routeID
+      tags: [routes]
+      parameters:
+        - name: routeID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/scim/tokens:
     post:
       operationId: post_v1_scim_tokens

@@ -984,6 +984,26 @@ func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route)
 	return r, tx.Commit(ctx)
 }
 
+func (s *Store) GetRoute(ctx context.Context, organizationID, id uuid.UUID) (Route, error) {
+	var item Route
+	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.target_port,r.tls,r.certificate_resolver FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.TargetPort, &item.TLS, &item.CertificateResolver)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Route{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM routes r USING compose_services s,environments e,projects p WHERE r.id=$1 AND s.id=r.compose_service_id AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {

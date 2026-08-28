@@ -36,6 +36,16 @@ resource "dockyard_service" "whoami" {
   YAML
 }
 
+resource "dockyard_route" "whoami" {
+  service_id           = dockyard_service.whoami.id
+  service_name         = "web"
+  host                 = "whoami.example.com"
+  path_prefix          = "/"
+  target_port          = 80
+  tls                  = true
+  certificate_resolver = "letsencrypt"
+}
+
 resource "dockyard_database" "postgres" {
   environment_id = dockyard_environment.production.id
   name           = "Primary PostgreSQL"

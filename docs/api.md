@@ -140,6 +140,7 @@ until an administrator retries them.
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup) |
 | PUT | `/v1/services/{id}/source` | Configure a Git/Dockerfile build, registry target, and credentials |
 | POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
+| GET/DELETE | `/v1/routes/{id}` | Inspect or remove a route |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |
 | GET | `/v1/services/{id}/deployments` | Read deployment history |
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |

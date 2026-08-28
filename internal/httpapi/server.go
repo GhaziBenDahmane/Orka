@@ -176,6 +176,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /v1/services/{serviceID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateService)))
 	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertSource)))
 	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.addRoute)))
+	mux.Handle("GET /v1/routes/{routeID}", s.requireResourceRole("viewer", "route", "routeID", http.HandlerFunc(s.getRoute)))
+	mux.Handle("DELETE /v1/routes/{routeID}", s.requireResourceRole("developer", "route", "routeID", http.HandlerFunc(s.deleteRoute)))
 	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deployService)))
 	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listDeployments)))
 	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.serviceLogs)))
@@ -1572,6 +1574,36 @@ func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
 	s.Store.Audit(r.Context(), &p, "route.create", "route", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
+
+func (s *Server) getRoute(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("routeID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid route id")
+		return
+	}
+	item, err := s.Store.GetRoute(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, item)
+}
+
+func (s *Server) deleteRoute(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("routeID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid route id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.DeleteRoute(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "route.delete", "route", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) deployService(w http.ResponseWriter, r *http.Request) {
 	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
 	if err != nil {
