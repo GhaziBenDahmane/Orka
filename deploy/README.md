@@ -22,3 +22,22 @@ and scrape `http://dockyard:8080/metrics`. The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, stale backups, and
 maintenance mode left enabled. Route those alerts through Alertmanager to the
 team's email, Slack, PagerDuty, or other incident receiver.
+
+## Remote Swarm agent
+
+Configure the controller with a dedicated TLS 1.3 listener and a private agent
+CA. Create a cluster and one-time enrollment token through the API, then install
+one outbound agent on a manager of that Swarm:
+
+```sh
+printf '%s' "$ENROLLMENT_TOKEN" | docker secret create dockyard_agent_enrollment_token -
+DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com \
+  DOCKYARD_AGENT_URL=https://agents.dockyard.example.com:8444 \
+  DOCKYARD_IMAGE=ghcr.io/example/dockyard:latest \
+  docker stack deploy -c deploy/agent-swarm.yml dockyard-agent
+```
+
+The token is used once. The agent generates its private key locally, stores its
+identity in the `agent-state` volume, verifies the controller using the
+enrollment CA, and uses mTLS for heartbeat and command polling. No inbound port
+or remote Docker socket is exposed on the managed cluster.

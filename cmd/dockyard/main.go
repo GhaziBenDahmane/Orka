@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/agent"
 	"github.com/bendahma/dokploy-go/internal/config"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
@@ -28,13 +30,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "serve":
 		err = serve()
+	case "agent":
+		err = runAgent()
 	case "import-dokploy-templates":
 		if len(os.Args) != 3 {
 			fmt.Fprintln(os.Stderr, "usage: dockyard import-dokploy-templates PATH")
@@ -52,13 +56,35 @@ func main() {
 	case "migrate-dokploy":
 		err = migrateDokploy(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
 		os.Exit(2)
 	}
 	if err != nil {
 		slog.Error("dockyard stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func runAgent() error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return agent.Run(ctx, agent.Config{
+		EnrollmentURL:       os.Getenv("DOCKYARD_CONTROL_PLANE_URL"),
+		AgentURL:            os.Getenv("DOCKYARD_AGENT_URL"),
+		EnrollmentToken:     os.Getenv("DOCKYARD_AGENT_ENROLLMENT_TOKEN"),
+		EnrollmentTokenFile: os.Getenv("DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE"),
+		StateDirectory:      envDefault("DOCKYARD_AGENT_STATE_DIRECTORY", "/var/lib/dockyard-agent"),
+		DockerBin:           envDefault("DOCKYARD_DOCKER_BIN", "docker"),
+		Network:             envDefault("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		Version:             "dev",
+	})
+}
+
+func envDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func migrateDokploy(arguments []string) error {
@@ -158,6 +184,9 @@ func serve() error {
 	databaseRegistry := database.NewRegistry()
 	metrics := observability.NewMetrics()
 	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
+	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
+		return deploy.RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 10 * time.Minute}
+	}
 	go worker.Run(ctx)
 	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, AgentCACertificate: cfg.AgentCACertificate, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL}
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}

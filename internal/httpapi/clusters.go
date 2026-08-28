@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
@@ -23,7 +25,122 @@ const clusterIDKey clusterContextKey = "cluster-id"
 func (s *Server) AgentHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/agent/heartbeat", s.agentHeartbeat)
+	mux.HandleFunc("POST /v1/agent/rotate", s.agentRotateCertificate)
+	mux.HandleFunc("GET /v1/agent/commands/next", s.agentNextCommand)
+	mux.HandleFunc("POST /v1/agent/commands/{commandID}/lease", s.agentRenewCommand)
+	mux.HandleFunc("POST /v1/agent/commands/{commandID}/complete", s.agentCompleteCommand)
 	return s.requestIDMiddleware(s.requireAgentCertificate(mux))
+}
+
+func (s *Server) agentRotateCertificate(w http.ResponseWriter, r *http.Request) {
+	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
+	var input struct {
+		CSR string `json:"csr"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	ttl := s.AgentCertificateTTL
+	if ttl == 0 {
+		ttl = 7 * 24 * time.Hour
+	}
+	certificate, parsed, err := agentpki.SignAgentCSR(s.AgentCACertificate, s.AgentCAKey, []byte(input.CSR), clusterID, time.Now(), ttl)
+	if err != nil {
+		writeError(w, 400, "invalid_csr", err.Error())
+		return
+	}
+	oldSerial := hex.EncodeToString(r.TLS.PeerCertificates[0].SerialNumber.Bytes())
+	if err = s.Store.RotateClusterCertificate(r.Context(), clusterID, oldSerial, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter); err != nil {
+		writeError(w, http.StatusConflict, "certificate_superseded", "agent certificate was already superseded")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"certificate": string(certificate), "expiresAt": parsed.NotAfter})
+}
+
+func (s *Server) agentNextCommand(w http.ResponseWriter, r *http.Request) {
+	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
+	command, err := s.Store.ClaimClusterCommand(r.Context(), clusterID, 45*time.Second)
+	if errors.Is(err, store.ErrNotFound) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	payload, err := s.Box.Decrypt(command.EncryptedPayload, "cluster-command:"+command.ID.String())
+	if err != nil {
+		result, _ := s.Box.Encrypt([]byte(`{"error":"command payload cannot be decrypted"}`), "cluster-command-result:"+command.ID.String())
+		_ = s.Store.CompleteClusterCommand(r.Context(), clusterID, command.ID, *command.LeaseID, result, true)
+		writeError(w, 500, "command_decryption_failed", "cluster command cannot be decrypted")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": command.ID, "kind": command.Kind, "payload": json.RawMessage(payload), "leaseId": command.LeaseID, "leaseExpiresAt": command.LeaseExpiresAt})
+}
+
+func (s *Server) agentRenewCommand(w http.ResponseWriter, r *http.Request) {
+	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
+	commandID, leaseID, ok := commandLeaseIDs(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Store.RenewClusterCommand(r.Context(), clusterID, commandID, leaseID, 45*time.Second); err != nil {
+		if errors.Is(err, store.ErrLeaseLost) {
+			writeError(w, http.StatusConflict, "lease_lost", err.Error())
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) agentCompleteCommand(w http.ResponseWriter, r *http.Request) {
+	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
+	commandID, leaseID, ok := commandLeaseIDs(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Output string `json:"output"`
+		Error  string `json:"error"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	if len(input.Output) > 65536 || len(input.Error) > 8192 {
+		writeError(w, 400, "result_too_large", "command result exceeds limits")
+		return
+	}
+	resultJSON, _ := json.Marshal(input)
+	encryptedResult, err := s.Box.Encrypt(resultJSON, "cluster-command-result:"+commandID.String())
+	if err != nil {
+		writeError(w, 500, "encryption_failed", "command result cannot be encrypted")
+		return
+	}
+	if err := s.Store.CompleteClusterCommand(r.Context(), clusterID, commandID, leaseID, encryptedResult, input.Error != ""); err != nil {
+		if errors.Is(err, store.ErrLeaseLost) {
+			writeError(w, http.StatusConflict, "lease_lost", err.Error())
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func commandLeaseIDs(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {
+	commandID, err := uuid.Parse(r.PathValue("commandID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid command id")
+		return uuid.Nil, uuid.Nil, false
+	}
+	leaseID, err := uuid.Parse(r.Header.Get("X-Dockyard-Lease-ID"))
+	if err != nil {
+		writeError(w, 400, "invalid_lease", "valid X-Dockyard-Lease-ID required")
+		return uuid.Nil, uuid.Nil, false
+	}
+	return commandID, leaseID, true
 }
 
 func (s *Server) requireAgentCertificate(next http.Handler) http.Handler {
@@ -102,6 +219,24 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Store.ListClusters(r.Context(), principal(r).OrganizationID)
 	if err != nil {
 		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) clusterNodes(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid cluster id")
+		return
+	}
+	if _, err = s.Store.GetCluster(r.Context(), principal(r).OrganizationID, clusterID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	items, err := (deploy.RemoteSwarm{Store: s.Store, Box: s.Box, ClusterID: clusterID, Timeout: 30 * time.Second}).Nodes(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "cluster_unavailable", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})

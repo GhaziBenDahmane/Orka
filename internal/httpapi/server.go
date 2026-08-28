@@ -101,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.listClusters)))
 	mux.Handle("POST /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.createCluster)))
 	mux.Handle("POST /v1/clusters/{clusterID}/enrollment-tokens", s.requireRole("admin", http.HandlerFunc(s.createClusterEnrollmentToken)))
+	mux.Handle("GET /v1/clusters/{clusterID}/nodes", s.requireRole("admin", http.HandlerFunc(s.clusterNodes)))
 	mux.Handle("POST /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.createOIDCProvider)))
 	mux.Handle("GET /v1/sso/oidc-providers", s.requireRole("admin", http.HandlerFunc(s.listOIDCProviders)))
 	mux.Handle("DELETE /v1/sso/oidc-providers/{providerID}", s.requireRole("admin", http.HandlerFunc(s.deleteOIDCProvider)))
@@ -649,8 +650,9 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name string `json:"name"`
-		Slug string `json:"slug"`
+		Name      string     `json:"name"`
+		Slug      string     `json:"slug"`
+		ClusterID *uuid.UUID `json:"clusterId"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -663,7 +665,7 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateEnvironment(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug)
+	item, err := s.Store.CreateEnvironmentOnCluster(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug, in.ClusterID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1404,7 +1406,16 @@ func (s *Server) serviceLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	logs, err := s.Swarm.Logs(ctx, item.StackName, 500)
+	scheduler := s.Swarm
+	var clusterID *uuid.UUID
+	if err = s.Store.Pool.QueryRow(ctx, `SELECT cluster_id FROM environments WHERE id=$1`, item.EnvironmentID).Scan(&clusterID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if clusterID != nil {
+		scheduler = deploy.RemoteSwarm{Store: s.Store, Box: s.Box, ClusterID: *clusterID, Timeout: 30 * time.Second}
+	}
+	logs, err := scheduler.Logs(ctx, item.StackName, 500)
 	if err != nil {
 		writeError(w, 502, "logs_failed", err.Error())
 		return

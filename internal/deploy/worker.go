@@ -41,6 +41,7 @@ type Worker struct {
 	Builder            Builder
 	Metrics            *observability.Metrics
 	NotificationClient *http.Client
+	RemoteScheduler    func(uuid.UUID) Scheduler
 }
 
 type job struct {
@@ -270,7 +271,8 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		return err
 	}
 	var stack, compose, encrypted string
-	err = w.Store.Pool.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s WHERE d.id=$1 AND s.id=d.compose_service_id RETURNING s.stack_name,d.compose_snapshot,d.env_snapshot`, id).Scan(&stack, &compose, &encrypted)
+	var clusterID *uuid.UUID
+	err = w.Store.Pool.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.stack_name,d.compose_snapshot,d.env_snapshot,e.cluster_id`, id).Scan(&stack, &compose, &encrypted, &clusterID)
 	if err != nil {
 		return err
 	}
@@ -343,7 +345,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if err == nil {
 		var output string
-		output, err = w.Swarm.Deploy(ctx, stack, compiled, env)
+		output, err = w.scheduler(clusterID).Deploy(ctx, stack, compiled, env)
 		w.markDeployment(ctx, id, map[bool]string{true: "failed", false: "succeeded"}[err != nil], buildOutput+output, err)
 	} else {
 		w.markDeployment(ctx, id, "failed", buildOutput, err)
@@ -363,7 +365,11 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	if _, err = w.Swarm.Remove(ctx, payload.StackName); err != nil {
+	var clusterID *uuid.UUID
+	if err = w.Store.Pool.QueryRow(ctx, `SELECT e.cluster_id FROM compose_services s JOIN environments e ON e.id=s.environment_id WHERE s.id=$1`, serviceID).Scan(&clusterID); err != nil {
+		return err
+	}
+	if _, err = w.scheduler(clusterID).Remove(ctx, payload.StackName); err != nil {
 		return err
 	}
 	rows, err := w.Store.Pool.Query(ctx, `SELECT b.path,b.destination_id,b.object_key FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1`, serviceID)
@@ -424,6 +430,13 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 		}
 	}
 	return nil
+}
+
+func (w *Worker) scheduler(clusterID *uuid.UUID) Scheduler {
+	if clusterID != nil && w.RemoteScheduler != nil {
+		return w.RemoteScheduler(*clusterID)
+	}
+	return w.Swarm
 }
 
 func (w *Worker) backupDatabase(ctx context.Context, j job) error {

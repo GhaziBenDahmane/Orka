@@ -1,0 +1,26 @@
+services:
+  agent:
+    image: ${DOCKYARD_IMAGE:-ghcr.io/bendahma/dockyard:latest}
+    command: ["agent"]
+    environment:
+      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL}
+      DOCKYARD_AGENT_URL: ${DOCKYARD_AGENT_URL}
+      DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE: /run/secrets/dockyard_agent_enrollment_token
+      DOCKYARD_AGENT_STATE_DIRECTORY: /var/lib/dockyard-agent
+      DOCKYARD_TRAEFIK_NETWORK: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+    secrets: [dockyard_agent_enrollment_token]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-state:/var/lib/dockyard-agent
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  agent-state: {}
+
+secrets:
+  dockyard_agent_enrollment_token: {external: true}

@@ -74,11 +74,12 @@ type Project struct {
 }
 
 type Environment struct {
-	ID        uuid.UUID `json:"id"`
-	ProjectID uuid.UUID `json:"projectId"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID        uuid.UUID  `json:"id"`
+	ProjectID uuid.UUID  `json:"projectId"`
+	ClusterID *uuid.UUID `json:"clusterId,omitempty"`
+	Name      string     `json:"name"`
+	Slug      string     `json:"slug"`
+	CreatedAt time.Time  `json:"createdAt"`
 }
 
 type ComposeService struct {
@@ -550,6 +551,10 @@ func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]P
 }
 
 func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string) (Environment, error) {
+	return s.CreateEnvironmentOnCluster(ctx, organizationID, projectID, name, slug, nil)
+}
+
+func (s *Store) CreateEnvironmentOnCluster(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string, clusterID *uuid.UUID) (Environment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Environment{}, err
@@ -561,8 +566,17 @@ func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, nil, "environments"); err != nil {
 		return Environment{}, err
 	}
-	e := Environment{ID: uuid.New(), ProjectID: projectID, Name: name, Slug: slug}
-	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,name,slug) SELECT $1,p.id,$3,$4 FROM projects p WHERE p.id=$2 AND p.organization_id=$5 RETURNING created_at`, e.ID, projectID, name, slug, organizationID).Scan(&e.CreatedAt)
+	if clusterID != nil {
+		var clusterExists bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND organization_id=$2 AND state='active')`, *clusterID, organizationID).Scan(&clusterExists); err != nil {
+			return Environment{}, err
+		}
+		if !clusterExists {
+			return Environment{}, ErrNotFound
+		}
+	}
+	e := Environment{ID: uuid.New(), ProjectID: projectID, ClusterID: clusterID, Name: name, Slug: slug}
+	err = tx.QueryRow(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug) SELECT $1,p.id,$3,$4,$5 FROM projects p WHERE p.id=$2 AND p.organization_id=$6 RETURNING created_at`, e.ID, projectID, clusterID, name, slug, organizationID).Scan(&e.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	}
@@ -573,7 +587,7 @@ func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID
 }
 
 func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID uuid.UUID) ([]Environment, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.project_id=$1 AND p.organization_id=$2 ORDER BY e.name`, projectID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.project_id=$1 AND p.organization_id=$2 ORDER BY e.name`, projectID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +595,7 @@ func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID 
 	items := []Environment{}
 	for rows.Next() {
 		var item Environment
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

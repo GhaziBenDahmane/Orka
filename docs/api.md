@@ -47,6 +47,10 @@ deployments, backups, restores, restore drills, and operation durations.
 | POST | `/v1/clusters/{id}/enrollment-tokens` | Issue a 15-minute one-time agent token |
 | POST | `/v1/agent/enroll` | Exchange a token and CSR for a client certificate |
 | POST | `/v1/agent/heartbeat` | Report agent and Swarm capacity over the mTLS listener |
+| GET | `/v1/agent/commands/next` | Lease the next encrypted-at-rest Swarm command over mTLS |
+| POST | `/v1/agent/commands/{id}/lease` | Renew a command lease using its fencing ID |
+| POST | `/v1/agent/commands/{id}/complete` | Store a fenced command result |
+| POST | `/v1/agent/rotate` | Rotate the current short-lived client certificate |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
@@ -74,6 +78,10 @@ Heartbeat traffic is accepted only on the optional dedicated agent listener;
 the client certificate must chain to the configured CA and its serial must
 match the cluster's latest enrollment, allowing immediate supersession during
 rotation.
+Remote environments select a cluster with `clusterId` when they are created.
+Application deploy, removal, logs, and node operations use encrypted-at-rest
+commands claimed by the outbound agent. Expiring leases are retried and every
+renewal/completion is fenced by a per-attempt UUID.
 
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in

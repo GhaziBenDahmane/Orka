@@ -131,9 +131,9 @@ disaster-recovery scenarios pass under load.
 
 ### 5. Multi-cluster and high availability
 
-Status: in progress; scheduler abstraction, cluster inventory, one-time
-enrollment, short-lived identity certificates, rotation-safe serial checks,
-and mTLS heartbeats are implemented.
+Status: in progress; scheduler abstraction, cluster inventory and placement,
+one-time enrollment, rotating short-lived certificates, mTLS heartbeats, and
+fenced outbound command execution are implemented.
 
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.

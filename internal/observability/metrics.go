@@ -101,6 +101,9 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 		{"dockyard_database_restore_last_success_age_seconds", "Age of the most recent successful restore by kind.", `SELECT kind,extract(epoch FROM now()-max(finished_at))::float8 FROM database_restores WHERE status='succeeded' GROUP BY kind`, []string{"kind"}},
 		{"dockyard_maintenance_scopes", "Resource scopes currently in maintenance mode.", `SELECT scope_type,count(*)::float8 FROM resource_policies WHERE maintenance_enabled GROUP BY scope_type`, []string{"scope_type"}},
 		{"dockyard_notification_deliveries", "Notification deliveries by event and state.", `SELECT event_type,status,count(*)::float8 FROM notification_deliveries GROUP BY event_type,status`, []string{"event", "status"}},
+		{"dockyard_clusters", "Registered clusters by lifecycle state.", `SELECT state,count(*)::float8 FROM clusters GROUP BY state`, []string{"state"}},
+		{"dockyard_cluster_commands", "Remote cluster commands by state and kind.", `SELECT kind,status,count(*)::float8 FROM cluster_commands GROUP BY kind,status`, []string{"kind", "status"}},
+		{"dockyard_cluster_heartbeat_age_seconds", "Age of the last heartbeat from each active remote cluster.", `SELECT slug,extract(epoch FROM now()-last_seen_at)::float8 FROM clusters WHERE state IN ('active','draining') AND last_seen_at IS NOT NULL`, []string{"cluster"}},
 	}
 	for _, f := range families {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", f.name, f.help, f.name)
