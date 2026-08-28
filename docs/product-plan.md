@@ -89,8 +89,10 @@ Status: core implementation complete; storage breadth remains.
 - Remote backup and restore execution through outbound agents using short-lived
   presigned transfers, per-backup encryption, and end-to-end checksum checks.
 - Scheduled drill failure notifications, overdue alerts, and per-database
-  recovery-duration metrics are implemented. Production RPO/RTO values still
-  require measured operator drills and publication for each supported engine.
+  recovery-duration metrics are implemented. An opt-in real-engine conformance
+  suite verifies seeded application data and emits RPO/RTO evidence for all
+  four backup-capable engines. Production RPO/RTO values still require drills
+  on production-equivalent storage and publication for each deployment.
 
 Exit gate: automated restore verification and documented RPO/RTO for every
 database advertised as backup-capable.

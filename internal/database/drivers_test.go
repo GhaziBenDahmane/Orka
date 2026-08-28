@@ -98,5 +98,8 @@ func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
 		if strings.Contains(strings.Join(plan.Command, " "), credentials["password"]) {
 			t.Fatalf("%s readiness command exposes password", engine)
 		}
+		if engine == "mongo" && plan.Environment["DOCKYARD_MONGO_PASSWORD"] != credentials["password"] {
+			t.Fatal("mongo readiness password was not passed through the environment")
+		}
 	}
 }

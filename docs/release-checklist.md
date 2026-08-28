@@ -28,7 +28,11 @@ links for every item below.
   command. Kill a worker while a job is leased and verify fenced takeover.
 - Back up and restore each advertised backup-capable database engine. Record
   measured RPO/RTO and verify checksum, application-level data, retention, and
-  restore-drill alerts.
+  restore-drill alerts. On a Swarm manager, `make test-database-recovery`
+  exercises the exact native readiness, backup, and restore commands against
+  PostgreSQL, MySQL, MariaDB, and MongoDB and emits one `RECOVERY_EVIDENCE`
+  JSON record per engine. Preserve the workflow artifact with the release;
+  repeat on production-equivalent storage because CI timings are not SLOs.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
   procedure. Verify tenant isolation with users from two organizations.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact

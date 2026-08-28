@@ -155,7 +155,11 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 	case "mariadb":
 		return BackupPlan{Image: "mariadb:" + version, Command: []string{"mariadb-admin", "--host", host, "--user", credentials["username"], "ping", "--silent"}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}}, nil
 	case "mongo":
-		return BackupPlan{Image: "mongo:" + version, Command: []string{"mongosh", "--quiet", "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--eval", "quit(db.runCommand({ping:1}).ok ? 0 : 1)"}, Environment: map[string]string{"MONGODB_PWD": credentials["password"]}}, nil
+		// mongosh does not consume MONGODB_PWD. Build the URI inside the shell
+		// process so the password remains in the container environment instead
+		// of appearing in Docker's command metadata or the host process list.
+		probe := `const uri="mongodb://"+encodeURIComponent(process.env.DOCKYARD_MONGO_USER)+":"+encodeURIComponent(process.env.DOCKYARD_MONGO_PASSWORD)+"@"+process.env.DOCKYARD_MONGO_HOST+"/"+encodeURIComponent(process.env.DOCKYARD_MONGO_DATABASE)+"?authSource=admin"; const client=new Mongo(uri); const ok=client.getDB(process.env.DOCKYARD_MONGO_DATABASE).runCommand({ping:1}).ok; quit(ok ? 0 : 1)`
+		return BackupPlan{Image: "mongo:" + version, Command: []string{"mongosh", "--quiet", "--nodb", "--eval", probe}, Environment: map[string]string{"DOCKYARD_MONGO_HOST": host, "DOCKYARD_MONGO_USER": credentials["username"], "DOCKYARD_MONGO_PASSWORD": credentials["password"], "DOCKYARD_MONGO_DATABASE": credentials["database"]}}, nil
 	default:
 		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
 	}
