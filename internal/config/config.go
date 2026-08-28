@@ -22,6 +22,7 @@ type Config struct {
 	UnsafeWorkloads         bool
 	PublicURL               string
 	BackupDirectory         string
+	RequireRemoteBackups    bool
 	OTLPEndpoint            string
 	OTLPInsecure            bool
 	ServiceName             string
@@ -65,6 +66,10 @@ func Load() (Config, error) {
 	backupDirectory := env("DOCKYARD_BACKUP_DIRECTORY", "/var/lib/dockyard/backups")
 	if !filepath.IsAbs(backupDirectory) {
 		return Config{}, errors.New("DOCKYARD_BACKUP_DIRECTORY must be absolute")
+	}
+	requireRemoteBackups, err := strconv.ParseBool(env("DOCKYARD_REQUIRE_REMOTE_BACKUPS", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse DOCKYARD_REQUIRE_REMOTE_BACKUPS: %w", err)
 	}
 	driverDirectory := strings.TrimSpace(os.Getenv("DOCKYARD_DATABASE_DRIVER_DIRECTORY"))
 	if driverDirectory != "" && !filepath.IsAbs(driverDirectory) {
@@ -110,6 +115,7 @@ func Load() (Config, error) {
 		UnsafeWorkloads:         unsafeWorkloads,
 		PublicURL:               strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
 		BackupDirectory:         filepath.Clean(backupDirectory),
+		RequireRemoteBackups:    requireRemoteBackups,
 		OTLPEndpoint:            otlpEndpoint,
 		OTLPInsecure:            otlpInsecure,
 		ServiceName:             env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),

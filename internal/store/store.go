@@ -20,8 +20,12 @@ var ErrBusy = errors.New("resource has an operation in progress")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
 var ErrNoCapacity = errors.New("no eligible cluster has the requested placement capacity")
+var ErrRemoteBackupRequired = errors.New("a remote backup destination is required")
 
-type Store struct{ Pool *pgxpool.Pool }
+type Store struct {
+	Pool                 *pgxpool.Pool
+	RequireRemoteBackups bool
+}
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -1237,6 +1241,9 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 }
 
 func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databaseID, actorID uuid.UUID, destinationID *uuid.UUID) (DatabaseBackup, error) {
+	if s.RequireRemoteBackups && destinationID == nil {
+		return DatabaseBackup{}, ErrRemoteBackupRequired
+	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return DatabaseBackup{}, err
@@ -1263,7 +1270,24 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	return backup, nil
 }
 
+func (s *Store) ValidateBackupConfiguration(ctx context.Context) error {
+	if !s.RequireRemoteBackups {
+		return nil
+	}
+	var count int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM backup_policies WHERE enabled AND destination_id IS NULL`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("%w: %d enabled backup policies use node-local storage", ErrRemoteBackupRequired, count)
+	}
+	return nil
+}
+
 func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled, verifyRestore bool, destinationID *uuid.UUID) (BackupPolicy, error) {
+	if s.RequireRemoteBackups && enabled && destinationID == nil {
+		return BackupPolicy{}, ErrRemoteBackupRequired
+	}
 	var item BackupPolicy
 	err := s.Pool.QueryRow(ctx, `INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore)
 		SELECT $1,d.id,$4,$5,$6,now()+($4::int * interval '1 second'),$7,$8 FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$2 AND p.organization_id=$3 AND ($7::uuid IS NULL OR EXISTS(SELECT 1 FROM backup_destinations bd WHERE bd.id=$7 AND bd.organization_id=$3))

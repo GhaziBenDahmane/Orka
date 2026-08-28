@@ -125,6 +125,7 @@ func migrateDokploy(arguments []string) error {
 		return err
 	}
 	defer db.Pool.Close()
+	db.RequireRemoteBackups = cfg.RequireRemoteBackups
 	box, err := cryptox.New(cfg.MasterKey)
 	if err != nil {
 		return err
@@ -208,6 +209,10 @@ func serve() error {
 		return err
 	}
 	defer db.Pool.Close()
+	db.RequireRemoteBackups = cfg.RequireRemoteBackups
+	if err = db.ValidateBackupConfiguration(ctx); err != nil {
+		return fmt.Errorf("validate backup configuration: %w", err)
+	}
 	box, err := cryptox.New(cfg.MasterKey)
 	if err != nil {
 		return err

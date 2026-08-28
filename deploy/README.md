@@ -30,6 +30,35 @@ node. Watch `docker service ps dockyard_dockyard` and
 `docker service inspect dockyard_dockyard --pretty` until the update completes
 before removing the previous image.
 
+## Highly available controllers
+
+The base manifest is a recoverable single-manager installation. For production
+control-plane availability, provide a PostgreSQL 17-compatible HA endpoint over
+TLS in `dockyard_database_url`, create three or more Swarm manager nodes, and
+create the agent listener secrets below. The server certificate must cover the
+hostname in `DOCKYARD_AGENT_URL` and chain to `dockyard_agent_ca_cert`:
+
+```sh
+docker secret create dockyard_agent_ca_cert /secure/pki/agent-ca.crt
+docker secret create dockyard_agent_ca_key /secure/pki/agent-ca.key
+docker secret create dockyard_agent_server_cert /secure/pki/agent-server.crt
+docker secret create dockyard_agent_server_key /secure/pki/agent-server.key
+
+DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
+  DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
+  POSTGRES_IMAGE=postgres@sha256:... \
+  TRAEFIK_IMAGE=traefik@sha256:... \
+  docker stack deploy -c deploy/swarm.yml -c deploy/swarm-ha.yml dockyard
+```
+
+The overlay disables the bundled PostgreSQL task, starts three controller
+replicas, publishes the mTLS agent API through Swarm ingress on port 8444, and
+requires every enabled or manually requested managed-database backup to use an
+S3-compatible destination. Startup fails if an older enabled policy still
+targets node-local storage. Configure and test remote backup destinations
+before switching profiles. PostgreSQL availability, replication, PITR,
+connection pooling, and failover remain the database provider's responsibility.
+
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
 account configured as an HTTP bearer token. The rules cover controller outage,

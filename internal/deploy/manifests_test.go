@@ -10,7 +10,10 @@ import (
 
 type deploymentManifest struct {
 	Services map[string]struct {
-		Command     []string `yaml:"command"`
+		Command     []string          `yaml:"command"`
+		Environment map[string]string `yaml:"environment"`
+		Secrets     []any             `yaml:"secrets"`
+		Ports       []any             `yaml:"ports"`
 		Healthcheck struct {
 			Test []string `yaml:"test"`
 		} `yaml:"healthcheck"`
@@ -81,5 +84,28 @@ func TestDevelopmentComposeChecksControllerReadiness(t *testing.T) {
 	service := readDeploymentManifest(t, "../../compose.yml").Services["dockyard"]
 	if len(service.Healthcheck.Test) == 0 {
 		t.Fatal("development controller has no health check")
+	}
+}
+
+func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/swarm-ha.yml")
+	if replicas := manifest.Services["postgres"].Deploy.Replicas; replicas != 0 {
+		t.Fatalf("bundled PostgreSQL replicas=%d, want 0", replicas)
+	}
+	controller := manifest.Services["dockyard"]
+	if controller.Deploy.Replicas != 3 {
+		t.Fatalf("controller replicas=%d, want 3", controller.Deploy.Replicas)
+	}
+	if controller.Environment["DOCKYARD_REQUIRE_REMOTE_BACKUPS"] != "true" {
+		t.Fatal("HA deployment does not require remote backup storage")
+	}
+	for _, name := range []string{"DOCKYARD_AGENT_CA_CERT_FILE", "DOCKYARD_AGENT_CA_KEY_FILE", "DOCKYARD_AGENT_SERVER_CERT_FILE", "DOCKYARD_AGENT_SERVER_KEY_FILE"} {
+		if controller.Environment[name] == "" {
+			t.Fatalf("HA deployment does not configure %s", name)
+		}
+	}
+	port, ok := controller.Ports[0].(map[string]any)
+	if len(controller.Ports) != 1 || !ok || port["target"] != 8444 || port["published"] != 8444 || port["mode"] != "ingress" {
+		t.Fatalf("agent mTLS listener is not published through Swarm ingress: %#v", controller.Ports)
 	}
 }

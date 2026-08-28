@@ -1831,6 +1831,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "resource_not_empty", "delete child resources first")
 		return
 	}
+	if errors.Is(err, store.ErrRemoteBackupRequired) {
+		writeError(w, http.StatusBadRequest, "remote_backup_required", err.Error())
+		return
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		writeError(w, 409, "conflict", "resource already exists")

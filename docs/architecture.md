@@ -90,3 +90,9 @@ The stale-job reaper locks each expired job before changing either the job or
 its resource, and skips rows currently held by a heartbeat or resource
 transition. Job completion likewise locks the job while resolving a concurrent
 cancellation, so cancellation cannot be lost to a success update.
+
+`deploy/swarm-ha.yml` is layered over the base stack for a three-controller
+deployment. It disables the bundled single-node PostgreSQL service, expects an
+external highly available PostgreSQL URL, publishes the mTLS agent listener,
+and rejects node-local managed-database backup policies. Shared PostgreSQL is
+the coordination boundary; controllers do not require shared local state.

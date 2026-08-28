@@ -36,6 +36,7 @@ services:
       DOCKYARD_DATABASE_URL_FILE: /run/secrets/dockyard_database_url
       DOCKYARD_MASTER_KEY_FILE: /run/secrets/dockyard_master_key
       DOCKYARD_TRAEFIK_NETWORK: dockyard-public
+      DOCKYARD_PUBLIC_URL: https://${DOCKYARD_HOST}
       DOCKYARD_BACKUP_DIRECTORY: /var/lib/dockyard/backups
       DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT: ${DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE: ${DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE:-false}

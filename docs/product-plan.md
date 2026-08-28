@@ -146,7 +146,9 @@ disaster-recovery scenarios pass under load.
 Status: in progress; scheduler abstraction, cluster inventory, label/capacity
 placement with heartbeat freshness, scheduled maintenance windows,
 one-time enrollment, rotating short-lived certificates, mTLS heartbeats, and
-fenced outbound command execution are implemented.
+fenced outbound command execution are implemented. A three-controller Swarm
+profile uses external HA PostgreSQL, exposes the mTLS agent API, and enforces
+S3-compatible managed-database backups instead of node-local artifacts.
 Controller singleton loops use expiring database leader leases, while durable
 jobs and agent commands use independent per-attempt UUID fencing so stateless
 replicas can share the same PostgreSQL control plane. Integration tests force

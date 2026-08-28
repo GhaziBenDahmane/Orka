@@ -9,6 +9,7 @@ The initial implementation includes:
 - organization-scoped users, sessions, and role-based access;
 - projects, environments, Compose services, routes, and deployment history;
 - durable PostgreSQL jobs with leases, heartbeats, cancellation, and stale-worker recovery;
+- an external-PostgreSQL, three-controller Swarm profile with fenced workers and mandatory remote backups;
 - Docker Swarm stack deployment and rollback;
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;

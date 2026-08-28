@@ -99,6 +99,23 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 		t.Fatalf("stored backup destination = %v, err = %v", storedBackup.DestinationID, err)
 	}
 
+	db.RequireRemoteBackups = true
+	if _, err = db.QueueDatabaseBackup(ctx, orgID, databaseID, userID, nil); !errors.Is(err, ErrRemoteBackupRequired) {
+		t.Fatalf("local backup error = %v, want remote backup required", err)
+	}
+	if _, err = db.UpsertBackupPolicy(ctx, orgID, databaseID, 3600, 7, true, false, nil); !errors.Is(err, ErrRemoteBackupRequired) {
+		t.Fatalf("local backup policy error = %v, want remote backup required", err)
+	}
+	if err = db.ValidateBackupConfiguration(ctx); err != nil {
+		t.Fatalf("valid remote backup configuration: %v", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_policies SET destination_id=NULL WHERE database_instance_id=$1`, databaseID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ValidateBackupConfiguration(ctx); !errors.Is(err, ErrRemoteBackupRequired) {
+		t.Fatalf("existing local backup policy error = %v, want remote backup required", err)
+	}
+
 	items, err := db.ListBackupDestinations(ctx, orgID)
 	if err != nil || len(items) != 1 || items[0].ID != owned.ID {
 		t.Fatalf("organization destinations = %#v, err = %v", items, err)

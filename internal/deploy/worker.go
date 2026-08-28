@@ -153,7 +153,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	var destinationID *uuid.UUID
 	var intervalSeconds, retentionCount int
 	var verifyRestore bool
-	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count,destination_id,verify_restore FROM backup_policies WHERE enabled AND next_run_at<=now() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID, &verifyRestore)
+	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count,destination_id,verify_restore FROM backup_policies WHERE enabled AND next_run_at<=now() AND (NOT $1 OR destination_id IS NOT NULL) ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`, w.Store.RequireRemoteBackups).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID, &verifyRestore)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}

@@ -1,0 +1,35 @@
+# Overlay for a multi-manager production control plane. Apply after swarm.yml:
+# docker stack deploy -c deploy/swarm.yml -c deploy/swarm-ha.yml dockyard
+services:
+  postgres:
+    # Use an externally managed, highly available PostgreSQL endpoint in the
+    # dockyard_database_url secret instead of the bundled single-node database.
+    deploy:
+      replicas: 0
+
+  dockyard:
+    environment:
+      DOCKYARD_REQUIRE_REMOTE_BACKUPS: "true"
+      DOCKYARD_AGENT_LISTEN_ADDR: ":8444"
+      DOCKYARD_AGENT_CA_CERT_FILE: /run/secrets/dockyard_agent_ca_cert
+      DOCKYARD_AGENT_CA_KEY_FILE: /run/secrets/dockyard_agent_ca_key
+      DOCKYARD_AGENT_SERVER_CERT_FILE: /run/secrets/dockyard_agent_server_cert
+      DOCKYARD_AGENT_SERVER_KEY_FILE: /run/secrets/dockyard_agent_server_key
+    secrets:
+      - dockyard_agent_ca_cert
+      - dockyard_agent_ca_key
+      - dockyard_agent_server_cert
+      - dockyard_agent_server_key
+    ports:
+      - target: 8444
+        published: 8444
+        protocol: tcp
+        mode: ingress
+    deploy:
+      replicas: 3
+
+secrets:
+  dockyard_agent_ca_cert: {external: true}
+  dockyard_agent_ca_key: {external: true}
+  dockyard_agent_server_cert: {external: true}
+  dockyard_agent_server_key: {external: true}
