@@ -28,3 +28,26 @@ func TestRequestIDMiddleware(t *testing.T) {
 		t.Fatalf("expected generated request id, got %q", got)
 	}
 }
+
+func TestHandlerSetsSecurityHeadersOnAPIAndConsole(t *testing.T) {
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, route := range []string{"/v1/projects", "/"} {
+		request := httptest.NewRequest(http.MethodGet, route, nil)
+		request.Header.Set("X-Forwarded-Proto", "https")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		for _, header := range []string{
+			"Content-Security-Policy",
+			"Cross-Origin-Opener-Policy",
+			"Permissions-Policy",
+			"Referrer-Policy",
+			"Strict-Transport-Security",
+			"X-Content-Type-Options",
+			"X-Frame-Options",
+		} {
+			if response.Header().Get(header) == "" {
+				t.Errorf("%s: missing %s", route, header)
+			}
+		}
+	}
+}

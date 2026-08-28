@@ -183,3 +183,10 @@ upgrade from the previous release is tested, and a clean machine can be
 installed and recovered using only published documentation. Features without
 those guarantees should be marked preview rather than silently presented as
 complete.
+
+Release automation now covers migration checksums, fresh and checkpoint
+upgrades, stale-worker takeover, API security classification, clean Compose
+installation and restart persistence, vulnerability/license checks, an SPDX
+SBOM, and container scanning. The staging-only conformance, load, real-provider,
+full Dokploy cutover, and measured disaster-recovery gates remain open; see
+`docs/release-checklist.md`.

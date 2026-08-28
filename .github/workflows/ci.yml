@@ -27,12 +27,12 @@ jobs:
       DOCKYARD_TEST_S3_ACCESS_KEY: minioadmin
       DOCKYARD_TEST_S3_SECRET_KEY: minioadmin123
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26.x"
           cache: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
@@ -47,7 +47,7 @@ jobs:
           docker run -d --name dockyard-minio-test -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin123 \
-            minio/minio:latest server /data
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
           for attempt in {1..30}; do
             curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
             sleep 1
@@ -55,7 +55,51 @@ jobs:
           exit 1
       - run: go test -race ./...
       - run: go vet ./...
+      - name: Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
       - run: go build ./cmd/dockyard
       - run: go build ./cmd/terraform-provider-dockyard
       - run: docker compose config --quiet
       - run: DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com DOCKYARD_IMAGE=example/dockyard:test docker stack config -c deploy/swarm.yml >/dev/null
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Clean-install and restart smoke test
+        run: scripts/ci/smoke-compose.sh
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: License policy
+        run: go run github.com/google/go-licenses@v1.6.0 check ./... --disallowed_types=forbidden,restricted
+      - name: Build release image
+        run: docker build --tag dockyard:ci .
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@aa80c8c5bd439a416a62804f2151ab38c671a638 # v0.24.1
+        with:
+          image: dockyard:ci
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dockyard-sbom
+          path: sbom.spdx.json
+          if-no-files-found: error
+      - name: Scan release image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: dockyard:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

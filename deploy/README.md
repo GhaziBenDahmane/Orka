@@ -14,8 +14,8 @@ DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
 ```
 
 The controller is constrained to a manager because it uses the manager Docker
-API to deploy stacks. A later multi-cluster agent keeps the same Swarm adapter
-while removing the local socket requirement.
+API to deploy stacks. The outbound mTLS agent described below keeps the same
+Swarm adapter while removing direct control-plane access to remote sockets.
 
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics`. The rules cover controller outage,
