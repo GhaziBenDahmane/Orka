@@ -82,9 +82,9 @@ Status: core implementation complete; storage breadth remains.
 - Safety classifications instead of silently granting host access.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
-- PostgreSQL native backup/restore, streaming checksums, interval policies, and
-  retention.
-- Next: native backup drivers for MySQL/MariaDB and MongoDB; S3-compatible
+- PostgreSQL, MySQL, MariaDB, and MongoDB native backup/restore, streaming
+  checksums, interval policies, and retention.
+- Next: S3-compatible
   multipart storage; restore drills; encryption-at-rest per destination.
 
 Exit gate: automated restore verification and documented RPO/RTO for every

@@ -168,7 +168,14 @@ func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource 
 	if !safeName.MatchString(network) {
 		return "", fmt.Errorf("invalid network name %q", network)
 	}
-	args := []string{"run", "--rm", "--network", network, "--volume", mountSource + ":/backup"}
+	if len(command) == 0 || !safeName.MatchString(command[0]) {
+		return "", errors.New("container job command is required")
+	}
+	// Official database tool images use different unprivileged UIDs. Run the
+	// short-lived tool as container root so it can access the controller-owned
+	// mode-0700 backup directory; the container has no Docker socket or host
+	// mounts other than that directory.
+	args := []string{"run", "--rm", "--user", "0:0", "--network", network, "--volume", mountSource + ":/backup", "--entrypoint", command[0]}
 	keys := make([]string, 0, len(environment))
 	for key := range environment {
 		keys = append(keys, key)
@@ -178,7 +185,7 @@ func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource 
 		args = append(args, "--env", key)
 	}
 	args = append(args, image)
-	args = append(args, command...)
+	args = append(args, command[1:]...)
 	return s.runEnv(ctx, environment, args...)
 }
 

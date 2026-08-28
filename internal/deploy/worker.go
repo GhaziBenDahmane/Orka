@@ -394,7 +394,11 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err = json.Unmarshal(plain, &credentials); err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
-	filename := backupID.String() + ".dump"
+	extension, supported := w.Databases.BackupExtension(engine)
+	if !supported {
+		return w.failBackup(ctx, backupID, fmt.Errorf("verified backups are not implemented for database engine %q", engine))
+	}
+	filename := backupID.String() + "." + extension
 	plan, err := w.Databases.Backup(engine, version, serviceName, credentials, filename)
 	if err != nil {
 		return w.failBackup(ctx, backupID, err)
@@ -403,6 +407,10 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err = os.MkdirAll(directory, 0700); err != nil {
 		return w.failBackup(ctx, backupID, err)
 	}
+	if err = writePlanFiles(directory, plan.Files); err != nil {
+		return w.failBackup(ctx, backupID, err)
+	}
+	defer removePlanFiles(directory, plan.Files)
 	jobCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	_, err = w.Swarm.RunContainerJob(jobCtx, stackName+"_default", plan.Image, directory, plan.Environment, plan.Command)
@@ -493,6 +501,10 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failRestore(ctx, restoreID, err)
 	}
+	if err = writePlanFiles(filepath.Dir(cleanPath), plan.Files); err != nil {
+		return w.failRestore(ctx, restoreID, err)
+	}
+	defer removePlanFiles(filepath.Dir(cleanPath), plan.Files)
 	jobCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	_, err = w.Swarm.RunContainerJob(jobCtx, stackName+"_default", plan.Image, filepath.Dir(cleanPath), plan.Environment, plan.Command)
@@ -573,4 +585,22 @@ func checksumFile(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+func writePlanFiles(directory string, files map[string]string) error {
+	for name, content := range files {
+		if filepath.Base(name) != name {
+			return errors.New("invalid backup helper filename")
+		}
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removePlanFiles(directory string, files map[string]string) {
+	for name := range files {
+		_ = os.Remove(filepath.Join(directory, name))
+	}
 }

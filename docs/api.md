@@ -56,3 +56,5 @@ organization when a user belongs to more than one.
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
+The engine response includes `backupCapable`; native verified backup/restore is
+currently available for PostgreSQL, MySQL, MariaDB, and MongoDB.

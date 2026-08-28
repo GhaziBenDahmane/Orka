@@ -447,7 +447,13 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) databaseEngines(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"items": s.Databases.Names()})
+	backupCapable := []string{}
+	for _, name := range s.Databases.Names() {
+		if _, ok := s.Databases.BackupExtension(name); ok {
+			backupCapable = append(backupCapable, name)
+		}
+	}
+	writeJSON(w, 200, map[string]any{"items": s.Databases.Names(), "backupCapable": backupCapable})
 }
 func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	environmentID, err := uuid.Parse(r.PathValue("environmentID"))

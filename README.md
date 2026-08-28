@@ -15,7 +15,7 @@ The initial implementation includes:
 - extensible managed-database drivers;
 - OIDC/PKCE login, domain discovery, SCIM users/groups, and group-to-role mapping;
 - public or authenticated Git/Dockerfile builds pushed to authenticated OCI registries;
-- checksummed PostgreSQL backup, confirmed restore, scheduling, and retention jobs;
+- checksummed PostgreSQL/MySQL/MariaDB/MongoDB backup, confirmed restore, scheduling, and retention jobs;
 - encrypted secrets and an audit trail.
 
 See [docs/architecture.md](docs/architecture.md) and

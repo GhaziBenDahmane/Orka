@@ -3,7 +3,9 @@ package database
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -31,9 +33,12 @@ type BackupPlan struct {
 	Command     []string
 	Environment map[string]string
 	Extension   string
+	Files       map[string]string
 }
 type RestorePlan = BackupPlan
 type Registry struct{ drivers map[string]Driver }
+
+var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 func NewRegistry() *Registry {
 	r := &Registry{drivers: map[string]Driver{}}
@@ -69,25 +74,78 @@ func (r *Registry) Render(engine string, request Request) (Result, error) {
 	if request.Version == "" {
 		request.Version = driver.DefaultVersion()
 	}
+	if !safeVersion.MatchString(request.Version) {
+		return Result{}, fmt.Errorf("invalid database image version")
+	}
 	return driver.Render(request)
 }
 
 func (r *Registry) Backup(engine, version, host string, credentials map[string]string, filename string) (BackupPlan, error) {
+	if err := validateNativePlan(version, host, credentials, filename); err != nil {
+		return BackupPlan{}, err
+	}
 	switch engine {
 	case "postgres":
 		return BackupPlan{Image: "postgres:" + version, Command: []string{"pg_dump", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "--format=custom", "--file", "/backup/" + filename}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
+	case "mysql":
+		return BackupPlan{Image: "mysql:" + version, Command: []string{"mysqldump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--no-tablespaces", "--result-file=/backup/" + filename, credentials["database"]}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
+	case "mariadb":
+		return BackupPlan{Image: "mariadb:" + version, Command: []string{"mariadb-dump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--result-file=/backup/" + filename, credentials["database"]}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
+	case "mongo":
+		configName := filename + ".config"
+		return BackupPlan{Image: "mongo:" + version, Command: []string{"mongodump", "--config=/backup/" + configName, "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--db", credentials["database"], "--archive=/backup/" + filename, "--gzip"}, Extension: "archive.gz", Files: map[string]string{configName: "password: " + mongoYAMLString(credentials["password"]) + "\n"}}, nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
 }
 
 func (r *Registry) Restore(engine, version, host string, credentials map[string]string, filename string) (RestorePlan, error) {
+	if err := validateNativePlan(version, host, credentials, filename); err != nil {
+		return RestorePlan{}, err
+	}
 	switch engine {
 	case "postgres":
 		return RestorePlan{Image: "postgres:" + version, Command: []string{"pg_restore", "--clean", "--if-exists", "--no-owner", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "/backup/" + filename}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
+	case "mysql":
+		return RestorePlan{Image: "mysql:" + version, Command: []string{"mysql", "--host", host, "--user", credentials["username"], "--database", credentials["database"], "--execute", "source /backup/" + filename}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
+	case "mariadb":
+		return RestorePlan{Image: "mariadb:" + version, Command: []string{"mariadb", "--host", host, "--user", credentials["username"], "--database", credentials["database"], "--execute", "source /backup/" + filename}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
+	case "mongo":
+		configName := filename + ".config"
+		return RestorePlan{Image: "mongo:" + version, Command: []string{"mongorestore", "--config=/backup/" + configName, "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--db", credentials["database"], "--archive=/backup/" + filename, "--gzip", "--drop"}, Extension: "archive.gz", Files: map[string]string{configName: "password: " + mongoYAMLString(credentials["password"]) + "\n"}}, nil
 	default:
 		return RestorePlan{}, fmt.Errorf("verified restore is not implemented for database engine %q", engine)
 	}
+}
+
+func (r *Registry) BackupExtension(engine string) (string, bool) {
+	switch engine {
+	case "postgres":
+		return "dump", true
+	case "mysql", "mariadb":
+		return "sql", true
+	case "mongo":
+		return "archive.gz", true
+	default:
+		return "", false
+	}
+}
+
+func validateNativePlan(version, host string, credentials map[string]string, filename string) error {
+	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) || !regexp.MustCompile(`^[a-f0-9-]+\.(dump|sql|archive\.gz)$`).MatchString(filename) {
+		return errors.New("invalid native backup parameters")
+	}
+	for _, key := range []string{"username", "password", "database"} {
+		if credentials[key] == "" {
+			return fmt.Errorf("database credential %q is missing", key)
+		}
+	}
+	return nil
+}
+
+func mongoYAMLString(value string) string {
+	data, _ := yaml.Marshal(value)
+	return strings.TrimSpace(string(data))
 }
 
 type simpleDriver struct {

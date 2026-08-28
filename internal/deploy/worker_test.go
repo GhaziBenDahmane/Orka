@@ -28,3 +28,20 @@ func TestChecksumFileMissing(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestWritePlanFilesUsesPrivatePermissions(t *testing.T) {
+	directory := t.TempDir()
+	if err := writePlanFiles(directory, map[string]string{"credentials.yml": "password: secret\n"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(directory, "credentials.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("permissions = %o", info.Mode().Perm())
+	}
+	if err = writePlanFiles(directory, map[string]string{"../escape": "bad"}); err == nil {
+		t.Fatal("expected path traversal rejection")
+	}
+}
