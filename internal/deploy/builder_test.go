@@ -284,6 +284,30 @@ func TestBuildpacksUsesPinnedBuilderAndPublish(t *testing.T) {
 	if err := ValidateBuildMode("buildpacks", "", "", store.ApplicationBuildConfig{Secrets: map[string]string{"TOKEN": "secret"}}); err == nil {
 		t.Fatal("expected buildpack secrets to be rejected")
 	}
+	source.BuildType = "heroku_buildpacks"
+	source.BuildArguments = map[string]string{"NODE_ENV": "production"}
+	if _, _, err = (Builder{GitBin: gitPath, PackBin: packPath}).Build(context.Background(), source, uuid.New(), BuildCredentials{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(data), "--builder "+defaultHerokuBuilder) {
+		t.Fatalf("Heroku build did not use its pinned builder: %s, %v", data, err)
+	}
+	customBuilder := "registry.example.test/builders/custom:v1@sha256:" + strings.Repeat("a", 64)
+	source.BuildType, source.BuilderImage = "buildpacks", customBuilder
+	if _, _, err = (Builder{GitBin: gitPath, PackBin: packPath}).Build(context.Background(), source, uuid.New(), BuildCredentials{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(data), "--builder "+customBuilder) {
+		t.Fatalf("custom CNB build did not use configured builder: %s, %v", data, err)
+	}
+	if err = ValidateBuildpackBuilder("buildpacks", "heroku/builder:24"); err == nil {
+		t.Fatal("expected mutable custom builder tag to be rejected")
+	}
+	if err = ValidateBuildpackBuilder("dockerfile", customBuilder); err == nil {
+		t.Fatal("expected custom builder on Dockerfile build to be rejected")
+	}
 }
 
 func TestBuildUsesTargetArgumentsAndFileBackedSecrets(t *testing.T) {

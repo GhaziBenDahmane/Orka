@@ -26,6 +26,7 @@ type sourceApplication struct {
 	Env               string   `json:"env"`
 	SourceType        string   `json:"sourceType"`
 	BuildType         string   `json:"buildType"`
+	HerokuVersion     string   `json:"herokuVersion"`
 	DockerImage       string   `json:"dockerImage"`
 	RegistryURL       string   `json:"registryUrl"`
 	Username          string   `json:"username"`
@@ -99,7 +100,7 @@ func dokployApplicationReport(item sourceApplication, targetID *uuid.UUID, statu
 		SourceKind: "application", SourceID: item.ID, TargetID: targetID, Status: status, Reason: reason,
 		Metadata: map[string]any{
 			"name": item.Name, "appName": item.AppName, "sourceType": item.SourceType, "buildType": item.BuildType,
-			"repository": repository, "branch": branch, "buildPath": buildPath, "dockerfile": item.Dockerfile,
+			"repository": repository, "branch": branch, "buildPath": buildPath, "dockerfile": item.Dockerfile, "herokuVersion": item.HerokuVersion,
 			"dockerContextPath": item.DockerContextPath, "dockerBuildStage": item.DockerBuildStage,
 			"hasBuildArgs": item.BuildArgs != "", "hasBuildSecrets": item.BuildSecrets != "", "enableSubmodules": item.EnableSubmodules,
 			"publishDirectory": item.PublishDirectory,
@@ -240,7 +241,13 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		if buildType == "paketo" || buildType == "paketo_buildpacks" || buildType == "buildpack" {
 			buildType = "buildpacks"
 		}
-		if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" && buildType != "buildpacks" {
+		if buildType == "heroku_buildpacks" {
+			herokuVersion := strings.TrimSpace(item.HerokuVersion)
+			if herokuVersion != "" && herokuVersion != "24" {
+				return preparedApplication{}, warnings, fmt.Errorf("Heroku builder version %q is not supported; only digest-pinned version 24 can be imported automatically", herokuVersion)
+			}
+		}
+		if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" && buildType != "buildpacks" && buildType != "heroku_buildpacks" {
 			return preparedApplication{}, warnings, fmt.Errorf("build type %q is not supported", item.BuildType)
 		}
 		buildArguments, err := parseDokployBuildSettings(item.BuildArgs, options.EncryptionKeys)

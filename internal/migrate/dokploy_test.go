@@ -133,10 +133,15 @@ func TestPreparePaketoApplication(t *testing.T) {
 	}
 }
 
-func TestPrepareHerokuBuildpackRemainsManual(t *testing.T) {
-	item := sourceApplication{ID: "heroku-app", AppName: "API", Name: "API", SourceType: "git", BuildType: "heroku_buildpacks", CustomGitURL: "https://git.example.test/acme/api.git", CustomGitBranch: "main", Replicas: 1}
-	if _, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"}); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected Heroku buildpack to require manual conversion, got %v", err)
+func TestPrepareHerokuBuildpack(t *testing.T) {
+	item := sourceApplication{ID: "heroku-app", AppName: "API", Name: "API", SourceType: "git", BuildType: "heroku_buildpacks", HerokuVersion: "24", CustomGitURL: "https://git.example.test/acme/api.git", CustomGitBranch: "main", Replicas: 1}
+	prepared, _, err := prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"})
+	if err != nil || prepared.source == nil || prepared.source.BuildType != "heroku_buildpacks" {
+		t.Fatalf("Heroku buildpack source was not migrated: %#v, %v", prepared.source, err)
+	}
+	item.HerokuVersion = "22"
+	if _, _, err = prepareApplication(item, DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New(), RegistryPrefix: "registry.example.test/imports"}); err == nil || !strings.Contains(err.Error(), "digest-pinned version 24") {
+		t.Fatalf("expected unpinned Heroku version to require manual conversion, got %v", err)
 	}
 }
 

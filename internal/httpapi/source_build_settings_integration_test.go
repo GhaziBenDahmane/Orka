@@ -186,6 +186,33 @@ func TestApplicationBuildSettingsAreEncryptedAndRedacted(t *testing.T) {
 	if railpackResponse.StatusCode != http.StatusOK || !bytes.Contains(railpackData, []byte(`"buildType":"railpack"`)) || !bytes.Contains(railpackData, []byte(`"hasBuildSecrets":true`)) || bytes.Contains(railpackData, []byte("railpack-secret")) {
 		t.Fatalf("Railpack source update failed or leaked a secret: status=%d body=%s", railpackResponse.StatusCode, railpackData)
 	}
+	customBuilder := "registry.example.test/builders/custom:v1@sha256:" + strings.Repeat("a", 64)
+	buildpackBody := []byte(`{"repositoryUrl":"https://github.com/acme/api.git","gitRef":"release","contextDirectory":".","buildType":"heroku_buildpacks","builderImage":"` + customBuilder + `","buildArguments":{"NODE_ENV":"production"},"buildSecrets":{},"targetService":"api","registryImage":"ghcr.io/acme/api"}`)
+	buildpackRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(buildpackBody))
+	buildpackRequest.Header.Set("Authorization", "Bearer "+token)
+	buildpackRequest.Header.Set("X-Organization-ID", organizationID.String())
+	buildpackRequest.Header.Set("Content-Type", "application/json")
+	buildpackResponse, err := http.DefaultClient.Do(buildpackRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildpackData, _ := io.ReadAll(buildpackResponse.Body)
+	buildpackResponse.Body.Close()
+	if buildpackResponse.StatusCode != http.StatusOK || !bytes.Contains(buildpackData, []byte(`"buildType":"heroku_buildpacks"`)) || !bytes.Contains(buildpackData, []byte(`"builderImage":"`+customBuilder+`"`)) {
+		t.Fatalf("custom Heroku builder source update failed: status=%d body=%s", buildpackResponse.StatusCode, buildpackData)
+	}
+	mutableBody := bytes.Replace(buildpackBody, []byte(customBuilder), []byte("heroku/builder:24"), 1)
+	mutableRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(mutableBody))
+	mutableRequest.Header = buildpackRequest.Header.Clone()
+	mutableResponse, err := http.DefaultClient.Do(mutableRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutableData, _ := io.ReadAll(mutableResponse.Body)
+	mutableResponse.Body.Close()
+	if mutableResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(mutableData, []byte(`"code":"invalid_builder_image"`)) {
+		t.Fatalf("mutable builder was not rejected: status=%d body=%s", mutableResponse.StatusCode, mutableData)
+	}
 	dropBody := []byte(`{"sourceType":"drop","contextDirectory":".","dockerfile":"Dockerfile","buildType":"dockerfile","buildArguments":{},"buildSecrets":{},"targetService":"api","registryImage":"ghcr.io/acme/api"}`)
 	missingRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/services/"+serviceID.String()+"/source", bytes.NewReader(dropBody))
 	missingRequest.Header.Set("Authorization", "Bearer "+token)

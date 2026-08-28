@@ -21,7 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Builder struct{ GitBin, DockerBin, NixpacksBin, RailpackBin, PackBin, RailpackFrontend, BuildpackBuilder, StaticImage string }
+type Builder struct{ GitBin, DockerBin, NixpacksBin, RailpackBin, PackBin, RailpackFrontend, BuildpackBuilder, HerokuBuilder, StaticImage string }
 
 type Credential struct {
 	Kind       string `json:"kind"`
@@ -44,6 +44,7 @@ var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256
 const defaultStaticImage = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 const defaultRailpackFrontend = "ghcr.io/railwayapp/railpack-frontend:v0.38.0@sha256:b66c90368efcf6f2966cfa504cdbde93af7ba6092d676e0c7604cbc5ddf3acec"
 const defaultBuildpackBuilder = "paketobuildpacks/builder-jammy-base:0.4.629@sha256:129bda8835db00b4fe0b2fdf0a545e493f6f0403cbeb9f89ea6125a7a93a69d0"
+const defaultHerokuBuilder = "heroku/builder:24@sha256:c855fe9810b29dc60e0a0b1ddbbdd815ea5973c9dd754bf539218296fe3f4af2"
 
 func ValidateBuildSettings(target string, config store.ApplicationBuildConfig) error {
 	if target != "" && !buildTargetName.MatchString(target) {
@@ -79,7 +80,7 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 	if buildType == "" {
 		buildType = "dockerfile"
 	}
-	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" && buildType != "buildpacks" {
+	if buildType != "dockerfile" && buildType != "static" && buildType != "nixpacks" && buildType != "railpack" && buildType != "buildpacks" && buildType != "heroku_buildpacks" {
 		return fmt.Errorf("unsupported build type %q", buildType)
 	}
 	if err := ValidateBuildSettings(target, config); err != nil {
@@ -108,13 +109,26 @@ func ValidateBuildMode(buildType, outputDirectory, target string, config store.A
 	if buildType == "railpack" && (target != "" || outputDirectory != "") {
 		return errors.New("Railpack builds do not accept Docker targets or static output directories")
 	}
-	if buildType == "buildpacks" {
+	if buildType == "buildpacks" || buildType == "heroku_buildpacks" {
 		if target != "" || outputDirectory != "" {
 			return errors.New("buildpack builds do not accept Docker targets or static output directories")
 		}
 		if len(config.Secrets) > 0 {
 			return errors.New("buildpack secrets are not supported because the lifecycle does not guarantee ephemeral secret mounts")
 		}
+	}
+	return nil
+}
+
+func ValidateBuildpackBuilder(buildType, builder string) error {
+	if builder == "" {
+		return nil
+	}
+	if buildType != "buildpacks" && buildType != "heroku_buildpacks" {
+		return errors.New("custom builder images are only supported for buildpack builds")
+	}
+	if !pinnedImage.MatchString(builder) {
+		return errors.New("custom buildpack builder image must be pinned by sha256 digest")
 	}
 	return nil
 }
@@ -221,6 +235,9 @@ func validateBuildSource(source *store.ApplicationSource, registryCredential Cre
 	if registryCredential.Secret != "" && !strings.EqualFold(imageRegistry(source.RegistryImage), registryCredential.Server) {
 		return errors.New("registry credential server does not match image registry")
 	}
+	if err := ValidateBuildpackBuilder(source.BuildType, source.BuilderImage); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -248,7 +265,11 @@ func (b Builder) buildWorkspace(ctx context.Context, source store.ApplicationSou
 		return tag, output + buildOutput, buildErr
 	}
 	if source.BuildType == "buildpacks" {
-		buildOutput, buildErr := b.buildBuildpacks(ctx, contextPath, tag, buildEnvironment, source.BuildArguments)
+		buildOutput, buildErr := b.buildBuildpacks(ctx, contextPath, tag, source.BuilderImage, b.paketoBuilder(), buildEnvironment, source.BuildArguments)
+		return tag, output + buildOutput, buildErr
+	}
+	if source.BuildType == "heroku_buildpacks" {
+		buildOutput, buildErr := b.buildBuildpacks(ctx, contextPath, tag, source.BuilderImage, b.herokuBuilder(), buildEnvironment, source.BuildArguments)
 		return tag, output + buildOutput, buildErr
 	}
 	dockerfilePath, err := safeJoin(contextPath, source.Dockerfile)
@@ -364,10 +385,10 @@ func (b Builder) buildRailpack(ctx context.Context, contextPath, tag string, dep
 	return redactBuildText(output+buildOutput, buildSecrets), redactBuildError(err, buildSecrets)
 }
 
-func (b Builder) buildBuildpacks(ctx context.Context, contextPath, tag string, environment, buildArguments map[string]string) (string, error) {
-	builder := b.BuildpackBuilder
+func (b Builder) buildBuildpacks(ctx context.Context, contextPath, tag, configuredBuilder, defaultBuilder string, environment, buildArguments map[string]string) (string, error) {
+	builder := configuredBuilder
 	if builder == "" {
-		builder = defaultBuildpackBuilder
+		builder = defaultBuilder
 	}
 	if !pinnedImage.MatchString(builder) {
 		return "", errors.New("buildpack builder image must be pinned by sha256 digest")
@@ -382,6 +403,20 @@ func (b Builder) buildBuildpacks(ctx context.Context, contextPath, tag string, e
 		arguments = append(arguments, "--env", name)
 	}
 	return run(ctx, b.pack(), buildEnvironment, arguments...)
+}
+
+func (b Builder) paketoBuilder() string {
+	if b.BuildpackBuilder != "" {
+		return b.BuildpackBuilder
+	}
+	return defaultBuildpackBuilder
+}
+
+func (b Builder) herokuBuilder() string {
+	if b.HerokuBuilder != "" {
+		return b.HerokuBuilder
+	}
+	return defaultHerokuBuilder
 }
 
 func redactBuildText(value string, secrets map[string]string) string {

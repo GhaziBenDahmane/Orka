@@ -77,7 +77,9 @@ Reported for manual conversion:
 - drop applications, because their ZIPs live on Dokploy's filesystem rather
   than in its PostgreSQL database; recreate the application and upload its ZIP
   through the Dockyard console or artifact-source API;
-- buildpack applications that require a non-Paketo builder or build-time secrets;
+- Heroku Buildpack applications using version 24 and Paketo Buildpack
+  applications are imported; other Heroku versions and build-time secrets
+  remain manual;
 - static applications whose publish directory is generated during the build
   rather than already committed to the repository;
 - Git applications with malformed build settings, non-HTTPS clone URLs, or

@@ -16,6 +16,7 @@ The initial implementation includes:
 - ten built-in managed databases plus a versioned external driver protocol and Go SDK;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
 - public or authenticated HTTPS/SSH Git builds and encrypted, hardened ZIP uploads, pushed to authenticated OCI registries;
+- Dockerfile, static, Nixpacks, Railpack, Paketo, Heroku 24, and custom digest-pinned Cloud Native Buildpack builders;
 - signed GitHub, GitLab, Gitea, and Bitbucket push-to-deploy webhooks with durable commit-status callbacks;
 - checksummed database backups with confirmed restore, scheduling, retention, and S3-compatible storage;
 - encrypted secrets, a queryable audit trail, and hash-chained S3 Object Lock archives.
