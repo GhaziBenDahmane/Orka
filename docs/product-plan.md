@@ -172,8 +172,9 @@ additional provider resources and administrative console screens remain.
 - The idempotent Dokploy importer emits and persists a secret-safe parity
   manifest for advanced application settings and unsupported build features;
   provider credential and backup-policy import remain operator-assisted.
-- Signed catalog releases and an external driver protocol with compatibility
-  tests.
+- Ed25519-signed deterministic catalog manifests are implemented and verified
+  before import by default. An external driver protocol with compatibility
+  tests remains.
 
 Exit gate: a representative Dokploy installation can be imported, compared,
 deployed, and rolled back without manual database edits.

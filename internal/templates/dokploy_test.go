@@ -1,6 +1,8 @@
 package templates
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,6 +21,40 @@ func TestInstantiateDokployTemplate(t *testing.T) {
 	}
 	if !strings.HasSuffix(instance.Domains[0].Host, ".example.com") {
 		t.Fatalf("unexpected domain %q", instance.Domains[0].Host)
+	}
+}
+
+func TestSignedCatalogDetectsTampering(t *testing.T) {
+	root := t.TempDir()
+	blueprint := filepath.Join(root, "blueprints", "demo")
+	if err := os.MkdirAll(blueprint, 0700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"meta.json":          `{"id":"demo","name":"Demo","version":"1"}`,
+		"template.toml":      "[variables]\n",
+		"docker-compose.yml": "services:\n  web:\n    image: example@sha256:" + strings.Repeat("a", 64) + "\n",
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(blueprint, name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publicKey, privateKey, err := GenerateCatalogKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = SignCatalog(root, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyCatalog(root, publicKey); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(blueprint, "meta.json"), []byte(`{"id":"other"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyCatalog(root, publicKey); err == nil {
+		t.Fatal("expected modified catalog to fail verification")
 	}
 }
 

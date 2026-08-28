@@ -43,8 +43,14 @@ embedded in the Go binary. Run `make web` after changing files under `web/`.
 Import the complete upstream Dokploy template checkout with:
 
 ```sh
-go run ./cmd/dockyard import-dokploy-templates /path/to/dokploy-templates
+openssl genpkey -algorithm ED25519 -out catalog-signing-key.pem
+openssl pkey -in catalog-signing-key.pem -pubout -out catalog-public-key.pem
+go run ./cmd/dockyard sign-template-catalog --private-key-file catalog-signing-key.pem /path/to/dokploy-templates
+go run ./cmd/dockyard import-dokploy-templates --public-key-file catalog-public-key.pem /path/to/dokploy-templates
 ```
+
+Unsigned imports require the explicit `--allow-unsigned` development override.
+Keep the signing key offline and distribute only the public key.
 
 For an idempotent control-plane migration, including a mandatory dry-run and
 encrypted environment re-keying, see

@@ -32,7 +32,7 @@ var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy>")
 		os.Exit(2)
 	}
 	var err error
@@ -42,11 +42,9 @@ func main() {
 	case "agent":
 		err = runAgent()
 	case "import-dokploy-templates":
-		if len(os.Args) != 3 {
-			fmt.Fprintln(os.Stderr, "usage: dockyard import-dokploy-templates PATH")
-			os.Exit(2)
-		}
-		err = importTemplates(os.Args[2])
+		err = importTemplates(os.Args[2:])
+	case "sign-template-catalog":
+		err = signTemplateCatalog(os.Args[2:])
 	case "validate-dokploy-templates":
 		if len(os.Args) != 3 {
 			fmt.Fprintln(os.Stderr, "usage: dockyard validate-dokploy-templates PATH")
@@ -136,7 +134,26 @@ func migrateDokploy(arguments []string) error {
 	return err
 }
 
-func importTemplates(path string) error {
+func importTemplates(arguments []string) error {
+	flags := flag.NewFlagSet("import-dokploy-templates", flag.ContinueOnError)
+	publicKeyFile := flags.String("public-key-file", "", "trusted Ed25519 catalog public key")
+	allowUnsigned := flags.Bool("allow-unsigned", false, "allow an unsigned catalog (development only)")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 1 {
+		return errors.New("usage: dockyard import-dokploy-templates [--public-key-file PATH | --allow-unsigned] PATH")
+	}
+	if (*publicKeyFile == "") == !*allowUnsigned {
+		return errors.New("exactly one of --public-key-file or --allow-unsigned is required")
+	}
+	path := flags.Arg(0)
+	if *publicKeyFile != "" {
+		key, err := templates.LoadPublicKey(*publicKeyFile)
+		if err != nil {
+			return err
+		}
+		if err = templates.VerifyCatalog(path, key); err != nil {
+			return fmt.Errorf("verify template catalog: %w", err)
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -151,6 +168,19 @@ func importTemplates(path string) error {
 	report, err := templates.ImportDokployCatalog(ctx, db, path)
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
+}
+
+func signTemplateCatalog(arguments []string) error {
+	flags := flag.NewFlagSet("sign-template-catalog", flag.ContinueOnError)
+	privateKeyFile := flags.String("private-key-file", "", "Ed25519 catalog private key")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 1 || *privateKeyFile == "" {
+		return errors.New("usage: dockyard sign-template-catalog --private-key-file PATH CATALOG_PATH")
+	}
+	key, err := templates.LoadPrivateKey(*privateKeyFile)
+	if err != nil {
+		return err
+	}
+	return templates.SignCatalog(flags.Arg(0), key)
 }
 
 func serve() error {
