@@ -19,6 +19,9 @@ func TestOpenAPIContainsEveryRegisteredRoute(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, match := range routePattern.FindAllSubmatch(source, -1) {
+			if string(match[2]) == "/" {
+				continue
+			}
 			pathMarker := "  " + string(match[2]) + ":\n"
 			methodMarker := "    " + strings.ToLower(string(match[1])) + ":\n"
 			pathIndex := strings.Index(string(specification), pathMarker)

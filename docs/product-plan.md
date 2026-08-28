@@ -151,11 +151,12 @@ state, duplicate destructive jobs, or expose credentials.
 ### 6. Product surface and migration
 
 Status: Compose, Docker-image application, Dockerfile/HTTPS Git application,
-managed-database Dokploy dry-run/import tooling, and a secure operational CLI
-with a full raw-API escape hatch are implemented. Advanced build modes and
-application settings remain manual, and persistent database data still
-requires backup/restore. The web UI, generated contract coverage, and
-Terraform/OpenTofu provider remain.
+managed-database Dokploy dry-run/import tooling, a secure operational CLI with
+a full raw-API escape hatch, generated route-level OpenAPI coverage, and an
+embedded React console for core workload, template, database, and cluster
+workflows are implemented. Advanced build modes and application settings
+remain manual, persistent database data still requires backup/restore, and
+the Terraform/OpenTofu provider and administrative console screens remain.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.

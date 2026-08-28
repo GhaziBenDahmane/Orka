@@ -29,6 +29,9 @@ func main() {
 		}
 		for _, match := range routePattern.FindAllSubmatch(data, -1) {
 			op := operation{method: strings.ToLower(string(match[1])), path: string(match[2])}
+			if !isAPIPath(op.path) {
+				continue
+			}
 			byPath[op.path] = append(byPath[op.path], op)
 		}
 	}
@@ -103,6 +106,10 @@ paths:
 	if err := os.WriteFile(filepath.Join(directory, "openapi.yaml"), output.Bytes(), 0644); err != nil {
 		panic(err)
 	}
+}
+
+func isAPIPath(path string) bool {
+	return path == "/healthz" || path == "/metrics" || strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/scim/")
 }
 
 func repositoryRoot() (string, error) {

@@ -205,7 +205,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
-	writeJSON(w, 200, map[string]string{"token": token})
+	writeLoginSuccess(w, r, token)
 }
 
 func contains(items []string, want string) bool {

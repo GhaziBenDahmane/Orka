@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
+	"github.com/bendahma/dokploy-go/internal/webui"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -167,6 +169,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/webhooks/{integrationID}", s.requireResourceRole("developer", "webhook", "integrationID", http.HandlerFunc(s.deleteWebhookIntegration)))
 	mux.Handle("GET /v1/deployments/{deploymentID}", s.requireResourceRole("viewer", "deployment", "deploymentID", http.HandlerFunc(s.getDeployment)))
 	mux.Handle("POST /v1/deployments/{deploymentID}/cancel", s.requireResourceRole("developer", "deployment", "deploymentID", http.HandlerFunc(s.cancelDeployment)))
+	mux.Handle("GET /", webui.Handler())
 	instrumented := otelhttp.NewHandler(s.middleware(mux), "dockyard.http")
 	return s.requestIDMiddleware(instrumented)
 }
@@ -1541,6 +1544,19 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// writeLoginSuccess keeps the JSON API stable while allowing browser-based
+// OIDC and SAML flows to hand the short-lived bearer token to the console. The
+// fragment is never sent in subsequent HTTP requests and the console removes
+// it from browser history immediately after storing it in sessionStorage.
+func writeLoginSuccess(w http.ResponseWriter, r *http.Request, token string) {
+	w.Header().Set("Cache-Control", "no-store")
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		http.Redirect(w, r, "/#session="+url.QueryEscape(token), http.StatusSeeOther)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})

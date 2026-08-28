@@ -1,4 +1,4 @@
-.PHONY: test lint build run generate-openapi check-openapi
+.PHONY: test lint build run web generate-openapi check-openapi
 
 test:
 	go test ./...
@@ -9,6 +9,9 @@ lint:
 build:
 	go build -o bin/dockyard ./cmd/dockyard
 	go build -o bin/dockyardctl ./cmd/dockyardctl
+
+web:
+	cd web && npm ci && npm run build
 
 run:
 	go run ./cmd/dockyard serve

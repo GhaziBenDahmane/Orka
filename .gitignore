@@ -4,3 +4,5 @@
 /data/
 *.out
 coverage.html
+/web/node_modules/
+/web/*.tsbuildinfo

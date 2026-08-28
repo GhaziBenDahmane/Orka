@@ -20,6 +20,7 @@ The initial implementation includes:
 - encrypted secrets and an audit trail.
 - request correlation, optional OTLP tracing, and Prometheus operational metrics.
 - inherited organization/project/environment maintenance controls and resource quotas.
+- an embedded React console for core project, workload, template, database, and cluster workflows.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/roadmap.md](docs/roadmap.md). The detailed clean-room comparison, effort
@@ -34,6 +35,9 @@ docker compose up -d postgres
 set -a; . ./.env; set +a
 go run ./cmd/dockyard serve
 ```
+
+The console is available at `http://localhost:8080/`. Its production assets are
+embedded in the Go binary. Run `make web` after changing files under `web/`.
 
 Import the complete upstream Dokploy template checkout with:
 

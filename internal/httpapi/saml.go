@@ -259,7 +259,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.saml.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
-	writeJSON(w, 200, map[string]string{"token": token})
+	writeLoginSuccess(w, r, token)
 }
 
 func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.SAMLProvider, *saml.ServiceProvider, error) {
