@@ -86,6 +86,8 @@ Status: core implementation complete; storage breadth remains.
   checksums, interval policies, retention, and opt-in isolated restore drills.
 - S3-compatible multipart storage with encrypted destination credentials and
   client-side, per-backup envelope encryption for local and remote artifacts.
+- Remote backup and restore execution through outbound agents using short-lived
+  presigned transfers, per-backup encryption, and end-to-end checksum checks.
 - Next: scheduled drill alerting and published RPO/RTO measurements.
 
 Exit gate: automated restore verification and documented RPO/RTO for every

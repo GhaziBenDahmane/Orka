@@ -60,6 +60,13 @@ Heartbeats use a separate optional TLS listener configured with
 and matches its serial number against the cluster's current database record,
 so reenrollment immediately supersedes the previous identity.
 
+Remote database utilities run on the target cluster. The controller grants a
+single-operation presigned S3 transfer URL and sends a per-backup encryption
+key only inside the encrypted mTLS command. Agents encrypt before upload and
+verify encrypted size, encrypted checksum, and plaintext checksum before a
+restore. Plaintext artifacts exist only in a mode-0700 temporary agent
+directory and are removed when the command completes.
+
 Multiple controller replicas coordinate durable jobs with row leases and
 `SKIP LOCKED`. Singleton maintenance loops additionally use expiring,
 database-backed leader leases; only the current holder schedules backup policy

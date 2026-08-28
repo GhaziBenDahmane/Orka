@@ -40,8 +40,46 @@ func (s RemoteSwarm) Nodes(ctx context.Context) ([]Node, error) {
 	return nodes, json.Unmarshal([]byte(output), &nodes)
 }
 
-func (s RemoteSwarm) RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error) {
-	return "", errors.New("remote database utility jobs require object-storage transport")
+func (s RemoteSwarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {
+	if mountSource != "" {
+		return "", errors.New("remote container jobs cannot mount controller paths")
+	}
+	return s.run(ctx, "container.run", map[string]any{"network": network, "image": image, "environment": environment, "command": command})
+}
+
+type RemoteArtifactJob struct {
+	Mode            string            `json:"mode"`
+	Network         string            `json:"network"`
+	Image           string            `json:"image"`
+	Environment     map[string]string `json:"environment"`
+	Command         []string          `json:"command"`
+	Files           map[string]string `json:"files,omitempty"`
+	ArtifactName    string            `json:"artifactName"`
+	TransferURL     string            `json:"transferUrl"`
+	EncryptionKey   string            `json:"encryptionKey"`
+	EncryptionAAD   string            `json:"encryptionAad"`
+	SHA256          string            `json:"sha256,omitempty"`
+	PlaintextSHA256 string            `json:"plaintextSha256,omitempty"`
+	SizeBytes       int64             `json:"sizeBytes,omitempty"`
+}
+
+type RemoteArtifactResult struct {
+	Output          string `json:"output"`
+	SHA256          string `json:"sha256"`
+	PlaintextSHA256 string `json:"plaintextSha256"`
+	SizeBytes       int64  `json:"sizeBytes"`
+}
+
+func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) (RemoteArtifactResult, error) {
+	var result RemoteArtifactResult
+	output, err := s.run(ctx, "database.utility", job)
+	if err != nil {
+		return result, err
+	}
+	if err = json.Unmarshal([]byte(output), &result); err != nil {
+		return result, fmt.Errorf("decode remote artifact result: %w", err)
+	}
+	return result, nil
 }
 
 func (s RemoteSwarm) run(ctx context.Context, kind string, payload any) (string, error) {

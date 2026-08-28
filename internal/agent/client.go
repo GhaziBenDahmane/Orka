@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -19,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/google/uuid"
 )
@@ -310,6 +314,9 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		Compose     string            `json:"compose"`
 		Environment map[string]string `json:"environment"`
 		Tail        int               `json:"tail"`
+		Command     []string          `json:"command"`
+		Network     string            `json:"network"`
+		Image       string            `json:"image"`
 	}
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 		return "", err
@@ -325,9 +332,180 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		nodes, err := c.swarm.Nodes(ctx)
 		encoded, _ := json.Marshal(nodes)
 		return string(encoded), err
+	case "container.run":
+		return c.swarm.RunContainerJob(ctx, payload.Network, payload.Image, "", payload.Environment, payload.Command)
+	case "database.utility":
+		return c.executeArtifactJob(ctx, cmd.Payload)
 	default:
 		return "", fmt.Errorf("unsupported command kind %q", cmd.Kind)
 	}
+}
+
+func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (string, error) {
+	var job deploy.RemoteArtifactJob
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return "", err
+	}
+	if job.Mode != "upload" && job.Mode != "download" {
+		return "", errors.New("invalid artifact transfer mode")
+	}
+	if filepath.Base(job.ArtifactName) != job.ArtifactName || job.ArtifactName == "." {
+		return "", errors.New("invalid artifact name")
+	}
+	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
+	if err != nil || len(key) != 32 {
+		return "", errors.New("invalid artifact encryption key")
+	}
+	defer clear(key)
+	box, err := cryptox.New(key)
+	if err != nil {
+		return "", err
+	}
+	directory, err := os.MkdirTemp(c.cfg.StateDirectory, "utility-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(directory)
+	for name, contents := range job.Files {
+		if filepath.Base(name) != name {
+			return "", errors.New("invalid utility file name")
+		}
+		if err = os.WriteFile(filepath.Join(directory, name), []byte(contents), 0600); err != nil {
+			return "", err
+		}
+	}
+	plainPath := filepath.Join(directory, job.ArtifactName)
+	encryptedPath := plainPath + ".enc"
+	if job.Mode == "download" {
+		if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath); err != nil {
+			return "", err
+		}
+		if sum, size, hashErr := fileHash(encryptedPath); hashErr != nil || sum != job.SHA256 || (job.SizeBytes > 0 && size != job.SizeBytes) {
+			if hashErr != nil {
+				return "", hashErr
+			}
+			return "", errors.New("encrypted artifact checksum or size mismatch")
+		}
+		if err = transformFile(box, encryptedPath, plainPath, job.EncryptionAAD, false); err != nil {
+			return "", err
+		}
+		if sum, _, hashErr := fileHash(plainPath); hashErr != nil || sum != job.PlaintextSHA256 {
+			if hashErr != nil {
+				return "", hashErr
+			}
+			return "", errors.New("plaintext artifact checksum mismatch")
+		}
+	}
+	output, err := c.swarm.RunContainerJob(ctx, job.Network, job.Image, directory, job.Environment, job.Command)
+	if err != nil {
+		return output, err
+	}
+	result := deploy.RemoteArtifactResult{Output: output}
+	if job.Mode == "upload" {
+		result.PlaintextSHA256, _, err = fileHash(plainPath)
+		if err == nil {
+			err = transformFile(box, plainPath, encryptedPath, job.EncryptionAAD, true)
+		}
+		if err == nil {
+			result.SHA256, result.SizeBytes, err = fileHash(encryptedPath)
+		}
+		if err == nil {
+			err = transfer(ctx, http.MethodPut, job.TransferURL, encryptedPath)
+		}
+		if err != nil {
+			return output, err
+		}
+	}
+	encoded, err := json.Marshal(result)
+	return string(encoded), err
+}
+
+func transfer(ctx context.Context, method, rawURL, filename string) error {
+	var body io.ReadCloser
+	if method == http.MethodPut {
+		file, err := os.Open(filename)
+		if err != nil {
+			return err
+		}
+		body = file
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
+	if err != nil {
+		if body != nil {
+			_ = body.Close()
+		}
+		return err
+	}
+	if body != nil {
+		info, statErr := os.Stat(filename)
+		if statErr != nil {
+			_ = body.Close()
+			return statErr
+		}
+		req.ContentLength = info.Size()
+		defer body.Close()
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("artifact redirects are disabled") }}
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("artifact transfer returned HTTP %d", response.StatusCode)
+	}
+	if method == http.MethodGet {
+		file, createErr := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if createErr != nil {
+			return createErr
+		}
+		_, copyErr := io.Copy(file, response.Body)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	}
+	return nil
+}
+
+func fileHash(filename string) (string, int64, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", 0, err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	size, err := io.Copy(hash, file)
+	return hex.EncodeToString(hash.Sum(nil)), size, err
+}
+
+func transformFile(box *cryptox.Box, source, destination, aad string, encrypt bool) (err error) {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = os.Remove(destination)
+		}
+		_ = output.Close()
+	}()
+	if encrypt {
+		err = box.EncryptStream(output, input, aad)
+	} else {
+		err = box.DecryptStream(output, input, aad)
+	}
+	if err == nil {
+		err = output.Sync()
+	}
+	return err
 }
 
 func (c *Client) request(ctx context.Context, method, path string, input, output any, leaseID string) error {
