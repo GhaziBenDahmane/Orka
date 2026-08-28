@@ -21,9 +21,13 @@ applications. Dockyard uses it as the destination repository prefix for images
 built from imported Dockerfiles.
 
 The JSON report lists convertible projects, environments, Compose services,
-managed databases, routes, skipped resources, and manual actions. Repeated
-imports map every source identifier to the same target UUID, so a retry updates
-imported resources instead of duplicating them.
+managed databases, routes, skipped resources, and manual actions. Its
+structured `resources` entries record every application's deterministic target
+ID, disposition, source/build mode, resource settings, and boolean flags for
+credentials, build arguments, and build secrets. Secret values and URL
+credentials are never included. Repeated imports map every source identifier
+to the same target UUID, so a retry updates imported resources instead of
+duplicating them.
 
 Dokploy environment columns may use AES-256-GCM encryption. Export the derived
 keys using Dokploy's `exportEncryptionKeys()` facility, place the resulting
@@ -37,6 +41,11 @@ After reviewing the report, run with `--dry-run=false`. The command decrypts
 the source environment only in memory and immediately re-encrypts it with
 `DOCKYARD_MASTER_KEY`. It never copies Dokploy authentication sessions or raw
 encryption keys.
+
+A real import persists the same application parity manifest in
+`dokploy_migration_resources`. Administrators can retrieve it through
+`GET /v1/migration-resources?sourceOrganizationId=...`; later imports update
+the existing source-to-target records.
 
 ## Current conversion coverage
 

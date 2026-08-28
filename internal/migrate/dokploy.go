@@ -33,15 +33,25 @@ type DokployOptions struct {
 }
 
 type DokployReport struct {
-	DryRun       bool     `json:"dryRun"`
-	Projects     int      `json:"projects"`
-	Environments int      `json:"environments"`
-	Services     int      `json:"services"`
-	Applications int      `json:"applications"`
-	Databases    int      `json:"databases"`
-	Routes       int      `json:"routes"`
-	Skipped      int      `json:"skipped"`
-	Warnings     []string `json:"warnings"`
+	DryRun       bool                    `json:"dryRun"`
+	Projects     int                     `json:"projects"`
+	Environments int                     `json:"environments"`
+	Services     int                     `json:"services"`
+	Applications int                     `json:"applications"`
+	Databases    int                     `json:"databases"`
+	Routes       int                     `json:"routes"`
+	Skipped      int                     `json:"skipped"`
+	Warnings     []string                `json:"warnings"`
+	Resources    []DokployResourceReport `json:"resources"`
+}
+
+type DokployResourceReport struct {
+	SourceKind string         `json:"sourceKind"`
+	SourceID   string         `json:"sourceId"`
+	TargetID   *uuid.UUID     `json:"targetId,omitempty"`
+	Status     string         `json:"status"`
+	Reason     string         `json:"reason,omitempty"`
+	Metadata   map[string]any `json:"metadata"`
 }
 
 type sourceProject struct{ id, name, description string }
@@ -148,9 +158,12 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if prepareErr != nil {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("application %s is incompatible: %v", item.ID, prepareErr))
+			report.Resources = append(report.Resources, dokployApplicationReport(item, nil, "skipped", prepareErr.Error()))
 			continue
 		}
 		validApplications[item.ID] = true
+		targetID := prepared.serviceID
+		report.Resources = append(report.Resources, dokployApplicationReport(item, &targetID, "imported", ""))
 		if strings.HasPrefix(item.Env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("application %s has encrypted environment values; supply --encryption-key-file before import", item.ID))
 		}
@@ -346,6 +359,17 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'app',lower($3),$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET service_name='app',host=excluded.host,path_prefix=excluded.path_prefix,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver`, mappedID(options, "application-route", item.id), mappedID(options, "application-service", item.applicationID), item.host, path, item.port, item.tls, resolver)
 		if err != nil {
 			return report, fmt.Errorf("import application route %s: %w", item.id, err)
+		}
+	}
+	for _, resource := range report.Resources {
+		metadata, marshalErr := json.Marshal(resource.Metadata)
+		if marshalErr != nil {
+			return report, marshalErr
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO dokploy_migration_resources(target_organization_id,source_organization_id,source_kind,source_id,target_id,status,reason,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+			ON CONFLICT(target_organization_id,source_organization_id,source_kind,source_id) DO UPDATE SET target_id=excluded.target_id,status=excluded.status,reason=excluded.reason,metadata=excluded.metadata,updated_at=now()`, options.TargetOrganizationID, options.SourceOrganizationID, resource.SourceKind, resource.SourceID, resource.TargetID, resource.Status, resource.Reason, metadata)
+		if err != nil {
+			return report, fmt.Errorf("record migration metadata for %s %s: %w", resource.SourceKind, resource.SourceID, err)
 		}
 	}
 	return report, tx.Commit(ctx)

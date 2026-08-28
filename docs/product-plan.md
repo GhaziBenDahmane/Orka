@@ -166,8 +166,9 @@ additional provider resources and administrative console screens remain.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
-- Extend the idempotent Dokploy importer to advanced application settings,
-  providers, and backup metadata.
+- The idempotent Dokploy importer emits and persists a secret-safe parity
+  manifest for advanced application settings and unsupported build features;
+  provider credential and backup-policy import remain operator-assisted.
 - Signed catalog releases and an external driver protocol with compatibility
   tests.
 

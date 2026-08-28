@@ -4,6 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -60,5 +62,21 @@ func TestPrepareGitApplicationRequiresRegistryPrefix(t *testing.T) {
 	prepared, warnings, err := prepareApplication(item, options)
 	if err != nil || prepared.source == nil || prepared.source.RepositoryURL != "https://github.com/acme/web.git" || prepared.source.RegistryImage == "" || len(warnings) != 2 {
 		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
+	}
+}
+
+func TestMigrationApplicationReportDoesNotExposeCredentials(t *testing.T) {
+	item := sourceApplication{ID: "app", Name: "App", SourceType: "git", CustomGitURL: "https://username:password@git.example.test/acme/app.git?token=secret#fragment", BuildType: "dockerfile", BuildSecrets: "SECRET=value"}
+	report := dokployApplicationReport(item, nil, "skipped", "unsupported")
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "password") || strings.Contains(text, "token=secret") || strings.Contains(text, "SECRET=value") {
+		t.Fatalf("migration report leaked source secrets: %s", text)
+	}
+	if !strings.Contains(text, `"hasBuildSecrets":true`) {
+		t.Fatalf("migration report omitted the secret-presence flag: %s", text)
 	}
 }

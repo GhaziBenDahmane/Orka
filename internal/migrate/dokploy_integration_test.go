@@ -84,6 +84,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 1 || report.Applications != 2 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
+	if len(report.Resources) != 2 || report.Resources[0].SourceKind != "application" {
+		t.Fatalf("migration parity resources = %#v", report.Resources)
+	}
 	options.DryRun = false
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
@@ -128,5 +131,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	}
 	if repositoryURL != "https://github.com/example/api.git" || !strings.HasPrefix(registryImage, "registry.example.test/imports/") {
 		t.Fatalf("Git source was not converted: repository=%q registry=%q", repositoryURL, registryImage)
+	}
+	var migrationRecords int
+	if err = destination.Pool.QueryRow(ctx, `SELECT count(*) FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org' AND source_kind='application'`, targetOrg).Scan(&migrationRecords); err != nil || migrationRecords != 2 {
+		t.Fatalf("migration metadata records=%d err=%v", migrationRecords, err)
 	}
 }

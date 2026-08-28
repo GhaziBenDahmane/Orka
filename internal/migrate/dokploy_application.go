@@ -84,6 +84,33 @@ type preparedApplication struct {
 var migrationImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)
 var migrationGitRefPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
 
+func dokployApplicationReport(item sourceApplication, targetID *uuid.UUID, status, reason string) DokployResourceReport {
+	repository, branch, buildPath := applicationRepository(item)
+	repository = migrationRepositoryMetadata(repository)
+	return DokployResourceReport{
+		SourceKind: "application", SourceID: item.ID, TargetID: targetID, Status: status, Reason: reason,
+		Metadata: map[string]any{
+			"name": item.Name, "appName": item.AppName, "sourceType": item.SourceType, "buildType": item.BuildType,
+			"repository": repository, "branch": branch, "buildPath": buildPath, "dockerfile": item.Dockerfile,
+			"dockerContextPath": item.DockerContextPath, "dockerBuildStage": item.DockerBuildStage,
+			"hasBuildArgs": item.BuildArgs != "", "hasBuildSecrets": item.BuildSecrets != "", "enableSubmodules": item.EnableSubmodules,
+			"replicas": item.Replicas, "memoryReservation": item.MemoryReservation, "memoryLimit": item.MemoryLimit,
+			"cpuReservation": item.CPUReservation, "cpuLimit": item.CPULimit, "hasRegistryCredentials": item.Username != "" || item.Password != "",
+		},
+	}
+}
+
+func migrationRepositoryMetadata(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
 func readApplications(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceApplication, error) {
 	rows, err := db.Query(ctx, `SELECT to_jsonb(a),COALESCE(gh."githubUrl",''),COALESCE(gl."gitlabInternalUrl",gl."gitlabUrl",''),COALESCE(gt."giteaInternalUrl",gt."giteaUrl",'') FROM application a JOIN environment e ON e."environmentId"=a."environmentId" JOIN project p ON p."projectId"=e."projectId" LEFT JOIN github gh ON gh."githubId"=a."githubId" LEFT JOIN gitlab gl ON gl."gitlabId"=a."gitlabId" LEFT JOIN gitea gt ON gt."giteaId"=a."giteaId" WHERE p."organizationId"=$1 ORDER BY a."applicationId"`, org)
 	if err != nil {
