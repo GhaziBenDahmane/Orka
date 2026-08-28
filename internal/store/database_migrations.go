@@ -95,17 +95,17 @@ func (s *Store) CancelDatabaseMigration(ctx context.Context, organizationID, id 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var status string
+	var resourceStatus, jobStatus string
 	var jobID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT m.status,j.id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='migrate.database' AND j.payload->>'migrationId'=m.id::text WHERE m.id=$1 AND p.organization_id=$2 FOR UPDATE OF m,j`, id, organizationID).Scan(&status, &jobID)
+	err = tx.QueryRow(ctx, `SELECT m.status,j.status,j.id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='migrate.database' AND j.payload->>'migrationId'=m.id::text WHERE m.id=$1 AND p.organization_id=$2 FOR UPDATE OF m,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	switch status {
-	case "queued":
+	switch jobStatus {
+	case "pending":
 		if _, err = tx.Exec(ctx, `UPDATE database_migrations SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, id); err != nil {
 			return err
 		}
@@ -113,6 +113,9 @@ func (s *Store) CancelDatabaseMigration(ctx context.Context, organizationID, id 
 			return err
 		}
 	case "running":
+		if resourceStatus != "running" {
+			return ErrNotCancellable
+		}
 		if _, err = tx.Exec(ctx, `UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()) WHERE id=$1`, jobID); err != nil {
 			return err
 		}

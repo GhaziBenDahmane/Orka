@@ -57,8 +57,11 @@ func recoveryTestStore(t *testing.T) (*store.Store, context.Context) {
 
 func TestClaimSerializesJobsWithTheSameResourceKey(t *testing.T) {
 	db, ctx := recoveryTestStore(t)
-	firstID, secondID := uuid.New(), uuid.New()
+	firstID, secondID, cancelledID := uuid.New(), uuid.New(), uuid.New()
 	if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,created_at) VALUES($1,'test.serial','{}','database:test',now()-interval '1 second'),($2,'test.serial','{}','database:test',now())`, firstID, secondID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,cancel_requested_at,created_at) VALUES($1,'test.serial','{}','database:cancelled',now(),now()-interval '2 seconds')`, cancelledID); err != nil {
 		t.Fatal(err)
 	}
 	first, err := (&Worker{Store: db}).claim(ctx)
@@ -74,6 +77,12 @@ func TestClaimSerializesJobsWithTheSameResourceKey(t *testing.T) {
 	second, err := (&Worker{Store: db}).claim(ctx)
 	if err != nil || second.ID != secondID {
 		t.Fatalf("second claim=%s err=%v", second.ID, err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1`, secondID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = (&Worker{Store: db}).claim(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cancel-requested pending job was claimable: %v", err)
 	}
 }
 

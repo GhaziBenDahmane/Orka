@@ -353,7 +353,7 @@ func (w *Worker) claim(ctx context.Context) (job, error) {
 	}
 	defer tx.Rollback(ctx)
 	var j job
-	err = tx.QueryRow(ctx, `SELECT j.id,j.kind,j.payload,j.attempts,j.max_attempts FROM jobs j WHERE j.status='pending' AND j.run_after<=now()
+	err = tx.QueryRow(ctx, `SELECT j.id,j.kind,j.payload,j.attempts,j.max_attempts FROM jobs j WHERE j.status='pending' AND j.cancel_requested_at IS NULL AND j.run_after<=now()
 		AND (j.kind<>'deploy.compose' OR NOT EXISTS (SELECT 1 FROM jobs older JOIN deployments old_deployment ON old_deployment.id=(older.payload->>'deploymentId')::uuid JOIN deployments this_deployment ON this_deployment.id=(j.payload->>'deploymentId')::uuid WHERE older.kind='deploy.compose' AND older.status IN ('pending','running') AND old_deployment.compose_service_id=this_deployment.compose_service_id AND older.created_at<j.created_at))
 		AND (j.kind<>'commit.status' OR NOT EXISTS (SELECT 1 FROM commit_status_deliveries current_delivery JOIN commit_status_deliveries earlier_delivery ON earlier_delivery.deployment_id=current_delivery.deployment_id JOIN jobs earlier_job ON earlier_job.kind='commit.status' AND earlier_job.payload->>'deliveryId'=earlier_delivery.id::text WHERE current_delivery.id=(j.payload->>'deliveryId')::uuid AND earlier_delivery.created_at<current_delivery.created_at AND earlier_job.status IN ('pending','running')))
 		AND (j.resource_key IS NULL OR NOT EXISTS (SELECT 1 FROM jobs resource_job WHERE resource_job.resource_key=j.resource_key AND resource_job.status IN ('pending','running') AND (resource_job.created_at,resource_job.id)<(j.created_at,j.id)))

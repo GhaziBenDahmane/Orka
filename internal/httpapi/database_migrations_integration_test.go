@@ -90,6 +90,19 @@ func TestDatabaseMigrationHistoryAndCancellationAPI(t *testing.T) {
 	if err = json.Unmarshal(body, &restores); status != http.StatusOK || err != nil || len(restores.Items) != 1 || restores.Items[0].DatabaseBackupID != backupID || restores.Items[0].Kind != "manual" {
 		t.Fatalf("restore history status=%d body=%s err=%v", status, body, err)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/database-restores/"+restores.Items[0].ID.String()+"/cancel", token, organizationID, http.MethodPost, map[string]any{})
+	if status != http.StatusAccepted {
+		t.Fatalf("restore cancel status=%d body=%s", status, body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/databases/"+databaseID.String()+"/backups", token, organizationID, http.MethodPost, map[string]any{})
+	var queuedBackup store.DatabaseBackup
+	if err = json.Unmarshal(body, &queuedBackup); status != http.StatusAccepted || err != nil || queuedBackup.Status != "queued" {
+		t.Fatalf("backup queue status=%d body=%s err=%v", status, body, err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/database-backups/"+queuedBackup.ID.String()+"/cancel", token, organizationID, http.MethodPost, map[string]any{})
+	if status != http.StatusAccepted {
+		t.Fatalf("backup cancel status=%d body=%s", status, body)
+	}
 
 	status, body = scopedAPIRequest(t, server.URL+"/v1/databases/"+databaseID.String()+"/migrations", token, organizationID, http.MethodGet, nil)
 	var history struct {
@@ -111,5 +124,8 @@ func TestDatabaseMigrationHistoryAndCancellationAPI(t *testing.T) {
 	}
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='database.restore.create'`, organizationID).Scan(&auditCount); err != nil || auditCount != 1 {
 		t.Fatalf("restore audit count=%d err=%v", auditCount, err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('database_backup.cancel','database_restore.cancel')`, organizationID).Scan(&auditCount); err != nil || auditCount != 2 {
+		t.Fatalf("backup/restore cancellation audit count=%d err=%v", auditCount, err)
 	}
 }

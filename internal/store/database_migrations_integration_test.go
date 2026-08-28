@@ -53,6 +53,9 @@ func TestDatabaseMigrationQueueScopeUniquenessAndCancellation(t *testing.T) {
 	if _, err = s.GetDatabaseMigration(ctx, otherOrganizationID, queued.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-organization get error=%v, want ErrNotFound", err)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE database_migrations SET status='running' WHERE id=$1`, queued.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.CancelDatabaseMigration(ctx, organizationID, queued.ID); err != nil {
 		t.Fatal(err)
 	}
