@@ -12,6 +12,10 @@ export type Service = { id: string; environmentId: string; name: string; slug: s
 export type Deployment = { id: string; revision: number; status: string; trigger: string; error?: string; output?: string; createdAt: string };
 export type Template = { id: string; key: string; version: string; name: string; description: string; source: string };
 export type Cluster = { id: string; name: string; slug: string; state: string; agentVersion: string; dockerVersion: string; lastSeenAt?: string };
+export type SourceCredential = { id: string; kind: "git" | "git-ssh" | "registry"; name: string; server: string; username: string };
+export type BackupDestination = { id: string; name: string; endpoint: string; region: string; bucket: string; prefix: string; useTls: boolean };
+export type OIDCProvider = { id: string; name: string; issuer: string; clientId: string; domains: string[]; scopes: string[]; defaultRole: string; enabled: boolean };
+export type SAMLProvider = { id: string; name: string; domains: string[]; emailAttribute: string; nameAttribute: string; defaultRole: string; allowIdpInitiated: boolean; enabled: boolean };
 
 type Envelope<T> = { items: T[] };
 type ErrorEnvelope = { error?: { code?: string; message?: string } };
@@ -68,4 +72,16 @@ export const api = {
   databaseEngines: () => request<{ items: string[]; backupCapable: string[] }>("/v1/database-engines"),
   createDatabase: (environmentId: string, body: { name: string; engine: string; version: string; config: Record<string, unknown> }) => request<{ database: { id: string; name: string }; credentials: Record<string, string>; internalUrl: string }>(`/v1/environments/${environmentId}/databases`, { method: "POST", body: JSON.stringify(body) }),
   clusters: () => request<Envelope<Cluster>>("/v1/clusters"),
+  sourceCredentials: () => request<Envelope<SourceCredential>>("/v1/source-credentials"),
+  createSourceCredential: (body: { kind: string; name: string; server: string; username: string; secret?: string; privateKey?: string; knownHosts?: string }) => request<SourceCredential>("/v1/source-credentials", { method: "POST", body: JSON.stringify(body) }),
+  deleteSourceCredential: (id: string) => request<void>(`/v1/source-credentials/${id}`, { method: "DELETE" }),
+  backupDestinations: () => request<Envelope<BackupDestination>>("/v1/backup-destinations"),
+  createBackupDestination: (body: { name: string; endpoint: string; region: string; bucket: string; prefix: string; useTls: boolean; accessKey: string; secretKey: string; sessionToken?: string }) => request<BackupDestination>("/v1/backup-destinations", { method: "POST", body: JSON.stringify(body) }),
+  deleteBackupDestination: (id: string) => request<void>(`/v1/backup-destinations/${id}`, { method: "DELETE" }),
+  oidcProviders: () => request<Envelope<OIDCProvider>>("/v1/sso/oidc-providers"),
+  createOIDCProvider: (body: { name: string; issuer: string; clientId: string; clientSecret: string; domains: string[]; scopes: string[]; defaultRole: string }) => request<OIDCProvider>("/v1/sso/oidc-providers", { method: "POST", body: JSON.stringify(body) }),
+  disableOIDCProvider: (id: string) => request<void>(`/v1/sso/oidc-providers/${id}`, { method: "DELETE" }),
+  samlProviders: () => request<Envelope<SAMLProvider>>("/v1/sso/saml-providers"),
+  createSAMLProvider: (body: { name: string; metadataXml: string; domains: string[]; emailAttribute: string; nameAttribute: string; defaultRole: string; allowIdpInitiated: boolean }) => request<SAMLProvider>("/v1/sso/saml-providers", { method: "POST", body: JSON.stringify(body) }),
+  disableSAMLProvider: (id: string) => request<void>(`/v1/sso/saml-providers/${id}`, { method: "DELETE" }),
 };

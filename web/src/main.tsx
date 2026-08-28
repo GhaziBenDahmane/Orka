@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, APIError, Cluster, Deployment, Environment, Principal, Project, Service, session, Template } from "./api";
+import { api, APIError, BackupDestination, Cluster, Deployment, Environment, OIDCProvider, Principal, Project, SAMLProvider, Service, SourceCredential, session, Template } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -92,7 +92,7 @@ function Login({ onLogin }: { onLogin: (principal: Principal) => void }) {
   </main>;
 }
 
-type View = "workloads" | "templates" | "databases" | "clusters";
+type View = "workloads" | "templates" | "databases" | "clusters" | "settings";
 
 function Console({ principal, onLogout }: { principal: Principal; onLogout: () => void }) {
   const [view, setView] = useState<View>("workloads");
@@ -136,6 +136,7 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
         <Nav active={view === "templates"} onClick={() => setView("templates")} icon="◇">Templates</Nav>
         <Nav active={view === "databases"} onClick={() => setView("databases")} icon="◉">Databases</Nav>
         {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "clusters"} onClick={() => setView("clusters")} icon="⌁">Clusters</Nav>}
+        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "settings"} onClick={() => setView("settings")} icon="⚙">Settings</Nav>}
       </nav>
       <div className="account"><div className="avatar">{principal.email.slice(0, 1).toUpperCase()}</div><div><strong>{principal.email}</strong><small>{principal.role}</small></div><button className="icon-button" onClick={logout} title="Sign out">↪</button></div>
     </aside>
@@ -147,6 +148,7 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
       {view === "templates" && <Templates environmentId={environmentId} reloadServices={loadServices} flash={flash} setError={setError} />}
       {view === "databases" && <Databases environmentId={environmentId} flash={flash} setError={setError} />}
       {view === "clusters" && <Clusters setError={setError} />}
+      {view === "settings" && <Settings flash={flash} setError={setError} />}
     </main>
   </div>;
 }
@@ -220,6 +222,78 @@ function Clusters({ setError }: { setError: (s: string) => void }) {
   const [items, setItems] = useState<Cluster[]>([]);
   useEffect(() => { api.clusters().then(x => setItems(x.items)).catch(reason => setError(message(reason))); }, [setError]);
   return <><section className="section-head"><div><h2>Swarm clusters</h2><p className="muted">Outbound mTLS agents and local scheduler capacity.</p></div></section><div className="grid">{items.map(x => <article className="card cluster-card" key={x.id}><div className="cluster-top"><div className="service-icon">SW</div><Status value={x.state} /></div><h3>{x.name}</h3><p>{x.slug}</p><dl><div><dt>Agent</dt><dd>{x.agentVersion || "Not connected"}</dd></div><div><dt>Docker</dt><dd>{x.dockerVersion || "—"}</dd></div><div><dt>Last seen</dt><dd>{x.lastSeenAt ? new Date(x.lastSeenAt).toLocaleString() : "Never"}</dd></div></dl></article>)}</div>{!items.length && <Empty title="No remote clusters" text="The controller can still deploy to its local Swarm. Enroll an agent to add another cluster." />}</>;
+}
+
+function Settings({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {
+  const [credentials, setCredentials] = useState<SourceCredential[]>([]);
+  const [destinations, setDestinations] = useState<BackupDestination[]>([]);
+  const [oidc, setOIDC] = useState<OIDCProvider[]>([]);
+  const [saml, setSAML] = useState<SAMLProvider[]>([]);
+  const [credential, setCredential] = useState({ kind: "git", name: "", server: "", username: "", secret: "" });
+  const [destination, setDestination] = useState({ name: "", endpoint: "https://", region: "", bucket: "", prefix: "", useTls: true, accessKey: "", secretKey: "" });
+  const [oidcInput, setOIDCInput] = useState({ name: "", issuer: "https://", clientId: "", clientSecret: "", domains: "", scopes: "openid,email,profile", defaultRole: "developer" });
+  const [samlInput, setSAMLInput] = useState({ name: "", metadataXml: "", domains: "", emailAttribute: "email", nameAttribute: "name", defaultRole: "developer", allowIdpInitiated: false });
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const [credentialResult, destinationResult, oidcResult, samlResult] = await Promise.all([api.sourceCredentials(), api.backupDestinations(), api.oidcProviders(), api.samlProviders()]);
+    setCredentials(credentialResult.items); setDestinations(destinationResult.items); setOIDC(oidcResult.items); setSAML(samlResult.items);
+  }, []);
+  useEffect(() => { refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
+
+  async function run(action: () => Promise<unknown>, success: string) {
+    setBusy(true);
+    try { await action(); await refresh(); flash(success); }
+    catch (reason) { setError(message(reason)); }
+    finally { setBusy(false); }
+  }
+  const domains = (value: string) => value.split(",").map(x => x.trim()).filter(Boolean);
+
+  return <div className="settings-grid">
+    <section className="card settings-card"><p className="eyebrow">Build access</p><h2>Source credentials</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createSourceCredential(credential), "Credential encrypted and saved"); }}>
+      <label>Kind<select value={credential.kind} onChange={e => setCredential({ ...credential, kind: e.target.value })}><option value="git">Git HTTPS</option><option value="registry">Container registry</option></select></label>
+      <label>Name<input value={credential.name} onChange={e => setCredential({ ...credential, name: e.target.value })} required /></label>
+      <label>Server<input placeholder="github.com" value={credential.server} onChange={e => setCredential({ ...credential, server: e.target.value })} required /></label>
+      <label>Username<input value={credential.username} onChange={e => setCredential({ ...credential, username: e.target.value })} required /></label>
+      <label>Token or password<input type="password" value={credential.secret} onChange={e => setCredential({ ...credential, secret: e.target.value })} required /></label>
+      <button className="primary" disabled={busy}>Add credential</button>
+    </form><AdminItems items={credentials.map(x => ({ id: x.id, title: x.name, detail: `${x.kind} · ${x.username}@${x.server}` }))} action="Remove" onAction={id => run(() => api.deleteSourceCredential(id), "Credential removed")} /></section>
+
+    <section className="card settings-card"><p className="eyebrow">Off-site storage</p><h2>Backup destinations</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createBackupDestination(destination), "Backup destination verified and saved"); }}>
+      <label>Name<input value={destination.name} onChange={e => setDestination({ ...destination, name: e.target.value })} required /></label>
+      <label>Endpoint<input value={destination.endpoint} onChange={e => setDestination({ ...destination, endpoint: e.target.value, useTls: e.target.value.startsWith("https://") })} required /></label>
+      <div className="field-row"><label>Region<input value={destination.region} onChange={e => setDestination({ ...destination, region: e.target.value })} /></label><label>Bucket<input value={destination.bucket} onChange={e => setDestination({ ...destination, bucket: e.target.value })} required /></label></div>
+      <label>Object prefix<input value={destination.prefix} onChange={e => setDestination({ ...destination, prefix: e.target.value })} /></label>
+      <label>Access key<input value={destination.accessKey} onChange={e => setDestination({ ...destination, accessKey: e.target.value })} required /></label>
+      <label>Secret key<input type="password" value={destination.secretKey} onChange={e => setDestination({ ...destination, secretKey: e.target.value })} required /></label>
+      <button className="primary" disabled={busy}>Verify and add</button>
+    </form><AdminItems items={destinations.map(x => ({ id: x.id, title: x.name, detail: `${x.bucket} · ${x.endpoint}` }))} action="Remove" onAction={id => run(() => api.deleteBackupDestination(id), "Destination removed")} /></section>
+
+    <section className="card settings-card"><p className="eyebrow">Single sign-on</p><h2>OIDC providers</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createOIDCProvider({ ...oidcInput, domains: domains(oidcInput.domains), scopes: domains(oidcInput.scopes) }), "OIDC provider enabled"); }}>
+      <label>Name<input value={oidcInput.name} onChange={e => setOIDCInput({ ...oidcInput, name: e.target.value })} required /></label>
+      <label>Issuer<input value={oidcInput.issuer} onChange={e => setOIDCInput({ ...oidcInput, issuer: e.target.value })} required /></label>
+      <label>Client ID<input value={oidcInput.clientId} onChange={e => setOIDCInput({ ...oidcInput, clientId: e.target.value })} required /></label>
+      <label>Client secret<input type="password" value={oidcInput.clientSecret} onChange={e => setOIDCInput({ ...oidcInput, clientSecret: e.target.value })} required /></label>
+      <label>Email domains<input placeholder="example.com, subsidiary.test" value={oidcInput.domains} onChange={e => setOIDCInput({ ...oidcInput, domains: e.target.value })} required /></label>
+      <label>Scopes<input value={oidcInput.scopes} onChange={e => setOIDCInput({ ...oidcInput, scopes: e.target.value })} /></label>
+      <label>Default role<select value={oidcInput.defaultRole} onChange={e => setOIDCInput({ ...oidcInput, defaultRole: e.target.value })}><option>viewer</option><option>developer</option><option>admin</option></select></label>
+      <button className="primary" disabled={busy}>Add OIDC provider</button>
+    </form><AdminItems items={oidc.map(x => ({ id: x.id, title: x.name, detail: `${x.issuer} · ${x.defaultRole}${x.enabled ? "" : " · disabled"}` }))} action="Disable" onAction={id => run(() => api.disableOIDCProvider(id), "OIDC provider disabled")} /></section>
+
+    <section className="card settings-card"><p className="eyebrow">Enterprise federation</p><h2>SAML providers</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createSAMLProvider({ ...samlInput, domains: domains(samlInput.domains) }), "SAML provider enabled"); }}>
+      <label>Name<input value={samlInput.name} onChange={e => setSAMLInput({ ...samlInput, name: e.target.value })} required /></label>
+      <label>IdP metadata XML<textarea className="compact-code" value={samlInput.metadataXml} onChange={e => setSAMLInput({ ...samlInput, metadataXml: e.target.value })} required /></label>
+      <label>Email domains<input value={samlInput.domains} onChange={e => setSAMLInput({ ...samlInput, domains: e.target.value })} required /></label>
+      <div className="field-row"><label>Email attribute<input value={samlInput.emailAttribute} onChange={e => setSAMLInput({ ...samlInput, emailAttribute: e.target.value })} /></label><label>Name attribute<input value={samlInput.nameAttribute} onChange={e => setSAMLInput({ ...samlInput, nameAttribute: e.target.value })} /></label></div>
+      <label>Default role<select value={samlInput.defaultRole} onChange={e => setSAMLInput({ ...samlInput, defaultRole: e.target.value })}><option>viewer</option><option>developer</option><option>admin</option></select></label>
+      <label className="check"><input type="checkbox" checked={samlInput.allowIdpInitiated} onChange={e => setSAMLInput({ ...samlInput, allowIdpInitiated: e.target.checked })} /> Allow IdP-initiated login</label>
+      <button className="primary" disabled={busy}>Add SAML provider</button>
+    </form><AdminItems items={saml.map(x => ({ id: x.id, title: x.name, detail: `${x.domains.join(", ")} · ${x.defaultRole}${x.enabled ? "" : " · disabled"}` }))} action="Disable" onAction={id => run(() => api.disableSAMLProvider(id), "SAML provider disabled")} /></section>
+  </div>;
+}
+
+function AdminItems({ items, action, onAction }: { items: { id: string; title: string; detail: string }[]; action: string; onAction: (id: string) => Promise<unknown> }) {
+  return <div className="admin-items">{items.map(item => <article key={item.id}><div><strong>{item.title}</strong><small>{item.detail}</small></div><button type="button" onClick={() => { if (window.confirm(`${action} ${item.title}?`)) void onAction(item.id); }}>{action}</button></article>)}{!items.length && <p className="muted">None configured.</p>}</div>;
 }
 
 function Status({ value }: { value: string }) { return <span className={`status ${value}`}>{value.replaceAll("_", " ")}</span>; }

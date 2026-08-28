@@ -167,8 +167,8 @@ workflows are implemented. Advanced build modes and application settings
 remain manual and persistent database data still requires backup/restore. The
 Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
-policies; additional provider resources and administrative console screens
-remain.
+policies. The console provides credential, backup-destination, OIDC, and SAML
+administration; additional policy, audit, and notification screens remain.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
