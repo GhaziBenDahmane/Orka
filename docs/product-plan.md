@@ -168,7 +168,10 @@ replacement's deployment or job result.
   encrypted asynchronous commands. Heartbeats report ready/active/manager node
   counts plus active-node CPU and memory, all usable as placement constraints.
 - Run multiple stateless controllers and workers; prove job fencing and leader
-  election behavior under partitions.
+  election behavior under partitions. A scheduled disposable three-manager
+  Swarm conformance test now proves leader replacement, replica convergence,
+  minority-write rejection, and quorum recovery with JSON timing evidence;
+  the production multi-host topology must still repeat the exercise.
 
 Exit gate: loss of a controller or cluster manager does not corrupt desired
 state, duplicate destructive jobs, or expose credentials.

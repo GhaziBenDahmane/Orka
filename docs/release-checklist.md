@@ -39,6 +39,9 @@ links for every item below.
   resource to running or commit any resource completion after takeover. Race a
   cancellation against completion and verify the job and resource both remain
   cancelled.
+- Preserve the `make test-swarm-ha` evidence artifact, then repeat leader
+  partition, minority-write rejection, quorum restoration, and workload
+  convergence across the production-equivalent multi-host Swarm network.
 - Back up and restore each advertised backup-capable database engine. Record
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. On a Swarm manager, `make test-database-recovery`

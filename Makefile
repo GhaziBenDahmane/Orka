@@ -1,4 +1,4 @@
-.PHONY: test test-database-recovery test-keycloak-oidc lint build run web generate-openapi check-openapi check-release-images
+.PHONY: test test-database-recovery test-keycloak-oidc test-swarm-ha lint build run web generate-openapi check-openapi check-release-images
 
 test:
 	go test ./...
@@ -8,6 +8,9 @@ test-database-recovery:
 
 test-keycloak-oidc:
 	./scripts/ci/test-keycloak-oidc.sh
+
+test-swarm-ha:
+	./scripts/ci/test-swarm-ha.sh
 
 lint:
 	go vet ./...

@@ -1,0 +1,29 @@
+name: Swarm HA conformance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  manager-failover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Exercise manager failover and quorum loss
+        run: |
+          set -o pipefail
+          scripts/ci/test-swarm-ha.sh swarm-ha-conformance.json | tee swarm-ha-conformance.log
+          grep -q 'HA_EVIDENCE' swarm-ha-conformance.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: swarm-ha-conformance
+          path: |
+            swarm-ha-conformance.json
+            swarm-ha-conformance.log
+          if-no-files-found: warn

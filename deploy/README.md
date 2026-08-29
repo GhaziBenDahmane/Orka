@@ -69,6 +69,16 @@ libpq `sslrootcert` URL parameter when it is not publicly trusted. PostgreSQL
 availability, replication, PITR, connection pooling, and failover remain the
 database provider's responsibility.
 
+Before a production rollout, run `make test-swarm-ha` on a host that permits
+privileged containers. It creates an isolated three-manager nested Swarm,
+converges a three-replica service, partitions the elected leader, verifies
+leader replacement and replica recovery, confirms a one-manager minority
+cannot mutate desired state, restores quorum, and writes
+`swarm-ha-conformance.json`. All temporary managers, networks, images, and
+state are removed on exit. This validates Swarm/Raft behavior on one host; the
+release gate still requires the same failure sequence on the actual multi-host
+network and storage topology.
+
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
 account configured as an HTTP bearer token. The rules cover controller outage,
