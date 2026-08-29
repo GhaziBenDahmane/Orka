@@ -1,4 +1,4 @@
-.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-swarm-ha test-templates lint build run web generate-openapi check-openapi check-alerts check-release-images
+.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-swarm-ha test-templates lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
 
 test:
 	go test ./...
@@ -44,6 +44,9 @@ check-openapi: generate-openapi
 
 check-alerts:
 	docker run --rm --entrypoint promtool -v "$(CURDIR):/repo:ro" prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 check rules /repo/deploy/prometheus-alerts.yml
+
+check-licenses:
+	./scripts/ci/check-licenses.sh
 
 check-release-images:
 	./scripts/ci/check-image-digests.sh build

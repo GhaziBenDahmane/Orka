@@ -112,7 +112,7 @@ jobs:
           go-version: "1.26.x"
           cache: true
       - name: License policy
-        run: go run github.com/google/go-licenses@v1.6.0 check ./... --disallowed_types=forbidden,restricted
+        run: make check-licenses
       - name: Build release image
         run: docker build --tag dockyard:ci .
       - name: Generate SPDX SBOM

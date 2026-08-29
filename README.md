@@ -134,5 +134,5 @@ services, including waiting for asynchronous Swarm cleanup during destroy. See
 
 ## License
 
-Apache-2.0. This project is an independent implementation and does not include
-Dokploy proprietary source code.
+[Apache-2.0](LICENSE). This project is an independent implementation and does
+not include Dokploy proprietary source code.
