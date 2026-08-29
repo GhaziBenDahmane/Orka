@@ -84,7 +84,18 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		}
 		deploy["labels"] = labels
 		service["deploy"] = deploy
-		service["networks"] = appendUnique(networkNames(service["networks"]), c.PublicNetwork)
+		var implicitDefault bool
+		service["networks"], implicitDefault = addServiceNetwork(service["networks"], c.PublicNetwork)
+		if implicitDefault {
+			networks, _ := stringMap(doc["networks"])
+			if networks == nil {
+				networks = map[string]any{}
+			}
+			if _, exists := networks["default"]; !exists {
+				networks["default"] = map[string]any{}
+			}
+			doc["networks"] = networks
+		}
 		services[route.ServiceName] = service
 	}
 	doc["services"] = services
@@ -225,6 +236,22 @@ func networkNames(value any) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+func addServiceNetwork(value any, network string) (any, bool) {
+	if value == nil {
+		return []string{"default", network}, true
+	}
+	switch networks := value.(type) {
+	case []any:
+		return appendUnique(networkNames(networks), network), false
+	case map[string]any:
+		if _, exists := networks[network]; !exists {
+			networks[network] = map[string]any{}
+		}
+		return networks, false
+	default:
+		return []string{network}, false
+	}
 }
 func appendUnique(items []string, item string) []string {
 	for _, v := range items {

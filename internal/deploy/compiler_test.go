@@ -20,6 +20,101 @@ func TestCompileInjectsTraefikAndNetwork(t *testing.T) {
 		}
 	}
 }
+
+func TestCompilePreservesImplicitDefaultNetworkForRoutedService(t *testing.T) {
+	source := `services:
+  web:
+    image: nginx:alpine
+  database:
+    image: postgres:17-alpine
+`
+	out, err := (Compiler{PublicNetwork: "public"}).Compile(source, []store.Route{{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNetworkNames(t, compiledService(t, out, "web")["networks"], "default", "public")
+	if _, exists := compiledService(t, out, "database")["networks"]; exists {
+		t.Fatalf("unrouted sidecar should retain its implicit default network: %s", out)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(out), &document); err != nil {
+		t.Fatal(err)
+	}
+	networks, _ := stringMap(document["networks"])
+	if _, exists := networks["default"]; !exists {
+		t.Fatalf("compiled Compose does not declare the synthesized default network: %s", out)
+	}
+}
+
+func TestCompilePreservesExplicitServiceNetworks(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		check  func(*testing.T, any)
+	}{
+		{
+			name: "list",
+			source: `services:
+  web:
+    image: nginx:alpine
+    networks: [internal]
+networks:
+  internal: {}
+`,
+			check: func(t *testing.T, value any) {
+				assertNetworkNames(t, value, "internal", "public")
+			},
+		},
+		{
+			name: "map",
+			source: `services:
+  web:
+    image: nginx:alpine
+    networks:
+      internal:
+        aliases: [api]
+networks:
+  internal: {}
+`,
+			check: func(t *testing.T, value any) {
+				networks, ok := stringMap(value)
+				if !ok {
+					t.Fatalf("map-form networks changed form: %#v", value)
+				}
+				assertNetworkNames(t, networks, "internal", "public")
+				internal, _ := stringMap(networks["internal"])
+				aliases := anySlice(internal["aliases"])
+				if len(aliases) != 1 || aliases[0] != "api" {
+					t.Fatalf("network aliases were not preserved: %#v", networks)
+				}
+			},
+		},
+		{
+			name: "explicit public only",
+			source: `services:
+  web:
+    image: nginx:alpine
+    networks: [public]
+networks:
+  public:
+    external: true
+`,
+			check: func(t *testing.T, value any) {
+				assertNetworkNames(t, value, "public")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out, err := (Compiler{PublicNetwork: "public"}).Compile(test.source, []store.Route{{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.check(t, compiledService(t, out, "web")["networks"])
+		})
+	}
+}
+
 func TestCompileRejectsHostMount(t *testing.T) {
 	c := Compiler{}
 	_, err := c.Compile("services:\n  web:\n    image: nginx\n    volumes:\n      - /etc:/host\n", nil)
@@ -139,4 +234,12 @@ func compiledService(t *testing.T, compose, name string) map[string]any {
 		t.Fatalf("compiled Compose has no %s service: %s", name, compose)
 	}
 	return service
+}
+
+func assertNetworkNames(t *testing.T, value any, expected ...string) {
+	t.Helper()
+	actual := networkNames(value)
+	if strings.Join(actual, ",") != strings.Join(expected, ",") {
+		t.Fatalf("unexpected networks: got %v, want %v", actual, expected)
+	}
 }
