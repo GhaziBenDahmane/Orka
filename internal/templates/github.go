@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
 )
 
@@ -41,11 +42,15 @@ func GitHubArchiveURL(repositoryURL, gitRef string) (string, error) {
 	return "https://codeload.github.com/" + parts[0] + "/" + parts[1] + "/tar.gz/" + url.PathEscape(gitRef), nil
 }
 
-func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL, gitRef string) (string, func(), error) {
+func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL, gitRef, token string) (string, func(), error) {
 	archiveURL, err := GitHubArchiveURL(repositoryURL, gitRef)
 	if err != nil {
 		return "", nil, err
 	}
+	return fetchCatalogArchive(ctx, client, archiveURL, token)
+}
+
+func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, token string) (string, func(), error) {
 	if client == nil {
 		client = &http.Client{}
 	}
@@ -53,6 +58,10 @@ func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL,
 	if err != nil {
 		return "", nil, err
 	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, fmt.Errorf("download template repository: %w", err)
@@ -155,11 +164,15 @@ func VerifyRepositoryCatalog(repository store.TemplateRepository, root string) (
 	return PublicKeyFingerprint(key), nil
 }
 
-func SyncClaimedRepository(ctx context.Context, db *store.Store, client *http.Client, repository store.TemplateRepository) (ImportReport, error) {
+func SyncClaimedRepository(ctx context.Context, db *store.Store, box *cryptox.Box, client *http.Client, repository store.TemplateRepository) (ImportReport, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 45 * time.Second}
 	}
-	root, cleanup, err := FetchGitHubCatalog(ctx, client, repository.RepositoryURL, repository.GitRef)
+	token, err := repositoryToken(ctx, db, box, repository)
+	if err != nil {
+		return ImportReport{}, errors.Join(err, db.FinishTemplateRepositorySync(ctx, repository, "failed", boundedSyncError(err)))
+	}
+	root, cleanup, err := FetchGitHubCatalog(ctx, client, repository.RepositoryURL, repository.GitRef, token)
 	if err == nil {
 		defer cleanup()
 		_, err = VerifyRepositoryCatalog(repository, root)
@@ -170,10 +183,7 @@ func SyncClaimedRepository(ctx context.Context, db *store.Store, client *http.Cl
 	}
 	status, message := "succeeded", ""
 	if err != nil {
-		status, message = "failed", err.Error()
-		if len(message) > 1000 {
-			message = message[:1000]
-		}
+		status, message = "failed", boundedSyncError(err)
 	}
 	if finishErr := db.FinishTemplateRepositorySync(ctx, repository, status, message); finishErr != nil {
 		if err == nil {
@@ -185,7 +195,40 @@ func SyncClaimedRepository(ctx context.Context, db *store.Store, client *http.Cl
 	return report, err
 }
 
-func RunRepositorySyncScheduler(ctx context.Context, db *store.Store, client *http.Client, logger *slog.Logger, holder string) {
+func repositoryToken(ctx context.Context, db *store.Store, box *cryptox.Box, repository store.TemplateRepository) (string, error) {
+	if repository.CredentialID == nil {
+		return "", nil
+	}
+	if box == nil {
+		return "", errors.New("template repository credential decryption is unavailable")
+	}
+	credential, err := db.GetSourceCredential(ctx, repository.OrganizationID, *repository.CredentialID)
+	if err != nil {
+		return "", fmt.Errorf("load template repository credential: %w", err)
+	}
+	server := strings.ToLower(strings.TrimSpace(strings.Split(credential.Server, ":")[0]))
+	if credential.Kind != "git" || server != "github.com" {
+		return "", errors.New("template repository credential is not a GitHub HTTPS token")
+	}
+	plain, err := box.DecryptResource(credential.EncryptedSecret, "source-credential", credential.ID.String(), "source-credential")
+	if err != nil {
+		return "", fmt.Errorf("decrypt template repository credential: %w", err)
+	}
+	if token := strings.TrimSpace(string(plain)); token != "" {
+		return token, nil
+	}
+	return "", errors.New("template repository credential is empty")
+}
+
+func boundedSyncError(err error) string {
+	message := err.Error()
+	if len(message) > 1000 {
+		return message[:1000]
+	}
+	return message
+}
+
+func RunRepositorySyncScheduler(ctx context.Context, db *store.Store, box *cryptox.Box, client *http.Client, logger *slog.Logger, holder string) {
 	if client == nil {
 		client = &http.Client{Timeout: 45 * time.Second}
 	}
@@ -208,7 +251,7 @@ func RunRepositorySyncScheduler(ctx context.Context, db *store.Store, client *ht
 					logger.Error("claim due template repository", "error", claimErr)
 					break
 				}
-				report, syncErr := SyncClaimedRepository(ctx, db, client, repository)
+				report, syncErr := SyncClaimedRepository(ctx, db, box, client, repository)
 				metadata := map[string]any{"imported": report.Imported, "failed": len(report.Failed), "scheduled": true}
 				if syncErr != nil {
 					metadata["error"] = syncErr.Error()

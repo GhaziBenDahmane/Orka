@@ -1,9 +1,12 @@
 package templates
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +27,21 @@ func TestGitHubArchiveURL(t *testing.T) {
 		if _, err := GitHubArchiveURL(invalid, "main"); err == nil {
 			t.Errorf("accepted %q", invalid)
 		}
+	}
+}
+
+func TestFetchCatalogArchiveUsesBearerToken(t *testing.T) {
+	var authorization, accept string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization, accept = r.Header.Get("Authorization"), r.Header.Get("Accept")
+		http.Error(w, "not an archive", http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+	if _, _, err := fetchCatalogArchive(context.Background(), server.Client(), server.URL, "private-token"); err == nil {
+		t.Fatal("unauthorized archive response was accepted")
+	}
+	if authorization != "Bearer private-token" || accept != "application/vnd.github+json" {
+		t.Fatalf("authorization=%q accept=%q", authorization, accept)
 	}
 }
 

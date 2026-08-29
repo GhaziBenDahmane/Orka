@@ -19,6 +19,7 @@ type TemplateRepository struct {
 	CatalogPath         string     `json:"catalogPath"`
 	TrustedPublicKey    string     `json:"trustedPublicKey,omitempty"`
 	RequireSignature    bool       `json:"requireSignature"`
+	CredentialID        *uuid.UUID `json:"credentialId,omitempty"`
 	SyncIntervalSeconds int        `json:"syncIntervalSeconds"`
 	NextSyncAt          *time.Time `json:"nextSyncAt,omitempty"`
 	Enabled             bool       `json:"enabled"`
@@ -32,7 +33,7 @@ type TemplateRepository struct {
 func (s *Store) CreateTemplateRepository(ctx context.Context, item TemplateRepository) (TemplateRepository, error) {
 	item.ID = uuid.New()
 	item.Enabled = true
-	err := s.Pool.QueryRow(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,sync_interval_seconds,next_sync_at) SELECT $1,o.id,$3,$4,$5,$6,$7,$8,$9,$10,CASE WHEN $10>0 THEN now() ELSE NULL END FROM organizations o WHERE o.id=$2 RETURNING enabled,last_sync_status,last_sync_error,next_sync_at,created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Slug, item.RepositoryURL, item.GitRef, item.CatalogPath, item.TrustedPublicKey, item.RequireSignature, item.SyncIntervalSeconds).Scan(&item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.NextSyncAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,sync_interval_seconds,next_sync_at) SELECT $1,o.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $11>0 THEN now() ELSE NULL END FROM organizations o WHERE o.id=$2 AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=o.id AND c.kind='git' AND lower(split_part(c.server,':',1))='github.com')) RETURNING enabled,last_sync_status,last_sync_error,next_sync_at,created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Slug, item.RepositoryURL, item.GitRef, item.CatalogPath, item.TrustedPublicKey, item.RequireSignature, item.CredentialID, item.SyncIntervalSeconds).Scan(&item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.NextSyncAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -40,7 +41,7 @@ func (s *Store) CreateTemplateRepository(ctx context.Context, item TemplateRepos
 }
 
 func (s *Store) ListTemplateRepositories(ctx context.Context, organizationID uuid.UUID) ([]TemplateRepository, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,sync_interval_seconds,next_sync_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,sync_interval_seconds,next_sync_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +49,7 @@ func (s *Store) ListTemplateRepositories(ctx context.Context, organizationID uui
 	items := []TemplateRepository{}
 	for rows.Next() {
 		var item TemplateRepository
-		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -58,7 +59,7 @@ func (s *Store) ListTemplateRepositories(ctx context.Context, organizationID uui
 
 func (s *Store) GetTemplateRepository(ctx context.Context, organizationID, id uuid.UUID) (TemplateRepository, error) {
 	var item TemplateRepository
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,sync_interval_seconds,next_sync_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,sync_interval_seconds,next_sync_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -69,7 +70,7 @@ func (s *Store) BeginTemplateRepositorySync(ctx context.Context, organizationID,
 	var item TemplateRepository
 	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories SET last_sync_status='running',last_sync_error='',updated_at=now()
 		WHERE id=$1 AND organization_id=$2 AND enabled AND (last_sync_status<>'running' OR updated_at<now()-interval '5 minutes')
-		RETURNING id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,sync_interval_seconds,next_sync_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+		RETURNING id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,sync_interval_seconds,next_sync_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrBusy
 	}
@@ -86,7 +87,7 @@ func (s *Store) ClaimDueTemplateRepository(ctx context.Context) (TemplateReposit
 	)
 	UPDATE template_repositories r SET last_sync_status='running',last_sync_error='',updated_at=now()
 	FROM candidate c WHERE r.id=c.id
-	RETURNING r.id,r.organization_id,r.name,r.slug,r.repository_url,r.git_ref,r.catalog_path,r.trusted_public_key,r.require_signature,r.sync_interval_seconds,r.next_sync_at,r.enabled,r.last_sync_status,r.last_sync_error,r.last_synced_at,r.created_at,r.updated_at`).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+	RETURNING r.id,r.organization_id,r.name,r.slug,r.repository_url,r.git_ref,r.catalog_path,r.trusted_public_key,r.require_signature,r.credential_id,r.sync_interval_seconds,r.next_sync_at,r.enabled,r.last_sync_status,r.last_sync_error,r.last_synced_at,r.created_at,r.updated_at`).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -104,12 +105,21 @@ func (s *Store) FinishTemplateRepositorySync(ctx context.Context, repository Tem
 	return err
 }
 
-func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizationID, id uuid.UUID, trustedPublicKey string, requireSignature bool, syncIntervalSeconds int) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET trusted_public_key=$3,require_signature=$4,sync_interval_seconds=$5,next_sync_at=CASE WHEN $5>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID, trustedPublicKey, requireSignature, syncIntervalSeconds)
+func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizationID, id uuid.UUID, trustedPublicKey string, requireSignature bool, credentialID *uuid.UUID, syncIntervalSeconds int) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET trusted_public_key=$3,require_signature=$4,credential_id=$5,sync_interval_seconds=$6,next_sync_at=CASE WHEN $6>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$5 AND c.organization_id=$2 AND c.kind='git' AND lower(split_part(c.server,':',1))='github.com'))`, id, organizationID, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
 	return err
+}
+
+func (s *Store) GetSourceCredential(ctx context.Context, organizationID, id uuid.UUID) (SourceCredential, error) {
+	var item SourceCredential
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Kind, &item.Name, &item.Server, &item.Username, &item.EncryptedSecret, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SourceCredential{}, ErrNotFound
+	}
+	return item, err
 }
 
 func (s *Store) DeleteTemplateRepository(ctx context.Context, organizationID, id uuid.UUID) error {

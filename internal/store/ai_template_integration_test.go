@@ -22,13 +22,24 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Community", Slug: "community", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", TrustedPublicKey: "catalog-key", RequireSignature: true, SyncIntervalSeconds: 3600})
+	credentialID := uuid.New()
+	if _, err := db.CreateSourceCredential(ctx, SourceCredential{ID: credentialID, OrganizationID: organizationID, Kind: "git", Name: "GitHub", Server: "github.com", Username: "token", EncryptedSecret: "ciphertext"}); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Community", Slug: "community", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", TrustedPublicKey: "catalog-key", RequireSignature: true, CredentialID: &credentialID, SyncIntervalSeconds: 3600})
 	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
-	if err != nil || loaded.TrustedPublicKey != "catalog-key" || !loaded.RequireSignature || loaded.SyncIntervalSeconds != 3600 || loaded.NextSyncAt == nil {
+	if err != nil || loaded.TrustedPublicKey != "catalog-key" || !loaded.RequireSignature || loaded.CredentialID == nil || *loaded.CredentialID != credentialID || loaded.SyncIntervalSeconds != 3600 || loaded.NextSyncAt == nil {
 		t.Fatalf("repository trust policy=%#v err=%v", loaded, err)
+	}
+	otherOrganizationID := uuid.New()
+	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other AI test',$2)`, otherOrganizationID, "other-ai-"+otherOrganizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: otherOrganizationID, Name: "Wrong scope", Slug: "wrong-scope", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", CredentialID: &credentialID}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-organization catalog credential accepted: %v", err)
 	}
 	claimed, err := db.ClaimDueTemplateRepository(ctx)
 	if err != nil || claimed.ID != repository.ID || claimed.LastSyncStatus != "running" {
@@ -61,7 +72,6 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatalf("repository snapshot was not reconciled atomically: templates=%#v err=%v", listed, err)
 	}
 	badScope := replacement
-	otherOrganizationID := uuid.New()
 	badScope.OrganizationID = &otherOrganizationID
 	if err = db.ReplaceRepositoryTemplates(ctx, organizationID, repository.ID, []Template{badScope}); err == nil {
 		t.Fatal("repository snapshot accepted a cross-tenant template")

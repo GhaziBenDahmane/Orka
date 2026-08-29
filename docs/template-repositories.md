@@ -38,8 +38,12 @@ schedule between five minutes and seven days. Scheduled work is claimed
 atomically, protected by the controller singleton lease, and retried at the
 next interval after either success or failure. Existing repositories remain
 manual-only after upgrading; new repositories default to hourly refresh in the
-console. Private repository credentials remain follow-up work; do not weaken
-URL validation to add them.
+console. Private repositories reuse an organization-scoped HTTPS Git source
+credential whose server is `github.com`; its token is decrypted only for the
+bounded archive request and is never copied into the repository record,
+response, audit event, or sync error. Deleting the credential safely returns
+the repository to unauthenticated access. Repository URLs remain restricted to
+canonical GitHub HTTPS URLs.
 
 Create signed catalog artifacts with:
 
@@ -60,6 +64,11 @@ POST   /v1/template-repositories/{repositoryID}/sync
 DELETE /v1/template-repositories/{repositoryID}
 GET    /v1/templates
 ```
+
+Set `credentialId` on `POST` or `PATCH` to the ID returned when creating a
+`git` source credential for `github.com`. Omit it or send an empty string for a
+public repository. `syncIntervalSeconds` accepts `0` for manual-only operation
+or a value from `300` through `604800`.
 
 Deleting a repository also removes its catalog entries. Existing services keep
 their immutable Compose revision and template provenance snapshot.

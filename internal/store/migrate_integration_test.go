@@ -143,6 +143,42 @@ func TestMigrateUpgradeFrom063AddsTemplateRepositorySchedules(t *testing.T) {
 	}
 }
 
+func TestMigrateUpgradeFrom064AddsTemplateRepositoryCredentials(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "064_template_repository_schedules.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, repositoryID, credentialID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'private catalog org',$2)`, organizationID, "private-catalog-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,'git','GitHub','github.com','token','ciphertext')`, credentialID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref) VALUES($1,$2,'Catalog','catalog','https://github.com/acme/catalog','main')`, repositoryID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var storedCredentialID *uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT credential_id FROM template_repositories WHERE id=$1`, repositoryID).Scan(&storedCredentialID); err != nil {
+		t.Fatal(err)
+	}
+	if storedCredentialID != nil {
+		t.Fatalf("existing repository unexpectedly gained credential %v", storedCredentialID)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE template_repositories SET credential_id=$2 WHERE id=$1`, repositoryID, credentialID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1`, credentialID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT credential_id FROM template_repositories WHERE id=$1`, repositoryID).Scan(&storedCredentialID); err != nil || storedCredentialID != nil {
+		t.Fatalf("credential deletion did not detach repository: credential=%v err=%v", storedCredentialID, err)
+	}
+}
+
 func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "034_ssh_source_credentials.sql"); err != nil {

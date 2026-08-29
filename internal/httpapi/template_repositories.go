@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"path"
@@ -16,6 +17,7 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		Name, Slug, RepositoryURL, GitRef, CatalogPath string
 		TrustedPublicKey                               string
 		RequireSignature                               bool
+		CredentialID                                   string
 		SyncIntervalSeconds                            int
 	}
 	if !decode(w, r, &in) {
@@ -51,6 +53,11 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		writeError(w, 400, "invalid_template_repository", "syncIntervalSeconds must be zero or between 300 and 604800")
 		return
 	}
+	credentialID, err := s.templateRepositoryCredential(r.Context(), principal(r).OrganizationID, in.CredentialID)
+	if err != nil {
+		writeError(w, 400, "invalid_template_repository", err.Error())
+		return
+	}
 	signerFingerprint := ""
 	if in.TrustedPublicKey != "" {
 		key, keyErr := templates.ParsePublicKey([]byte(in.TrustedPublicKey))
@@ -61,12 +68,12 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		signerFingerprint = templates.PublicKeyFingerprint(key)
 	}
 	p := principal(r)
-	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature, SyncIntervalSeconds: in.SyncIntervalSeconds})
+	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature, CredentialID: credentialID, SyncIntervalSeconds: in.SyncIntervalSeconds})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef, "requireSignature": item.RequireSignature, "signerFingerprint": signerFingerprint, "syncIntervalSeconds": item.SyncIntervalSeconds})
+	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef, "requireSignature": item.RequireSignature, "signerFingerprint": signerFingerprint, "credentialId": item.CredentialID, "syncIntervalSeconds": item.SyncIntervalSeconds})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -88,6 +95,7 @@ func (s *Server) updateTemplateRepositorySettings(w http.ResponseWriter, r *http
 	var in struct {
 		TrustedPublicKey    string
 		RequireSignature    bool
+		CredentialID        string
 		SyncIntervalSeconds int
 	}
 	if !decode(w, r, &in) {
@@ -106,6 +114,11 @@ func (s *Server) updateTemplateRepositorySettings(w http.ResponseWriter, r *http
 		writeError(w, 400, "invalid_template_repository", "syncIntervalSeconds must be zero or between 300 and 604800")
 		return
 	}
+	credentialID, err := s.templateRepositoryCredential(r.Context(), principal(r).OrganizationID, in.CredentialID)
+	if err != nil {
+		writeError(w, 400, "invalid_template_repository", err.Error())
+		return
+	}
 	fingerprint := ""
 	if in.TrustedPublicKey != "" {
 		key, keyErr := templates.ParsePublicKey([]byte(in.TrustedPublicKey))
@@ -116,12 +129,32 @@ func (s *Server) updateTemplateRepositorySettings(w http.ResponseWriter, r *http
 		fingerprint = templates.PublicKeyFingerprint(key)
 	}
 	p := principal(r)
-	if err = s.Store.UpdateTemplateRepositorySettings(r.Context(), p.OrganizationID, id, in.TrustedPublicKey, in.RequireSignature, in.SyncIntervalSeconds); err != nil {
+	if err = s.Store.UpdateTemplateRepositorySettings(r.Context(), p.OrganizationID, id, in.TrustedPublicKey, in.RequireSignature, credentialID, in.SyncIntervalSeconds); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.settings.update", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint, "syncIntervalSeconds": in.SyncIntervalSeconds})
+	s.Store.Audit(r.Context(), &p, "template_repository.settings.update", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint, "credentialId": credentialID, "syncIntervalSeconds": in.SyncIntervalSeconds})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) templateRepositoryCredential(ctx context.Context, organizationID uuid.UUID, raw string) (*uuid.UUID, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, errors.New("credentialId must be a UUID")
+	}
+	credential, err := s.Store.GetSourceCredential(ctx, organizationID, id)
+	if err != nil {
+		return nil, errors.New("credentialId must reference an organization credential")
+	}
+	server := strings.ToLower(strings.TrimSpace(strings.Split(credential.Server, ":")[0]))
+	if credential.Kind != "git" || server != "github.com" {
+		return nil, errors.New("credentialId must reference a GitHub HTTPS token credential")
+	}
+	return &id, nil
 }
 
 func validTemplateSyncInterval(seconds int) bool {
@@ -153,7 +186,7 @@ func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
-	report, err := templates.SyncClaimedRepository(r.Context(), s.Store, nil, repository)
+	report, err := templates.SyncClaimedRepository(r.Context(), s.Store, s.Box, nil, repository)
 	if err != nil {
 		writeError(w, 422, "template_repository_sync_failed", err.Error())
 		return

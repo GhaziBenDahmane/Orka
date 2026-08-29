@@ -44,4 +44,4 @@
 - Multiple namespaced GitHub template repositories using Dokploy Compose format
 - Signed remote catalogs with per-repository Ed25519 signer pinning
 - Scheduled repository sync with singleton controller coordination
-- Private repository credentials
+- Private GitHub catalogs using encrypted organization credentials

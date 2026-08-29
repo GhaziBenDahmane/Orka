@@ -240,8 +240,8 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
-| GET/POST | `/v1/template-repositories` | List or register organization GitHub catalogs |
-| PATCH | `/v1/template-repositories/{id}` | Pin or rotate a repository signing key, signature policy, and automatic sync interval |
+| GET/POST | `/v1/template-repositories` | List or register organization GitHub catalogs, optionally using an encrypted GitHub token credential |
+| PATCH | `/v1/template-repositories/{id}` | Pin or rotate a repository signing key, private-access credential, signature policy, and automatic sync interval |
 | POST | `/v1/template-repositories/{id}/sync` | Fetch and import a bounded Dokploy-compatible catalog archive |
 | DELETE | `/v1/template-repositories/{id}` | Remove a catalog and its template entries |
 | POST | `/v1/templates/import/dokploy` | Import `template.toml` plus Compose YAML |
