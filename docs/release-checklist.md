@@ -90,9 +90,13 @@ links for every item below.
 - Push a protected `vMAJOR.MINOR.PATCH` tag, or explicitly dispatch the
   `Release image` workflow with that version. It publishes amd64/arm64 to
   `ghcr.io/<owner>/<repository>`, attaches SLSA provenance and an SPDX SBOM,
-  signs the resulting digest with GitHub's OIDC identity, and verifies all
-  three. It also creates the matching immutable GitHub Release with
-  `promotion-manifest.json`, `image-digest.txt`, and a downloadable
+  makes the package public, proves the version can be fetched with an anonymous
+  registry token, signs the resulting digest with GitHub's OIDC identity, and
+  verifies all three. Configure the `GHCR_ADMIN_TOKEN` repository secret with
+  package-administration rights when the workflow `GITHUB_TOKEN` cannot change
+  package visibility; publication fails closed instead of leaving an
+  unusable private release. It also creates the matching immutable GitHub
+  Release with `promotion-manifest.json`, `image-digest.txt`, and a downloadable
   `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
   `sso-keycloak-evidence.json`, and `swarm-ha-conformance.json`; the same files
   remain available as a workflow artifact.
