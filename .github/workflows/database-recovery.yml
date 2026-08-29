@@ -1,5 +1,6 @@
 name: Database recovery conformance
 on:
+  workflow_call:
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * 1"
@@ -12,7 +13,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [postgres, mysql, mariadb, mongo, redis, valkey]
+        engine:
+          - postgres
+          - mysql
+          - mariadb
+          - mongo
+          - redis
+          - valkey
+          - libsql
+          - clickhouse
+          - qdrant
+          - meilisearch
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
