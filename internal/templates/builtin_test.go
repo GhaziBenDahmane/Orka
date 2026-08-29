@@ -11,7 +11,7 @@ func TestBuiltinCatalogIsSwarmSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Imported < 3 || len(report.Failed) > 0 {
+	if report.Imported < 4 || len(report.Failed) > 0 {
 		t.Fatalf("report=%#v", report)
 	}
 }

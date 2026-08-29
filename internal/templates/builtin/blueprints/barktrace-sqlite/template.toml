@@ -1,0 +1,33 @@
+[variables]
+domain = "${domain}"
+barktrace_version = "0.1.0"
+oidc_issuer_url = "https://id.example.com"
+oidc_client_id = "barktrace"
+oidc_client_secret = "${password:32}"
+default_org_name = "Default"
+default_org_slug = "default"
+mcp_token = "${base64:32}"
+
+[config.env]
+BARKTRACE_VERSION = "${barktrace_version}"
+BARKTRACE_PUBLIC_URL = "https://${domain}"
+BARKTRACE_DEFAULT_ORG_NAME = "${default_org_name}"
+BARKTRACE_DEFAULT_ORG_SLUG = "${default_org_slug}"
+BARKTRACE_AUTO_PROVISION = "true"
+BARKTRACE_SESSION_LIFETIME_HOURS = "720"
+BARKTRACE_MCP_TOKEN = "${mcp_token}"
+BARKTRACE_UPTIME_ALLOW_PRIVATE_TARGETS = "false"
+OIDC_ISSUER_URL = "${oidc_issuer_url}"
+OIDC_CLIENT_ID = "${oidc_client_id}"
+OIDC_CLIENT_SECRET = "${oidc_client_secret}"
+OIDC_REDIRECT_URL = "https://${domain}/auth/oidc/callback"
+OIDC_PROVIDER_NAME = "SSO"
+OIDC_SCOPES = "openid email profile"
+OIDC_REQUIRE_EMAIL_VERIFIED = "true"
+GOMEMLIMIT = "192MiB"
+
+[[config.domains]]
+serviceName = "barktrace"
+port = 8080
+host = "${domain}"
+path = "/"
