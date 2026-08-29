@@ -137,7 +137,26 @@ Slack, PagerDuty, or other incident receiver.
 
 Configure the controller with a dedicated TLS 1.3 listener and a private agent
 CA. Create a cluster and one-time enrollment token through the API, then install
-one outbound agent on a manager of that Swarm:
+one outbound agent on a manager of that Swarm. Store the token in a mode-0600
+file and use the guarded installer:
+
+```sh
+export DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com
+export DOCKYARD_AGENT_URL=https://agents.dockyard.example.com:8444
+export DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:...
+export DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE=/secure/dockyard/enrollment-token
+
+DOCKYARD_INSTALL_DRY_RUN=true scripts/install-agent.sh
+scripts/install-agent.sh
+```
+
+The installer requires HTTPS endpoints, an immutable image, an active Swarm
+manager, and a protected non-empty token file. It creates the workload overlay
+network when absent, derives the exact self-upgrade service name from
+`DOCKYARD_AGENT_STACK_NAME`, and waits for convergence. Existing enrollment
+secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
+one when the corresponding agent identity volume is intact. The equivalent
+manual commands are:
 
 ```sh
 printf '%s' "$ENROLLMENT_TOKEN" | docker secret create dockyard_agent_enrollment_token -
@@ -165,7 +184,8 @@ Agents can be upgraded through `POST /v1/clusters/{id}/agent-upgrades` or
 digests are accepted. The agent performs a Swarm `start-first` service update;
 the service update automatically rolls back if the replacement task fails.
 Poll the returned command with `dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
-Set `DOCKYARD_AGENT_SERVICE_NAME` when the stack is not named `dockyard-agent`.
+Set `DOCKYARD_AGENT_SERVICE_NAME` when the manually deployed stack is not named
+`dockyard-agent`; the installer derives it automatically.
 
 Managed-database backup and restore on remote clusters requires an
 S3-compatible backup destination whose configured endpoint is reachable from

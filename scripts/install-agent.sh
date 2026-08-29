@@ -1,0 +1,129 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+stack=${DOCKYARD_AGENT_STACK_NAME:-dockyard-agent}
+network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+reuse=${DOCKYARD_REUSE_EXISTING_SECRETS:-false}
+dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
+skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
+wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
+token_secret=dockyard_agent_enrollment_token
+
+fail() {
+  echo "install-agent: $*" >&2
+  exit 1
+}
+
+case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_AGENT_STACK_NAME" ;; esac
+case "$network" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_TRAEFIK_NETWORK" ;; esac
+case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
+case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
+case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
+case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer" ;; esac
+[ "$wait_timeout" -gt 0 ] || fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer"
+
+for command in awk docker find grep sleep tr wc; do
+  command -v "$command" >/dev/null 2>&1 || fail "$command is required"
+done
+
+validate_https_url() {
+  label=$1
+  value=$2
+  case "$value" in
+    https://*) ;;
+    *) fail "$label must be an https:// URL" ;;
+  esac
+  case "$value" in *\?*|*\#*) fail "$label must not contain a query string or fragment" ;; esac
+  if printf '%s' "$value" | grep -q '[[:space:]]'; then
+    fail "$label must not contain whitespace"
+  fi
+  authority=${value#https://}
+  authority=${authority%%/*}
+  case "$authority" in ""|*@*) fail "$label must contain a valid host without credentials" ;; esac
+}
+
+control_plane_url=${DOCKYARD_CONTROL_PLANE_URL:-}
+agent_url=${DOCKYARD_AGENT_URL:-}
+validate_https_url DOCKYARD_CONTROL_PLANE_URL "$control_plane_url"
+validate_https_url DOCKYARD_AGENT_URL "$agent_url"
+
+DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
+export DOCKYARD_IMAGE
+"$root/scripts/ci/check-image-digests.sh" agent
+
+swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}')
+[ "$swarm_state" = "active true" ] || fail "run this installer on an active Docker Swarm manager"
+
+token_file=${DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE:-}
+[ -n "$token_file" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE is required"
+[ -f "$token_file" ] && [ -r "$token_file" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must name a readable regular file"
+[ -z "$(find "$token_file" -prune -perm /077 -print)" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must not be accessible by group or other users"
+token_size=$(wc -c <"$token_file" | tr -d ' ')
+[ "$token_size" -gt 0 ] && [ "$token_size" -le 4096 ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must contain between 1 and 4096 bytes"
+token=$(tr -d '\r\n' <"$token_file")
+[ -n "$token" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE is empty"
+unset token
+
+DOCKYARD_AGENT_SERVICE_NAME=${stack}_agent
+export DOCKYARD_CONTROL_PLANE_URL="$control_plane_url"
+export DOCKYARD_AGENT_URL="$agent_url"
+export DOCKYARD_AGENT_SERVICE_NAME DOCKYARD_TRAEFIK_NETWORK="$network"
+
+if docker secret inspect "$token_secret" >/dev/null 2>&1 && [ "$reuse" != true ]; then
+  fail "Docker secret $token_secret already exists; set DOCKYARD_REUSE_EXISTING_SECRETS=true only when the agent identity volume is intact"
+fi
+
+docker stack config -c "$root/deploy/agent-swarm.yml" >/dev/null
+if [ "$dry_run" = true ]; then
+  echo "Preflight passed for agent stack $stack; no resources were changed."
+  exit 0
+fi
+
+created_secret=false
+created_network=false
+deployment_started=false
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ "$deployment_started" = false ]; then
+    if [ "$created_secret" = true ]; then
+      docker secret rm "$token_secret" >/dev/null 2>&1 || true
+    fi
+    if [ "$created_network" = true ]; then
+      docker network rm "$network" >/dev/null 2>&1 || true
+    fi
+  fi
+  trap - EXIT HUP INT TERM
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+
+if ! docker network inspect "$network" >/dev/null 2>&1; then
+  docker network create --driver overlay --attachable "$network" >/dev/null
+  created_network=true
+fi
+if ! docker secret inspect "$token_secret" >/dev/null 2>&1; then
+  docker secret create "$token_secret" "$token_file" >/dev/null
+  created_secret=true
+fi
+
+deployment_started=true
+docker stack deploy --prune --with-registry-auth -c "$root/deploy/agent-swarm.yml" "$stack"
+if [ "$skip_wait" = true ]; then
+  echo "Agent stack $stack submitted; convergence wait was skipped."
+  exit 0
+fi
+
+deadline=$(( $(date +%s) + wait_timeout ))
+while :; do
+  services=$(docker stack services "$stack" --format '{{.Name}} {{.Replicas}}') || fail "could not inspect agent stack"
+  [ -n "$services" ] || fail "agent stack has no services"
+  unconverged=$(printf '%s\n' "$services" | awk '{ split($2,n,"/"); if (n[1] != n[2]) print }')
+  [ -z "$unconverged" ] && break
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    printf '%s\n' "$unconverged" >&2
+    fail "agent stack $stack did not converge within ${wait_timeout}s"
+  fi
+  sleep 2
+done
+echo "Agent stack $stack installed and converged; verify its heartbeat in the Dockyard cluster view."

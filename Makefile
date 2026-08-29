@@ -8,6 +8,7 @@ test-database-recovery:
 
 test-install:
 	./scripts/ci/test-install-swarm.sh
+	./scripts/ci/test-install-agent.sh
 
 test-keycloak-oidc:
 	./scripts/ci/test-keycloak-oidc.sh
