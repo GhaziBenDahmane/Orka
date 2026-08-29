@@ -191,7 +191,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/template-repositories", s.requireRole("developer", http.HandlerFunc(s.listTemplateRepositories)))
 	mux.Handle("POST /v1/template-repositories", s.requireRole("admin", http.HandlerFunc(s.createTemplateRepository)))
 	mux.Handle("POST /v1/template-repositories/{repositoryID}/sync", s.requireRole("developer", http.HandlerFunc(s.syncTemplateRepository)))
-	mux.Handle("PATCH /v1/template-repositories/{repositoryID}", s.requireRole("admin", http.HandlerFunc(s.updateTemplateRepositoryTrust)))
+	mux.Handle("PATCH /v1/template-repositories/{repositoryID}", s.requireRole("admin", http.HandlerFunc(s.updateTemplateRepositorySettings)))
 	mux.Handle("DELETE /v1/template-repositories/{repositoryID}", s.requireRole("admin", http.HandlerFunc(s.deleteTemplateRepository)))
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/preview", s.requireAuth(http.HandlerFunc(s.previewTemplate)))

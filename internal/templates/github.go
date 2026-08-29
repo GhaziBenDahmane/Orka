@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bendahma/dokploy-go/internal/store"
 )
@@ -151,4 +153,74 @@ func VerifyRepositoryCatalog(repository store.TemplateRepository, root string) (
 		return "", fmt.Errorf("verify signed template repository: %w", err)
 	}
 	return PublicKeyFingerprint(key), nil
+}
+
+func SyncClaimedRepository(ctx context.Context, db *store.Store, client *http.Client, repository store.TemplateRepository) (ImportReport, error) {
+	if client == nil {
+		client = &http.Client{Timeout: 45 * time.Second}
+	}
+	root, cleanup, err := FetchGitHubCatalog(ctx, client, repository.RepositoryURL, repository.GitRef)
+	if err == nil {
+		defer cleanup()
+		_, err = VerifyRepositoryCatalog(repository, root)
+	}
+	var report ImportReport
+	if err == nil {
+		report, err = ImportRepositoryCatalog(ctx, db, repository, root)
+	}
+	status, message := "succeeded", ""
+	if err != nil {
+		status, message = "failed", err.Error()
+		if len(message) > 1000 {
+			message = message[:1000]
+		}
+	}
+	if finishErr := db.FinishTemplateRepositorySync(ctx, repository, status, message); finishErr != nil {
+		if err == nil {
+			err = finishErr
+		} else {
+			err = errors.Join(err, finishErr)
+		}
+	}
+	return report, err
+}
+
+func RunRepositorySyncScheduler(ctx context.Context, db *store.Store, client *http.Client, logger *slog.Logger, holder string) {
+	if client == nil {
+		client = &http.Client{Timeout: 45 * time.Second}
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		leader, err := db.AcquireControllerLease(ctx, "template-repository-scheduler", holder, 90*time.Second)
+		if err != nil && ctx.Err() == nil {
+			logger.Error("acquire template repository scheduler lease", "error", err)
+		} else if leader {
+			for ctx.Err() == nil {
+				repository, claimErr := db.ClaimDueTemplateRepository(ctx)
+				if errors.Is(claimErr, store.ErrNotFound) {
+					break
+				}
+				if claimErr != nil {
+					logger.Error("claim due template repository", "error", claimErr)
+					break
+				}
+				report, syncErr := SyncClaimedRepository(ctx, db, client, repository)
+				metadata := map[string]any{"imported": report.Imported, "failed": len(report.Failed), "scheduled": true}
+				if syncErr != nil {
+					metadata["error"] = syncErr.Error()
+					logger.Error("scheduled template repository sync", "repository_id", repository.ID, "error", syncErr)
+				}
+				db.AuditOrganization(ctx, repository.OrganizationID, "template_repository.sync", "template_repository", repository.ID.String(), "scheduler", metadata)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

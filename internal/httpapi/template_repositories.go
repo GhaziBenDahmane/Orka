@@ -1,10 +1,10 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
@@ -16,6 +16,7 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		Name, Slug, RepositoryURL, GitRef, CatalogPath string
 		TrustedPublicKey                               string
 		RequireSignature                               bool
+		SyncIntervalSeconds                            int
 	}
 	if !decode(w, r, &in) {
 		return
@@ -46,6 +47,10 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		writeError(w, 400, "invalid_template_repository", "trustedPublicKey is required when requireSignature is enabled")
 		return
 	}
+	if !validTemplateSyncInterval(in.SyncIntervalSeconds) {
+		writeError(w, 400, "invalid_template_repository", "syncIntervalSeconds must be zero or between 300 and 604800")
+		return
+	}
 	signerFingerprint := ""
 	if in.TrustedPublicKey != "" {
 		key, keyErr := templates.ParsePublicKey([]byte(in.TrustedPublicKey))
@@ -56,12 +61,12 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		signerFingerprint = templates.PublicKeyFingerprint(key)
 	}
 	p := principal(r)
-	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature})
+	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature, SyncIntervalSeconds: in.SyncIntervalSeconds})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef, "requireSignature": item.RequireSignature, "signerFingerprint": signerFingerprint})
+	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef, "requireSignature": item.RequireSignature, "signerFingerprint": signerFingerprint, "syncIntervalSeconds": item.SyncIntervalSeconds})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -74,15 +79,16 @@ func (s *Server) listTemplateRepositories(w http.ResponseWriter, r *http.Request
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 
-func (s *Server) updateTemplateRepositoryTrust(w http.ResponseWriter, r *http.Request) {
+func (s *Server) updateTemplateRepositorySettings(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("repositoryID"))
 	if err != nil {
 		writeError(w, 400, "invalid_id", "invalid template repository id")
 		return
 	}
 	var in struct {
-		TrustedPublicKey string
-		RequireSignature bool
+		TrustedPublicKey    string
+		RequireSignature    bool
+		SyncIntervalSeconds int
 	}
 	if !decode(w, r, &in) {
 		return
@@ -96,6 +102,10 @@ func (s *Server) updateTemplateRepositoryTrust(w http.ResponseWriter, r *http.Re
 		writeError(w, 400, "invalid_template_repository", "trustedPublicKey is required when requireSignature is enabled")
 		return
 	}
+	if !validTemplateSyncInterval(in.SyncIntervalSeconds) {
+		writeError(w, 400, "invalid_template_repository", "syncIntervalSeconds must be zero or between 300 and 604800")
+		return
+	}
 	fingerprint := ""
 	if in.TrustedPublicKey != "" {
 		key, keyErr := templates.ParsePublicKey([]byte(in.TrustedPublicKey))
@@ -106,12 +116,16 @@ func (s *Server) updateTemplateRepositoryTrust(w http.ResponseWriter, r *http.Re
 		fingerprint = templates.PublicKeyFingerprint(key)
 	}
 	p := principal(r)
-	if err = s.Store.UpdateTemplateRepositoryTrust(r.Context(), p.OrganizationID, id, in.TrustedPublicKey, in.RequireSignature); err != nil {
+	if err = s.Store.UpdateTemplateRepositorySettings(r.Context(), p.OrganizationID, id, in.TrustedPublicKey, in.RequireSignature, in.SyncIntervalSeconds); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.trust.update", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint})
+	s.Store.Audit(r.Context(), &p, "template_repository.settings.update", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint, "syncIntervalSeconds": in.SyncIntervalSeconds})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validTemplateSyncInterval(seconds int) bool {
+	return seconds == 0 || seconds >= 300 && seconds <= 604800
 }
 
 func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) {
@@ -130,32 +144,22 @@ func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 409, "repository_disabled", "template repository is disabled")
 		return
 	}
-	if err = s.Store.SetTemplateRepositorySync(r.Context(), p.OrganizationID, id, "running", ""); err != nil {
+	repository, err = s.Store.BeginTemplateRepositorySync(r.Context(), p.OrganizationID, id)
+	if errors.Is(err, store.ErrBusy) {
+		writeError(w, 409, "repository_sync_running", "template repository sync is already running")
+		return
+	}
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	client := &http.Client{Timeout: 45 * time.Second}
-	root, cleanup, err := templates.FetchGitHubCatalog(r.Context(), client, repository.RepositoryURL, repository.GitRef)
-	if err == nil {
-		defer cleanup()
-		_, err = templates.VerifyRepositoryCatalog(repository, root)
+	report, err := templates.SyncClaimedRepository(r.Context(), s.Store, nil, repository)
+	if err != nil {
+		writeError(w, 422, "template_repository_sync_failed", err.Error())
+		return
 	}
-	if err == nil {
-		var report templates.ImportReport
-		report, err = templates.ImportRepositoryCatalog(r.Context(), s.Store, repository, root)
-		if err == nil {
-			_ = s.Store.SetTemplateRepositorySync(r.Context(), p.OrganizationID, id, "succeeded", "")
-			s.Store.Audit(r.Context(), &p, "template_repository.sync", "template_repository", id.String(), r.RemoteAddr, map[string]any{"imported": report.Imported, "failed": len(report.Failed)})
-			writeJSON(w, 200, report)
-			return
-		}
-	}
-	message := err.Error()
-	if len(message) > 1000 {
-		message = message[:1000]
-	}
-	_ = s.Store.SetTemplateRepositorySync(r.Context(), p.OrganizationID, id, "failed", message)
-	writeError(w, 422, "template_repository_sync_failed", message)
+	s.Store.Audit(r.Context(), &p, "template_repository.sync", "template_repository", id.String(), r.RemoteAddr, map[string]any{"imported": report.Imported, "failed": len(report.Failed), "scheduled": false})
+	writeJSON(w, 200, report)
 }
 
 func (s *Server) deleteTemplateRepository(w http.ResponseWriter, r *http.Request) {

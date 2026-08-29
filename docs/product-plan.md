@@ -233,8 +233,9 @@ Catalogs are federated through organization-owned GitHub repository records.
 Each repository uses the Dokploy blueprint layout and gets a namespace, making
 overlapping upstream IDs deterministic. Remote sync supports bounded public
 GitHub archives and optional mandatory Ed25519 signer pinning with verified
-provenance. Private credentials, scheduled sync, and webhook-driven refresh
-remain release-gated follow-up work.
+provenance. HA-safe scheduled refresh is available at five-minute through
+seven-day intervals. Private credentials and webhook-driven refresh remain
+release-gated follow-up work.
 
 ## Release policy
 

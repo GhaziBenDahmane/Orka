@@ -115,6 +115,34 @@ func TestMigrateUpgradeFrom062AddsRemoteCatalogTrustPolicy(t *testing.T) {
 	}
 }
 
+func TestMigrateUpgradeFrom063AddsTemplateRepositorySchedules(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "063_remote_catalog_signing.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, repositoryID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'scheduled catalog org',$2)`, organizationID, "scheduled-catalog-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref) VALUES($1,$2,'Catalog','catalog','https://github.com/acme/catalog','main')`, repositoryID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var interval int
+	var nextSyncAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT sync_interval_seconds,next_sync_at FROM template_repositories WHERE id=$1`, repositoryID).Scan(&interval, &nextSyncAt); err != nil {
+		t.Fatal(err)
+	}
+	if interval != 0 || nextSyncAt != nil {
+		t.Fatalf("existing repository schedule interval=%d next=%v", interval, nextSyncAt)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE template_repositories SET sync_interval_seconds=299 WHERE id=$1`, repositoryID); err == nil {
+		t.Fatal("invalid template repository sync interval was accepted")
+	}
+}
+
 func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "034_ssh_source_credentials.sql"); err != nil {

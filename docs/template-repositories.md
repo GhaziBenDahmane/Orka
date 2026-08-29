@@ -33,8 +33,13 @@ fingerprint in every imported template's provenance. A failed or tampered sync
 leaves the previously imported versions intact. Valid snapshots are reconciled
 in one database transaction, including removal of catalog versions no longer
 published by the repository; existing services retain their copied provenance.
-Private repositories and
-scheduled refresh are follow-up work; do not weaken URL validation to add them.
+Each repository can be synchronized manually or on a controller-managed
+schedule between five minutes and seven days. Scheduled work is claimed
+atomically, protected by the controller singleton lease, and retried at the
+next interval after either success or failure. Existing repositories remain
+manual-only after upgrading; new repositories default to hourly refresh in the
+console. Private repository credentials remain follow-up work; do not weaken
+URL validation to add them.
 
 Create signed catalog artifacts with:
 
@@ -50,7 +55,7 @@ API flow:
 ```text
 POST   /v1/template-repositories
 GET    /v1/template-repositories
-PATCH  /v1/template-repositories/{repositoryID}
+PATCH  /v1/template-repositories/{repositoryID}  # signing and sync schedule
 POST   /v1/template-repositories/{repositoryID}/sync
 DELETE /v1/template-repositories/{repositoryID}
 GET    /v1/templates

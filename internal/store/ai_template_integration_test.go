@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -21,13 +22,27 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Community", Slug: "community", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", TrustedPublicKey: "catalog-key", RequireSignature: true})
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Community", Slug: "community", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", TrustedPublicKey: "catalog-key", RequireSignature: true, SyncIntervalSeconds: 3600})
 	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
-	if err != nil || loaded.TrustedPublicKey != "catalog-key" || !loaded.RequireSignature {
+	if err != nil || loaded.TrustedPublicKey != "catalog-key" || !loaded.RequireSignature || loaded.SyncIntervalSeconds != 3600 || loaded.NextSyncAt == nil {
 		t.Fatalf("repository trust policy=%#v err=%v", loaded, err)
+	}
+	claimed, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID || claimed.LastSyncStatus != "running" {
+		t.Fatalf("claimed repository=%#v err=%v", claimed, err)
+	}
+	if _, err = db.ClaimDueTemplateRepository(ctx); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("running repository was claimed twice: %v", err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || loaded.NextSyncAt == nil || !loaded.NextSyncAt.After(time.Now()) || loaded.LastSyncStatus != "succeeded" {
+		t.Fatalf("completed repository schedule=%#v err=%v", loaded, err)
 	}
 	template, err := db.UpsertRepositoryTemplate(ctx, Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "community/demo", Version: "1", Name: "Demo", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/demo", Checksum: "abc"})
 	if err != nil {

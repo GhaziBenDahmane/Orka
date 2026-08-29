@@ -43,4 +43,5 @@
 - Hermes-compatible auditor API for interactive investigations without Docker-socket access
 - Multiple namespaced GitHub template repositories using Dokploy Compose format
 - Signed remote catalogs with per-repository Ed25519 signer pinning
-- Private repository credentials and scheduled sync
+- Scheduled repository sync with singleton controller coordination
+- Private repository credentials
