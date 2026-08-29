@@ -25,7 +25,7 @@ func TestRegistryRendersAllDrivers(t *testing.T) {
 func TestNativeBackupAndRestorePlans(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey"} {
 		extension, ok := registry.BackupExtension(engine)
 		if !ok {
 			t.Fatalf("%s should support backups", engine)
@@ -46,6 +46,9 @@ func TestNativeBackupAndRestorePlans(t *testing.T) {
 		if engine == "mongo" && !strings.Contains(backup.Files[filename+".config"], "secret") {
 			t.Fatal("mongo password config was not generated")
 		}
+		if (engine == "redis" || engine == "valkey") && (backup.Environment["REDISCLI_AUTH"] != credentials["password"] || restore.Environment["REDISCLI_AUTH"] != credentials["password"] || !strings.Contains(restore.Command[3], "REPLICAOF")) {
+			t.Fatalf("%s recovery plan is incomplete", engine)
+		}
 	}
 }
 
@@ -60,17 +63,35 @@ func TestNativeBackupPlanRejectsUnsafeInput(t *testing.T) {
 	}
 }
 
+func TestRedisRecoveryPlansRequireOnlyPassword(t *testing.T) {
+	registry := NewRegistry()
+	credentials := map[string]string{"password": "secret"}
+	for _, engine := range []string{"redis", "valkey"} {
+		if _, err := registry.Backup(engine, "8", "cache", credentials, "123e4567-e89b-12d3-a456-426614174000.rdb"); err != nil {
+			t.Fatalf("%s password-only backup: %v", engine, err)
+		}
+		if _, err := registry.Restore(engine, "8", "cache", credentials, "123e4567-e89b-12d3-a456-426614174000.rdb"); err != nil {
+			t.Fatalf("%s password-only restore: %v", engine, err)
+		}
+	}
+	if _, err := registry.Backup("postgres", "17", "database", credentials, "123e4567-e89b-12d3-a456-426614174000.dump"); err == nil {
+		t.Fatal("PostgreSQL backup accepted missing username and database")
+	}
+}
+
 func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 	registry := NewRegistry()
 	for _, tc := range []struct {
 		engine string
 		want   string
-	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}} {
+	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}} {
 		port := "13306"
 		if tc.engine == "postgres" {
 			port = "15432"
 		} else if tc.engine == "mongo" {
 			port = "17017"
+		} else if tc.engine == "redis" || tc.engine == "valkey" {
+			port = "16379"
 		}
 		plan, err := registry.Backup(tc.engine, "17", "source.internal", map[string]string{"username": "user", "password": "secret", "database": "app", "port": port}, "123e4567-e89b-12d3-a456-426614174000.dump")
 		if err != nil {
@@ -150,7 +171,7 @@ func TestStoredConfigRemovesPasswords(t *testing.T) {
 func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "app", "password": "very-secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey"} {
 		plan, err := registry.Readiness(engine, "17", "verify", credentials)
 		if err != nil {
 			t.Fatalf("%s readiness: %v", engine, err)

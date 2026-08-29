@@ -605,7 +605,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 
 func migrationBackupCapableEngine(engine string) bool {
 	switch engine {
-	case "postgres", "mysql", "mariadb", "mongo":
+	case "postgres", "mysql", "mariadb", "mongo", "redis", "valkey":
 		return true
 	default:
 		return false

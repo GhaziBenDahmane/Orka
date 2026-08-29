@@ -286,7 +286,7 @@ Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
 The engine response includes `backupCapable`; native verified backup/restore is
-currently available for PostgreSQL, MySQL, MariaDB, and MongoDB.
+currently available for PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and Valkey.
 Pass `destinationId` to a backup request or backup policy to upload through an
 S3-compatible multipart client. Restores download to an isolated temporary
 directory and verify the stored SHA-256 checksum before invoking native tools.
@@ -294,6 +294,11 @@ Every new local or S3 artifact is encrypted before storage with a random
 per-backup AES-256-GCM data key; only the master-key-wrapped data key is kept in
 PostgreSQL. Chunk authentication detects modification, reordering, and
 truncation, and restores also verify the original plaintext checksum.
+Redis and Valkey backups stream an authenticated RDB snapshot. Their restore
+jobs briefly make the target a replica of an ephemeral, password-protected
+source loaded from that snapshot, wait for full synchronization, and promote
+the target back to primary. Schedule these destructive restores during a write
+maintenance window.
 Set `verifyRestore` on a backup policy to enqueue one restore drill after each
 successful scheduled backup. Drills create a temporary isolated Swarm stack,
 restore the verified artifact with fresh credentials, record the result as a

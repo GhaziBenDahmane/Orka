@@ -58,9 +58,10 @@ links for every item below.
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. On a Swarm manager, `make test-database-recovery`
   exercises the exact native readiness, backup, and restore commands against
-  PostgreSQL, MySQL, MariaDB, and MongoDB and emits one `RECOVERY_EVIDENCE`
-  JSON record per engine. Preserve the workflow artifact with the release;
-  repeat on production-equivalent storage because CI timings are not SLOs.
+  PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and Valkey and emits one
+  `RECOVERY_EVIDENCE` JSON record per engine. Preserve the workflow artifact
+  with the release; repeat on production-equivalent storage because CI timings
+  are not SLOs.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
   procedure. `make test-keycloak-oidc` provisions a real TLS-enabled Keycloak
   realm and verifies discovery, authorization-code login, PKCE, nonce binding,

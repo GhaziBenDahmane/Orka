@@ -44,6 +44,8 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 		mysqlRecovery("mysql", "8.4"),
 		mysqlRecovery("mariadb", "11.8"),
 		mongoRecovery(),
+		redisRecovery("redis", "8"),
+		redisRecovery("valkey", "8"),
 	}
 	for _, tc := range cases {
 		if len(wanted) > 0 && !wanted[tc.engine] {
@@ -56,7 +58,9 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 type recoveryCase struct {
 	engine       string
 	version      string
+	image        string
 	serverEnv    map[string]string
+	serverArgs   []string
 	seedCommand  []string
 	clearCommand []string
 	readCommand  []string
@@ -101,6 +105,21 @@ func mongoRecovery() recoveryCase {
 	}
 }
 
+func redisRecovery(engine, version string) recoveryCase {
+	cli, server, image := "redis-cli", "redis-server", "redis"
+	if engine == "valkey" {
+		cli, server, image = "valkey-cli", "valkey-server", "valkey/valkey"
+	}
+	return recoveryCase{
+		engine: engine, version: version, image: image,
+		serverArgs:   []string{server, "--appendonly", "yes", "--requirepass", "recovery-secret"},
+		seedCommand:  []string{cli, "EVAL", `redis.call('SET','recovery_probe','dockyard-recovery-ok'); redis.call('HSET','recovery_hash','field','hash-ok'); redis.call('PEXPIRE','recovery_probe',600000); return 'OK'`, "0"},
+		clearCommand: []string{cli, "FLUSHALL"},
+		readCommand:  []string{cli, "--raw", "EVAL", `local ttl=redis.call('PTTL','recovery_probe'); return redis.call('GET','recovery_probe')..'|'..redis.call('HGET','recovery_hash','field')..'|'..(ttl>0 and 'ttl' or 'no-ttl')`, "0"},
+		want:         "dockyard-recovery-ok|hash-ok|ttl",
+	}
+}
+
 func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc recoveryCase) {
 	t.Helper()
 	registry := database.NewRegistry()
@@ -110,7 +129,12 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	for key, value := range tc.serverEnv {
 		args = append(args, "--env", key+"="+value)
 	}
-	args = append(args, tc.engine+":"+tc.version)
+	image := tc.image
+	if image == "" {
+		image = tc.engine
+	}
+	args = append(args, image+":"+tc.version)
+	args = append(args, tc.serverArgs...)
 	docker(t, ctx, nil, args...)
 	t.Cleanup(func() { _, _ = dockerOutput(context.Background(), nil, "rm", "--force", container) })
 
@@ -119,21 +143,9 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(3 * time.Minute)
-	for {
-		attempt, attemptCancel := context.WithTimeout(ctx, 15*time.Second)
-		_, err = scheduler.RunContainerJob(attempt, network, readiness.Image, "", readiness.Environment, readiness.Command)
-		attemptCancel()
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("database did not become ready: %v\n%s", err, dockerLogs(container))
-		}
-		time.Sleep(2 * time.Second)
-	}
+	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
 
-	clientEnv := map[string]string{"PGPASSWORD": credentials["password"], "MYSQL_PWD": credentials["password"]}
+	clientEnv := map[string]string{"PGPASSWORD": credentials["password"], "MYSQL_PWD": credentials["password"], "REDISCLI_AUTH": credentials["password"]}
 	docker(t, ctx, clientEnv, append([]string{"exec"}, append(envArgs(clientEnv), append([]string{container}, tc.seedCommand...)...)...)...)
 	seededAt := time.Now()
 	directory := t.TempDir()
@@ -168,12 +180,37 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 		t.Fatal(err)
 	}
 	restoreFinished := time.Now()
+	verifyRecoveryData(t, ctx, clientEnv, container, tc)
+	docker(t, ctx, nil, "restart", container)
+	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
+	verifyRecoveryData(t, ctx, clientEnv, container, tc)
+	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true, "restartVerified": true})
+	t.Logf("RECOVERY_EVIDENCE %s", evidence)
+}
+
+func waitForRecoveryDatabase(t *testing.T, ctx context.Context, scheduler deploy.Swarm, network string, readiness database.BackupPlan, container string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		attempt, attemptCancel := context.WithTimeout(ctx, 15*time.Second)
+		_, err := scheduler.RunContainerJob(attempt, network, readiness.Image, "", readiness.Environment, readiness.Command)
+		attemptCancel()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("database did not become ready: %v\n%s", err, dockerLogs(container))
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func verifyRecoveryData(t *testing.T, ctx context.Context, clientEnv map[string]string, container string, tc recoveryCase) {
+	t.Helper()
 	output := strings.TrimSpace(docker(t, ctx, clientEnv, append([]string{"exec"}, append(envArgs(clientEnv), append([]string{container}, tc.readCommand...)...)...)...))
 	if !strings.Contains(output, tc.want) {
 		t.Fatalf("restored application data=%q, want %q", output, tc.want)
 	}
-	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true})
-	t.Logf("RECOVERY_EVIDENCE %s", evidence)
 }
 
 func envArgs(values map[string]string) []string {

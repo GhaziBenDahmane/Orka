@@ -18,12 +18,23 @@ func TestParseDokployDatabaseTransferManifest(t *testing.T) {
 	}
 }
 
+func TestParseDokployDatabaseTransferManifestAllowsPasswordOnlyStores(t *testing.T) {
+	manifest, err := ParseDokployDatabaseTransferManifest([]byte(`{"version":1,"connections":[{"sourceId":"redis-1","host":"redis.internal","password":"private"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manifest.Connections[0]; got.Username != "" || got.Database != "" || got.Password != "private" {
+		t.Fatalf("unexpected password-only connection: %#v", got)
+	}
+}
+
 func TestParseDokployDatabaseTransferManifestRejectsInvalidInput(t *testing.T) {
 	tests := map[string]string{
-		"unknown field": `{"version":1,"extra":true,"connections":[{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"}]}`,
-		"duplicate id":  `{"version":1,"connections":[{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"},{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"}]}`,
-		"unsafe host":   `{"version":1,"connections":[{"sourceId":"db-1","host":"db;evil","username":"u","password":"p","database":"d"}]}`,
-		"trailing json": `{"version":1,"connections":[{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"}]} {}`,
+		"unknown field":  `{"version":1,"extra":true,"connections":[{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"}]}`,
+		"duplicate id":   `{"version":1,"connections":[{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"},{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"}]}`,
+		"unsafe host":    `{"version":1,"connections":[{"sourceId":"db-1","host":"db;evil","username":"u","password":"p","database":"d"}]}`,
+		"empty password": `{"version":1,"connections":[{"sourceId":"db-1","host":"db","username":"u","database":"d"}]}`,
+		"trailing json":  `{"version":1,"connections":[{"sourceId":"db-1","host":"db","username":"u","password":"p","database":"d"}]} {}`,
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {

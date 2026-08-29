@@ -93,7 +93,7 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 	if driver, ok := r.drivers[engine].(*externalDriver); ok {
 		return driver.Backup(version, host, credentials, filename)
 	}
-	if err := validateNativePlan(version, host, credentials, filename); err != nil {
+	if err := validateNativePlan(engine, version, host, credentials, filename); err != nil {
 		return BackupPlan{}, err
 	}
 	switch engine {
@@ -116,6 +116,12 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 		command := []string{"mongodump", "--config=/backup/" + configName, "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--db", credentials["database"], "--archive=/backup/" + filename, "--gzip"}
 		command = append(command, nativePortArguments(engine, credentials)...)
 		return BackupPlan{Image: "mongo:" + version, Command: command, Extension: "archive.gz", Files: map[string]string{configName: "password: " + mongoYAMLString(credentials["password"]) + "\n"}}, nil
+	case "redis", "valkey":
+		cli, _, image := redisTools(engine, version)
+		return BackupPlan{
+			Image: image, Command: []string{cli, "-h", host, "-p", nativePort(credentials, 6379), "--rdb", "/backup/" + filename},
+			Environment: map[string]string{"REDISCLI_AUTH": credentials["password"]}, Extension: "rdb",
+		}, nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
@@ -125,7 +131,7 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 	if driver, ok := r.drivers[engine].(*externalDriver); ok {
 		return driver.Restore(version, host, credentials, filename)
 	}
-	if err := validateNativePlan(version, host, credentials, filename); err != nil {
+	if err := validateNativePlan(engine, version, host, credentials, filename); err != nil {
 		return RestorePlan{}, err
 	}
 	switch engine {
@@ -138,6 +144,17 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 	case "mongo":
 		configName := filename + ".config"
 		return RestorePlan{Image: "mongo:" + version, Command: []string{"mongorestore", "--config=/backup/" + configName, "--host", host, "--username", credentials["username"], "--authenticationDatabase", "admin", "--db", credentials["database"], "--archive=/backup/" + filename, "--gzip", "--drop"}, Extension: "archive.gz", Files: map[string]string{configName: "password: " + mongoYAMLString(credentials["password"]) + "\n"}}, nil
+	case "redis", "valkey":
+		cli, server, image := redisTools(engine, version)
+		return RestorePlan{
+			Image:   image,
+			Command: []string{"sh", "-eu", "-c", redisRestoreScript},
+			Environment: map[string]string{
+				"REDISCLI_AUTH": credentials["password"], "DOCKYARD_REDIS_HOST": host, "DOCKYARD_REDIS_PORT": nativePort(credentials, 6379),
+				"DOCKYARD_REDIS_RDB": filename, "DOCKYARD_REDIS_CLI": cli, "DOCKYARD_REDIS_SERVER": server, "DOCKYARD_REDIS_SOURCE_PASSWORD": secret(32),
+			},
+			Extension: "rdb",
+		}, nil
 	default:
 		return RestorePlan{}, fmt.Errorf("verified restore is not implemented for database engine %q", engine)
 	}
@@ -154,6 +171,8 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 		return "sql", true
 	case "mongo":
 		return "archive.gz", true
+	case "redis", "valkey":
+		return "rdb", true
 	default:
 		return "", false
 	}
@@ -179,16 +198,23 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 		// of appearing in Docker's command metadata or the host process list.
 		probe := `const uri="mongodb://"+encodeURIComponent(process.env.DOCKYARD_MONGO_USER)+":"+encodeURIComponent(process.env.DOCKYARD_MONGO_PASSWORD)+"@"+process.env.DOCKYARD_MONGO_HOST+"/"+encodeURIComponent(process.env.DOCKYARD_MONGO_DATABASE)+"?authSource=admin"; const client=new Mongo(uri); const ok=client.getDB(process.env.DOCKYARD_MONGO_DATABASE).runCommand({ping:1}).ok; quit(ok ? 0 : 1)`
 		return BackupPlan{Image: "mongo:" + version, Command: []string{"mongosh", "--quiet", "--nodb", "--eval", probe}, Environment: map[string]string{"DOCKYARD_MONGO_HOST": host, "DOCKYARD_MONGO_USER": credentials["username"], "DOCKYARD_MONGO_PASSWORD": credentials["password"], "DOCKYARD_MONGO_DATABASE": credentials["database"]}}, nil
+	case "redis", "valkey":
+		cli, _, image := redisTools(engine, version)
+		return BackupPlan{Image: image, Command: []string{cli, "-h", host, "-p", nativePort(credentials, 6379), "ping"}, Environment: map[string]string{"REDISCLI_AUTH": credentials["password"]}}, nil
 	default:
 		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
 	}
 }
 
-func validateNativePlan(version, host string, credentials map[string]string, filename string) error {
-	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) || !regexp.MustCompile(`^[a-f0-9-]+\.(dump|sql|archive\.gz)$`).MatchString(filename) {
+func validateNativePlan(engine, version, host string, credentials map[string]string, filename string) error {
+	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) || !regexp.MustCompile(`^[a-f0-9-]+\.(dump|sql|archive\.gz|rdb)$`).MatchString(filename) {
 		return errors.New("invalid native backup parameters")
 	}
-	for _, key := range []string{"username", "password", "database"} {
+	required := []string{"username", "password", "database"}
+	if engine == "redis" || engine == "valkey" {
+		required = []string{"password"}
+	}
+	for _, key := range required {
 		if credentials[key] == "" {
 			return fmt.Errorf("database credential %q is missing", key)
 		}
@@ -211,6 +237,53 @@ func nativePortArguments(engine string, credentials map[string]string) []string 
 	}
 	return []string{"--port=" + credentials["port"]}
 }
+
+func nativePort(credentials map[string]string, fallback int) string {
+	if credentials["port"] != "" {
+		return credentials["port"]
+	}
+	return strconv.Itoa(fallback)
+}
+
+func redisTools(engine, version string) (cli, server, image string) {
+	if engine == "valkey" {
+		return "valkey-cli", "valkey-server", "valkey/valkey:" + version
+	}
+	return "redis-cli", "redis-server", "redis:" + version
+}
+
+const redisRestoreScript = `
+config=/tmp/dockyard-redis-restore.conf
+cleanup() {
+  "$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" REPLICAOF NO ONE >/dev/null 2>&1 || true
+  "$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" CONFIG SET masterauth "" >/dev/null 2>&1 || true
+  REDISCLI_AUTH="$DOCKYARD_REDIS_SOURCE_PASSWORD" "$DOCKYARD_REDIS_CLI" -h 127.0.0.1 -p 6380 shutdown nosave >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+umask 077
+printf 'bind 0.0.0.0\nprotected-mode yes\nport 6380\ndir /backup\ndbfilename %s\nappendonly no\nsave ""\nrequirepass %s\n' "$DOCKYARD_REDIS_RDB" "$DOCKYARD_REDIS_SOURCE_PASSWORD" >"$config"
+"$DOCKYARD_REDIS_SERVER" "$config" --daemonize yes
+ready=false
+for attempt in $(seq 1 30); do
+  if REDISCLI_AUTH="$DOCKYARD_REDIS_SOURCE_PASSWORD" "$DOCKYARD_REDIS_CLI" -h 127.0.0.1 -p 6380 ping >/dev/null 2>&1; then ready=true; break; fi
+  sleep 1
+done
+test "$ready" = true
+source_ip="$(hostname -i | awk '{print $1}')"
+printf '%s' "$DOCKYARD_REDIS_SOURCE_PASSWORD" | "$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" -x CONFIG SET masterauth >/dev/null
+"$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" REPLICAOF "$source_ip" 6380 >/dev/null
+synced=false
+for attempt in $(seq 1 120); do
+  replication="$("$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" INFO replication 2>/dev/null || true)"
+  case "$replication" in *master_link_status:up*master_sync_in_progress:0*) synced=true; break;; esac
+  sleep 1
+done
+test "$synced" = true
+"$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" REPLICAOF NO ONE >/dev/null
+"$DOCKYARD_REDIS_CLI" -h "$DOCKYARD_REDIS_HOST" -p "$DOCKYARD_REDIS_PORT" CONFIG SET masterauth "" >/dev/null
+trap - EXIT INT TERM
+REDISCLI_AUTH="$DOCKYARD_REDIS_SOURCE_PASSWORD" "$DOCKYARD_REDIS_CLI" -h 127.0.0.1 -p 6380 shutdown nosave >/dev/null
+`
 
 func mongoYAMLString(value string) string {
 	data, _ := yaml.Marshal(value)

@@ -115,9 +115,9 @@ matching registry credential to local or remote Swarm managers.
 
 Managed-database import creates the destination Compose service and database
 record, but the control-plane import does not copy persistent volume contents.
-Use the native transfer command below for PostgreSQL, MySQL, MariaDB, and
-MongoDB. Redis, libSQL, and other engines still require an operator-managed
-backup and restore.
+Use the native transfer command below for PostgreSQL, MySQL, MariaDB, MongoDB,
+and Redis. libSQL and other engines still require an operator-managed backup
+and restore.
 
 ## Transfer managed database data
 
@@ -145,8 +145,9 @@ Create a mode-0600 connection manifest outside the repository:
 ```
 
 The `sourceId` is Dokploy's database identifier. Start with the default dry
-run. Prefer the environment variable for the Dokploy control-plane URL so its
-credentials do not appear in the process list:
+run. `username` and `database` may be empty for Redis; its password remains
+required. Prefer the environment variable for the Dokploy control-plane URL so
+its credentials do not appear in the process list:
 
 ```sh
 export DOCKYARD_DOKPLOY_DATABASE_URL='postgres://dokploy:...@source/dokploy'
@@ -197,10 +198,11 @@ mapping. With the default `--require-operational=true`, each imported service
 and managed-database stack must have a successful deployment of its current
 revision plus a healthy Swarm reconciliation observation from the previous
 five minutes. Each database must also be running, and each PostgreSQL, MySQL,
-MariaDB, or MongoDB database must have a successful Dokploy data-transfer
-record. Missing targets, stale or unhealthy stacks, and unconverted resources
-make the command exit non-zero. Allow the controller's one-minute reconciler
-to observe newly deployed stacks before running the final verification.
+MariaDB, MongoDB, or Redis database must have a successful Dokploy
+data-transfer record. Missing targets, stale or unhealthy stacks, and
+unconverted resources make the command exit non-zero. Allow the controller's
+one-minute reconciler to observe newly deployed stacks before running the
+final verification.
 
 Some source features deliberately require manual conversion. After completing
 and documenting one, acknowledge its exact parity key explicitly; the entry

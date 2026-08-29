@@ -71,8 +71,8 @@ func ParseDokployDatabaseTransferManifest(data []byte) (DokployDatabaseTransferM
 		if item.Port < 0 || item.Port > 65535 {
 			return manifest, fmt.Errorf("connection %s has an invalid source port", item.SourceID)
 		}
-		if item.Username == "" || item.Password == "" || item.Database == "" || len(item.Username) > 255 || len(item.Password) > 64<<10 || len(item.Database) > 255 {
-			return manifest, fmt.Errorf("connection %s requires bounded username, password, and database values", item.SourceID)
+		if item.Password == "" || len(item.Username) > 255 || len(item.Password) > 64<<10 || len(item.Database) > 255 {
+			return manifest, fmt.Errorf("connection %s requires a password and bounded username and database values", item.SourceID)
 		}
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {

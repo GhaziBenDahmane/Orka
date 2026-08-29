@@ -85,8 +85,9 @@ Status: core implementation complete; storage breadth remains.
   revisions without rotating generated credentials.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
-- PostgreSQL, MySQL, MariaDB, and MongoDB native backup/restore, streaming
-  checksums, interval policies, retention, and opt-in isolated restore drills.
+- PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and Valkey native backup/restore,
+  streaming checksums, interval policies, retention, and opt-in isolated
+  restore drills.
 - S3-compatible multipart storage with encrypted destination credentials and
   client-side, per-backup envelope encryption for local and remote artifacts.
 - Remote backup and restore execution through outbound agents using short-lived
@@ -94,7 +95,7 @@ Status: core implementation complete; storage breadth remains.
 - Scheduled drill failure notifications, overdue alerts, and per-database
   recovery-duration metrics are implemented. An opt-in real-engine conformance
   suite verifies seeded application data and emits RPO/RTO evidence for all
-  four backup-capable engines. Production RPO/RTO values still require drills
+  six backup-capable engines. Production RPO/RTO values still require drills
   on production-equivalent storage and publication for each deployment.
 
 Exit gate: automated restore verification and documented RPO/RTO for every
@@ -190,9 +191,9 @@ embedded React console for core workload, template, database, and cluster
   BuildKit secrets, same-origin Git submodules, and packaging of prebuilt static
   sites into a digest-pinned runtime, Nixpacks, and the production Railpack
   BuildKit frontend, Paketo and Heroku 24 Cloud Native Buildpacks, and custom
-  digest-pinned CNB builders are supported. PostgreSQL, MySQL, MariaDB, and
-  MongoDB Dokploy data can be moved through confirmed, durable native transfer
-  jobs; other engines remain operator-assisted. The
+  digest-pinned CNB builders are supported. PostgreSQL, MySQL, MariaDB,
+  MongoDB, and Redis Dokploy data can be moved through confirmed, durable
+  native transfer jobs; other engines remain operator-assisted. The
 Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
 policies. The console provides credential, backup-destination, OIDC, SAML,

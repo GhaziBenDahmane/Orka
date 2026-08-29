@@ -85,8 +85,8 @@ Keep the signing key offline and distribute only the public key.
 For an idempotent control-plane migration, including a mandatory dry-run and
 encrypted environment re-keying, see
 [docs/migrating-from-dokploy.md](docs/migrating-from-dokploy.md).
-The same guide covers durable native PostgreSQL, MySQL, MariaDB, and MongoDB
-data transfers after the imported target stacks are deployed.
+The same guide covers durable native PostgreSQL, MySQL, MariaDB, MongoDB, and
+Redis data transfers after the imported target stacks are deployed.
 
 Bootstrap the first administrator:
 
