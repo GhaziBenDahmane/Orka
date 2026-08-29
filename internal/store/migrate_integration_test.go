@@ -304,3 +304,37 @@ func TestMigrateUpgradeFrom067AddsAuthenticationRateLimits(t *testing.T) {
 		t.Fatalf("authentication rate-limit table missing: exists=%v err=%v", exists, err)
 	}
 }
+
+func TestMigrateUpgradeFrom068ScopesFederatedSessions(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "068_auth_rate_limits.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, userID := uuid.New(), uuid.New()
+	var err error
+	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'session scope',$2)`, organizationID, "session-scope-"+organizationID.String()); err == nil {
+		_, err = pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test")
+	}
+	if err == nil {
+		_, err = pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local'),($4,$2,$5,now()+interval '1 hour','oidc'),($6,$2,$7,now()+interval '1 hour','saml')`, uuid.New(), userID, []byte("local"), uuid.New(), []byte("oidc"), uuid.New(), []byte("saml"))
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var localCount, federatedCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE auth_method='local'),count(*) FILTER (WHERE auth_method<>'local') FROM sessions WHERE user_id=$1`, userID).Scan(&localCount, &federatedCount); err != nil {
+		t.Fatal(err)
+	}
+	if localCount != 1 || federatedCount != 0 {
+		t.Fatalf("migrated sessions local=%d federated=%d, want 1 and 0", localCount, federatedCount)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','oidc')`, uuid.New(), userID, []byte("unscoped")); err == nil {
+		t.Fatal("unscoped federated session was accepted")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc')`, uuid.New(), userID, organizationID, []byte("scoped")); err != nil {
+		t.Fatalf("scoped federated session was rejected: %v", err)
+	}
+}

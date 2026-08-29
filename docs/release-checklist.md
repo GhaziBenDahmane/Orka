@@ -65,8 +65,8 @@ links for every item below.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
   procedure. `make test-keycloak-sso` provisions a real TLS-enabled Keycloak
   realm. Its OIDC flow verifies discovery, authorization-code login, PKCE,
-  nonce binding, JIT provisioning, session authentication, and callback replay
-  rejection. Its SAML flow imports the generated SP metadata into Keycloak and
+  nonce binding, JIT provisioning, organization-scoped session isolation, and
+  callback replay rejection. Its SAML flow imports the generated SP metadata into Keycloak and
   verifies a signed AuthnRequest, signed responses, SP- and IdP-initiated login,
   JIT provisioning, session authentication, and assertion replay rejection.
   Run the equivalent flow against Entra ID, Okta, and Google Workspace, and

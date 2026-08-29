@@ -142,6 +142,17 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 	if me.Email != "conformance@example.test" || me.OrganizationID != organizationID || me.Role != "developer" {
 		t.Fatalf("unexpected JIT principal: %#v", me)
 	}
+	otherOrganizationID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other Keycloak tenant',$2)`, otherOrganizationID, "other-keycloak-"+otherOrganizationID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'admin')`, otherOrganizationID, me.UserID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrganizationID)
+	})
+	assertConformanceSession(t, server.URL, otherOrganizationID, login.Token, http.StatusUnauthorized, "")
 
 	settingsBody, _ := json.Marshal(map[string]bool{"requireSso": true})
 	settingsRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/sso/settings", bytes.NewReader(settingsBody))

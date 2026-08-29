@@ -43,7 +43,9 @@ allowed to finish before deletion can begin.
 ## Trust boundaries
 
 - Passwords use Argon2id. Session tokens are random and only their SHA-256
-  digests are persisted.
+  digests are persisted. OIDC and SAML sessions are bound to the organization
+  that owns the authenticating provider; upgrades revoke legacy federated
+  sessions that predate this binding rather than guessing their tenant.
 - Sensitive application values are encrypted with AES-256-GCM using the
   instance master key. New Compose environments use the service ID as
   authenticated context, preventing ciphertext from being transplanted between

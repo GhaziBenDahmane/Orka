@@ -107,7 +107,8 @@ Status: OIDC/PKCE, signed SAML 2.0 with replay protection, mandatory SSO,
 device-session administration, expiring service accounts with atomic token
 rotation, SCIM users/groups, group-to-role mapping, owner protection, inherited
 project/environment grants, resumable audit export, and configurable audit
-retention implemented. Scheduled real-provider conformance exercises both OIDC
+retention implemented. Federated sessions are tenant-bound and legacy
+unscoped federated sessions are revoked on upgrade. Scheduled real-provider conformance exercises both OIDC
 and SAML against TLS-enabled Keycloak, including signed metadata-derived SAML
 configuration, SP- and IdP-initiated login, and replay rejection.
 

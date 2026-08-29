@@ -61,15 +61,15 @@ func TestMandatorySSOAndSessionAdministration(t *testing.T) {
 	}
 
 	ownerHash, localHash, samlHash := []byte("owner-local-token-hash"), []byte("developer-local-token-hash"), []byte("developer-saml-token-hash")
-	ownerSessionID, err := db.CreateSessionWithMetadata(ctx, ownerID, ownerHash, time.Now().Add(time.Hour), "local", "owner-agent", "127.0.0.1")
+	ownerSessionID, err := db.CreateSessionWithMetadata(ctx, ownerID, nil, ownerHash, time.Now().Add(time.Hour), "local", "owner-agent", "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	localID, err := db.CreateSessionWithMetadata(ctx, developerID, localHash, time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
+	localID, err := db.CreateSessionWithMetadata(ctx, developerID, nil, localHash, time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	samlID, err := db.CreateSessionWithMetadata(ctx, developerID, samlHash, time.Now().Add(time.Hour), "saml", "saml-agent", "127.0.0.3")
+	samlID, err := db.CreateSessionWithMetadata(ctx, developerID, &orgID, samlHash, time.Now().Add(time.Hour), "saml", "saml-agent", "127.0.0.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +83,17 @@ func TestMandatorySSOAndSessionAdministration(t *testing.T) {
 	principal, err := db.Authenticate(ctx, samlHash, &orgID)
 	if err != nil || principal.SessionID != samlID {
 		t.Fatalf("SAML principal = %#v, err = %v", principal, err)
+	}
+	otherOrgID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other identity policy',$2)`, otherOrgID, "other-identity-policy-"+otherOrgID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'admin')`, otherOrgID, developerID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrgID) })
+	if _, err = db.Authenticate(ctx, samlHash, &otherOrgID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("federated session crossed organization boundary: %v", err)
 	}
 	sessions, err := db.ListSessions(ctx, developerID, samlID)
 	if err != nil || len(sessions) != 2 {

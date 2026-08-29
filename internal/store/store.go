@@ -388,13 +388,13 @@ func (s *Store) LocalLoginAllowed(ctx context.Context, userID uuid.UUID) (bool, 
 }
 
 func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, expires time.Time) error {
-	_, err := s.CreateSessionWithMetadata(ctx, userID, tokenHash, expires, "local", "", "")
+	_, err := s.CreateSessionWithMetadata(ctx, userID, nil, tokenHash, expires, "local", "", "")
 	return err
 }
 
-func (s *Store) CreateSessionWithMetadata(ctx context.Context, userID uuid.UUID, tokenHash []byte, expires time.Time, authMethod, userAgent, ipAddress string) (uuid.UUID, error) {
+func (s *Store) CreateSessionWithMetadata(ctx context.Context, userID uuid.UUID, organizationID *uuid.UUID, tokenHash []byte, expires time.Time, authMethod, userAgent, ipAddress string) (uuid.UUID, error) {
 	id := uuid.New()
-	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method,user_agent,ip_address) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, userID, tokenHash, expires, authMethod, userAgent, ipAddress)
+	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method,user_agent,ip_address) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, userID, organizationID, tokenHash, expires, authMethod, userAgent, ipAddress)
 	return id, err
 }
 
@@ -404,7 +404,7 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organizationID *uuid.UUID) (Principal, error) {
-	query := `SELECT u.id,s.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
+	query := `SELECT u.id,s.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (s.organization_id IS NULL OR s.organization_id=o.id) AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
 	args := []any{tokenHash}
 	if organizationID != nil {
 		query += ` AND o.id=$2`

@@ -551,7 +551,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "bootstrap_failed", err.Error())
 		return
 	}
-	token, err := s.newSession(r, p.UserID, "local")
+	token, err := s.newSession(r, p.UserID, nil, "local")
 	if err != nil {
 		writeError(w, 500, "session_failed", err.Error())
 		return
@@ -599,7 +599,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "sso_required", "this account must sign in through its identity provider")
 		return
 	}
-	token, err := s.newSession(r, userID, "local")
+	token, err := s.newSession(r, userID, nil, "local")
 	if err != nil {
 		writeError(w, 500, "session_failed", err.Error())
 		return
@@ -621,7 +621,7 @@ func (s *Server) allowAuthenticationAttempt(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
-func (s *Server) newSession(r *http.Request, userID uuid.UUID, method string) (string, error) {
+func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *uuid.UUID, method string) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -630,7 +630,7 @@ func (s *Server) newSession(r *http.Request, userID uuid.UUID, method string) (s
 	if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
 		ipAddress = host
 	}
-	if _, err = s.Store.CreateSessionWithMetadata(r.Context(), userID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128)); err != nil {
+	if _, err = s.Store.CreateSessionWithMetadata(r.Context(), userID, organizationID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128)); err != nil {
 		return "", err
 	}
 	return token, nil

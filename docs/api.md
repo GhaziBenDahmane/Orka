@@ -144,7 +144,9 @@ cannot mutate workloads. See `ai-auditing.md` for the deployment contract.
 
 OIDC uses Authorization Code flow with PKCE, nonce validation, one-time state,
 an encrypted browser-bound HttpOnly cookie, and exact issuer/audience
-validation.
+validation. Federated sessions are bound to the organization that owns the
+provider and cannot be reused to select another organization where the same
+user has a membership.
 
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in
@@ -155,7 +157,8 @@ binds SP-initiated responses to one-time RelayState and an encrypted
 Explicitly enabled IdP-initiated login remains cookie-independent. Register the
 provider metadata URL with the IdP.
 Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
-Once enabled, local-password sessions cannot access that organization.
+Once enabled, local-password sessions cannot access that organization except
+for its owner break-glass account.
 Service-account tokens are shown once, stored as hashes, expire within 365
 days, carry an organization role, support atomic rotation, and are attributed
 separately from users in the audit log.
