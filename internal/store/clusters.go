@@ -257,6 +257,41 @@ func (s *Store) GetClusterCommand(ctx context.Context, clusterID, commandID uuid
 	return item, tx.Commit(ctx)
 }
 
+func (s *Store) ListAgentUpgrades(ctx context.Context, organizationID uuid.UUID, limit int) ([]ClusterCommand, error) {
+	if limit < 1 || limit > 200 {
+		return nil, errors.New("agent upgrade limit must be between 1 and 200")
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE cluster_commands command SET status='failed',last_error='replacement agent did not confirm the requested image before the verification deadline',finished_at=now() FROM clusters cluster WHERE command.cluster_id=cluster.id AND cluster.organization_id=$1 AND command.kind='agent.upgrade' AND command.status='verifying' AND command.run_after<=now()`, organizationID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT command.id,command.cluster_id,command.kind,command.status,command.attempts,command.target_image,command.last_error,command.created_at,command.lease_expires_at FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE cluster.organization_id=$1 AND command.kind='agent.upgrade' ORDER BY command.created_at DESC,command.id DESC LIMIT $2`, organizationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClusterCommand{}
+	for rows.Next() {
+		var item ClusterCommand
+		if err = rows.Scan(&item.ID, &item.ClusterID, &item.Kind, &item.Status, &item.Attempts, &item.TargetImage, &item.LastError, &item.CreatedAt, &item.LeaseExpiresAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (s *Store) CancelClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='controller cancelled command',finished_at=now() WHERE id=$1 AND cluster_id=$2 AND status IN ('pending','leased','verifying')`, commandID, clusterID)
 	if err != nil {

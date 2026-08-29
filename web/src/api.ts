@@ -135,6 +135,7 @@ export const api = {
   restoreDatabaseBackup: (backupId: string, confirm: string) => request<DatabaseRestore>(`/v1/database-backups/${backupId}/restore`, { method: "POST", body: JSON.stringify({ confirm }) }),
   cancelDatabaseRestore: (restoreId: string) => request<{ status: string }>(`/v1/database-restores/${restoreId}/cancel`, { method: "POST", body: "{}" }),
   clusters: () => request<Envelope<Cluster>>("/v1/clusters"),
+  agentUpgrades: () => request<Envelope<ClusterCommand>>("/v1/agent-upgrades?limit=200"),
   createCluster: (body: { name: string; labels: Record<string, string> }) => request<Cluster>("/v1/clusters", { method: "POST", body: JSON.stringify(body) }),
   updateCluster: (id: string, state: string) => request<Cluster>(`/v1/clusters/${id}`, { method: "PATCH", body: JSON.stringify({ state }) }),
   deleteCluster: (id: string) => request<{ status: string }>(`/v1/clusters/${id}`, { method: "DELETE" }),

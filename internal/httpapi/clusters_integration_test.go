@@ -54,6 +54,20 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
+	otherOrganizationID, otherClusterID, otherCommandID := uuid.New(), uuid.New(), uuid.New()
+	otherTarget := "registry.example/dockyard@sha256:" + strings.Repeat("f", 64)
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other cluster upgrade',$2)`, otherOrganizationID, "other-cluster-upgrade-"+otherOrganizationID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Other remote','other-remote','active')`, otherClusterID, otherOrganizationID)
+	}
+	if err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,target_image,last_error,finished_at) VALUES($1,$2,'agent.upgrade','other-command-secret','failed',$3,'other tenant failure',now())`, otherCommandID, otherClusterID, otherTarget)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrganizationID)
+	})
 
 	api := &Server{Store: db, Box: box, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	httpServer := httptest.NewServer(api.Handler())
@@ -71,10 +85,21 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 		t.Fatalf("queued command=%#v", command)
 	}
 
-	otherTarget := "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)
-	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+clusterID.String()+"/agent-upgrades", token, organizationID, http.MethodPost, map[string]string{"image": otherTarget})
+	replacementTarget := "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+clusterID.String()+"/agent-upgrades", token, organizationID, http.MethodPost, map[string]string{"image": replacementTarget})
 	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"agent_upgrade_running"`)) {
 		t.Fatalf("duplicate status=%d body=%s", status, body)
+	}
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/agent-upgrades?limit=20", token, organizationID, http.MethodGet, nil)
+	var history struct {
+		Items []store.ClusterCommand `json:"items"`
+	}
+	if err = json.Unmarshal(body, &history); status != http.StatusOK || err != nil || len(history.Items) != 1 || history.Items[0].ID != command.ID || bytes.Contains(body, []byte("other-command-secret")) || bytes.Contains(body, []byte(otherCommandID.String())) {
+		t.Fatalf("history status=%d body=%s err=%v", status, body, err)
+	}
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/agent-upgrades?limit=201", token, organizationID, http.MethodGet, nil)
+	if status != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"invalid_limit"`)) {
+		t.Fatalf("invalid limit status=%d body=%s", status, body)
 	}
 
 	claimed, err := db.ClaimClusterCommand(ctx, clusterID, time.Minute)
@@ -116,7 +141,7 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 		t.Fatalf("rollback status=%d body=%s", status, body)
 	}
 
-	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+clusterID.String()+"/agent-upgrades", token, organizationID, http.MethodPost, map[string]string{"image": otherTarget})
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+clusterID.String()+"/agent-upgrades", token, organizationID, http.MethodPost, map[string]string{"image": replacementTarget})
 	if status != http.StatusAccepted {
 		t.Fatalf("replacement queue status=%d body=%s", status, body)
 	}
@@ -130,7 +155,7 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	if err = db.CompleteClusterCommand(ctx, clusterID, command.ID, *claimed.LeaseID, "encrypted-result", false); err != nil {
 		t.Fatal(err)
 	}
-	postAgentHeartbeat(t, api, clusterID, map[string]any{"agentVersion": "2.0.0", "agentImage": otherTarget, "agentUpdateState": "completed", "dockerVersion": "29.0.0", "capacity": map[string]any{"nodes": 3}})
+	postAgentHeartbeat(t, api, clusterID, map[string]any{"agentVersion": "2.0.0", "agentImage": replacementTarget, "agentUpdateState": "completed", "dockerVersion": "29.0.0", "capacity": map[string]any{"nodes": 3}})
 	commandURL = httpServer.URL + "/v1/clusters/" + clusterID.String() + "/commands/" + command.ID.String()
 	status, body = clusterUpgradeRequest(t, commandURL, token, organizationID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"status":"succeeded"`)) {

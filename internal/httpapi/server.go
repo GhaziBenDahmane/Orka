@@ -126,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/migration-resources", s.requireRole("admin", http.HandlerFunc(s.listMigrationResources)))
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))
 	mux.Handle("GET /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.listClusters)))
+	mux.Handle("GET /v1/agent-upgrades", s.requireRole("admin", http.HandlerFunc(s.listAgentUpgrades)))
 	mux.Handle("POST /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.createCluster)))
 	mux.Handle("PATCH /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.updateCluster)))
 	mux.Handle("DELETE /v1/clusters/{clusterID}", s.requireRole("admin", http.HandlerFunc(s.deleteCluster)))

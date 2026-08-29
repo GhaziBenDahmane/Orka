@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -381,6 +382,24 @@ func (s *Server) getClusterCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, command)
+}
+
+func (s *Server) listAgentUpgrades(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 200 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 200")
+			return
+		}
+	}
+	items, err := s.Store.ListAgentUpgrades(r.Context(), principal(r).OrganizationID, limit)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {

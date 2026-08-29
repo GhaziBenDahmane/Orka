@@ -410,6 +410,10 @@ func TestMigrateUpgradeFrom071AddsDurableAgentUpgradeVerification(t *testing.T) 
 	if status != "cancelled" || !strings.Contains(reason, "predates durable convergence") || agentImage != "" || updateState != "" {
 		t.Fatalf("legacy command status=%q reason=%q image=%q update=%q", status, reason, agentImage, updateState)
 	}
+	var historyIndexExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('cluster_commands_history_idx') IS NOT NULL`).Scan(&historyIndexExists); err != nil || !historyIndexExists {
+		t.Fatalf("cluster command history index missing: exists=%v err=%v", historyIndexExists, err)
+	}
 	db := &Store{Pool: pool}
 	target := "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)
 	if _, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted", target); err != nil {

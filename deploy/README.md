@@ -198,7 +198,8 @@ successful Docker submission leaves the command in `verifying`; it changes to
 digest and Swarm's `completed` update state. A paused or rolled-back state marks
 the command `failed`; absence of a confirming heartbeat fails verification
 after 15 minutes. Poll the returned command with
-`dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
+`dockyardctl cluster-command CLUSTER_ID COMMAND_ID`, or inspect the latest
+tenant-scoped upgrade status for every cluster in the web console.
 Set `DOCKYARD_AGENT_SERVICE_NAME` when the manually deployed stack is not named
 `dockyard-agent`; the installer derives it automatically.
 

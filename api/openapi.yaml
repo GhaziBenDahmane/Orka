@@ -256,6 +256,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/agent-upgrades:
+    get:
+      operationId: get_v1_agent_upgrades
+      tags: [agent-upgrades]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/agent/commands/next:
     get:
       operationId: get_v1_agent_commands_next
