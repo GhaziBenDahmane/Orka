@@ -172,6 +172,11 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, usageError()
 		}
 		return http.MethodGet, "/v1/clusters/" + args[1] + "/commands/" + args[2], nil, nil
+	case "cancel-agent-upgrade":
+		if len(args) != 3 {
+			return "", "", nil, usageError()
+		}
+		return http.MethodDelete, "/v1/clusters/" + args[1] + "/agent-upgrades/" + args[2], nil, nil
 	case "request":
 		if len(args) < 3 || len(args) > 4 {
 			return "", "", nil, usageError()
@@ -298,5 +303,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }

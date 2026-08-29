@@ -402,6 +402,30 @@ func (s *Server) listAgentUpgrades(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) cancelAgentUpgrade(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(r.PathValue("clusterID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid cluster id")
+		return
+	}
+	commandID, err := uuid.Parse(r.PathValue("commandID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid command id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.CancelPendingAgentUpgrade(r.Context(), p.OrganizationID, clusterID, commandID); err != nil {
+		if errors.Is(err, store.ErrNotCancellable) {
+			writeError(w, http.StatusConflict, "not_cancellable", "an agent upgrade can only be cancelled before execution starts")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "cluster.agent.upgrade.cancel", "cluster_command", commandID.String(), r.RemoteAddr, map[string]any{"clusterId": clusterID})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
 func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 	if len(s.AgentCACertificate) == 0 || len(s.AgentCAKey) == 0 {
 		writeError(w, http.StatusServiceUnavailable, "agent_enrollment_disabled", "agent certificate authority is not configured")

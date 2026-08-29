@@ -101,6 +101,10 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	if status != http.StatusBadRequest || !bytes.Contains(body, []byte(`"code":"invalid_limit"`)) {
 		t.Fatalf("invalid limit status=%d body=%s", status, body)
 	}
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+otherClusterID.String()+"/agent-upgrades/"+otherCommandID.String(), token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-tenant cancellation status=%d body=%s", status, body)
+	}
 
 	claimed, err := db.ClaimClusterCommand(ctx, clusterID, time.Minute)
 	if err != nil || claimed.ID != command.ID || claimed.LeaseID == nil {
@@ -113,6 +117,10 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	status, body = clusterUpgradeRequest(t, commandURL, token, organizationID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"status":"verifying"`)) {
 		t.Fatalf("verifying status=%d body=%s", status, body)
+	}
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+clusterID.String()+"/agent-upgrades/"+command.ID.String(), token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"not_cancellable"`)) {
+		t.Fatalf("in-flight cancellation status=%d body=%s", status, body)
 	}
 
 	for _, payload := range []string{
@@ -160,6 +168,30 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	status, body = clusterUpgradeRequest(t, commandURL, token, organizationID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"status":"succeeded"`)) {
 		t.Fatalf("converged status=%d body=%s", status, body)
+	}
+
+	cancelTarget := "registry.example/dockyard@sha256:" + strings.Repeat("d", 64)
+	status, body = clusterUpgradeRequest(t, httpServer.URL+"/v1/clusters/"+clusterID.String()+"/agent-upgrades", token, organizationID, http.MethodPost, map[string]string{"image": cancelTarget})
+	if status != http.StatusAccepted || json.Unmarshal(body, &command) != nil {
+		t.Fatalf("cancellable queue status=%d body=%s", status, body)
+	}
+	cancelURL := httpServer.URL + "/v1/clusters/" + clusterID.String() + "/agent-upgrades/" + command.ID.String()
+	status, body = clusterUpgradeRequest(t, cancelURL, token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"status":"cancelled"`)) {
+		t.Fatalf("cancellation status=%d body=%s", status, body)
+	}
+	commandURL = httpServer.URL + "/v1/clusters/" + clusterID.String() + "/commands/" + command.ID.String()
+	status, body = clusterUpgradeRequest(t, commandURL, token, organizationID, http.MethodGet, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"status":"cancelled"`)) || !bytes.Contains(body, []byte("cancelled by user")) {
+		t.Fatalf("cancelled command status=%d body=%s", status, body)
+	}
+	status, body = clusterUpgradeRequest(t, cancelURL, token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusConflict {
+		t.Fatalf("repeat cancellation status=%d body=%s", status, body)
+	}
+	var auditCount int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='cluster.agent.upgrade.cancel' AND resource_id=$2`, organizationID, command.ID.String()).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("cancellation audit count=%d err=%v", auditCount, err)
 	}
 }
 

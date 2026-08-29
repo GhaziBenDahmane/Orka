@@ -141,6 +141,7 @@ export const api = {
   deleteCluster: (id: string) => request<{ status: string }>(`/v1/clusters/${id}`, { method: "DELETE" }),
   createEnrollmentToken: (id: string) => request<{ token: string; expiresAt: string }>(`/v1/clusters/${id}/enrollment-tokens`, { method: "POST", body: "{}" }),
   upgradeAgent: (id: string, image: string) => request<ClusterCommand>(`/v1/clusters/${id}/agent-upgrades`, { method: "POST", body: JSON.stringify({ image }) }),
+  cancelAgentUpgrade: (clusterId: string, commandId: string) => request<{ status: string }>(`/v1/clusters/${clusterId}/agent-upgrades/${commandId}`, { method: "DELETE" }),
   sourceCredentials: () => request<Envelope<SourceCredential>>("/v1/source-credentials"),
   createSourceCredential: (body: { kind: string; name: string; server: string; username: string; secret?: string; privateKey?: string; knownHosts?: string }) => request<SourceCredential>("/v1/source-credentials", { method: "POST", body: JSON.stringify(body) }),
   deleteSourceCredential: (id: string) => request<void>(`/v1/source-credentials/${id}`, { method: "DELETE" }),

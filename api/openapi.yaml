@@ -1047,6 +1047,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/clusters/{clusterID}/agent-upgrades/{commandID}:
+    delete:
+      operationId: delete_v1_clusters_clusterID_agent_upgrades_commandID
+      tags: [clusters]
+      parameters:
+        - name: clusterID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: commandID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/clusters/{clusterID}/commands/{commandID}:
     get:
       operationId: get_v1_clusters_clusterID_commands_commandID

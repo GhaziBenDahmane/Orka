@@ -20,6 +20,7 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"cluster-token", "cluster-id"}, http.MethodPost, "/v1/clusters/cluster-id/enrollment-tokens"},
 		{[]string{"agent-upgrade", "cluster-id", "repo/image@sha256:digest"}, http.MethodPost, "/v1/clusters/cluster-id/agent-upgrades"},
 		{[]string{"cluster-command", "cluster-id", "command-id"}, http.MethodGet, "/v1/clusters/cluster-id/commands/command-id"},
+		{[]string{"cancel-agent-upgrade", "cluster-id", "command-id"}, http.MethodDelete, "/v1/clusters/cluster-id/agent-upgrades/command-id"},
 		{[]string{"request", "delete", "/v1/services/id"}, http.MethodDelete, "/v1/services/id"},
 	}
 	for _, test := range tests {

@@ -292,6 +292,29 @@ func (s *Store) ListAgentUpgrades(ctx context.Context, organizationID uuid.UUID,
 	return items, nil
 }
 
+func (s *Store) CancelPendingAgentUpgrade(ctx context.Context, organizationID, clusterID, commandID uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	err = tx.QueryRow(ctx, `SELECT command.status FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE command.id=$1 AND command.cluster_id=$2 AND cluster.organization_id=$3 AND command.kind='agent.upgrade' FOR UPDATE OF command`, commandID, clusterID, organizationID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status != "pending" {
+		return ErrNotCancellable
+	}
+	if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',last_error='cancelled by user',finished_at=now() WHERE id=$1`, commandID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) CancelClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='controller cancelled command',finished_at=now() WHERE id=$1 AND cluster_id=$2 AND status IN ('pending','leased','verifying')`, commandID, clusterID)
 	if err != nil {
