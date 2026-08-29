@@ -68,6 +68,35 @@ exit 1
 	}
 }
 
+func TestStatusReportsMissingHealthyAndDegradedStacks(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+case "$*" in
+  *namespace=missing*) exit 0 ;;
+  *namespace=healthy*) printf 'healthy_web 2/2\nhealthy_worker 0/0\nhealthy_migrate 0/1 (1/1 completed)\n'; exit 0 ;;
+  *namespace=degraded*) printf 'degraded_web 1/2\ndegraded_worker 1/1\n'; exit 0 ;;
+esac
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	swarm := Swarm{DockerBin: docker}
+	missing, err := swarm.Status(context.Background(), "missing")
+	if err != nil || missing.Exists {
+		t.Fatalf("missing=%#v err=%v", missing, err)
+	}
+	healthy, err := swarm.Status(context.Background(), "healthy")
+	if err != nil || !healthy.Exists || healthy.Services != 3 || healthy.HealthyServices != 3 || healthy.RunningTasks != 2 || healthy.DesiredTasks != 3 {
+		t.Fatalf("healthy=%#v err=%v", healthy, err)
+	}
+	degraded, err := swarm.Status(context.Background(), "degraded")
+	if err != nil || degraded.HealthyServices != 1 || degraded.RunningTasks != 2 || degraded.DesiredTasks != 3 || len(degraded.Degraded) != 1 || degraded.Degraded[0] != "degraded_web" {
+		t.Fatalf("degraded=%#v err=%v", degraded, err)
+	}
+}
+
 func TestRunContainerJobOverridesImageEntrypoint(t *testing.T) {
 	directory := t.TempDir()
 	docker := filepath.Join(directory, "docker")

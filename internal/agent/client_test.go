@@ -27,6 +27,11 @@ type fakeScheduler struct {
 	wantArtifact       []byte
 	nodes              []deploy.Node
 	transfer           *deploy.DatabaseTransferJob
+	status             deploy.StackStatus
+}
+
+func (f *fakeScheduler) Status(context.Context, string) (deploy.StackStatus, error) {
+	return f.status, nil
 }
 
 func (f *fakeScheduler) RunDatabaseTransfer(_ context.Context, job deploy.DatabaseTransferJob) (deploy.DatabaseTransferResult, error) {
@@ -109,6 +114,19 @@ func TestExecuteDeployCommand(t *testing.T) {
 	}
 	if scheduler.stack != "demo" || scheduler.compose != "services: {}" || scheduler.environment["TOKEN"] != "secret" || scheduler.registryCredential == nil || scheduler.registryCredential.Secret != "registry-secret" {
 		t.Fatalf("unexpected dispatch: %#v", scheduler)
+	}
+}
+
+func TestExecuteStackStatusCommand(t *testing.T) {
+	want := deploy.StackStatus{Exists: true, Services: 2, HealthyServices: 1, RunningTasks: 1, DesiredTasks: 2, Degraded: []string{"demo_web"}}
+	client := &Client{swarm: &fakeScheduler{status: want}}
+	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.status", Payload: []byte(`{"stackName":"demo"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got deploy.StackStatus
+	if err = json.Unmarshal([]byte(output), &got); err != nil || got.Services != want.Services || len(got.Degraded) != 1 || got.Degraded[0] != "demo_web" {
+		t.Fatalf("status=%#v output=%q err=%v", got, output, err)
 	}
 }
 

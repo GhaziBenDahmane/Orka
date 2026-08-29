@@ -237,7 +237,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -255,5 +255,38 @@ func TestMigrateRejectsChecksumMismatch(t *testing.T) {
 	}
 	if err := Migrate(ctx, pool); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("expected checksum mismatch, got %v", err)
+	}
+}
+
+func TestMigrateUpgradeFrom066AddsReconciliationState(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "066_template_repository_webhooks.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID, serviceID, deploymentID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'upgrade reconcile',$2)`, []any{organizationID, "upgrade-reconcile-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'app','app',$3,'services: {}')`, []any{serviceID, environmentID, "upgrade-reconcile-" + serviceID.String()}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','succeeded','manual')`, []any{deploymentID, serviceID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var effective string
+	var tableExists bool
+	if err := pool.QueryRow(ctx, `SELECT effective_compose FROM deployments WHERE id=$1`, deploymentID).Scan(&effective); err != nil || effective != "" {
+		t.Fatalf("effective snapshot=%q err=%v", effective, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('service_reconciliations') IS NOT NULL`).Scan(&tableExists); err != nil || !tableExists {
+		t.Fatalf("reconciliation table exists=%v err=%v", tableExists, err)
 	}
 }

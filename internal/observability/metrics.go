@@ -111,6 +111,8 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 		{"dockyard_cluster_commands", "Remote cluster commands by state and kind.", `SELECT kind,status,count(*)::float8 FROM cluster_commands GROUP BY kind,status`, []string{"kind", "status"}},
 		{"dockyard_cluster_heartbeat_age_seconds", "Age of the last heartbeat from each active remote cluster.", `SELECT slug,extract(epoch FROM now()-last_seen_at)::float8 FROM clusters WHERE state IN ('active','draining') AND last_seen_at IS NOT NULL`, []string{"cluster"}},
 		{"dockyard_controller_leases", "Controller singleton leases by validity.", `SELECT name,CASE WHEN expires_at>now() THEN 'active' ELSE 'expired' END,count(*)::float8 FROM controller_leases GROUP BY name,CASE WHEN expires_at>now() THEN 'active' ELSE 'expired' END`, []string{"name", "state"}},
+		{"dockyard_service_reconciliation", "Compose services by observed reconciliation state.", `SELECT state,count(*)::float8 FROM service_reconciliations GROUP BY state`, []string{"state"}},
+		{"dockyard_service_reconciliation_age_seconds", "Age of the most recent reconciliation observation for each service.", `SELECT compose_service_id::text,extract(epoch FROM now()-last_checked_at)::float8 FROM service_reconciliations`, []string{"service"}},
 	}
 	for _, f := range families {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", f.name, f.help, f.name)

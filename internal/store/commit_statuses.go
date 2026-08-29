@@ -68,6 +68,19 @@ func (s *Store) FinishDeploymentForJob(ctx context.Context, jobID, leaseID, depl
 	})
 }
 
+func (s *Store) SetDeploymentEffectiveComposeForJob(ctx context.Context, jobID, leaseID, deploymentID uuid.UUID, compose string) error {
+	return s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE deployments SET effective_compose=$2 WHERE id=$1`, deploymentID, compose)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
 func finishDeploymentTx(ctx context.Context, tx pgx.Tx, deploymentID uuid.UUID, status, output, message string) error {
 	if _, err := tx.Exec(ctx, `UPDATE deployments SET status=$2,output=$3,error=$4,finished_at=now() WHERE id=$1`, deploymentID, status, truncateStore(output, 65536), truncateStore(message, 8192)); err != nil {
 		return err

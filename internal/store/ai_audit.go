@@ -23,6 +23,7 @@ type AIAuditSnapshot struct {
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
+	Reconciliation       []ServiceReconciliation         `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
 	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
 }
@@ -81,7 +82,7 @@ type AIAuditTemplateRepositoryInfo struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -123,6 +124,11 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	snapshot.Clusters = clusters
+	reconciliation, err := s.ListServiceReconciliations(ctx, organizationID)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.Reconciliation = reconciliation
 	if err = s.loadAIAuditOperationalPosture(ctx, organizationID, &snapshot); err != nil {
 		return snapshot, err
 	}

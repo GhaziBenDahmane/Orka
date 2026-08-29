@@ -1122,7 +1122,7 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	d.Trigger = trigger
 	var compose, env string
 	var projectID, environmentID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2`, serviceID, organizationID).Scan(&d.Revision, &compose, &env, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&d.Revision, &compose, &env, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -1135,12 +1135,15 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
 		return Deployment{}, err
 	}
+	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
+		return Deployment{}, err
+	}
 	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, d.Revision, compose, env, trigger, nullableUUID(actorID)).Scan(&d.CreatedAt)
 	if err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'deploy.compose',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1315,6 +1318,9 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
 		return Deployment{}, err
 	}
+	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
+		return Deployment{}, err
+	}
 	if _, err = tx.Exec(ctx, `DELETE FROM webhook_deliveries WHERE received_at<now()-interval '30 days'`); err != nil {
 		return Deployment{}, err
 	}
@@ -1330,7 +1336,7 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'deploy.compose',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
 	}
 	if commitSHA != "" {
@@ -1527,7 +1533,7 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 	var serviceID, organizationID, projectID, environmentID uuid.UUID
 	var revision int64
 	var compose, env string
-	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,p.organization_id,p.id,e.id FROM deploy_tokens t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL`, tokenHash).Scan(&serviceID, &revision, &compose, &env, &organizationID, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,p.organization_id,p.id,e.id FROM deploy_tokens t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL FOR UPDATE OF s`, tokenHash).Scan(&serviceID, &revision, &compose, &env, &organizationID, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -1540,12 +1546,15 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
 		return Deployment{}, err
 	}
+	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
+		return Deployment{}, err
+	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "webhook"}
 	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger) VALUES($1,$2,$3,$4,$5,'queued','webhook') RETURNING created_at`, d.ID, serviceID, revision, compose, env).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'deploy.compose',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1582,7 +1591,7 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 	defer tx.Rollback(ctx)
 	var compose, encrypted string
 	var projectID, environmentID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.env_snapshot,p.id,e.id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND d.status='succeeded' ORDER BY d.finished_at DESC LIMIT 1`, serviceID, organizationID).Scan(&compose, &encrypted, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.env_snapshot,p.id,e.id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND d.status='succeeded' ORDER BY d.finished_at DESC LIMIT 1 FOR UPDATE OF s`, serviceID, organizationID).Scan(&compose, &encrypted, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -1595,6 +1604,9 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
 		return Deployment{}, err
 	}
+	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
+		return Deployment{}, err
+	}
 	var revision int64
 	if err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$2,encrypted_env=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision`, serviceID, compose, encrypted).Scan(&revision); err != nil {
 		return Deployment{}, err
@@ -1604,7 +1616,7 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload) VALUES($1,'deploy.compose',$2)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {

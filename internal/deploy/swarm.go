@@ -35,6 +35,19 @@ type Scheduler interface {
 	RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error)
 }
 
+type StackStatus struct {
+	Exists          bool     `json:"exists"`
+	Services        int      `json:"services"`
+	HealthyServices int      `json:"healthyServices"`
+	RunningTasks    int      `json:"runningTasks"`
+	DesiredTasks    int      `json:"desiredTasks"`
+	Degraded        []string `json:"degraded,omitempty"`
+}
+
+type StackInspector interface {
+	Status(context.Context, string) (StackStatus, error)
+}
+
 var _ Scheduler = Swarm{}
 
 type Node struct {
@@ -196,6 +209,55 @@ func (s Swarm) Logs(ctx context.Context, stackName string, tail int) (string, er
 		all.WriteByte('\n')
 	}
 	return all.String(), nil
+}
+
+func (s Swarm) Status(ctx context.Context, stackName string) (StackStatus, error) {
+	if !safeName.MatchString(stackName) {
+		return StackStatus{}, errors.New("invalid stack name")
+	}
+	output, err := s.run(ctx, "service", "ls", "--filter", "label=com.docker.stack.namespace="+stackName, "--format", "{{.Name}} {{.Replicas}}")
+	if err != nil {
+		return StackStatus{}, err
+	}
+	status := StackStatus{Degraded: []string{}}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return StackStatus{}, fmt.Errorf("invalid Swarm service status %q", line)
+		}
+		parts := strings.SplitN(fields[1], "/", 2)
+		if len(parts) != 2 {
+			return StackStatus{}, fmt.Errorf("invalid replica status for service %s", fields[0])
+		}
+		running, runningErr := strconv.Atoi(parts[0])
+		desired, desiredErr := strconv.Atoi(parts[1])
+		if runningErr != nil || desiredErr != nil {
+			return StackStatus{}, fmt.Errorf("invalid replica status for service %s", fields[0])
+		}
+		status.Exists = true
+		status.Services++
+		status.RunningTasks += running
+		status.DesiredTasks += desired
+		healthy := running == desired
+		if len(fields) >= 4 && strings.HasPrefix(fields[2], "(") && fields[3] == "completed)" {
+			completed := strings.TrimPrefix(fields[2], "(")
+			completedParts := strings.SplitN(completed, "/", 2)
+			if len(completedParts) == 2 {
+				done, doneErr := strconv.Atoi(completedParts[0])
+				total, totalErr := strconv.Atoi(completedParts[1])
+				healthy = doneErr == nil && totalErr == nil && done == total
+			}
+		}
+		if healthy {
+			status.HealthyServices++
+		} else {
+			status.Degraded = append(status.Degraded, fields[0])
+		}
+	}
+	return status, nil
 }
 
 func (s Swarm) Nodes(ctx context.Context) ([]Node, error) {

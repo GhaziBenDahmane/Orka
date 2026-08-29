@@ -339,10 +339,14 @@ func TestFinishSerializesWithCancellation(t *testing.T) {
 type takeoverScheduler struct {
 	started chan struct{}
 	release chan struct{}
+	compose chan string
 	output  string
 }
 
-func (s takeoverScheduler) Deploy(ctx context.Context, _ string, _ string, _ map[string]string, _ *Credential) (string, error) {
+func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string, _ map[string]string, _ *Credential) (string, error) {
+	if s.compose != nil {
+		s.compose <- compose
+	}
 	if s.started != nil {
 		close(s.started)
 	}
@@ -354,6 +358,49 @@ func (s takeoverScheduler) Deploy(ctx context.Context, _ string, _ string, _ map
 		}
 	}
 	return s.output, nil
+}
+
+func TestReconciliationDeploymentUsesEffectiveSnapshotWithoutRebuild(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	deploymentID := uuid.New()
+	effective := "services:\n  web:\n    image: registry.example/app@sha256:" + strings.Repeat("a", 64) + "\n"
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'reconcile-worker',$2)`, []any{organizationID, "reconcile-worker-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'app','app',$3,'services: {web: {image: moving-source}}')`, []any{serviceID, environmentID, "reconcile-worker-" + serviceID.String()}},
+		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image) VALUES($1,'https://invalid.example/repository','web','registry.example/app')`, []any{serviceID}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,status,trigger) VALUES($1,$2,1,$3,$3,'queued','reconcile')`, []any{deploymentID, serviceID, effective}},
+		{`INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',jsonb_build_object('deploymentId',$2::text),$3)`, []any{uuid.New(), deploymentID, "service:" + serviceID.String()}},
+	}
+	for _, statement := range statements {
+		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, err := (&Worker{Store: db, ID: "reconcile-test"}).claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployed := make(chan string, 1)
+	worker := &Worker{Store: db, ID: "reconcile-test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Compiler: Compiler{PublicNetwork: "public"}, Swarm: takeoverScheduler{compose: deployed}}
+	if err = worker.execute(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-deployed; got != effective {
+		t.Fatalf("deployed compose changed:\n%s\nwant:\n%s", got, effective)
+	}
+	if err = worker.finish(ctx, claimed, nil); err != nil {
+		t.Fatal(err)
+	}
+	var status, stored string
+	if err = db.Pool.QueryRow(ctx, `SELECT status,effective_compose FROM deployments WHERE id=$1`, deploymentID).Scan(&status, &stored); err != nil || status != "succeeded" || stored != effective {
+		t.Fatalf("deployment status=%q effective=%q err=%v", status, stored, err)
+	}
 }
 
 func (takeoverScheduler) Remove(context.Context, string) (string, error) {

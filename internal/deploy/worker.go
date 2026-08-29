@@ -58,16 +58,98 @@ type job struct {
 func (w *Worker) Run(ctx context.Context) {
 	w.recoverStale(ctx)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); w.scheduleBackups(ctx) }()
 	go func() { defer wg.Done(); w.pruneAuditEvents(ctx) }()
 	go func() { defer wg.Done(); w.scheduleAuditArchives(ctx) }()
+	go func() { defer wg.Done(); w.reconcileStacks(ctx) }()
 	for i := 0; i < w.Concurrency; i++ {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.loop(ctx) }()
 	}
 	<-ctx.Done()
 	wg.Wait()
+}
+
+func (w *Worker) reconcileStacks(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		leader, err := w.Store.AcquireControllerLease(ctx, "stack-reconciler", w.ID, 90*time.Second)
+		if err != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire stack reconciler lease", "error", err)
+		} else if leader {
+			w.reconcileStackBatch(ctx)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (w *Worker) reconcileStackBatch(ctx context.Context) {
+	candidates, err := w.Store.ListReconciliationCandidates(ctx, 50)
+	if err != nil {
+		w.Logger.Error("list reconciliation candidates", "error", err)
+		return
+	}
+	jobs := make(chan store.ReconciliationCandidate)
+	var workers sync.WaitGroup
+	workerCount := min(8, len(candidates))
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for candidate := range jobs {
+				w.reconcileStack(ctx, candidate)
+			}
+		}()
+	}
+	for _, candidate := range candidates {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			return
+		case jobs <- candidate:
+		}
+	}
+	close(jobs)
+	workers.Wait()
+}
+
+func (w *Worker) reconcileStack(ctx context.Context, candidate store.ReconciliationCandidate) {
+	inspector, ok := w.scheduler(candidate.ClusterID).(StackInspector)
+	if !ok {
+		if _, recordErr := w.Store.RecordReconciliation(ctx, candidate, "unknown", "scheduler does not support stack inspection"); recordErr != nil {
+			w.Logger.Error("record reconciliation", "service", candidate.ServiceID, "error", recordErr)
+		}
+		return
+	}
+	inspectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	status, inspectErr := inspector.Status(inspectCtx, candidate.StackName)
+	cancel()
+	state, detail := "healthy", ""
+	if inspectErr != nil {
+		state, detail = "unknown", inspectErr.Error()
+	} else if !status.Exists {
+		state, detail = "missing", "stack has no services"
+	} else if status.HealthyServices != status.Services {
+		state = "degraded"
+		detail = fmt.Sprintf("%d/%d services healthy; %d/%d tasks running; degraded=%s", status.HealthyServices, status.Services, status.RunningTasks, status.DesiredTasks, strings.Join(status.Degraded, ","))
+	}
+	repair, recordErr := w.Store.RecordReconciliation(ctx, candidate, state, detail)
+	if recordErr != nil {
+		if !errors.Is(recordErr, store.ErrNotFound) {
+			w.Logger.Error("record reconciliation", "service", candidate.ServiceID, "error", recordErr)
+		}
+		return
+	}
+	if repair != nil {
+		w.Logger.Warn("queued drift repair", "service", candidate.ServiceID, "deployment", repair.ID, "state", state)
+	}
 }
 
 func (w *Worker) scheduleAuditArchives(ctx context.Context) {
@@ -435,10 +517,10 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		return err
 	}
 	var serviceID uuid.UUID
-	var stack, compose, encrypted string
+	var stack, compose, encrypted, trigger string
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.id,s.stack_name,d.compose_snapshot,d.env_snapshot,e.cluster_id`, id).Scan(&serviceID, &stack, &compose, &encrypted, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.id,s.stack_name,d.compose_snapshot,d.env_snapshot,d.trigger,e.cluster_id`, id).Scan(&serviceID, &stack, &compose, &encrypted, &trigger, &clusterID)
 	})
 	if err != nil {
 		return err
@@ -457,7 +539,10 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		routes = append(routes, r)
 	}
 	rows.Close()
-	compiled, err := w.Compiler.Compile(compose, routes)
+	compiled := compose
+	if trigger != "reconcile" {
+		compiled, err = w.Compiler.Compile(compose, routes)
+	}
 	if err != nil {
 		w.markDeployment(ctx, j, id, "failed", "", err)
 		return err
@@ -473,7 +558,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	buildOutput := ""
 	var deploymentRegistryCredential *Credential
-	if err == nil {
+	if err == nil && trigger != "reconcile" {
 		var source store.ApplicationSource
 		source.ComposeServiceID = uuid.Nil
 		var gitCredentialID, registryCredentialID *uuid.UUID
@@ -549,6 +634,11 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 			}
 		} else if !errors.Is(sourceErr, pgx.ErrNoRows) {
 			err = sourceErr
+		}
+	}
+	if err == nil {
+		if snapshotErr := w.Store.SetDeploymentEffectiveComposeForJob(ctx, j.ID, j.LeaseID, id, compiled); snapshotErr != nil {
+			err = snapshotErr
 		}
 	}
 	if err == nil {

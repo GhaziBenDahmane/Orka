@@ -22,6 +22,19 @@ Docker Compose remains the portable workload definition.
 7. Rollback creates a new deployment from the last successful snapshot. History
    is never edited in place.
 
+The leader-elected stack reconciler inspects every previously deployed stack
+once per minute through the same local-or-remote scheduler boundary. Missing or
+under-replicated stacks must be observed twice before repair. Repairs replay the
+last successful effective Compose document and encrypted environment snapshot;
+they do not overwrite a newer, undeployed service revision or rebuild a moving
+Git ref. Active deployments, deletion finalizers, maintenance policies, and
+cluster maintenance windows suppress repair, while a ten-minute cooldown and a
+database uniqueness constraint prevent repair storms. Inspection failures are
+recorded as `unknown`, not mistaken for missing workloads. Reconciliation state
+is included in the secret-free AI audit snapshot and Prometheus metrics.
+Services last deployed before the effective-snapshot migration must complete
+one normal deployment before automatic repair is enabled.
+
 Deletion is also asynchronous. The API first marks a service as deleting and
 queues a finalizer. The worker removes the Swarm stack before deleting database
 records and locally retained backups. A busy service must be cancelled or
@@ -103,8 +116,11 @@ after another replica recovers the expired attempt—even when the replacement
 uses the same configured worker name. External Swarm, provider, and object-store
 operations remain at-least-once and must be idempotent. Singleton maintenance
 loops additionally use expiring, database-backed leader leases; only the
-current holder schedules backup policy runs or prunes audit history, and
-another replica takes over after expiry.
+current holder schedules backup policy runs, reconciles stack state, archives
+or prunes audit history, and another replica takes over after expiry. Repair
+queue creation is independently serialized on the service row and constrained
+to one active reconciliation deployment, so a lease handoff cannot enqueue
+duplicate repairs.
 
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a

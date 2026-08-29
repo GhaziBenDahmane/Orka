@@ -10,7 +10,7 @@ The initial implementation includes:
 - projects, environments, Compose services, routes, and deployment history;
 - durable PostgreSQL jobs with leases, heartbeats, cancellation, and stale-worker recovery;
 - an external-PostgreSQL, three-controller Swarm profile with fenced workers and mandatory remote backups;
-- Docker Swarm stack deployment and rollback;
+- Docker Swarm stack deployment, rollback, and leader-elected drift repair;
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;
 - multiple GitHub template repositories with namespaced Dokploy-compatible Compose catalogs;

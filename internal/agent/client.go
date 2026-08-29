@@ -354,6 +354,14 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		return c.swarm.RemoveVolumes(ctx, payload.StackName)
 	case "swarm.logs":
 		return c.swarm.Logs(ctx, payload.StackName, payload.Tail)
+	case "swarm.status":
+		inspector, ok := c.swarm.(deploy.StackInspector)
+		if !ok {
+			return "", errors.New("scheduler does not support stack inspection")
+		}
+		status, err := inspector.Status(ctx, payload.StackName)
+		encoded, _ := json.Marshal(status)
+		return string(encoded), err
 	case "swarm.nodes":
 		nodes, err := c.swarm.Nodes(ctx)
 		encoded, _ := json.Marshal(nodes)

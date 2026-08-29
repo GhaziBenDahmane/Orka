@@ -39,6 +39,11 @@ links for every item below.
   resource to running or commit any resource completion after takeover. Race a
   cancellation against completion and verify the job and resource both remain
   cancelled.
+- Remove a healthy local stack and under-replicate a remote stack. Verify two
+  consecutive observations queue exactly one repair from the last successful
+  effective snapshot, preserve newer undeployed edits, and expose the state in
+  both Prometheus metrics and the AI audit snapshot. Repeat during maintenance
+  and an active deployment and verify repair is suppressed.
 - Preserve the `make test-swarm-ha` evidence artifact, then repeat leader
   partition, minority-write rejection, quorum restoration, and workload
   convergence across the production-equivalent multi-host Swarm network.

@@ -75,7 +75,8 @@ printf '%s ' "$@" >> ` + strconv.Quote(logPath) + `; printf '\n' >> ` + strconv.
 if [ "$1" = info ]; then echo active; exit 0; fi
 if [ "$1" = network ]; then exit 0; fi
 if [ "$1" = stack ]; then exit 0; fi
-if [ "$1" = service ]; then echo 'drill_verify 1/1'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = ls ]; then echo 'drill_verify 1/1'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'null'; exit 0; fi
 mount=''; entry=''; filename=''
 while [ "$#" -gt 0 ]; do case "$1" in --volume) shift; mount="${1%%:*}" ;; --entrypoint) shift; entry="$1" ;; /backup/*) filename="${1#/backup/}" ;; esac; shift; done
 [ "$entry" = pg_isready ] && exit 0

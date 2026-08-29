@@ -36,6 +36,18 @@ func (s RemoteSwarm) Logs(ctx context.Context, stackName string, tail int) (stri
 	return s.run(ctx, "swarm.logs", map[string]any{"stackName": stackName, "tail": tail})
 }
 
+func (s RemoteSwarm) Status(ctx context.Context, stackName string) (StackStatus, error) {
+	output, err := s.run(ctx, "swarm.status", map[string]any{"stackName": stackName})
+	if err != nil {
+		return StackStatus{}, err
+	}
+	var status StackStatus
+	if err = json.Unmarshal([]byte(output), &status); err != nil {
+		return StackStatus{}, fmt.Errorf("decode remote stack status: %w", err)
+	}
+	return status, nil
+}
+
 func (s RemoteSwarm) Nodes(ctx context.Context) ([]Node, error) {
 	output, err := s.run(ctx, "swarm.nodes", map[string]any{})
 	if err != nil {
