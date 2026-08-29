@@ -7,7 +7,34 @@ workflow artifact and use that exact `ghcr.io/...@sha256:...` value for
 verifies the keyless Sigstore signature, SLSA provenance, and SPDX SBOM before
 making the promotion artifact available.
 
-Run these commands on a Swarm manager after publishing the Dockyard image:
+For a repeatable non-interactive installation, put the three secret values in
+mode-0600 files and run the installer on a Swarm manager:
+
+```sh
+export DOCKYARD_HOST=dockyard.example.com
+export ACME_EMAIL=ops@example.com
+export DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:...
+export POSTGRES_IMAGE=postgres@sha256:...
+export TRAEFIK_IMAGE=traefik@sha256:...
+export DOCKYARD_DB_PASSWORD_FILE=/secure/dockyard/database-password
+export DOCKYARD_DATABASE_URL_FILE=/secure/dockyard/database-url
+export DOCKYARD_MASTER_KEY_FILE=/secure/dockyard/master-key
+
+DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
+scripts/install-swarm.sh
+```
+
+The installer rejects mutable image tags, non-manager nodes, loose secret-file
+permissions, malformed keys, and existing secrets unless reuse is explicitly
+acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
+fully rendered stack before creating the overlay network or secrets, then
+waits for every service to reach its desired replica count. Set
+`DOCKYARD_INSTALL_SKIP_WAIT=true` only when another deployment system owns the
+convergence check. If pre-deployment setup fails, resources created by that
+attempt are removed; once stack deployment begins, failed resources are left
+intact for Docker diagnostics and an explicit retry.
+
+The equivalent manual commands are:
 
 ```sh
 docker swarm init                         # skip if already active
@@ -78,6 +105,25 @@ cannot mutate desired state, restores quorum, and writes
 state are removed on exit. This validates Swarm/Raft behavior on one host; the
 release gate still requires the same failure sequence on the actual multi-host
 network and storage topology.
+
+The installer also supports this profile with
+`DOCKYARD_INSTALL_MODE=ha`. In addition to the variables above, set
+`DOCKYARD_AGENT_HOST` and the four `DOCKYARD_AGENT_*_FILE` variables shown
+below. Preflight verifies certificate validity, hostname coverage, the server
+chain, and both private-key matches before changing Docker state. The database
+URL file must contain `sslmode=verify-full`.
+
+```sh
+export DOCKYARD_INSTALL_MODE=ha
+export DOCKYARD_AGENT_HOST=agents.dockyard.example.com
+export DOCKYARD_AGENT_CA_CERT_FILE=/secure/pki/agent-ca.crt
+export DOCKYARD_AGENT_CA_KEY_FILE=/secure/pki/agent-ca.key
+export DOCKYARD_AGENT_SERVER_CERT_FILE=/secure/pki/agent-server.crt
+export DOCKYARD_AGENT_SERVER_KEY_FILE=/secure/pki/agent-server.key
+
+DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
+scripts/install-swarm.sh
+```
 
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service

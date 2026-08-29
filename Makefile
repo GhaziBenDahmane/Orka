@@ -1,10 +1,13 @@
-.PHONY: test test-database-recovery test-keycloak-oidc test-swarm-ha test-templates lint build run web generate-openapi check-openapi check-release-images
+.PHONY: test test-database-recovery test-install test-keycloak-oidc test-swarm-ha test-templates lint build run web generate-openapi check-openapi check-release-images
 
 test:
 	go test ./...
 
 test-database-recovery:
 	DOCKYARD_TEST_DATABASE_RECOVERY=1 go test -timeout 35m -run TestNativeDatabaseRecoveryConformance -v -count=1 ./internal/database
+
+test-install:
+	./scripts/ci/test-install-swarm.sh
 
 test-keycloak-oidc:
 	./scripts/ci/test-keycloak-oidc.sh

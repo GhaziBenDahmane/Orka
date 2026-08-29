@@ -36,6 +36,14 @@ AI deployment and trust boundaries are documented in
 [docs/ai-auditing.md](docs/ai-auditing.md); remote catalog layout is in
 [docs/template-repositories.md](docs/template-repositories.md).
 
+## Installation
+
+Production deployments use immutable image digests and Docker Swarm. The
+non-interactive installer validates the manager, images, secret files, and
+rendered stack before changing Docker state, and supports both single-manager
+and HA controller profiles. See [deploy/README.md](deploy/README.md) for the
+preflight, installation, upgrade, backup, and recovery procedures.
+
 ## Development
 
 ```sh
