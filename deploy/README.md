@@ -192,8 +192,13 @@ or remote Docker socket is exposed on the managed cluster.
 Agents can be upgraded through `POST /v1/clusters/{id}/agent-upgrades` or
 `dockyardctl agent-upgrade CLUSTER_ID IMAGE@sha256:DIGEST`. Only immutable image
 digests are accepted. The agent performs a Swarm `start-first` service update;
-the service update automatically rolls back if the replacement task fails.
-Poll the returned command with `dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
+the service update automatically rolls back if the replacement task fails. A
+successful Docker submission leaves the command in `verifying`; it changes to
+`succeeded` only after a replacement agent heartbeat reports both the requested
+digest and Swarm's `completed` update state. A paused or rolled-back state marks
+the command `failed`; absence of a confirming heartbeat fails verification
+after 15 minutes. Poll the returned command with
+`dockyardctl cluster-command CLUSTER_ID COMMAND_ID`.
 Set `DOCKYARD_AGENT_SERVICE_NAME` when the manually deployed stack is not named
 `dockyard-agent`; the installer derives it automatically.
 

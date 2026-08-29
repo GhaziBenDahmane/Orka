@@ -164,19 +164,24 @@ func (s *Server) requireAgentCertificate(next http.Handler) http.Handler {
 
 func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		AgentVersion  string         `json:"agentVersion"`
-		DockerVersion string         `json:"dockerVersion"`
-		Capacity      map[string]any `json:"capacity"`
+		AgentVersion     string         `json:"agentVersion"`
+		AgentImage       string         `json:"agentImage"`
+		AgentUpdateState string         `json:"agentUpdateState"`
+		DockerVersion    string         `json:"dockerVersion"`
+		Capacity         map[string]any `json:"capacity"`
 	}
 	if !decode(w, r, &input) {
 		return
 	}
-	if len(input.AgentVersion) > 100 || len(input.DockerVersion) > 100 || len(input.Capacity) > 64 {
+	input.AgentImage = strings.TrimSpace(input.AgentImage)
+	input.AgentUpdateState = strings.TrimSpace(input.AgentUpdateState)
+	validUpdateState := contains([]string{"", "updating", "paused", "completed", "rollback_started", "rollback_paused", "rollback_completed"}, input.AgentUpdateState)
+	if len(input.AgentVersion) > 100 || len(input.AgentImage) > 500 || strings.ContainsAny(input.AgentImage, "\r\n") || !validUpdateState || len(input.DockerVersion) > 100 || len(input.Capacity) > 64 {
 		writeError(w, 400, "invalid_heartbeat", "heartbeat metadata exceeds limits")
 		return
 	}
 	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
-	if err := s.Store.RecordClusterHeartbeat(r.Context(), clusterID, input.AgentVersion, input.DockerVersion, input.Capacity); err != nil {
+	if err := s.Store.RecordClusterHeartbeat(r.Context(), clusterID, input.AgentVersion, input.AgentImage, input.AgentUpdateState, input.DockerVersion, input.Capacity); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -342,8 +347,12 @@ func (s *Server) upgradeClusterAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "encryption_failed", "upgrade command cannot be encrypted")
 		return
 	}
-	command, err := s.Store.EnqueueClusterCommand(r.Context(), clusterID, commandID, "agent.upgrade", encrypted)
+	command, err := s.Store.EnqueueAgentUpgrade(r.Context(), clusterID, commandID, encrypted, input.Image)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "agent_upgrade_running", "an agent upgrade is already pending or being verified")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}

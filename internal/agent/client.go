@@ -42,9 +42,10 @@ type Config struct {
 }
 
 type Client struct {
-	cfg   Config
-	swarm deploy.Scheduler
-	http  *http.Client
+	cfg          Config
+	swarm        deploy.Scheduler
+	http         *http.Client
+	serviceState func(context.Context) (string, string, error)
 }
 
 type command struct {
@@ -83,6 +84,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	c := &Client{cfg: cfg, swarm: deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.Network, Timeout: 5 * time.Minute}, http: httpClient}
+	c.serviceState = c.inspectServiceState
 	return c.loop(ctx)
 }
 
@@ -269,6 +271,13 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	if len(nodes) > 0 {
 		dockerVersion = nodes[0].EngineVersion
 	}
+	agentImage, agentUpdateState := "", ""
+	if c.serviceState != nil {
+		agentImage, agentUpdateState, err = c.serviceState(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	capacity := map[string]any{"nodes": len(nodes), "readyNodes": 0, "activeNodes": 0, "schedulableNodes": 0, "managers": 0, "nanoCpus": int64(0), "memoryBytes": int64(0)}
 	for _, node := range nodes {
 		if strings.EqualFold(node.Status, "ready") {
@@ -286,7 +295,19 @@ func (c *Client) heartbeat(ctx context.Context) error {
 			capacity["managers"] = capacity["managers"].(int) + 1
 		}
 	}
-	return c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "dockerVersion": dockerVersion, "capacity": capacity}, nil, "")
+	return c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "agentImage": agentImage, "agentUpdateState": agentUpdateState, "dockerVersion": dockerVersion, "capacity": capacity}, nil, "")
+}
+
+func (c *Client) inspectServiceState(ctx context.Context) (string, string, error) {
+	output, err := exec.CommandContext(ctx, c.cfg.DockerBin, "service", "inspect", "--format", "{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}", c.cfg.ServiceName).CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("inspect agent service: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(output)), "|", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		return "", "", errors.New("inspect agent service returned invalid state")
+	}
+	return parts[0], parts[1], nil
 }
 
 func (c *Client) claim(ctx context.Context) (*command, error) {

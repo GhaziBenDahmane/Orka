@@ -178,8 +178,11 @@ replacement's deployment or job result.
 - Replace direct remote Docker socket access with outbound agents using mTLS,
   short-lived enrollment tokens, certificate rotation, and signed commands.
 - Digest-pinned, start-first agent upgrades are implemented as fenced,
-  encrypted asynchronous commands. Heartbeats report ready/active/manager node
-  counts plus active-node CPU and memory, all usable as placement constraints.
+  encrypted asynchronous commands. They remain in durable verification until
+  a replacement heartbeat reports the requested digest and completed Swarm
+  update, and fail on paused or rolled-back update states. Heartbeats report
+  ready/active/manager node counts plus active-node CPU and memory, all usable
+  as placement constraints.
 - Run multiple stateless controllers and workers; prove job fencing and leader
   election behavior under partitions. A scheduled disposable three-manager
   Swarm conformance test now proves leader replacement, replica convergence,

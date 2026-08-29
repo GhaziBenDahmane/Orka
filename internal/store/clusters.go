@@ -8,9 +8,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var ErrLeaseLost = errors.New("command lease is no longer valid")
+
+const expireAgentUpgradeVerifications = `UPDATE cluster_commands SET status='failed',last_error='replacement agent did not confirm the requested image before the verification deadline',finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' AND run_after<=now()`
 
 type Cluster struct {
 	ID                  uuid.UUID      `json:"id"`
@@ -21,6 +24,8 @@ type Cluster struct {
 	Labels              map[string]any `json:"labels"`
 	Capacity            map[string]any `json:"capacity"`
 	AgentVersion        string         `json:"agentVersion"`
+	AgentImage          string         `json:"agentImage"`
+	AgentUpdateState    string         `json:"agentUpdateState"`
 	DockerVersion       string         `json:"dockerVersion"`
 	CertificateNotAfter *time.Time     `json:"certificateNotAfter,omitempty"`
 	LastSeenAt          *time.Time     `json:"lastSeenAt,omitempty"`
@@ -37,6 +42,7 @@ type ClusterCommand struct {
 	EncryptedPayload string     `json:"-"`
 	Status           string     `json:"status"`
 	Attempts         int        `json:"attempts"`
+	TargetImage      string     `json:"targetImage,omitempty"`
 	LeaseID          *uuid.UUID `json:"leaseId,omitempty"`
 	LeaseExpiresAt   *time.Time `json:"leaseExpiresAt,omitempty"`
 	EncryptedResult  string     `json:"-"`
@@ -56,7 +62,7 @@ func (s *Store) CreateCluster(ctx context.Context, item Cluster) (Cluster, error
 }
 
 func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]Cluster, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +72,7 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 		var item Cluster
 		var labels []byte
 		var capacity []byte
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(labels, &item.Labels)
@@ -79,7 +85,7 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 func (s *Store) GetCluster(ctx context.Context, organizationID, clusterID uuid.UUID) (Cluster, error) {
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -101,7 +107,7 @@ func (s *Store) UpdateClusterConfiguration(ctx context.Context, organizationID, 
 	}
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -133,7 +139,7 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='cluster deletion requested',finished_at=now() WHERE cluster_id=$1 AND status IN ('pending','leased')`, clusterID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='cluster deletion requested',finished_at=now() WHERE cluster_id=$1 AND status IN ('pending','leased','verifying')`, clusterID); err != nil {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]string{"clusterId": clusterID.String()})
@@ -166,19 +172,36 @@ func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUI
 	return nil
 }
 
-func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, dockerVersion string, capacity map[string]any) error {
+func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity map[string]any) error {
 	encoded, err := json.Marshal(capacity)
 	if err != nil {
 		return err
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE clusters SET agent_version=$2,docker_version=$3,capacity=$4,last_seen_at=now(),updated_at=now() WHERE id=$1 AND state IN ('active','draining')`, clusterID, agentVersion, dockerVersion, encoded)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE clusters SET agent_version=$2,agent_image=$3,agent_update_state=$4,docker_version=$5,capacity=$6,last_seen_at=now(),updated_at=now() WHERE id=$1 AND state IN ('active','draining')`, clusterID, agentVersion, agentImage, agentUpdateState, dockerVersion, encoded)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
+		return err
+	}
+	if agentUpdateState == "completed" {
+		if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='succeeded',last_error='',finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' AND target_image=$2`, clusterID, agentImage); err != nil {
+			return err
+		}
+	} else if agentUpdateState == "paused" || agentUpdateState == "rollback_started" || agentUpdateState == "rollback_paused" || agentUpdateState == "rollback_completed" {
+		if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='failed',last_error='agent Swarm update entered ' || $2 || '; reported image ' || $3,finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying'`, clusterID, agentUpdateState, agentImage); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string) (ClusterCommand, error) {
@@ -190,17 +213,52 @@ func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID 
 	return item, err
 }
 
-func (s *Store) GetClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) (ClusterCommand, error) {
-	var item ClusterCommand
-	err := s.Pool.QueryRow(ctx, `SELECT id,cluster_id,kind,status,attempts,encrypted_result,last_error,created_at,lease_expires_at FROM cluster_commands WHERE id=$1 AND cluster_id=$2`, commandID, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.Status, &item.Attempts, &item.EncryptedResult, &item.LastError, &item.CreatedAt, &item.LeaseExpiresAt)
+func (s *Store) EnqueueAgentUpgrade(ctx context.Context, clusterID, commandID uuid.UUID, encryptedPayload, targetImage string) (ClusterCommand, error) {
+	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: "agent.upgrade", TargetImage: targetImage, Status: "pending"}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
+		return ClusterCommand{}, err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,target_image) SELECT $1,c.id,'agent.upgrade',$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' RETURNING created_at`, commandID, clusterID, encryptedPayload, targetImage).Scan(&item.CreatedAt)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ClusterCommand{}, ErrBusy
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClusterCommand{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) GetClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) (ClusterCommand, error) {
+	var item ClusterCommand
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications+` AND id=$2`, clusterID, commandID); err != nil {
+		return ClusterCommand{}, err
+	}
+	err = tx.QueryRow(ctx, `SELECT id,cluster_id,kind,status,attempts,target_image,encrypted_result,last_error,created_at,lease_expires_at FROM cluster_commands WHERE id=$1 AND cluster_id=$2`, commandID, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.Status, &item.Attempts, &item.TargetImage, &item.EncryptedResult, &item.LastError, &item.CreatedAt, &item.LeaseExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ClusterCommand{}, ErrNotFound
+	}
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) CancelClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='controller cancelled command',finished_at=now() WHERE id=$1 AND cluster_id=$2 AND status IN ('pending','leased')`, commandID, clusterID)
+	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='controller cancelled command',finished_at=now() WHERE id=$1 AND cluster_id=$2 AND status IN ('pending','leased','verifying')`, commandID, clusterID)
 	if err != nil {
 		return err
 	}
@@ -219,13 +277,16 @@ func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, le
 		return ClusterCommand{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
+		return ClusterCommand{}, err
+	}
 	_, err = tx.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'pending' END,lease_id=NULL,lease_expires_at=NULL,run_after=now()+interval '5 seconds',last_error='agent lease expired',finished_at=CASE WHEN attempts>=max_attempts THEN now() ELSE NULL END WHERE cluster_id=$1 AND status='leased' AND lease_expires_at<now()`, clusterID)
 	if err != nil {
 		return ClusterCommand{}, err
 	}
 	var item ClusterCommand
 	leaseID := uuid.New()
-	err = tx.QueryRow(ctx, `SELECT id,cluster_id,kind,encrypted_payload,status,attempts,created_at FROM cluster_commands WHERE cluster_id=$1 AND status='pending' AND run_after<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.EncryptedPayload, &item.Status, &item.Attempts, &item.CreatedAt)
+	err = tx.QueryRow(ctx, `SELECT id,cluster_id,kind,encrypted_payload,target_image,status,attempts,created_at FROM cluster_commands WHERE cluster_id=$1 AND status='pending' AND run_after<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.EncryptedPayload, &item.TargetImage, &item.Status, &item.Attempts, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return ClusterCommand{}, commitErr
@@ -259,7 +320,7 @@ func (s *Store) CompleteClusterCommand(ctx context.Context, clusterID, commandID
 	if failed {
 		status, message = "failed", "agent reported command failure"
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status=$4,encrypted_result=$5,last_error=$6,finished_at=now(),lease_id=NULL,lease_expires_at=NULL WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, status, encryptedResult, message)
+	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN 'verifying' ELSE $4 END,encrypted_result=$5,last_error=$6,finished_at=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN NULL ELSE now() END,run_after=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN now()+interval '15 minutes' ELSE run_after END,lease_id=NULL,lease_expires_at=NULL WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, status, encryptedResult, message)
 	if err != nil {
 		return err
 	}

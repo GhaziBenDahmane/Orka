@@ -225,7 +225,9 @@ func TestExecuteAgentUpgradeRequiresDigestAndFixedService(t *testing.T) {
 
 func TestHeartbeatAggregatesActiveCapacity(t *testing.T) {
 	var body struct {
-		Capacity map[string]any `json:"capacity"`
+		AgentImage       string         `json:"agentImage"`
+		AgentUpdateState string         `json:"agentUpdateState"`
+		Capacity         map[string]any `json:"capacity"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -237,6 +239,9 @@ func TestHeartbeatAggregatesActiveCapacity(t *testing.T) {
 	client := &Client{
 		cfg:  Config{AgentURL: server.URL, Version: "1.2.3"},
 		http: server.Client(),
+		serviceState: func(context.Context) (string, string, error) {
+			return "registry.example/dockyard@sha256:" + strings.Repeat("a", 64), "completed", nil
+		},
 		swarm: &fakeScheduler{nodes: []deploy.Node{
 			{Status: "Ready", Availability: "Active", ManagerStatus: "Leader", EngineVersion: "29", NanoCPUs: 4_000_000_000, MemoryBytes: 8_000_000_000},
 			{Status: "Down", Availability: "Active", EngineVersion: "29", NanoCPUs: 2_000_000_000, MemoryBytes: 4_000_000_000},
@@ -248,5 +253,26 @@ func TestHeartbeatAggregatesActiveCapacity(t *testing.T) {
 	}
 	if body.Capacity["nodes"] != float64(3) || body.Capacity["readyNodes"] != float64(2) || body.Capacity["activeNodes"] != float64(2) || body.Capacity["schedulableNodes"] != float64(1) || body.Capacity["nanoCpus"] != float64(4_000_000_000) || body.Capacity["memoryBytes"] != float64(8_000_000_000) {
 		t.Fatalf("unexpected capacity: %#v", body.Capacity)
+	}
+	if body.AgentUpdateState != "completed" || !strings.Contains(body.AgentImage, "@sha256:") {
+		t.Fatalf("unexpected agent release state: image=%q state=%q", body.AgentImage, body.AgentUpdateState)
+	}
+}
+
+func TestInspectServiceStateReportsImageAndRollout(t *testing.T) {
+	directory := t.TempDir()
+	dockerBin := filepath.Join(directory, "docker")
+	image := "registry.example/dockyard@sha256:" + strings.Repeat("d", 64)
+	script := "#!/bin/sh\nprintf '%s|%s\\n' '" + image + "' 'rollback_completed'\n"
+	if err := os.WriteFile(dockerBin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{cfg: Config{DockerBin: dockerBin, ServiceName: "dockyard-agent_agent"}}
+	gotImage, gotState, err := client.inspectServiceState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotImage != image || gotState != "rollback_completed" {
+		t.Fatalf("image=%q state=%q", gotImage, gotState)
 	}
 }

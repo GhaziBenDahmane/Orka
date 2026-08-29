@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "6789ab"); err != nil {
 		t.Fatalf("authenticate rotated certificate: %v", err)
 	}
-	if err = db.RecordClusterHeartbeat(ctx, cluster.ID, "1.2.3", "28.0.1", map[string]any{"nodes": 3}); err != nil {
+	if err = db.RecordClusterHeartbeat(ctx, cluster.ID, "1.2.3", "registry.example/dockyard@sha256:"+strings.Repeat("a", 64), "completed", "28.0.1", map[string]any{"nodes": 3}); err != nil {
 		t.Fatal(err)
 	}
 	command, err := db.EnqueueClusterCommand(ctx, cluster.ID, uuid.New(), "swarm.nodes", "encrypted")
@@ -156,6 +157,114 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	}
 	if err = db.QueueClusterDeletion(ctx, orgID, assignedCluster); !errors.Is(err, ErrBusy) {
 		t.Fatalf("assigned cluster deletion error=%v, want busy", err)
+	}
+}
+
+func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID, clusterID := uuid.New(), uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Agent upgrade',$2)`, organizationID, "agent-upgrade-"+organizationID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, clusterID, organizationID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+
+	target := "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)
+	upgrade, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-upgrade", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-duplicate", target); !errors.Is(err, ErrBusy) {
+		t.Fatalf("concurrent upgrade error=%v, want ErrBusy", err)
+	}
+	claimed, err := db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != upgrade.ID || claimed.LeaseID == nil || claimed.TargetImage != target {
+		t.Fatalf("claimed upgrade=%#v err=%v", claimed, err)
+	}
+	if err = db.CompleteClusterCommand(ctx, clusterID, upgrade.ID, *claimed.LeaseID, "encrypted-submission", false); err != nil {
+		t.Fatal(err)
+	}
+	verifying, err := db.GetClusterCommand(ctx, clusterID, upgrade.ID)
+	if err != nil || verifying.Status != "verifying" || verifying.TargetImage != target {
+		t.Fatalf("submitted upgrade=%#v err=%v", verifying, err)
+	}
+	oldImage := "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "1.0.0", oldImage, "updating", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+		t.Fatal(err)
+	}
+	verifying, err = db.GetClusterCommand(ctx, clusterID, upgrade.ID)
+	if err != nil || verifying.Status != "verifying" {
+		t.Fatalf("upgrade completed before replacement heartbeat=%#v err=%v", verifying, err)
+	}
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "2.0.0", target, "completed", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+		t.Fatal(err)
+	}
+	succeeded, err := db.GetClusterCommand(ctx, clusterID, upgrade.ID)
+	if err != nil || succeeded.Status != "succeeded" {
+		t.Fatalf("converged upgrade=%#v err=%v", succeeded, err)
+	}
+	cluster, err := db.GetCluster(ctx, organizationID, clusterID)
+	if err != nil || cluster.AgentImage != target || cluster.AgentUpdateState != "completed" || cluster.AgentVersion != "2.0.0" {
+		t.Fatalf("cluster release state=%#v err=%v", cluster, err)
+	}
+
+	rollbackTarget := "registry.example/dockyard@sha256:" + strings.Repeat("c", 64)
+	rollback, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-rollback", rollbackTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != rollback.ID || claimed.LeaseID == nil {
+		t.Fatalf("claimed rollback=%#v err=%v", claimed, err)
+	}
+	if err = db.CompleteClusterCommand(ctx, clusterID, rollback.ID, *claimed.LeaseID, "encrypted-submission", false); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "2.0.0", target, "rollback_completed", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := db.GetClusterCommand(ctx, clusterID, rollback.ID)
+	if err != nil || failed.Status != "failed" || !strings.Contains(failed.LastError, "rollback_completed") {
+		t.Fatalf("rolled-back upgrade=%#v err=%v", failed, err)
+	}
+
+	timedOut, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-timeout", rollbackTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != timedOut.ID || claimed.LeaseID == nil {
+		t.Fatalf("claimed timeout=%#v err=%v", claimed, err)
+	}
+	if err = db.CompleteClusterCommand(ctx, clusterID, timedOut.ID, *claimed.LeaseID, "encrypted-submission", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE cluster_commands SET run_after=now()-interval '1 second' WHERE id=$1`, timedOut.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "3.0.0", rollbackTarget, "completed", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+		t.Fatal(err)
+	}
+	timedOut, err = db.GetClusterCommand(ctx, clusterID, timedOut.ID)
+	if err != nil || timedOut.Status != "failed" || !strings.Contains(timedOut.LastError, "verification deadline") {
+		t.Fatalf("timed-out upgrade=%#v err=%v", timedOut, err)
+	}
+	if _, err = db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-after-timeout", rollbackTarget); err != nil {
+		t.Fatalf("replacement upgrade after timeout: %v", err)
 	}
 }
 

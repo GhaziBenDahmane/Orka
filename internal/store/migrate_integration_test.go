@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -380,5 +381,41 @@ func TestMigrateUpgradeFrom070AddsOrganizationInvitations(t *testing.T) {
 	var exists bool
 	if err := pool.QueryRow(ctx, `SELECT to_regclass('organization_invitations') IS NOT NULL`).Scan(&exists); err != nil || !exists {
 		t.Fatalf("organization invitations table missing: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestMigrateUpgradeFrom071AddsDurableAgentUpgradeVerification(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "071_organization_invitations.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, clusterID, legacyCommandID := uuid.New(), uuid.New(), uuid.New()
+	var err error
+	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Agent migration',$2)`, organizationID, "agent-migration-"+organizationID.String()); err == nil {
+		_, err = pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, clusterID, organizationID)
+	}
+	if err == nil {
+		_, err = pool.Exec(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,lease_id,lease_expires_at) VALUES($1,$2,'agent.upgrade','legacy','leased',$3,now()+interval '1 minute')`, legacyCommandID, clusterID, uuid.New())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var status, reason, agentImage, updateState string
+	if err := pool.QueryRow(ctx, `SELECT command.status,command.last_error,cluster.agent_image,cluster.agent_update_state FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE command.id=$1`, legacyCommandID).Scan(&status, &reason, &agentImage, &updateState); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" || !strings.Contains(reason, "predates durable convergence") || agentImage != "" || updateState != "" {
+		t.Fatalf("legacy command status=%q reason=%q image=%q update=%q", status, reason, agentImage, updateState)
+	}
+	db := &Store{Pool: pool}
+	target := "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)
+	if _, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted", target); err != nil {
+		t.Fatalf("enqueue tracked upgrade after migration: %v", err)
+	}
+	if _, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted", target); !errors.Is(err, ErrBusy) {
+		t.Fatalf("duplicate tracked upgrade error=%v, want ErrBusy", err)
 	}
 }
