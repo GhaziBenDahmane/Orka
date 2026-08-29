@@ -23,6 +23,10 @@ case "$1 $2" in
   "network inspect") exit 1 ;;
   "stack config")
     printf 'service=%s network=%s\n' "$DOCKYARD_AGENT_SERVICE_NAME" "$DOCKYARD_TRAEFIK_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
+  "service inspect")
+    image=${DOCKYARD_INSTALL_TEST_AGENT_IMAGE:-$DOCKYARD_IMAGE}
+    state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
+    printf '%s|%s\n' "$image" "$state" ;;
   "stack services") printf '%s\n' 'edge_agent 1/1' ;;
 esac
 MOCK
@@ -96,6 +100,21 @@ if DOCKYARD_INSTALL_STABILITY_SECONDS=301 "$root/scripts/install-agent.sh" >"$te
   exit 1
 fi
 grep -q 'DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed' "$temporary/err"
+
+if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 \
+  DOCKYARD_INSTALL_TEST_AGENT_IMAGE="example/dockyard@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" \
+  "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a rolled-back image' >&2
+  exit 1
+fi
+grep -q 'edge_agent image is .* expected' "$temporary/err"
+
+if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_completed \
+  "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a completed Swarm rollback' >&2
+  exit 1
+fi
+grep -q 'edge_agent update state is rollback_completed' "$temporary/err"
 
 chmod 0644 "$temporary/secrets/enrollment-token"
 if "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then

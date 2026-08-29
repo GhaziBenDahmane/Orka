@@ -164,7 +164,9 @@ network when absent, derives the exact self-upgrade service name from
 for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
 one when the corresponding agent identity volume is intact. The equivalent
-manual commands are:
+installer verifies the exact requested image digest and rejects active, paused,
+or rolled-back service updates before reporting success. The equivalent manual
+commands are:
 
 ```sh
 printf '%s' "$ENROLLMENT_TOKEN" | docker secret create dockyard_agent_enrollment_token -
