@@ -15,6 +15,7 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"projects"}, http.MethodGet, "/v1/projects"},
 		{[]string{"environments", "project-id"}, http.MethodGet, "/v1/projects/project-id/environments"},
 		{[]string{"deploy", "service-id"}, http.MethodPost, "/v1/services/service-id/deployments"},
+		{[]string{"template-versions", "service-id"}, http.MethodGet, "/v1/services/service-id/template-versions"},
 		{[]string{"cluster-token", "cluster-id"}, http.MethodPost, "/v1/clusters/cluster-id/enrollment-tokens"},
 		{[]string{"agent-upgrade", "cluster-id", "repo/image@sha256:digest"}, http.MethodPost, "/v1/clusters/cluster-id/agent-upgrades"},
 		{[]string{"cluster-command", "cluster-id", "command-id"}, http.MethodGet, "/v1/clusters/cluster-id/commands/command-id"},

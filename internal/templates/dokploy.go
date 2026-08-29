@@ -116,6 +116,32 @@ func containsSensitiveGenerator(value string) bool {
 	return false
 }
 
+// UpgradeOverrides keeps explicit operator choices and stable generated values
+// that still exist in a target template. Derived variables are recomputed so a
+// changed dependency cannot leave stale connection strings or URLs behind.
+func UpgradeOverrides(template DokployTemplate, resolved, savedOverrides, requested map[string]string) map[string]string {
+	result := map[string]string{}
+	for key, value := range savedOverrides {
+		if _, declared := template.Variables[key]; declared {
+			result[key] = value
+		}
+	}
+	for key, definition := range template.Variables {
+		if _, explicitlySet := result[key]; explicitlySet || !directGenerator.MatchString(definition) {
+			continue
+		}
+		if value, ok := resolved[key]; ok {
+			result[key] = value
+		}
+	}
+	for key, value := range requested {
+		result[key] = value
+	}
+	return result
+}
+
+var directGenerator = regexp.MustCompile(`^\$\{(?:domain|password(?::[0-9]+)?|base64(?::[0-9]+)?|hash(?::[0-9]+)?|uuid|timestamp|timestampms|timestamps|randomPort|email|username(?::[0-9]+)?|jwt(?::[^}]+)?)\}$`)
+
 func LoadDokployDirectory(path, baseDomain string) (Instance, error) {
 	tomlBytes, err := os.ReadFile(filepath.Join(path, "template.toml"))
 	if err != nil {

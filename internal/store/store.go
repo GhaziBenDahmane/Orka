@@ -165,6 +165,7 @@ type TemplateInstance struct {
 	AppliedComposeChecksum string     `json:"appliedComposeChecksum"`
 	BaseDomain             string     `json:"baseDomain"`
 	EncryptedVariables     string     `json:"-"`
+	EncryptedOverrides     string     `json:"-"`
 	Drifted                bool       `json:"drifted"`
 	CreatedAt              time.Time  `json:"createdAt"`
 	UpdatedAt              time.Time  `json:"updatedAt"`
@@ -1762,7 +1763,7 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 		}
 	}
 	instance.ComposeServiceID = service.ID
-	if err = tx.QueryRow(ctx, `INSERT INTO template_instances(compose_service_id,template_id,template_key,template_version,template_checksum,applied_compose_checksum,base_domain,encrypted_variables) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at,updated_at`, instance.ComposeServiceID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.BaseDomain, instance.EncryptedVariables).Scan(&instance.CreatedAt, &instance.UpdatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO template_instances(compose_service_id,template_id,template_key,template_version,template_checksum,applied_compose_checksum,base_domain,encrypted_variables,encrypted_overrides) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING created_at,updated_at`, instance.ComposeServiceID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.BaseDomain, instance.EncryptedVariables, instance.EncryptedOverrides).Scan(&instance.CreatedAt, &instance.UpdatedAt); err != nil {
 		return ComposeService{}, nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1773,11 +1774,52 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 
 func (s *Store) GetTemplateInstance(ctx context.Context, organizationID, serviceID uuid.UUID) (TemplateInstance, error) {
 	var item TemplateInstance
-	err := s.Pool.QueryRow(ctx, `SELECT t.compose_service_id,t.template_id,t.template_key,t.template_version,t.template_checksum,t.applied_compose_checksum,t.base_domain,t.encrypted_variables,t.created_at,t.updated_at FROM template_instances t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&item.ComposeServiceID, &item.TemplateID, &item.TemplateKey, &item.TemplateVersion, &item.TemplateChecksum, &item.AppliedComposeChecksum, &item.BaseDomain, &item.EncryptedVariables, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT t.compose_service_id,t.template_id,t.template_key,t.template_version,t.template_checksum,t.applied_compose_checksum,t.base_domain,t.encrypted_variables,t.encrypted_overrides,t.created_at,t.updated_at FROM template_instances t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&item.ComposeServiceID, &item.TemplateID, &item.TemplateKey, &item.TemplateVersion, &item.TemplateChecksum, &item.AppliedComposeChecksum, &item.BaseDomain, &item.EncryptedVariables, &item.EncryptedOverrides, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateInstance{}, ErrNotFound
 	}
 	return item, err
+}
+
+func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.UUID, expectedRevision int64, service ComposeService, routes []Route, instance TemplateInstance) (ComposeService, []Route, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	var projectID, environmentID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1 AND p.organization_id=$2 FOR UPDATE OF s,t`, service.ID, organizationID).Scan(&projectID, &environmentID); errors.Is(err, pgx.ErrNoRows) {
+		return ComposeService{}, nil, ErrNotFound
+	} else if err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return ComposeService{}, nil, err
+	}
+	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 RETURNING id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ComposeService{}, nil, ErrBusy
+	}
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM routes WHERE compose_service_id=$1`, service.ID); err != nil {
+		return ComposeService{}, nil, err
+	}
+	for index := range routes {
+		routes[index].ID = uuid.New()
+		routes[index].ComposeServiceID = service.ID
+		if _, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, routes[index].ID, service.ID, routes[index].ServiceName, routes[index].Host, routes[index].PathPrefix, routes[index].TargetPort, routes[index].TLS, routes[index].CertificateResolver); err != nil {
+			return ComposeService{}, nil, err
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE template_instances SET template_id=$2,template_key=$3,template_version=$4,template_checksum=$5,applied_compose_checksum=$6,encrypted_variables=$7,encrypted_overrides=$8,updated_at=now() WHERE compose_service_id=$1`, service.ID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.EncryptedVariables, instance.EncryptedOverrides); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, nil, err
+	}
+	return service, routes, nil
 }
 
 func (s *Store) CreateOIDCProvider(ctx context.Context, p OIDCProvider) (OIDCProvider, error) {

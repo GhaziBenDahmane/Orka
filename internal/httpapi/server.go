@@ -181,6 +181,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireAuth(http.HandlerFunc(s.instantiateTemplate)))
 	mux.Handle("GET /v1/services/{serviceID}", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.getService)))
+	mux.Handle("GET /v1/services/{serviceID}/template-versions", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listTemplateVersions)))
+	mux.Handle("POST /v1/services/{serviceID}/template-upgrades", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upgradeTemplateService)))
 	mux.Handle("DELETE /v1/services/{serviceID}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteService)))
 	mux.Handle("PATCH /v1/services/{serviceID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateService)))
 	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertSource)))
@@ -1349,6 +1351,12 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
+	overridesJSON, _ := json.Marshal(in.Variables)
+	encryptedOverrides, err := s.Box.Encrypt(overridesJSON, cryptox.ResourceContext("template-overrides", serviceID.String()))
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
 	shortID := strings.Split(serviceID.String(), "-")[0]
 	composeSum := sha256.Sum256([]byte(instance.ComposeYAML))
 	routes := make([]store.Route, 0, len(instance.Domains))
@@ -1361,7 +1369,7 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		routes = append(routes, store.Route{ComposeServiceID: serviceID, ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"})
 	}
 	templateRef := item.ID
-	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables})
+	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1404,6 +1412,163 @@ func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"service": item, "routes": routes, "source": source, "template": templateInstance})
+}
+
+func (s *Server) listTemplateVersions(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid service id")
+		return
+	}
+	p := principal(r)
+	instance, err := s.Store.GetTemplateInstance(r.Context(), p.OrganizationID, serviceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	service, _, err := s.Store.GetComposeService(r.Context(), p.OrganizationID, serviceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	composeSum := sha256.Sum256([]byte(service.ComposeYAML))
+	instance.Drifted = instance.AppliedComposeChecksum != hex.EncodeToString(composeSum[:])
+	items, err := s.Store.ListTemplates(r.Context(), p.OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	candidates := make([]store.Template, 0)
+	for _, item := range items {
+		if item.Key == instance.TemplateKey && item.Checksum != instance.TemplateChecksum {
+			candidates = append(candidates, item)
+		}
+	}
+	writeJSON(w, 200, map[string]any{"current": instance, "items": candidates})
+}
+
+func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid service id")
+		return
+	}
+	var in struct {
+		TemplateID uuid.UUID         `json:"templateId"`
+		AllowDrift bool              `json:"allowDrift"`
+		Variables  map[string]string `json:"variables"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.TemplateID == uuid.Nil {
+		writeError(w, 400, "invalid_template", "templateId is required")
+		return
+	}
+	p := principal(r)
+	service, _, err := s.Store.GetComposeService(r.Context(), p.OrganizationID, serviceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	provenance, err := s.Store.GetTemplateInstance(r.Context(), p.OrganizationID, serviceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	currentSum := sha256.Sum256([]byte(service.ComposeYAML))
+	if provenance.AppliedComposeChecksum != hex.EncodeToString(currentSum[:]) && !in.AllowDrift {
+		writeError(w, 409, "template_drift", "service Compose has local changes; set allowDrift to replace them")
+		return
+	}
+	target, err := s.Store.GetTemplate(r.Context(), p.OrganizationID, in.TemplateID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if target.Key != provenance.TemplateKey || target.Checksum == provenance.TemplateChecksum {
+		writeError(w, 409, "invalid_template_upgrade", "target must be a different revision of the same template")
+		return
+	}
+	var config map[string]string
+	if err = json.Unmarshal(target.Config, &config); err != nil {
+		writeError(w, 500, "invalid_template", "stored template config is invalid")
+		return
+	}
+	template, err := templates.ParseDokploy([]byte(config["templateToml"]))
+	if err != nil {
+		writeError(w, 500, "invalid_template", "stored template definition is invalid")
+		return
+	}
+	preserved := map[string]string{}
+	if provenance.EncryptedVariables != "" {
+		plain, decryptErr := s.Box.Decrypt(provenance.EncryptedVariables, cryptox.ResourceContext("template-variables", serviceID.String()))
+		if decryptErr != nil || json.Unmarshal(plain, &preserved) != nil {
+			writeError(w, 500, "decryption_failed", "template variables cannot be decrypted")
+			return
+		}
+	}
+	storedOverrides := map[string]string{}
+	if provenance.EncryptedOverrides != "" {
+		plain, decryptErr := s.Box.Decrypt(provenance.EncryptedOverrides, cryptox.ResourceContext("template-overrides", serviceID.String()))
+		if decryptErr != nil || json.Unmarshal(plain, &storedOverrides) != nil {
+			writeError(w, 500, "decryption_failed", "template overrides cannot be decrypted")
+			return
+		}
+	}
+	overrides := templates.UpgradeOverrides(template, preserved, storedOverrides, in.Variables)
+	upgraded, err := templates.InstantiateWithOverrides(template, target.ComposeYAML, provenance.BaseDomain, overrides)
+	if err == nil {
+		upgraded.ComposeYAML, err = templates.ApplyMounts(upgraded.ComposeYAML, upgraded.Mounts)
+	}
+	if err == nil {
+		_, err = s.Compiler.Compile(upgraded.ComposeYAML, nil)
+	}
+	if err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	environmentJSON, _ := json.Marshal(upgraded.Environment)
+	encryptedEnvironment, err := s.Box.Encrypt(environmentJSON, composeEnvironmentContext(serviceID))
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	variablesJSON, _ := json.Marshal(upgraded.Variables)
+	encryptedVariables, err := s.Box.Encrypt(variablesJSON, cryptox.ResourceContext("template-variables", serviceID.String()))
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	overridesJSON, _ := json.Marshal(overrides)
+	encryptedOverrides, err := s.Box.Encrypt(overridesJSON, cryptox.ResourceContext("template-overrides", serviceID.String()))
+	if err != nil {
+		writeError(w, 500, "encryption_failed", err.Error())
+		return
+	}
+	routes := make([]store.Route, 0, len(upgraded.Domains))
+	for _, domain := range upgraded.Domains {
+		port, portErr := templates.PortNumber(domain.Port)
+		if portErr != nil {
+			writeError(w, 400, "invalid_template", portErr.Error())
+			return
+		}
+		routes = append(routes, store.Route{ComposeServiceID: serviceID, ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"})
+	}
+	upgradedSum := sha256.Sum256([]byte(upgraded.ComposeYAML))
+	targetRef := target.ID
+	service.ComposeYAML, service.EncryptedEnv = upgraded.ComposeYAML, encryptedEnvironment
+	service, routes, err = s.Store.UpgradeTemplateService(r.Context(), p.OrganizationID, service.Revision, service, routes, store.TemplateInstance{TemplateID: &targetRef, TemplateKey: target.Key, TemplateVersion: target.Version, TemplateChecksum: target.Checksum, AppliedComposeChecksum: hex.EncodeToString(upgradedSum[:]), BaseDomain: provenance.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides})
+	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, 409, "concurrent_update", "service changed while the template upgrade was prepared")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "template.upgrade", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"fromTemplateId": provenance.TemplateID, "toTemplateId": target.ID, "fromVersion": provenance.TemplateVersion, "toVersion": target.Version, "replacedDrift": in.AllowDrift})
+	writeJSON(w, 200, map[string]any{"service": service, "routes": routes})
 }
 
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {

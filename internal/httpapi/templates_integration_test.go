@@ -175,6 +175,80 @@ path = "/"
 	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"drifted":true`)) {
 		t.Fatalf("template drift was not reported: %d: %s", status, detailBody)
 	}
+	upgradeTOML := strings.Replace(templateTOML, `admin_email = "admin@example.test"`, `admin_email = "new-default@example.test"
+feature = "enabled"`, 1)
+	upgradeTOML = strings.Replace(upgradeTOML, `"PASSWORD=${password}"`, `"PASSWORD=${password}", "FEATURE=${feature}"`, 1)
+	upgradeConfig, _ := json.Marshal(map[string]string{"templateToml": upgradeTOML})
+	upgradeTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: orgTemplate.Key, Version: "2", Name: "Variable Test", ComposeYAML: "services:\n  app:\n    image: nginx:1.27-alpine\n", Config: upgradeConfig, Source: "dokploy", Checksum: strings.Repeat("b", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-versions", viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(upgradeTemplate.ID.String())) || bytes.Contains(body, []byte("templateToml")) {
+		t.Fatalf("template versions status = %d: %s", status, body)
+	}
+	upgradeBody := map[string]any{"templateId": upgradeTemplate.ID, "variables": map[string]string{"admin_email": "upgraded@example.test"}}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-upgrades", viewerToken, orgID, http.MethodPost, upgradeBody)
+	if status != http.StatusConflict || !bytes.Contains(body, []byte("template_drift")) {
+		t.Fatalf("drifted upgrade status = %d: %s", status, body)
+	}
+	upgradeBody["allowDrift"] = true
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-upgrades", viewerToken, orgID, http.MethodPost, upgradeBody)
+	if status != http.StatusOK || bytes.Contains(body, []byte("operator-password")) {
+		t.Fatalf("template upgrade status = %d: %s", status, body)
+	}
+	var upgradedEncryptedEnvironment string
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&upgradedEncryptedEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	upgradedEnvironmentJSON, err := box.Decrypt(upgradedEncryptedEnvironment, cryptox.ResourceContext("compose-env", created.Service.ID.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var upgradedEnvironment map[string]string
+	if err = json.Unmarshal(upgradedEnvironmentJSON, &upgradedEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	if upgradedEnvironment["PASSWORD"] != "operator-password" || upgradedEnvironment["ADMIN_EMAIL"] != "upgraded@example.test" || upgradedEnvironment["FEATURE"] != "enabled" {
+		t.Fatalf("upgraded environment = %#v", upgradedEnvironment)
+	}
+	status, detailBody = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"templateVersion":"2"`)) || !bytes.Contains(detailBody, []byte(`"drifted":false`)) {
+		t.Fatalf("upgraded provenance status = %d: %s", status, detailBody)
+	}
+	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, map[string]any{"environmentId": environmentID, "name": "Upgrade Route Blocker", "baseDomain": "example.test", "variables": map[string]string{"hostname": "blocked.example.test"}})
+	if status != http.StatusCreated {
+		t.Fatalf("route blocker instantiate status = %d", status)
+	}
+	rollbackTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: orgTemplate.Key, Version: "3", Name: "Variable Test", ComposeYAML: "services:\n  app:\n    image: nginx:1.28-alpine\n", Config: upgradeConfig, Source: "dokploy", Checksum: strings.Repeat("c", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beforeRevision int64
+	var beforeEnvironment, beforeRouteHost, beforeTemplateVersion string
+	if err = db.Pool.QueryRow(ctx, `SELECT s.revision,s.encrypted_env,r.host,t.template_version FROM compose_services s JOIN routes r ON r.compose_service_id=s.id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1`, created.Service.ID).Scan(&beforeRevision, &beforeEnvironment, &beforeRouteHost, &beforeTemplateVersion); err != nil {
+		t.Fatal(err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-upgrades", viewerToken, orgID, http.MethodPost, map[string]any{"templateId": rollbackTemplate.ID, "variables": map[string]string{"hostname": "blocked.example.test"}})
+	if status != http.StatusConflict {
+		t.Fatalf("upgrade route collision status = %d: %s", status, body)
+	}
+	var afterRevision int64
+	var afterEnvironment, afterRouteHost, afterTemplateVersion string
+	if err = db.Pool.QueryRow(ctx, `SELECT s.revision,s.encrypted_env,r.host,t.template_version FROM compose_services s JOIN routes r ON r.compose_service_id=s.id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1`, created.Service.ID).Scan(&afterRevision, &afterEnvironment, &afterRouteHost, &afterTemplateVersion); err != nil {
+		t.Fatal(err)
+	}
+	if afterRevision != beforeRevision || afterEnvironment != beforeEnvironment || afterRouteHost != beforeRouteHost || afterTemplateVersion != beforeTemplateVersion {
+		t.Fatalf("failed upgrade was not atomic: before=(%d,%q,%q,%q) after=(%d,%q,%q,%q)", beforeRevision, beforeEnvironment, beforeRouteHost, beforeTemplateVersion, afterRevision, afterEnvironment, afterRouteHost, afterTemplateVersion)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-versions", otherToken, otherOrgID, http.MethodGet, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-tenant template versions status = %d: %s", status, body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-upgrades", otherToken, otherOrgID, http.MethodPost, map[string]any{"templateId": rollbackTemplate.ID})
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-tenant template upgrade status = %d: %s", status, body)
+	}
 
 	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, map[string]any{"environmentId": environmentID, "name": "Rejected", "variables": map[string]string{"undeclared": "value"}})
 	if status != http.StatusBadRequest {

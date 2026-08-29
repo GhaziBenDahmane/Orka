@@ -99,6 +99,30 @@ func TestDescribeVariablesRedactsGeneratedAndSensitiveDefaults(t *testing.T) {
 	}
 }
 
+func TestUpgradeOverridesPreservesInputsAndGeneratorsButRecomputesDerivedValues(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{
+		"password": "${password:32}",
+		"database": "new_default",
+		"dsn":      "postgres://app:${password}@db/${database}",
+		"removed":  "not actually present",
+	}}
+	delete(template.Variables, "removed")
+	merged := UpgradeOverrides(template,
+		map[string]string{"password": "stable-secret", "database": "old_default", "dsn": "old-dsn", "old_key": "old"},
+		map[string]string{"database": "operator_database", "old_key": "old"},
+		map[string]string{"password": "replacement-secret"},
+	)
+	if merged["password"] != "replacement-secret" || merged["database"] != "operator_database" {
+		t.Fatalf("explicit and requested overrides were not retained: %#v", merged)
+	}
+	if _, exists := merged["dsn"]; exists {
+		t.Fatalf("derived value must be recomputed: %#v", merged)
+	}
+	if _, exists := merged["old_key"]; exists {
+		t.Fatalf("removed variable survived upgrade: %#v", merged)
+	}
+}
+
 func TestSignedCatalogDetectsTampering(t *testing.T) {
 	root := t.TempDir()
 	blueprint := filepath.Join(root, "blueprints", "demo")

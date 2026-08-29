@@ -80,6 +80,9 @@ Status: core implementation complete; storage breadth remains.
 
 - Native catalog plus Dokploy `template.toml` compatibility and bulk importer.
 - Safety classifications instead of silently granting host access.
+- Template instances retain encrypted resolved inputs and explicit overrides,
+  expose drift-aware version provenance, and can atomically move between
+  revisions without rotating generated credentials.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
 - PostgreSQL, MySQL, MariaDB, and MongoDB native backup/restore, streaming
