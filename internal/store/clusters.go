@@ -206,9 +206,9 @@ func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 
 func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string) (ClusterCommand, error) {
 	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: kind, Status: "pending"}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND ($3 NOT IN ('swarm.deploy','container.run','database.utility') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','container.run','database.utility') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ClusterCommand{}, ErrNotFound
+		return ClusterCommand{}, clusterCommandUnavailableError(ctx, s.Pool, clusterID, kind)
 	}
 	return item, err
 }
@@ -223,18 +223,36 @@ func (s *Store) EnqueueAgentUpgrade(ctx context.Context, clusterID, commandID uu
 	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
 		return ClusterCommand{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,target_image) SELECT $1,c.id,'agent.upgrade',$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' RETURNING created_at`, commandID, clusterID, encryptedPayload, targetImage).Scan(&item.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,target_image) SELECT $1,c.id,'agent.upgrade',$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' RETURNING created_at`, commandID, clusterID, encryptedPayload, targetImage).Scan(&item.CreatedAt)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return ClusterCommand{}, ErrBusy
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ClusterCommand{}, ErrNotFound
+		return ClusterCommand{}, clusterCommandUnavailableError(ctx, tx, clusterID, "agent.upgrade")
 	}
 	if err != nil {
 		return ClusterCommand{}, err
 	}
 	return item, tx.Commit(ctx)
+}
+
+func clusterCommandUnavailableError(ctx context.Context, db policyQueryer, clusterID uuid.UUID, kind string) error {
+	var writable, fresh bool
+	err := db.QueryRow(ctx, `SELECT
+		state='active' AND ($2 NOT IN ('swarm.deploy','container.run','database.utility') OR NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false)),
+		COALESCE(last_seen_at>now()-interval '2 minutes',false)
+		FROM clusters WHERE id=$1`, clusterID, kind).Scan(&writable, &fresh)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !writable) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !fresh {
+		return ErrClusterUnavailable
+	}
+	return ErrNotFound
 }
 
 func (s *Store) GetClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) (ClusterCommand, error) {

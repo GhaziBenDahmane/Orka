@@ -37,6 +37,7 @@ func (s *Store) ListReconciliationCandidates(ctx context.Context, limit int) ([]
 		LEFT JOIN service_reconciliations r ON r.compose_service_id=s.id
 		WHERE s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL
 		AND EXISTS(SELECT 1 FROM deployments d WHERE d.compose_service_id=s.id AND d.status='succeeded')
+		AND (e.cluster_id IS NULL OR EXISTS(SELECT 1 FROM clusters c WHERE c.id=e.cluster_id AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes'))
 		ORDER BY r.last_checked_at NULLS FIRST,s.id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -117,7 +118,7 @@ func (s *Store) RecordReconciliation(ctx context.Context, candidate Reconciliati
 		NOT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON j.kind='deploy.compose' AND d.id=(j.payload->>'deploymentId')::uuid WHERE d.compose_service_id=$1 AND j.status IN ('pending','running'))
 		AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='delete.compose' AND j.payload->>'serviceId'=$1::text AND j.status IN ('pending','running'))
 		AND NOT EXISTS(SELECT 1 FROM resource_policies rp WHERE rp.organization_id=$2 AND rp.maintenance_enabled AND ((rp.scope_type='organization' AND rp.scope_id=$2) OR (rp.scope_type='project' AND rp.scope_id=$3) OR (rp.scope_type='environment' AND rp.scope_id=$4)))
-		AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM clusters c WHERE c.id=$5 AND c.state='active' AND c.deletion_requested_at IS NULL AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)))
+		AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM clusters c JOIN environments assigned ON assigned.id=$4 WHERE c.id=$5 AND c.state='active' AND c.deletion_requested_at IS NULL AND c.last_seen_at>now()-interval '2 minutes' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false) AND (assigned.placement_selector='{}'::jsonb OR c.labels@>assigned.placement_selector) AND CASE WHEN jsonb_typeof(c.capacity->'schedulableNodes')='number' THEN (c.capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(c.capacity->'nodes')='number' THEN (c.capacity->>'nodes')::integer ELSE 0 END >= assigned.minimum_nodes AND CASE WHEN jsonb_typeof(c.capacity->'nanoCpus')='number' THEN (c.capacity->>'nanoCpus')::bigint ELSE 0 END >= assigned.minimum_nano_cpus AND CASE WHEN jsonb_typeof(c.capacity->'memoryBytes')='number' THEN (c.capacity->>'memoryBytes')::bigint ELSE 0 END >= assigned.minimum_memory_bytes))
 		AND NOT EXISTS(SELECT 1 FROM service_reconciliations r WHERE r.compose_service_id=$1 AND r.last_repair_at>now()-interval '10 minutes')`, candidate.ServiceID, candidate.OrganizationID, projectID, environmentID, clusterID).Scan(&permitted)
 	if err != nil {
 		return nil, err

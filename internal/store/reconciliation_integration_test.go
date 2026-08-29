@@ -160,3 +160,62 @@ func TestReconciliationHonorsMaintenanceAndNeedsEffectiveSourceSnapshot(t *testi
 		t.Fatalf("unsafe repairs=%d err=%v", deployments, err)
 	}
 }
+
+func TestRemoteReconciliationWaitsForFreshCapacityAfterPartition(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, projectID, environmentID, serviceID, clusterID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Remote reconcile',$2)`, []any{organizationID, "remote-reconcile-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,last_seen_at) VALUES($1,$2,'Remote','remote','active','{"region":"eu"}', '{"schedulableNodes":3,"nanoCpus":6000000000,"memoryBytes":12884901888}',now())`, []any{clusterID, organizationID}},
+		{`INSERT INTO environments(id,project_id,cluster_id,name,slug,placement_selector,minimum_nodes,minimum_nano_cpus,minimum_memory_bytes) VALUES($1,$2,$3,'Production','production','{"region":"eu"}',3,6000000000,12884901888)`, []any{environmentID, projectID, clusterID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: desired:new}}',2)`, []any{serviceID, environmentID, "remote-reconcile-" + serviceID.String()}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,status,trigger,finished_at) VALUES($1,$2,1,'services: {api: {image: old}}','services: {api: {image: registry/app@sha256:old}}','succeeded','manual',now())`, []any{uuid.New(), serviceID}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates, err := db.ListReconciliationCandidates(ctx, 10)
+	if err != nil || len(candidates) != 1 || candidates[0].ServiceID != serviceID {
+		t.Fatalf("fresh candidates=%#v err=%v", candidates, err)
+	}
+	candidate := candidates[0]
+	if repair, err := db.RecordReconciliation(ctx, candidate, "missing", "first observation"); err != nil || repair != nil {
+		t.Fatalf("first observation repair=%#v err=%v", repair, err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE clusters SET last_seen_at=now()-interval '10 minutes' WHERE id=$1`, clusterID); err != nil {
+		t.Fatal(err)
+	}
+	if candidates, err = db.ListReconciliationCandidates(ctx, 10); err != nil || len(candidates) != 0 {
+		t.Fatalf("partitioned candidates=%#v err=%v", candidates, err)
+	}
+	if repair, err := db.RecordReconciliation(ctx, candidate, "missing", "partitioned"); err != nil || repair != nil {
+		t.Fatalf("partition repair=%#v err=%v", repair, err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE clusters SET last_seen_at=now(),capacity=jsonb_set(capacity,'{schedulableNodes}','2') WHERE id=$1`, clusterID); err != nil {
+		t.Fatal(err)
+	}
+	if repair, err := db.RecordReconciliation(ctx, candidate, "degraded", "capacity unavailable"); err != nil || repair != nil {
+		t.Fatalf("capacity repair=%#v err=%v", repair, err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE clusters SET capacity=jsonb_set(capacity,'{schedulableNodes}','3') WHERE id=$1`, clusterID); err != nil {
+		t.Fatal(err)
+	}
+	repair, err := db.RecordReconciliation(ctx, candidate, "degraded", "capacity restored")
+	if err != nil || repair == nil || repair.Trigger != "reconcile" || repair.Revision != 1 {
+		t.Fatalf("recovered repair=%#v err=%v", repair, err)
+	}
+	var repairCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM deployments WHERE compose_service_id=$1 AND trigger='reconcile'`, serviceID).Scan(&repairCount); err != nil || repairCount != 1 {
+		t.Fatalf("repair deployments=%d err=%v", repairCount, err)
+	}
+}

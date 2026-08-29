@@ -2398,6 +2398,15 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "maintenance_mode", "resource is in maintenance mode")
 		return
 	}
+	if errors.Is(err, store.ErrClusterUnavailable) {
+		w.Header().Set("Retry-After", "30")
+		writeError(w, http.StatusServiceUnavailable, "cluster_unavailable", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrNoCapacity) {
+		writeError(w, http.StatusConflict, "no_cluster_capacity", err.Error())
+		return
+	}
 	var quota *store.QuotaExceededError
 	if errors.As(err, &quota) {
 		writeError(w, http.StatusConflict, "quota_exceeded", quota.Error())

@@ -87,16 +87,35 @@ func servicePolicyScope(ctx context.Context, tx pgx.Tx, organizationID, serviceI
 }
 
 func ensureEnvironmentClusterWritable(ctx context.Context, tx pgx.Tx, environmentID uuid.UUID) error {
-	var available bool
-	err := tx.QueryRow(ctx, `SELECT e.cluster_id IS NULL OR EXISTS(SELECT 1 FROM clusters c WHERE c.id=e.cluster_id AND c.state='active' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) FROM environments e WHERE e.id=$1`, environmentID).Scan(&available)
+	var local, writable, fresh, capacity bool
+	err := tx.QueryRow(ctx, `SELECT
+		e.cluster_id IS NULL,
+		e.cluster_id IS NULL OR COALESCE(c.state='active' AND NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false),false),
+		e.cluster_id IS NULL OR COALESCE(c.last_seen_at>now()-interval '2 minutes',false),
+		e.cluster_id IS NULL OR COALESCE(
+			(e.placement_selector='{}'::jsonb OR c.labels@>e.placement_selector)
+			AND CASE WHEN jsonb_typeof(c.capacity->'schedulableNodes')='number' THEN (c.capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(c.capacity->'nodes')='number' THEN (c.capacity->>'nodes')::integer ELSE 0 END >= e.minimum_nodes
+			AND CASE WHEN jsonb_typeof(c.capacity->'nanoCpus')='number' THEN (c.capacity->>'nanoCpus')::bigint ELSE 0 END >= e.minimum_nano_cpus
+			AND CASE WHEN jsonb_typeof(c.capacity->'memoryBytes')='number' THEN (c.capacity->>'memoryBytes')::bigint ELSE 0 END >= e.minimum_memory_bytes,
+		false)
+		FROM environments e LEFT JOIN clusters c ON c.id=e.cluster_id WHERE e.id=$1`, environmentID).Scan(&local, &writable, &fresh, &capacity)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if !available {
+	if local {
+		return nil
+	}
+	if !writable {
 		return ErrMaintenance
+	}
+	if !fresh {
+		return ErrClusterUnavailable
+	}
+	if !capacity {
+		return ErrNoCapacity
 	}
 	return nil
 }

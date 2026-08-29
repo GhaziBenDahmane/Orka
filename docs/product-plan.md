@@ -187,7 +187,11 @@ replacement's deployment or job result.
   election behavior under partitions. A scheduled disposable three-manager
   Swarm conformance test now proves leader replacement, replica convergence,
   minority-write rejection, and quorum recovery with JSON timing evidence;
-  the production multi-host topology must still repeat the exercise.
+  placement, deployment admission, remote command creation, and drift repair
+  fail closed when an agent heartbeat is stale, and placement capacity is
+  revalidated before mutations. PostgreSQL integration tests simulate
+  heartbeat and capacity loss plus recovery; the production multi-host
+  topology must still repeat the exercise under real network partitions.
 
 Exit gate: loss of a controller or cluster manager does not corrupt desired
 state, duplicate destructive jobs, or expose credentials.
@@ -271,6 +275,7 @@ publishes an amd64/arm64 digest with BuildKit provenance and SBOM attestations,
 then keylessly signs and verifies it through Sigstore. Each promotion creates
 a non-overwritable GitHub Release with the immutable digest, promotion
 manifest, and downloadable SPDX JSON evidence. An actual signed promotion and
-its soak evidence, plus the staging-only conformance, load, real-provider, full
-Dokploy cutover, and measured disaster-recovery gates, remain open; see
+its soak evidence, plus the staging-only conformance, load, real-provider,
+production-topology partition, full Dokploy cutover, and measured
+disaster-recovery gates, remain open; see
 `docs/release-checklist.md`.

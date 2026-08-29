@@ -44,7 +44,7 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, []any{userID, userID.String() + "@example.test"}},
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, []any{organizationID, userID}},
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes')`, []any{uuid.New(), userID, cryptox.Digest(token)}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, []any{clusterID, organizationID}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, []any{clusterID, organizationID}},
 	} {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)

@@ -36,7 +36,7 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
-	if _, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, clusterID, orgID); err != nil {
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, clusterID, orgID); err != nil {
 		t.Fatal(err)
 	}
 	remote := RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 5 * time.Second}

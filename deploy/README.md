@@ -170,8 +170,10 @@ for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
 one when the corresponding agent identity volume is intact. The equivalent
 installer verifies the exact requested image digest and rejects active, paused,
-or rolled-back service updates before reporting success. The equivalent manual
-commands are:
+or rolled-back service updates before reporting success. Placement, deployment,
+remote commands, and drift repair fail closed when the assigned agent has not
+heartbeated for two minutes; placement capacity is rechecked before every
+deployment or automatic repair. The equivalent manual commands are:
 
 ```sh
 printf '%s' "$ENROLLMENT_TOKEN" | docker secret create dockyard_agent_enrollment_token -

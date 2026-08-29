@@ -174,7 +174,7 @@ func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 	t.Cleanup(db.Pool.Close)
 	organizationID, clusterID := uuid.New(), uuid.New()
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Agent upgrade',$2)`, organizationID, "agent-upgrade-"+organizationID.String()); err == nil {
-		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, clusterID, organizationID)
+		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, clusterID, organizationID)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -300,6 +300,9 @@ func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err = db.CreateEnvironmentOnCluster(ctx, orgID, projectID, "Explicit stale", "explicit-stale", &staleID); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("explicit stale placement error=%v, want ErrNoCapacity", err)
+	}
 	environment, err := db.CreateEnvironmentWithPlacement(ctx, orgID, projectID, "Production", "production", nil, map[string]string{"region": "eu"}, 3, 8_000_000_000, 16_000_000_000)
 	if err != nil {
 		t.Fatal(err)
@@ -309,6 +312,24 @@ func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
 	}
 	serviceID := uuid.New()
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Web','web',$3,'services: {}')`, serviceID, environment.ID, "placement-"+serviceID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE clusters SET last_seen_at=now()-interval '10 minutes' WHERE id=$1`, largeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueDeployment(ctx, orgID, serviceID, uuid.Nil, "manual"); !errors.Is(err, ErrClusterUnavailable) {
+		t.Fatalf("deployment during agent partition error=%v, want ErrClusterUnavailable", err)
+	}
+	if _, err = db.EnqueueClusterCommand(ctx, largeID, uuid.New(), "swarm.deploy", "encrypted"); !errors.Is(err, ErrClusterUnavailable) {
+		t.Fatalf("command during agent partition error=%v, want ErrClusterUnavailable", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE clusters SET last_seen_at=now(),capacity=jsonb_set(capacity,'{nodes}','1') WHERE id=$1`, largeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueDeployment(ctx, orgID, serviceID, uuid.Nil, "manual"); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("deployment after capacity loss error=%v, want ErrNoCapacity", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE clusters SET capacity=jsonb_set(capacity,'{nodes}','5') WHERE id=$1`, largeID); err != nil {
 		t.Fatal(err)
 	}
 	maintenanceStart, maintenanceEnd := time.Now().Add(-time.Minute), time.Now().Add(time.Hour)

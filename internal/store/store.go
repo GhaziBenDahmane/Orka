@@ -20,6 +20,7 @@ var ErrBusy = errors.New("resource has an operation in progress")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
 var ErrNoCapacity = errors.New("no eligible cluster has the requested placement capacity")
+var ErrClusterUnavailable = errors.New("assigned remote cluster has no fresh heartbeat")
 var ErrRemoteBackupRequired = errors.New("a remote backup destination is required")
 var ErrLastOwner = errors.New("organization must retain an active owner")
 var ErrSCIMManaged = errors.New("membership is managed by SCIM")
@@ -765,7 +766,7 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 	}
 	if clusterID != nil {
 		var clusterExists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND organization_id=$2 AND state='active' AND NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false) AND ($3::jsonb='{}'::jsonb OR labels@>$3::jsonb) AND CASE WHEN jsonb_typeof(capacity->'schedulableNodes')='number' THEN (capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(capacity->'nodes')='number' THEN (capacity->>'nodes')::integer ELSE 0 END >=$4 AND CASE WHEN jsonb_typeof(capacity->'nanoCpus')='number' THEN (capacity->>'nanoCpus')::bigint ELSE 0 END >=$5 AND CASE WHEN jsonb_typeof(capacity->'memoryBytes')='number' THEN (capacity->>'memoryBytes')::bigint ELSE 0 END >=$6 AND (($3::jsonb='{}'::jsonb AND $4=0 AND $5=0 AND $6=0) OR last_seen_at>now()-interval '2 minutes'))`, *clusterID, organizationID, selectorJSON, minimumNodes, minimumNanoCPUs, minimumMemoryBytes).Scan(&clusterExists); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND organization_id=$2 AND state='active' AND last_seen_at>now()-interval '2 minutes' AND NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false) AND ($3::jsonb='{}'::jsonb OR labels@>$3::jsonb) AND CASE WHEN jsonb_typeof(capacity->'schedulableNodes')='number' THEN (capacity->>'schedulableNodes')::integer WHEN jsonb_typeof(capacity->'nodes')='number' THEN (capacity->>'nodes')::integer ELSE 0 END >=$4 AND CASE WHEN jsonb_typeof(capacity->'nanoCpus')='number' THEN (capacity->>'nanoCpus')::bigint ELSE 0 END >=$5 AND CASE WHEN jsonb_typeof(capacity->'memoryBytes')='number' THEN (capacity->>'memoryBytes')::bigint ELSE 0 END >=$6)`, *clusterID, organizationID, selectorJSON, minimumNodes, minimumNanoCPUs, minimumMemoryBytes).Scan(&clusterExists); err != nil {
 			return Environment{}, err
 		}
 		if !clusterExists {

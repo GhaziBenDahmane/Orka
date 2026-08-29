@@ -392,7 +392,7 @@ func TestMigrateUpgradeFrom071AddsDurableAgentUpgradeVerification(t *testing.T) 
 	organizationID, clusterID, legacyCommandID := uuid.New(), uuid.New(), uuid.New()
 	var err error
 	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Agent migration',$2)`, organizationID, "agent-migration-"+organizationID.String()); err == nil {
-		_, err = pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, clusterID, organizationID)
+		_, err = pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, clusterID, organizationID)
 	}
 	if err == nil {
 		_, err = pool.Exec(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,lease_id,lease_expires_at) VALUES($1,$2,'agent.upgrade','legacy','leased',$3,now()+interval '1 minute')`, legacyCommandID, clusterID, uuid.New())
