@@ -271,14 +271,8 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_id_token", "identity token verification failed")
 		return
 	}
-	var claims struct {
-		Subject       string `json:"sub"`
-		Email         string `json:"email"`
-		EmailVerified *bool  `json:"email_verified"`
-		Name          string `json:"name"`
-		Nonce         string `json:"nonce"`
-	}
-	if err = idToken.Claims(&claims); err != nil || claims.Subject == "" || claims.Email == "" {
+	var claims oidcIdentityClaims
+	if err = idToken.Claims(&claims); err != nil || claims.Subject == "" {
 		writeError(w, 401, "invalid_claims", "identity token lacks required claims")
 		return
 	}
@@ -290,7 +284,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "email_unverified", "verified email is required")
 		return
 	}
-	email, domain, ok := oidcEmail(claims.Email)
+	email, domain, ok := claims.loginEmail()
 	if !ok {
 		writeError(w, 401, "invalid_claims", "identity token lacks a valid email address")
 		return
@@ -311,6 +305,26 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeLoginSuccess(w, r, token)
+}
+
+type oidcIdentityClaims struct {
+	Subject           string `json:"sub"`
+	Email             string `json:"email"`
+	PreferredUsername string `json:"preferred_username"`
+	EmailVerified     *bool  `json:"email_verified"`
+	Name              string `json:"name"`
+	Nonce             string `json:"nonce"`
+}
+
+// loginEmail accepts the standard email claim first and falls back to
+// preferred_username for providers such as Microsoft Entra ID that commonly
+// omit email for workforce accounts. Both values still pass the same strict
+// address and organization-domain validation before JIT provisioning.
+func (claims oidcIdentityClaims) loginEmail() (string, string, bool) {
+	if strings.TrimSpace(claims.Email) != "" {
+		return oidcEmail(claims.Email)
+	}
+	return oidcEmail(claims.PreferredUsername)
 }
 
 func (s *Server) setLoginStateCookie(w http.ResponseWriter, kind, state string, sameSite http.SameSite) error {

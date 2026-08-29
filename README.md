@@ -34,7 +34,9 @@ estimate, delivery order, and release gates are in
 [docs/product-plan.md](docs/product-plan.md).
 AI deployment and trust boundaries are documented in
 [docs/ai-auditing.md](docs/ai-auditing.md); remote catalog layout is in
-[docs/template-repositories.md](docs/template-repositories.md).
+[docs/template-repositories.md](docs/template-repositories.md), and provider
+setup plus release evidence requirements are in
+[docs/sso-provider-conformance.md](docs/sso-provider-conformance.md).
 
 ## Installation
 
@@ -96,8 +98,8 @@ Keep the signing key offline and distribute only the public key.
 For an idempotent control-plane migration, including a mandatory dry-run and
 encrypted environment re-keying, see
 [docs/migrating-from-dokploy.md](docs/migrating-from-dokploy.md).
-The same guide covers durable native PostgreSQL, MySQL, MariaDB, MongoDB, and
-Redis data transfers after the imported target stacks are deployed.
+The same guide covers durable native PostgreSQL, MySQL, MariaDB, MongoDB,
+Redis, and libSQL data transfers after the imported target stacks are deployed.
 
 Bootstrap the first administrator:
 

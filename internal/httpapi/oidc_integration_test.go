@@ -138,6 +138,30 @@ func TestOIDCEmailValidationRejectsMalformedClaims(t *testing.T) {
 	}
 }
 
+func TestOIDCIdentityClaimsUseProviderCompatibleEmail(t *testing.T) {
+	verified := true
+	tests := []struct {
+		name       string
+		claims     oidcIdentityClaims
+		wantEmail  string
+		wantDomain string
+		wantOK     bool
+	}{
+		{name: "email", claims: oidcIdentityClaims{Email: "User@Example.Test", PreferredUsername: "other@example.test", EmailVerified: &verified}, wantEmail: "user@example.test", wantDomain: "example.test", wantOK: true},
+		{name: "entra preferred username", claims: oidcIdentityClaims{PreferredUsername: "User@Contoso.com"}, wantEmail: "user@contoso.com", wantDomain: "contoso.com", wantOK: true},
+		{name: "malformed email fails closed", claims: oidcIdentityClaims{Email: "not-an-email", PreferredUsername: "user@example.test"}, wantOK: false},
+		{name: "non-email username", claims: oidcIdentityClaims{PreferredUsername: "shortname"}, wantOK: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			email, domain, ok := test.claims.loginEmail()
+			if email != test.wantEmail || domain != test.wantDomain || ok != test.wantOK {
+				t.Fatalf("loginEmail() = %q, %q, %v; want %q, %q, %v", email, domain, ok, test.wantEmail, test.wantDomain, test.wantOK)
+			}
+		})
+	}
+}
+
 func TestLoginStateCookieIsOpaqueAndBrowserBound(t *testing.T) {
 	box, err := cryptox.New(bytes.Repeat([]byte{29}, 32))
 	if err != nil {
