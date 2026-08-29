@@ -116,6 +116,20 @@ jobs:
           output-file: sbom.spdx.json
           upload-artifact: false
 
+      - name: Download database recovery evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: recovery-*
+          path: recovery-evidence
+
+      - name: Aggregate database recovery evidence
+        run: |
+          set -euo pipefail
+          mapfile -t evidence_files < <(find recovery-evidence -type f -name 'recovery-*.json' -print | sort)
+          test "${#evidence_files[@]}" -eq 10
+          jq -s 'sort_by(.engine)' "${evidence_files[@]}" > database-recovery-evidence.json
+          jq -e 'length == 10 and ([.[].engine] | unique | length) == 10 and all(.[]; .dataVerified == true and .restartVerified == true)' database-recovery-evidence.json >/dev/null
+
       - name: Write promotion manifest
         env:
           IMAGE: ${{ steps.release.outputs.image }}
@@ -134,7 +148,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -146,6 +160,7 @@ jobs:
             promotion-manifest.json
             image-digest.txt
             sbom.spdx.json
+            database-recovery-evidence.json
           if-no-files-found: error
 
       - name: Publish immutable release evidence
@@ -154,7 +169,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json)
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

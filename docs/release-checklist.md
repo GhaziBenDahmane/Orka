@@ -61,9 +61,10 @@ links for every item below.
   against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
   ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON
   record per engine.
-  The release workflow runs the same matrix and preserves one log artifact per
-  engine; repeat on production-equivalent storage because CI timings are not
-  SLOs.
+  The release workflow runs the same matrix, validates a machine-readable
+  record for each engine, and publishes their aggregate as
+  `database-recovery-evidence.json`; repeat on production-equivalent storage
+  because CI timings are not SLOs.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
   procedure. `make test-keycloak-sso` provisions a real TLS-enabled Keycloak
   realm. Its OIDC flow verifies discovery, authorization-code login, PKCE,
@@ -89,7 +90,8 @@ links for every item below.
   signs the resulting digest with GitHub's OIDC identity, and verifies all
   three. It also creates the matching immutable GitHub Release with
   `promotion-manifest.json`, `image-digest.txt`, and a downloadable
-  `sbom.spdx.json`; the same files remain available as a workflow artifact.
+  `sbom.spdx.json` plus the ten-engine `database-recovery-evidence.json`; the
+  same files remain available as a workflow artifact.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
