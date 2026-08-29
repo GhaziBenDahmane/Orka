@@ -1892,6 +1892,17 @@ func (s *Store) DisableOIDCProvider(ctx context.Context, organizationID, id uuid
 	return nil
 }
 
+func (s *Store) SetOIDCProviderEnabled(ctx context.Context, organizationID, id uuid.UUID, enabled bool) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE oidc_providers SET enabled=$3 WHERE id=$1 AND organization_id=$2`, id, organizationID, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) DiscoverOIDC(ctx context.Context, domain string) ([]OIDCProvider, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled FROM oidc_providers WHERE enabled AND $1=ANY(domains) ORDER BY name`, strings.ToLower(domain))
 	if err != nil {
@@ -2036,6 +2047,17 @@ func (s *Store) DiscoverSAML(ctx context.Context, domain string) ([]SAMLProvider
 
 func (s *Store) DisableSAMLProvider(ctx context.Context, organizationID, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET enabled=false WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetSAMLProviderEnabled(ctx context.Context, organizationID, id uuid.UUID, enabled bool) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET enabled=$3 WHERE id=$1 AND organization_id=$2`, id, organizationID, enabled)
 	if err != nil {
 		return err
 	}

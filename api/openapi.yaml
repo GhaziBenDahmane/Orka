@@ -2738,6 +2738,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/sso/oidc-providers/{providerID}/enable:
+    post:
+      operationId: post_v1_sso_oidc_providers_providerID_enable
+      tags: [sso]
+      parameters:
+        - name: providerID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/sso/saml-providers:
     get:
       operationId: get_v1_sso_saml_providers
@@ -2792,6 +2819,33 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
     put:
       operationId: put_v1_sso_saml_providers_providerID
+      tags: [sso]
+      parameters:
+        - name: providerID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/sso/saml-providers/{providerID}/enable:
+    post:
+      operationId: post_v1_sso_saml_providers_providerID_enable
       tags: [sso]
       parameters:
         - name: providerID

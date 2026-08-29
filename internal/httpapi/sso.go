@@ -152,6 +152,21 @@ func (s *Server) deleteOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (s *Server) enableOIDCProvider(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.SetOIDCProviderEnabled(r.Context(), p.OrganizationID, id, true); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.oidc.enable", "oidc_provider", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) discoverOIDC(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
 	parts := strings.Split(email, "@")

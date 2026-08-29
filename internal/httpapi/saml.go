@@ -174,6 +174,21 @@ func (s *Server) deleteSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) enableSAMLProvider(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.SetSAMLProviderEnabled(r.Context(), p.OrganizationID, id, true); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.saml.enable", "saml_provider", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) discoverSAML(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
 	parts := strings.Split(email, "@")

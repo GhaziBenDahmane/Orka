@@ -115,6 +115,15 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 	if _, err = db.UpdateOIDCProvider(ctx, uuid.New(), store.OIDCProvider{ID: providerID, Name: "cross-tenant", Issuer: issuer, ClientID: "x", Domains: []string{"example.test"}, Scopes: []string{"openid"}, DefaultRole: "viewer"}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cross-tenant provider update error = %v", err)
 	}
+	if err = db.DisableOIDCProvider(ctx, organizationID, providerID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SetOIDCProviderEnabled(ctx, uuid.New(), providerID, true); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-tenant provider enable error = %v", err)
+	}
+	if err = db.SetOIDCProviderEnabled(ctx, organizationID, providerID, true); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestOIDCEmailValidationRejectsMalformedClaims(t *testing.T) {
