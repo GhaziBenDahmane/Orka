@@ -87,6 +87,34 @@ func TestMigrateFreshInstallIsCompleteAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateUpgradeFrom062AddsRemoteCatalogTrustPolicy(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "062_ai_audits_and_template_repositories.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, repositoryID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'catalog org',$2)`, organizationID, "catalog-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref) VALUES($1,$2,'Catalog','catalog','https://github.com/acme/catalog','main')`, repositoryID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var key string
+	var required bool
+	if err := pool.QueryRow(ctx, `SELECT trusted_public_key,require_signature FROM template_repositories WHERE id=$1`, repositoryID).Scan(&key, &required); err != nil {
+		t.Fatal(err)
+	}
+	if key != "" || required {
+		t.Fatalf("unexpected migrated trust policy key=%q required=%v", key, required)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE template_repositories SET require_signature=true WHERE id=$1`, repositoryID); err == nil {
+		t.Fatal("signature requirement accepted without a trusted public key")
+	}
+}
+
 func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "034_ssh_source_credentials.sql"); err != nil {

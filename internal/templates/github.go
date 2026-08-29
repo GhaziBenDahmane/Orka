@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/bendahma/dokploy-go/internal/store"
 )
 
 const maxCatalogArchiveBytes int64 = 64 << 20
@@ -127,4 +129,26 @@ func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL,
 		}
 	}
 	return directory, cleanup, nil
+}
+
+// VerifyRepositoryCatalog applies the repository's trust policy before any
+// catalog entries are imported. Supplying a key always enables verification;
+// requireSignature additionally prevents an accidentally unconfigured key.
+func VerifyRepositoryCatalog(repository store.TemplateRepository, root string) (string, error) {
+	raw := strings.TrimSpace(repository.TrustedPublicKey)
+	if raw == "" {
+		if repository.RequireSignature {
+			return "", errors.New("template repository requires a trusted catalog public key")
+		}
+		return "", nil
+	}
+	key, err := ParsePublicKey([]byte(raw))
+	if err != nil {
+		return "", fmt.Errorf("parse trusted catalog public key: %w", err)
+	}
+	catalogRoot := filepath.Join(root, filepath.FromSlash(repository.CatalogPath))
+	if err = VerifyCatalog(catalogRoot, key); err != nil {
+		return "", fmt.Errorf("verify signed template repository: %w", err)
+	}
+	return PublicKeyFingerprint(key), nil
 }

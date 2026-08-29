@@ -12,7 +12,11 @@ import (
 )
 
 func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Name, Slug, RepositoryURL, GitRef, CatalogPath string }
+	var in struct {
+		Name, Slug, RepositoryURL, GitRef, CatalogPath string
+		TrustedPublicKey                               string
+		RequireSignature                               bool
+	}
 	if !decode(w, r, &in) {
 		return
 	}
@@ -33,13 +37,31 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		writeError(w, 400, "invalid_template_repository", err.Error())
 		return
 	}
+	in.TrustedPublicKey = strings.TrimSpace(in.TrustedPublicKey)
+	if len(in.TrustedPublicKey) > 16<<10 {
+		writeError(w, 400, "invalid_template_repository", "trustedPublicKey exceeds 16 KiB")
+		return
+	}
+	if in.RequireSignature && in.TrustedPublicKey == "" {
+		writeError(w, 400, "invalid_template_repository", "trustedPublicKey is required when requireSignature is enabled")
+		return
+	}
+	signerFingerprint := ""
+	if in.TrustedPublicKey != "" {
+		key, keyErr := templates.ParsePublicKey([]byte(in.TrustedPublicKey))
+		if keyErr != nil {
+			writeError(w, 400, "invalid_template_repository", keyErr.Error())
+			return
+		}
+		signerFingerprint = templates.PublicKeyFingerprint(key)
+	}
 	p := principal(r)
-	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath})
+	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef})
+	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef, "requireSignature": item.RequireSignature, "signerFingerprint": signerFingerprint})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -50,6 +72,46 @@ func (s *Server) listTemplateRepositories(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) updateTemplateRepositoryTrust(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("repositoryID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid template repository id")
+		return
+	}
+	var in struct {
+		TrustedPublicKey string
+		RequireSignature bool
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.TrustedPublicKey = strings.TrimSpace(in.TrustedPublicKey)
+	if len(in.TrustedPublicKey) > 16<<10 {
+		writeError(w, 400, "invalid_template_repository", "trustedPublicKey exceeds 16 KiB")
+		return
+	}
+	if in.RequireSignature && in.TrustedPublicKey == "" {
+		writeError(w, 400, "invalid_template_repository", "trustedPublicKey is required when requireSignature is enabled")
+		return
+	}
+	fingerprint := ""
+	if in.TrustedPublicKey != "" {
+		key, keyErr := templates.ParsePublicKey([]byte(in.TrustedPublicKey))
+		if keyErr != nil {
+			writeError(w, 400, "invalid_template_repository", keyErr.Error())
+			return
+		}
+		fingerprint = templates.PublicKeyFingerprint(key)
+	}
+	p := principal(r)
+	if err = s.Store.UpdateTemplateRepositoryTrust(r.Context(), p.OrganizationID, id, in.TrustedPublicKey, in.RequireSignature); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "template_repository.trust.update", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +138,9 @@ func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) 
 	root, cleanup, err := templates.FetchGitHubCatalog(r.Context(), client, repository.RepositoryURL, repository.GitRef)
 	if err == nil {
 		defer cleanup()
+		_, err = templates.VerifyRepositoryCatalog(repository, root)
+	}
+	if err == nil {
 		var report templates.ImportReport
 		report, err = templates.ImportRepositoryCatalog(r.Context(), s.Store, repository, root)
 		if err == nil {

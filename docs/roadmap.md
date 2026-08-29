@@ -42,4 +42,5 @@
 - Lightweight built-in OpenAI-compatible auditor; optional 9Router gateway
 - Hermes-compatible auditor API for interactive investigations without Docker-socket access
 - Multiple namespaced GitHub template repositories using Dokploy Compose format
-- Signed remote catalogs, private repository credentials, and scheduled sync
+- Signed remote catalogs with per-repository Ed25519 signer pinning
+- Private repository credentials and scheduled sync

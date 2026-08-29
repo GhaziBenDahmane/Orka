@@ -106,7 +106,17 @@ func LoadPublicKey(path string) (ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	if block, _ := pem.Decode(data); block != nil {
+	return ParsePublicKey(data)
+}
+
+// ParsePublicKey accepts the same PEM or base64 representation used by the
+// catalog CLI without requiring the key to be written to disk.
+func ParsePublicKey(data []byte) (ed25519.PublicKey, error) {
+	data = bytesTrimSpace(data)
+	if block, rest := pem.Decode(data); block != nil {
+		if len(bytesTrimSpace(rest)) != 0 {
+			return nil, errors.New("catalog public key PEM contains trailing data")
+		}
 		key, parseErr := x509.ParsePKIXPublicKey(block.Bytes)
 		if parseErr != nil {
 			return nil, parseErr
@@ -117,11 +127,16 @@ func LoadPublicKey(path string) (ed25519.PublicKey, error) {
 		}
 		return publicKey, nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(string(bytesTrimSpace(data)))
+	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil || len(decoded) != ed25519.PublicKeySize {
 		return nil, errors.New("catalog public key must be Ed25519 PEM or base64 raw key")
 	}
 	return ed25519.PublicKey(decoded), nil
+}
+
+func PublicKeyFingerprint(key ed25519.PublicKey) string {
+	digest := sha256.Sum256(key)
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(digest[:])
 }
 
 func LoadPrivateKey(path string) (ed25519.PrivateKey, error) {

@@ -241,6 +241,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 |---|---|---|
 | GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
 | GET/POST | `/v1/template-repositories` | List or register organization GitHub catalogs |
+| PATCH | `/v1/template-repositories/{id}` | Pin or rotate a repository signing key and signature policy |
 | POST | `/v1/template-repositories/{id}/sync` | Fetch and import a bounded Dokploy-compatible catalog archive |
 | DELETE | `/v1/template-repositories/{id}` | Remove a catalog and its template entries |
 | POST | `/v1/templates/import/dokploy` | Import `template.toml` plus Compose YAML |
@@ -251,6 +252,11 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | GET | `/v1/database-engines` | List built-in database drivers |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
+
+Repository creation accepts `trustedPublicKey` as an Ed25519 PEM or base64 raw
+public key and `requireSignature` as a boolean. When a key is configured every
+sync verifies the catalog manifest and signature before any database write;
+`requireSignature` prevents registering the repository without a key.
 
 Template previews execute the same variable resolution, mount conversion, and
 safe-Compose validation as creation, but omit secret environment values,

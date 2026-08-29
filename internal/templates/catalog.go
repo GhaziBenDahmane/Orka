@@ -87,6 +87,8 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	report := ImportReport{Failed: map[string]string{}}
+	items := make([]store.Template, 0, len(entries))
+	identities := map[string]string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -120,19 +122,29 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 			report.Failed[entry.Name()] = "meta.json requires id, version, and name"
 			continue
 		}
-		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef})
+		provenance := map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef}
+		if key, keyErr := ParsePublicKey([]byte(repository.TrustedPublicKey)); keyErr == nil && len(key) > 0 {
+			provenance["catalogSigner"] = PublicKeyFingerprint(key)
+		}
+		config, _ := json.Marshal(provenance)
 		sum := sha256.Sum256(append(tomlBytes, compose...))
-		organizationID, repositoryID := repository.OrganizationID, repository.ID
-		_, readErr = db.UpsertRepositoryTemplate(ctx, store.Template{OrganizationID: &organizationID, RepositoryID: &repositoryID, Key: repository.Slug + "/" + meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "github", SourcePath: filepath.ToSlash(filepath.Join(repository.CatalogPath, "blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
-		if readErr != nil {
-			report.Failed[entry.Name()] = readErr.Error()
+		key := repository.Slug + "/" + meta.ID
+		identity := key + "\x00" + meta.Version
+		if previous, duplicate := identities[identity]; duplicate {
+			report.Failed[entry.Name()] = fmt.Sprintf("duplicates template key and version from %s", previous)
 			continue
 		}
-		report.Imported++
+		identities[identity] = entry.Name()
+		organizationID, repositoryID := repository.OrganizationID, repository.ID
+		items = append(items, store.Template{OrganizationID: &organizationID, RepositoryID: &repositoryID, Key: key, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "github", SourcePath: filepath.ToSlash(filepath.Join(repository.CatalogPath, "blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
 	}
-	if report.Imported == 0 && len(report.Failed) > 0 {
-		return report, fmt.Errorf("no templates imported")
+	if len(report.Failed) > 0 {
+		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
 	}
+	if err = db.ReplaceRepositoryTemplates(ctx, repository.OrganizationID, repository.ID, items); err != nil {
+		return report, err
+	}
+	report.Imported = len(items)
 	return report, nil
 }
 

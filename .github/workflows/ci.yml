@@ -67,7 +67,7 @@ jobs:
       - name: Check operational scripts
         run: |
           sh -n scripts/backup-control-plane.sh scripts/restore-control-plane.sh scripts/ci/check-image-digests.sh
-          bash -n scripts/ci/smoke-compose.sh scripts/ci/test-keycloak-oidc.sh scripts/ci/test-swarm-ha.sh
+          bash -n scripts/ci/smoke-compose.sh scripts/ci/smoke-templates.sh scripts/ci/test-keycloak-oidc.sh scripts/ci/test-swarm-ha.sh
       - name: Validate GitHub Actions workflows
         run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
       - name: Validate immutable production images
@@ -88,6 +88,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Clean-install and restart smoke test
         run: scripts/ci/smoke-compose.sh
+
+  template-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Deploy built-in PostgreSQL and Redis products
+        run: scripts/ci/smoke-templates.sh
 
   supply-chain:
     runs-on: ubuntu-latest

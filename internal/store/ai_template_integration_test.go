@@ -21,9 +21,13 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Community", Slug: "community", RepositoryURL: "https://github.com/acme/templates", GitRef: "main"})
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Community", Slug: "community", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", TrustedPublicKey: "catalog-key", RequireSignature: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || loaded.TrustedPublicKey != "catalog-key" || !loaded.RequireSignature {
+		t.Fatalf("repository trust policy=%#v err=%v", loaded, err)
 	}
 	template, err := db.UpsertRepositoryTemplate(ctx, Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "community/demo", Version: "1", Name: "Demo", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/demo", Checksum: "abc"})
 	if err != nil {
@@ -32,6 +36,24 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	listed, err := db.ListTemplates(ctx, organizationID)
 	if err != nil || len(listed) != 1 || listed[0].RepositoryID == nil || *listed[0].RepositoryID != repository.ID {
 		t.Fatalf("templates=%#v err=%v", listed, err)
+	}
+	replacement := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "community/replacement", Version: "2", Name: "Replacement", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/replacement", Checksum: "def"}
+	if err = db.ReplaceRepositoryTemplates(ctx, organizationID, repository.ID, []Template{replacement}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = db.ListTemplates(ctx, organizationID)
+	if err != nil || len(listed) != 1 || listed[0].Key != "community/replacement" {
+		t.Fatalf("repository snapshot was not reconciled atomically: templates=%#v err=%v", listed, err)
+	}
+	badScope := replacement
+	otherOrganizationID := uuid.New()
+	badScope.OrganizationID = &otherOrganizationID
+	if err = db.ReplaceRepositoryTemplates(ctx, organizationID, repository.ID, []Template{badScope}); err == nil {
+		t.Fatal("repository snapshot accepted a cross-tenant template")
+	}
+	listed, err = db.ListTemplates(ctx, organizationID)
+	if err != nil || len(listed) != 1 || listed[0].Key != "community/replacement" {
+		t.Fatalf("failed replacement changed catalog: templates=%#v err=%v", listed, err)
 	}
 	account, err := db.CreateServiceAccount(ctx, organizationID, userID, "auditor", "auditor", []byte("token-hash"), time.Now().Add(time.Hour))
 	if err != nil {
