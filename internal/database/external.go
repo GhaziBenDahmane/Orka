@@ -81,14 +81,17 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 	command := exec.CommandContext(ctx, "/proc/self/fd/3")
 	command.ExtraFiles = []*os.File{executable}
 	// Do not leak the controller's database URL, master key, or provider
-	// credentials into an extension process.
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}
+	// credentials into an extension process. Use a fixed system path rather
+	// than inheriting a potentially attacker-controlled controller PATH.
+	command.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
 	command.Stdin = bytes.NewReader(payload)
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = 4<<20, 64<<10
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {
-		return databaseplugin.Response{}, fmt.Errorf("database driver %s: %w: %s", d.description.Name, err, stderr.String())
+		// Requests can contain plaintext credentials and render inputs. Never
+		// propagate extension-controlled stderr into API, job, or audit errors.
+		return databaseplugin.Response{}, fmt.Errorf("database driver %s failed during %s: %w", driverLabel(d), operation, err)
 	}
 	var response databaseplugin.Response
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
@@ -98,9 +101,16 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 		return response, errors.New("database driver protocol version mismatch")
 	}
 	if response.Error != "" {
-		return response, errors.New(response.Error)
+		return response, fmt.Errorf("database driver %s reported a failure during %s", driverLabel(d), operation)
 	}
 	return response, nil
+}
+
+func driverLabel(driver *externalDriver) string {
+	if driver.description.Name != "" {
+		return driver.description.Name
+	}
+	return filepath.Base(driver.path)
 }
 
 type limitedBuffer struct {

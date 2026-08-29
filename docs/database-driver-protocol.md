@@ -18,6 +18,13 @@ and reads one JSON response from stdout. Protocol version 1 supports
 same isolated Docker jobs as built-in drivers; image names and artifact
 extensions are validated before execution.
 
+Driver stderr and protocol error text are deliberately not copied into API,
+job, or audit errors: requests may contain plaintext database credentials and a
+faulty driver could echo them. Failures identify only the trusted driver and
+operation. Diagnose a driver locally with scrubbed test credentials before
+installing it. The process receives a fixed system `PATH` and no inherited
+controller environment.
+
 Go plugins can import `github.com/bendahma/dokploy-go/pkg/databaseplugin`,
 implement `databaseplugin.Driver`, and call:
 

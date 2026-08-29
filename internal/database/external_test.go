@@ -115,6 +115,60 @@ esac
 	}
 }
 
+func TestExternalDriverDoesNotExposeControlledErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		failed string
+	}{
+		{name: "stderr", failed: `echo 'password=driver-secret' >&2; exit 1`},
+		{name: "protocol", failed: `echo '{"protocolVersion":1,"error":"password=driver-secret"}'`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, "secret-driver")
+			script := `#!/bin/sh
+request=$(cat)
+case "$request" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"secret-test","defaultVersion":"1","capabilities":[]}}' ;;
+  *) ` + test.failed + ` ;;
+esac
+`
+			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			registry := NewRegistry()
+			if err := registry.LoadExternal(directory); err != nil {
+				t.Fatal(err)
+			}
+			_, err := registry.Render("secret-test", Request{Name: "data", Config: map[string]any{"password": "request-secret"}})
+			if err == nil || !strings.Contains(err.Error(), "secret-test") || !strings.Contains(err.Error(), "render") {
+				t.Fatalf("unexpected driver error: %v", err)
+			}
+			if strings.Contains(err.Error(), "driver-secret") || strings.Contains(err.Error(), "request-secret") {
+				t.Fatalf("driver-controlled secret leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestExternalDriverUsesSanitizedEnvironment(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "environment-driver")
+	script := `#!/bin/sh
+[ "$PATH" = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' ] || exit 9
+[ -z "${DOCKYARD_MASTER_KEY:-}" ] || exit 10
+echo '{"protocolVersion":1,"description":{"name":"environment-test","defaultVersion":"1","capabilities":[]}}'
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("DOCKYARD_MASTER_KEY", "controller-secret")
+	if err := NewRegistry().LoadExternal(directory); err != nil {
+		t.Fatalf("sanitized driver environment: %v", err)
+	}
+}
+
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {
