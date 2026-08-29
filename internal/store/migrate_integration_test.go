@@ -368,3 +368,17 @@ func TestMigrateUpgradeFrom069ExpiresLegacySCIMTokens(t *testing.T) {
 		t.Fatalf("migrated SCIM token authentication org=%s role=%q err=%v", authenticatedOrg, role, err)
 	}
 }
+
+func TestMigrateUpgradeFrom070AddsOrganizationInvitations(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "070_scim_token_expiry.sql"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('organization_invitations') IS NOT NULL`).Scan(&exists); err != nil || !exists {
+		t.Fatalf("organization invitations table missing: exists=%v err=%v", exists, err)
+	}
+}

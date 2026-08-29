@@ -40,6 +40,9 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/members` | List organization members, roles, status, and SCIM ownership |
 | PATCH | `/v1/members/{userID}` | Change a manually managed organization membership role |
 | DELETE | `/v1/members/{userID}` | Remove a manually managed member and their scoped grants |
+| GET/POST | `/v1/invitations` | List invitations or create a one-time, 1–30 day organization invitation |
+| DELETE | `/v1/invitations/{invitationID}` | Revoke a pending organization invitation |
+| POST | `/v1/invitations/accept` | Publicly consume an invitation token and create or attach an identity |
 | GET/PUT | `/v1/sso/settings` | Read or enforce organization-wide SSO |
 | GET/POST | `/v1/service-accounts` | List or create scoped automation identities |
 | POST | `/v1/service-accounts/{id}/rotate` | Revoke old tokens and issue a replacement |
@@ -100,6 +103,16 @@ serialized per organization and cannot remove its last active owner. Members
 owned by SCIM are read-only through the membership API so the identity provider
 remains authoritative. Removing a member also removes their project and
 environment grants and revokes federated sessions for that organization.
+Invitation tokens are returned only at creation and stored as SHA-256 digests.
+Creating another invitation for the same organization and email revokes the
+previous token. Acceptance is transactional and one-time. New local identities
+must set a password of at least 12 characters; organizations enforcing SSO can
+pre-provision the identity without a local password, ready for OIDC or SAML
+linking on first sign-in; any password submitted while accepting an SSO-only
+invitation is discarded. Existing identities retain their current credentials.
+Invitation acceptance and OIDC, SAML, and SCIM just-in-time provisioning use the
+same organization-first identity lock order so concurrent enrollment cannot
+create duplicate global identities or deadlock membership creation.
 
 Creating an environment accepts either an explicit `clusterId` or a
 `placementSelector` map plus `minimumNodes`, `minimumNanoCpus`, and

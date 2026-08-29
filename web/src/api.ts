@@ -39,6 +39,7 @@ export type NotificationEndpoint = { id: string; name: string; kind: "webhook" |
 export type ServiceAccount = { id: string; name: string; role: string; enabled: boolean; tokenExpiresAt?: string };
 export type SCIMToken = { id: string; organizationId: string; name: string; defaultRole: "admin" | "developer" | "viewer"; createdAt: string; expiresAt: string; revokedAt?: string };
 export type OrganizationMember = { userId: string; email: string; displayName: string; role: Role; active: boolean; managedByScim: boolean; createdAt: string };
+export type OrganizationInvitation = { id: string; organizationId: string; email: string; role: Role; expiresAt: string; acceptedAt?: string; revokedAt?: string; createdAt: string };
 export type AIAuditRun = { id: string; serviceAccountId: string; agentName: string; agentVersion: string; model: string; status: string; scope: Record<string, unknown>; summary: string; startedAt: string; completedAt?: string };
 export type AIAuditFinding = { id: string; runId: string; severity: string; category: string; title: string; description: string; resourceType?: string; resourceId?: string; evidence: Record<string, unknown>; remediation?: string; createdAt: string };
 
@@ -163,6 +164,10 @@ export const api = {
   members: () => request<Envelope<OrganizationMember>>("/v1/members"),
   updateMemberRole: (userId: string, role: Role) => request<OrganizationMember>(`/v1/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
   deleteMember: (userId: string) => request<void>(`/v1/members/${userId}`, { method: "DELETE" }),
+  invitations: () => request<Envelope<OrganizationInvitation>>("/v1/invitations"),
+  createInvitation: (email: string, role: Role, expiresInDays: number) => request<{ invitation: OrganizationInvitation; token: string; acceptUrl: string }>("/v1/invitations", { method: "POST", body: JSON.stringify({ email, role, expiresInDays }) }),
+  revokeInvitation: (id: string) => request<void>(`/v1/invitations/${id}`, { method: "DELETE" }),
+  acceptInvitation: (token: string, displayName: string, password: string) => request<{ userId: string; organizationId: string; organization: string; email: string; role: Role; requireSso: boolean }>("/v1/invitations/accept", { method: "POST", body: JSON.stringify({ token, displayName, password }) }),
   policy: (scope: "organization" | "project" | "environment", id = "") => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`),
   putPolicy: (scope: "organization" | "project" | "environment", id: string, body: Pick<ResourcePolicy, "maintenance" | "maintenanceReason" | "maxProjects" | "maxEnvironments" | "maxServices" | "maxDatabases">) => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`, { method: "PUT", body: JSON.stringify(body) }),
   auditEvents: (beforeId = 0, limit = 100) => request<Envelope<AuditEvent>>(`/v1/audit-events?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`),

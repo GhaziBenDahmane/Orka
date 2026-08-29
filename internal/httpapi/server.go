@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /metrics", s.requireAuth(http.HandlerFunc(s.metrics)))
 	mux.HandleFunc("POST /v1/auth/bootstrap", s.bootstrap)
 	mux.HandleFunc("POST /v1/auth/login", s.login)
+	mux.HandleFunc("POST /v1/invitations/accept", s.acceptOrganizationInvitation)
 	mux.HandleFunc("GET /v1/auth/sso/discover", s.discoverOIDC)
 	mux.HandleFunc("GET /v1/auth/sso/{providerID}/start", s.startOIDC)
 	mux.HandleFunc("GET /v1/auth/sso/callback", s.callbackOIDC)
@@ -90,6 +91,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/members", s.requireRole("admin", http.HandlerFunc(s.listOrganizationMembers)))
 	mux.Handle("PATCH /v1/members/{userID}", s.requireRole("admin", http.HandlerFunc(s.updateOrganizationMember)))
 	mux.Handle("DELETE /v1/members/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteOrganizationMember)))
+	mux.Handle("GET /v1/invitations", s.requireRole("admin", http.HandlerFunc(s.listOrganizationInvitations)))
+	mux.Handle("POST /v1/invitations", s.requireRole("admin", http.HandlerFunc(s.createOrganizationInvitation)))
+	mux.Handle("DELETE /v1/invitations/{invitationID}", s.requireRole("admin", http.HandlerFunc(s.revokeOrganizationInvitation)))
 	mux.Handle("GET /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.getAuthSettings)))
 	mux.Handle("PUT /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.putAuthSettings)))
 	mux.Handle("GET /v1/service-accounts", s.requireRole("admin", http.HandlerFunc(s.listServiceAccounts)))
@@ -2373,6 +2377,18 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrSCIMManaged) {
 		writeError(w, http.StatusConflict, "scim_managed", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrAlreadyMember) {
+		writeError(w, http.StatusConflict, "already_member", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrPasswordRequired) {
+		writeError(w, http.StatusBadRequest, "password_required", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrUserDisabled) {
+		writeError(w, http.StatusConflict, "user_disabled", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrMaintenance) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestSAMLProviderStateReplayAndJITIsolation(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=ANY($1)`, []uuid.UUID{orgID, otherOrgID})
-		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE email=$1`, "saml-user-"+orgID.String()+"@example.test")
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE email=ANY($1)`, []string{"saml-user-" + orgID.String() + "@example.test", "saml-race-" + orgID.String() + "@example.test"})
 	})
 
 	provider, err := db.CreateSAMLProvider(ctx, SAMLProvider{OrganizationID: orgID, Name: "workforce", IDPMetadata: "<metadata/>", CertificatePEM: "certificate", EncryptedPrivateKey: "ciphertext", Domains: []string{"example.test"}, EmailAttribute: "mail", NameAttribute: "displayName", DefaultRole: "developer", AllowIDPInitiated: true})
@@ -92,5 +93,49 @@ func TestSAMLProviderStateReplayAndJITIsolation(t *testing.T) {
 	var role string
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID).Scan(&role); err != nil || role != "developer" {
 		t.Fatalf("JIT membership role = %q, err = %v", role, err)
+	}
+
+	raceEmail := "saml-race-" + orgID.String() + "@example.test"
+	start := make(chan struct{})
+	results := make(chan struct {
+		id  uuid.UUID
+		err error
+	}, 2)
+	var group sync.WaitGroup
+	for _, subject := range []string{"race-subject-1", "race-subject-2"} {
+		subject := subject
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			id, jitErr := db.JITSAMLUser(ctx, provider, subject, raceEmail, "Concurrent SAML User")
+			results <- struct {
+				id  uuid.UUID
+				err error
+			}{id: id, err: jitErr}
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	var racedUserID uuid.UUID
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent SAML JIT failed: %v", result.err)
+		}
+		if racedUserID != uuid.Nil && racedUserID != result.id {
+			t.Fatalf("concurrent SAML JIT created distinct users %s and %s", racedUserID, result.id)
+		}
+		racedUserID = result.id
+	}
+	var users, identities int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE email=$1`, raceEmail).Scan(&users); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM saml_external_identities WHERE provider_id=$1 AND user_id=$2`, provider.ID, racedUserID).Scan(&identities); err != nil {
+		t.Fatal(err)
+	}
+	if users != 1 || identities != 2 {
+		t.Fatalf("concurrent SAML JIT users=%d identities=%d", users, identities)
 	}
 }

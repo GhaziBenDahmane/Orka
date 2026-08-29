@@ -24,6 +24,9 @@ var ErrRemoteBackupRequired = errors.New("a remote backup destination is require
 var ErrLastOwner = errors.New("organization must retain an active owner")
 var ErrSCIMManaged = errors.New("membership is managed by SCIM")
 var ErrOwnerRequired = errors.New("organization owner role is required")
+var ErrAlreadyMember = errors.New("user is already an organization member")
+var ErrPasswordRequired = errors.New("a password is required for a new local account")
+var ErrUserDisabled = errors.New("user account is disabled")
 
 type Store struct {
 	Pool                 *pgxpool.Pool
@@ -1987,13 +1990,23 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 		return uuid.Nil, err
 	}
 	defer tx.Rollback(ctx)
+	email = strings.ToLower(email)
+	var lockedOrganizationID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, p.OrganizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	} else if err != nil {
+		return uuid.Nil, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
+		return uuid.Nil, err
+	}
 	var userID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT user_id FROM external_identities WHERE provider_id=$1 AND subject=$2`, p.ID, subject).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, strings.ToLower(email)).Scan(&userID)
+		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, email).Scan(&userID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			userID = uuid.New()
-			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, strings.ToLower(email), "!oidc:"+uuid.NewString(), name)
+			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!oidc:"+uuid.NewString(), name)
 		}
 		if err != nil {
 			return uuid.Nil, err
@@ -2140,13 +2153,23 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 		return uuid.Nil, err
 	}
 	defer tx.Rollback(ctx)
+	email = strings.ToLower(email)
+	var lockedOrganizationID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, p.OrganizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	} else if err != nil {
+		return uuid.Nil, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
+		return uuid.Nil, err
+	}
 	var userID uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT user_id FROM saml_external_identities WHERE provider_id=$1 AND subject=$2`, p.ID, subject).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, strings.ToLower(email)).Scan(&userID)
+		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, email).Scan(&userID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			userID = uuid.New()
-			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, strings.ToLower(email), "!saml:"+uuid.NewString(), name)
+			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!saml:"+uuid.NewString(), name)
 		}
 		if err != nil {
 			return uuid.Nil, err

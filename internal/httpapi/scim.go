@@ -190,6 +190,18 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var lockedOrganizationID uuid.UUID
+	if err = tx.QueryRow(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+		scimError(w, 404, "organization not found")
+		return
+	} else if err != nil {
+		scimError(w, 500, "create failed")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
+		scimError(w, 500, "create failed")
+		return
+	}
 	var userID uuid.UUID
 	var displayName string
 	err = tx.QueryRow(r.Context(), `SELECT id,display_name FROM users WHERE email=$1 AND disabled_at IS NULL`, email).Scan(&userID, &displayName)

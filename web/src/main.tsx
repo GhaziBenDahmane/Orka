@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, DatabaseBackup, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceReconciliation, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, DatabaseBackup, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceReconciliation, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -19,6 +19,7 @@ const roleRank = (role: Role | "") => ({ "": 0, viewer: 1, developer: 2, admin: 
 function App() {
   const [principal, setPrincipal] = useState<Principal | null>(null);
   const [checking, setChecking] = useState(Boolean(session.get()));
+  const [invitationToken, setInvitationToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get("invitation") ?? "");
 
   useEffect(() => {
     const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -27,21 +28,26 @@ function App() {
       session.set(callbackToken);
       history.replaceState(null, "", window.location.pathname + window.location.search);
     }
+    if (fragment.get("invitation")) history.replaceState(null, "", window.location.pathname + window.location.search);
     if (!session.get()) return;
     api.me().then(setPrincipal).catch(() => session.clear()).finally(() => setChecking(false));
   }, []);
 
   if (checking) return <div className="center"><div className="spinner" /><span>Opening Dockyard…</span></div>;
-  if (!principal) return <Login onLogin={setPrincipal} />;
+  if (invitationToken) return <Login onLogin={setPrincipal} invitationToken={invitationToken} clearInvitation={() => setInvitationToken("")} />;
+  if (!principal) return <Login onLogin={setPrincipal} invitationToken={invitationToken} clearInvitation={() => setInvitationToken("")} />;
   return <Console principal={principal} onLogout={() => { session.clear(); setPrincipal(null); }} />;
 }
 
-function Login({ onLogin }: { onLogin: (principal: Principal) => void }) {
+function Login({ onLogin, invitationToken, clearInvitation }: { onLogin: (principal: Principal) => void; invitationToken: string; clearInvitation: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [providers, setProviders] = useState<{ id: string; name: string; kind: "oidc" | "saml" }[]>([]);
+  const [inviteName, setInviteName] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [inviteAccepted, setInviteAccepted] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError("");
@@ -69,6 +75,14 @@ function Login({ onLogin }: { onLogin: (principal: Principal) => void }) {
     catch (reason) { setError(message(reason)); setBusy(false); }
   }
 
+  async function acceptInvitation() {
+    setBusy(true); setError("");
+    try {
+      const accepted = await api.acceptInvitation(invitationToken, inviteName, invitePassword);
+      setEmail(accepted.email); setInviteAccepted(`Invitation to ${accepted.organization} accepted as ${accepted.role}. ${accepted.requireSso ? "Continue with SSO." : "Sign in below."}`); clearInvitation();
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
   return <main className="login-page">
     <section className="brand-panel">
       <div className="brand-mark">D</div>
@@ -80,6 +94,8 @@ function Login({ onLogin }: { onLogin: (principal: Principal) => void }) {
     <section className="login-panel">
       <form className="card login-card" onSubmit={submit}>
         <p className="eyebrow">Dockyard Console</p><h2>Welcome back</h2>
+        {invitationToken && <section className="invitation-accept"><h3>Accept organization invitation</h3><p className="muted">Choose a display name and, for a new local account, a password of at least 12 characters. Existing and SSO accounts can leave the password empty.</p><label>Display name<input value={inviteName} onChange={event => setInviteName(event.target.value)} maxLength={120} /></label><label>New-account password<input type="password" value={invitePassword} onChange={event => setInvitePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><div className="actions"><button type="button" className="primary" disabled={busy} onClick={() => void acceptInvitation()}>Accept invitation</button><button type="button" disabled={busy} onClick={clearInvitation}>Dismiss</button></div></section>}
+        {inviteAccepted && <p className="success-text">{inviteAccepted}</p>}
         <p className="muted">Sign in with your local administrator account.</p>
         <label>Email<input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
         <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
@@ -355,6 +371,11 @@ function Governance({ principal, projects, projectId, environments, environmentI
   const [draft, setDraft] = useState<PolicyDraft>(emptyPolicy);
   const [requireSso, setRequireSso] = useState(false);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
+  const [invitations, setInvitations] = useState<OrganizationInvitation[]>([]);
+  const [invitationEmail, setInvitationEmail] = useState("");
+  const [invitationRole, setInvitationRole] = useState<Role>("developer");
+  const [invitationDays, setInvitationDays] = useState(7);
+  const [createdInvitation, setCreatedInvitation] = useState<{ token: string; acceptUrl: string } | null>(null);
   const [scimTokens, setSCIMTokens] = useState<SCIMToken[]>([]);
   const [scimName, setSCIMName] = useState("identity-provider");
   const [scimRole, setSCIMRole] = useState<SCIMToken["defaultRole"]>("developer");
@@ -365,9 +386,11 @@ function Governance({ principal, projects, projectId, environments, environmentI
 
   const applyPolicy = (item: ResourcePolicy) => setDraft({ maintenance: item.maintenance, maintenanceReason: item.maintenanceReason, maxProjects: item.maxProjects?.toString() ?? "", maxEnvironments: item.maxEnvironments?.toString() ?? "", maxServices: item.maxServices?.toString() ?? "", maxDatabases: item.maxDatabases?.toString() ?? "" });
   const refreshMembers = useCallback(async () => setMembers((await api.members()).items), []);
+  const refreshInvitations = useCallback(async () => setInvitations((await api.invitations()).items), []);
   const refreshSCIMTokens = useCallback(async () => setSCIMTokens((await api.scimTokens()).items), []);
   useEffect(() => { api.authSettings().then(x => setRequireSso(x.requireSso)).catch(reason => setError(message(reason))); }, [setError]);
   useEffect(() => { void refreshMembers().catch(reason => setError(message(reason))); }, [refreshMembers, setError]);
+  useEffect(() => { void refreshInvitations().catch(reason => setError(message(reason))); }, [refreshInvitations, setError]);
   useEffect(() => { void refreshSCIMTokens().catch(reason => setError(message(reason))); }, [refreshSCIMTokens, setError]);
   useEffect(() => {
     if (!scopeId) { setDraft(emptyPolicy); return; }
@@ -400,10 +423,21 @@ function Governance({ principal, projects, projectId, environments, environmentI
     setBusy(true); try { await api.deleteMember(item.userId); await refreshMembers(); flash(`${item.email} removed`); }
     catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
+  async function createInvitation(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setCreatedInvitation(null);
+    try { const result = await api.createInvitation(invitationEmail, invitationRole, invitationDays); setCreatedInvitation({ token: result.token, acceptUrl: result.acceptUrl }); setInvitationEmail(""); await refreshInvitations(); flash("Invitation created"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  async function revokeInvitation(item: OrganizationInvitation) {
+    if (!window.confirm(`Revoke the invitation for ${item.email}?`)) return;
+    setBusy(true); try { await api.revokeInvitation(item.id); await refreshInvitations(); flash("Invitation revoked"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
   const activeOwners = members.filter(item => item.active && item.role === "owner").length;
   const canManageMember = (item: OrganizationMember) => !item.managedByScim && (principal.role === "owner" || item.role !== "owner") && !(item.userId === principal.userId && item.role === "owner" && activeOwners <= 1);
   return <div className="settings-grid">
     <section className="card settings-card"><p className="eyebrow">Organization access</p><h2>Members</h2><p className="muted">Manage organization roles and remove access. Directory-managed members must be changed in the identity provider.</p><div className="admin-items">{members.map(item => { const manageable = canManageMember(item); return <article key={item.userId}><div><strong>{item.displayName || item.email}{item.userId === principal.userId ? " · You" : ""}</strong><small>{item.email} · {item.active ? "active" : "disabled"}{item.managedByScim ? " · SCIM managed" : ""}</small></div><div className="actions">{manageable ? <select aria-label={`Role for ${item.email}`} value={item.role} disabled={busy} onChange={event => void updateMemberRole(item, event.target.value as Role)}>{principal.role === "owner" && <option value="owner">Owner</option>}<option value="admin">Admin</option><option value="developer">Developer</option><option value="viewer">Viewer</option></select> : <Status value={item.role} />}{manageable && <button type="button" className="danger-button" disabled={busy} onClick={() => void removeMember(item)}>Remove</button>}</div></article>; })}{!members.length && <p className="muted">No organization members.</p>}</div></section>
+    <section className="card settings-card"><p className="eyebrow">Organization access</p><h2>Invitations</h2><p className="muted">Create a one-time enrollment link. Creating another invitation for the same email revokes the previous link.</p><form onSubmit={createInvitation}><label>Email<input type="email" value={invitationEmail} onChange={event => setInvitationEmail(event.target.value)} required /></label><label>Role<select value={invitationRole} onChange={event => setInvitationRole(event.target.value as Role)}>{principal.role === "owner" && <option value="owner">Owner</option>}<option value="admin">Admin</option><option value="developer">Developer</option><option value="viewer">Viewer</option></select></label><label>Lifetime (days)<input type="number" min="1" max="30" value={invitationDays} onChange={event => setInvitationDays(Number(event.target.value))} /></label><button className="primary" disabled={busy}>Create invitation</button></form>{createdInvitation && <div className="credential-card spaced"><p className="eyebrow">Share once</p><p className="muted">The invitation token is never shown again.</p><code>{createdInvitation.acceptUrl}</code><div className="actions"><button type="button" onClick={() => void navigator.clipboard.writeText(createdInvitation.acceptUrl)}>Copy link</button><button type="button" onClick={() => setCreatedInvitation(null)}>Dismiss</button></div></div>}<div className="admin-items">{invitations.map(item => { const status = item.acceptedAt ? "accepted" : item.revokedAt ? "revoked" : new Date(item.expiresAt) <= new Date() ? "expired" : "pending"; return <article key={item.id}><div><strong>{item.email}</strong><small>{item.role} · expires {new Date(item.expiresAt).toLocaleDateString()}</small></div><Status value={status} />{status === "pending" && <button type="button" className="danger-button" disabled={busy} onClick={() => void revokeInvitation(item)}>Revoke</button>}</article>; })}{!invitations.length && <p className="muted">No invitations issued.</p>}</div></section>
     <section className="card settings-card"><p className="eyebrow">Resource guardrails</p><h2>Policy and quotas</h2><form onSubmit={savePolicy}>
       <label>Scope<select value={scope} onChange={e => setScope(e.target.value as PolicyScope)}><option value="organization">Organization · {principal.organization}</option><option value="project" disabled={!projectId}>Project · {projects.find(x => x.id === projectId)?.name ?? "select under Workloads"}</option><option value="environment" disabled={!environmentId}>Environment · {environments.find(x => x.id === environmentId)?.name ?? "select under Workloads"}</option></select></label>
       <label className="check"><input type="checkbox" checked={draft.maintenance} onChange={e => setDraft({ ...draft, maintenance: e.target.checked })} /> Block mutations for maintenance</label>
