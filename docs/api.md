@@ -220,6 +220,13 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | GET | `/v1/database-engines` | List built-in database drivers |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
+
+Template instantiation is atomic: the Compose service, routes, and provenance
+record either commit together or are all rolled back. Service detail responses
+include redacted template key, version, checksum, base-domain provenance, and a
+Compose-drift flag;
+the resolved template-variable set is encrypted with the service ID as
+authenticated context and is never returned by the API.
 | GET/POST | `/v1/databases/{id}/backups` | List or queue verified native backups |
 | GET | `/v1/databases/{id}/restores` | List manual and verification restores |
 | GET/DELETE | `/v1/databases/{id}` | Inspect or asynchronously delete a managed database |

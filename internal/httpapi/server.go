@@ -1343,25 +1343,28 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
-	shortID := strings.Split(serviceID.String(), "-")[0]
-	service, err := s.Store.CreateComposeService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv})
+	variablesJSON, _ := json.Marshal(instance.Variables)
+	encryptedVariables, err := s.Box.Encrypt(variablesJSON, cryptox.ResourceContext("template-variables", serviceID.String()))
 	if err != nil {
-		writeStoreError(w, err)
+		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
-	routes := []store.Route{}
+	shortID := strings.Split(serviceID.String(), "-")[0]
+	composeSum := sha256.Sum256([]byte(instance.ComposeYAML))
+	routes := make([]store.Route, 0, len(instance.Domains))
 	for _, domain := range instance.Domains {
 		port, portErr := templates.PortNumber(domain.Port)
 		if portErr != nil {
 			writeError(w, 400, "invalid_template", portErr.Error())
 			return
 		}
-		route, routeErr := s.Store.AddRoute(r.Context(), p.OrganizationID, store.Route{ComposeServiceID: service.ID, ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"})
-		if routeErr != nil {
-			writeStoreError(w, routeErr)
-			return
-		}
-		routes = append(routes, route)
+		routes = append(routes, store.Route{ComposeServiceID: serviceID, ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"})
+	}
+	templateRef := item.ID
+	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables})
+	if err != nil {
+		writeStoreError(w, err)
+		return
 	}
 	s.Store.Audit(r.Context(), &p, "template.instantiate", "compose_service", service.ID.String(), r.RemoteAddr, map[string]any{"templateId": templateID})
 	writeJSON(w, 201, map[string]any{"service": service, "routes": routes})
@@ -1390,7 +1393,17 @@ func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, sourceErr)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"service": item, "routes": routes, "source": source})
+	var templateInstance *store.TemplateInstance
+	provenance, provenanceErr := s.Store.GetTemplateInstance(r.Context(), principal(r).OrganizationID, id)
+	if provenanceErr == nil {
+		composeSum := sha256.Sum256([]byte(item.ComposeYAML))
+		provenance.Drifted = provenance.AppliedComposeChecksum != hex.EncodeToString(composeSum[:])
+		templateInstance = &provenance
+	} else if !errors.Is(provenanceErr, store.ErrNotFound) {
+		writeStoreError(w, provenanceErr)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"service": item, "routes": routes, "source": source, "template": templateInstance})
 }
 
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
@@ -1434,8 +1447,16 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_compose", err.Error())
 		return
 	}
+	p := principal(r)
 	encrypted := ""
-	if len(in.Environment) > 0 {
+	if in.Environment == nil {
+		existing, _, getErr := s.Store.GetComposeService(r.Context(), p.OrganizationID, id)
+		if getErr != nil {
+			writeStoreError(w, getErr)
+			return
+		}
+		encrypted = existing.EncryptedEnv
+	} else if len(in.Environment) > 0 {
 		plain, _ := json.Marshal(in.Environment)
 		encrypted, err = s.Box.Encrypt(plain, composeEnvironmentContext(id))
 		if err != nil {
@@ -1443,7 +1464,6 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p := principal(r)
 	item, err := s.Store.UpdateComposeService(r.Context(), p.OrganizationID, id, in.ComposeYAML, encrypted)
 	if err != nil {
 		writeStoreError(w, err)

@@ -156,6 +156,20 @@ type Template struct {
 	CreatedAt      time.Time       `json:"createdAt"`
 }
 
+type TemplateInstance struct {
+	ComposeServiceID       uuid.UUID  `json:"composeServiceId"`
+	TemplateID             *uuid.UUID `json:"templateId,omitempty"`
+	TemplateKey            string     `json:"templateKey"`
+	TemplateVersion        string     `json:"templateVersion"`
+	TemplateChecksum       string     `json:"templateChecksum"`
+	AppliedComposeChecksum string     `json:"appliedComposeChecksum"`
+	BaseDomain             string     `json:"baseDomain"`
+	EncryptedVariables     string     `json:"-"`
+	Drifted                bool       `json:"drifted"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
+}
+
 type OIDCProvider struct {
 	ID                    uuid.UUID `json:"id"`
 	OrganizationID        uuid.UUID `json:"organizationId"`
@@ -1706,6 +1720,62 @@ func (s *Store) GetTemplate(ctx context.Context, organizationID, id uuid.UUID) (
 	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,template_key,version,name,description,compose_yaml,config,source,checksum,created_at FROM templates WHERE id=$1 AND (organization_id IS NULL OR organization_id=$2)`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Key, &item.Version, &item.Name, &item.Description, &item.ComposeYAML, &item.Config, &item.Source, &item.Checksum, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Template{}, ErrNotFound
+	}
+	return item, err
+}
+
+// CreateTemplateService commits the service, its routes, and the catalog
+// provenance as one unit so failed route or provenance validation cannot leave
+// a partially instantiated workload behind.
+func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.UUID, service ComposeService, routes []Route, instance TemplateInstance) (ComposeService, []Route, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	var projectID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, service.EnvironmentID, organizationID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
+		return ComposeService{}, nil, ErrNotFound
+	} else if err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &service.EnvironmentID, "services"); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if len(routes) > 0 {
+		if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &service.EnvironmentID, "deployment"); err != nil {
+			return ComposeService{}, nil, err
+		}
+	}
+	if service.ID == uuid.Nil {
+		service.ID = uuid.New()
+	}
+	service.Revision = 1
+	if err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv).Scan(&service.CreatedAt, &service.UpdatedAt); err != nil {
+		return ComposeService{}, nil, err
+	}
+	for index := range routes {
+		routes[index].ID = uuid.New()
+		routes[index].ComposeServiceID = service.ID
+		if _, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, routes[index].ID, service.ID, routes[index].ServiceName, routes[index].Host, routes[index].PathPrefix, routes[index].TargetPort, routes[index].TLS, routes[index].CertificateResolver); err != nil {
+			return ComposeService{}, nil, err
+		}
+	}
+	instance.ComposeServiceID = service.ID
+	if err = tx.QueryRow(ctx, `INSERT INTO template_instances(compose_service_id,template_id,template_key,template_version,template_checksum,applied_compose_checksum,base_domain,encrypted_variables) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at,updated_at`, instance.ComposeServiceID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.BaseDomain, instance.EncryptedVariables).Scan(&instance.CreatedAt, &instance.UpdatedAt); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, nil, err
+	}
+	return service, routes, nil
+}
+
+func (s *Store) GetTemplateInstance(ctx context.Context, organizationID, serviceID uuid.UUID) (TemplateInstance, error) {
+	var item TemplateInstance
+	err := s.Pool.QueryRow(ctx, `SELECT t.compose_service_id,t.template_id,t.template_key,t.template_version,t.template_checksum,t.applied_compose_checksum,t.base_domain,t.encrypted_variables,t.created_at,t.updated_at FROM template_instances t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&item.ComposeServiceID, &item.TemplateID, &item.TemplateKey, &item.TemplateVersion, &item.TemplateChecksum, &item.AppliedComposeChecksum, &item.BaseDomain, &item.EncryptedVariables, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TemplateInstance{}, ErrNotFound
 	}
 	return item, err
 }

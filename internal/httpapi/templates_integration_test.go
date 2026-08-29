@@ -137,14 +137,57 @@ path = "/"
 	if environment["ADMIN_EMAIL"] != "operator@example.test" || environment["API_TOKEN"] != "operator-token" || environment["PASSWORD"] != "operator-password" {
 		t.Fatalf("stored environment did not use overrides: %#v", environment)
 	}
+	var templateKey, templateVersion, templateChecksum, encryptedVariables string
+	if err = db.Pool.QueryRow(ctx, `SELECT template_key,template_version,template_checksum,encrypted_variables FROM template_instances WHERE compose_service_id=$1`, created.Service.ID).Scan(&templateKey, &templateVersion, &templateChecksum, &encryptedVariables); err != nil {
+		t.Fatal(err)
+	}
+	if templateKey != orgTemplate.Key || templateVersion != orgTemplate.Version || templateChecksum != orgTemplate.Checksum {
+		t.Fatalf("template provenance = %q/%q/%q", templateKey, templateVersion, templateChecksum)
+	}
+	plainVariables, err := box.Decrypt(encryptedVariables, cryptox.ResourceContext("template-variables", created.Service.ID.String()))
+	if err != nil || !bytes.Contains(plainVariables, []byte(`"password":"operator-password"`)) {
+		t.Fatalf("encrypted template variables are unavailable: %s, %v", plainVariables, err)
+	}
+	if _, err = box.Decrypt(encryptedVariables, cryptox.ResourceContext("template-variables", uuid.NewString())); err == nil {
+		t.Fatal("template variables were accepted for another service")
+	}
 	var routeHost string
 	if err = db.Pool.QueryRow(ctx, `SELECT host FROM routes WHERE compose_service_id=$1`, created.Service.ID).Scan(&routeHost); err != nil || routeHost != "custom.example.test" {
 		t.Fatalf("route host = %q, err = %v", routeHost, err)
+	}
+	status, detailBody := scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"templateKey":"variable-test"`)) || !bytes.Contains(detailBody, []byte(`"templateVersion":"1"`)) || !bytes.Contains(detailBody, []byte(`"drifted":false`)) {
+		t.Fatalf("service template provenance status = %d: %s", status, detailBody)
+	}
+	if bytes.Contains(detailBody, []byte("operator-password")) || bytes.Contains(detailBody, []byte("encryptedVariables")) {
+		t.Fatalf("service detail leaked template variables: %s", detailBody)
+	}
+	customCompose := "services:\n  app:\n    image: nginx:stable-alpine\n"
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodPatch, map[string]any{"composeYaml": customCompose})
+	if status != http.StatusOK {
+		t.Fatalf("customize service status = %d: %s", status, body)
+	}
+	var preservedEnvironment string
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&preservedEnvironment); err != nil || preservedEnvironment != encryptedEnvironment {
+		t.Fatalf("compose-only update did not preserve encrypted environment: %v", err)
+	}
+	status, detailBody = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"drifted":true`)) {
+		t.Fatalf("template drift was not reported: %d: %s", status, detailBody)
 	}
 
 	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, map[string]any{"environmentId": environmentID, "name": "Rejected", "variables": map[string]string{"undeclared": "value"}})
 	if status != http.StatusBadRequest {
 		t.Fatalf("unknown override status = %d", status)
+	}
+	collisionBody := map[string]any{"environmentId": environmentID, "name": "Collision", "variables": map[string]string{"hostname": "custom.example.test"}}
+	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, collisionBody)
+	if status != http.StatusConflict {
+		t.Fatalf("route collision status = %d", status)
+	}
+	var partialServices int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM compose_services WHERE environment_id=$1 AND slug='collision'`, environmentID).Scan(&partialServices); err != nil || partialServices != 0 {
+		t.Fatalf("failed template left %d partial services: %v", partialServices, err)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", otherToken, otherOrgID, http.MethodPost, map[string]any{"environmentId": otherEnvironmentID, "name": "Cross Tenant"})
 	if status != http.StatusNotFound {
