@@ -11,7 +11,9 @@ Docker Compose remains the portable workload definition.
 2. The API stores an immutable deployment snapshot and enqueues a PostgreSQL job.
 3. A worker claims the job with `FOR UPDATE SKIP LOCKED`.
 4. The Compose compiler validates the document, injects Dockyard and Traefik
-   labels, and ensures the public overlay network is attached where needed.
+   labels, ensures the public overlay network is attached where needed, and
+   adds conservative Swarm update/rollback defaults when the application did
+   not declare its own rollout policy. Job-mode services are left unchanged.
 5. The Swarm adapter runs `docker stack deploy --prune --resolve-image=always`.
 6. The worker polls Swarm services until replicas converge or the deadline is
    exceeded, then records events and an audit entry.

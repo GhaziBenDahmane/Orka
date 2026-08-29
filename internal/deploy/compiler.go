@@ -42,6 +42,10 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 				return "", err
 			}
 		}
+		if err := applyRolloutDefaults(name, service); err != nil {
+			return "", err
+		}
+		services[name] = service
 	}
 	if len(routes) > 0 {
 		networks, _ := stringMap(doc["networks"])
@@ -89,6 +93,57 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		return "", fmt.Errorf("render compose yaml: %w", err)
 	}
 	return string(out), nil
+}
+
+func applyRolloutDefaults(name string, service map[string]any) error {
+	deploy := map[string]any{}
+	if raw, exists := service["deploy"]; exists && raw != nil {
+		var ok bool
+		deploy, ok = stringMap(raw)
+		if !ok {
+			return fmt.Errorf("service %q deploy must be an object", name)
+		}
+	}
+	if mode, _ := deploy["mode"].(string); mode == "replicated-job" || mode == "global-job" {
+		return nil
+	}
+	update, err := rolloutConfig(name, "update_config", deploy["update_config"])
+	if err != nil {
+		return err
+	}
+	setDefault(update, "parallelism", 1)
+	setDefault(update, "order", "stop-first")
+	setDefault(update, "failure_action", "rollback")
+	setDefault(update, "monitor", "30s")
+	deploy["update_config"] = update
+
+	rollback, err := rolloutConfig(name, "rollback_config", deploy["rollback_config"])
+	if err != nil {
+		return err
+	}
+	setDefault(rollback, "parallelism", 1)
+	setDefault(rollback, "order", "stop-first")
+	setDefault(rollback, "monitor", "30s")
+	deploy["rollback_config"] = rollback
+	service["deploy"] = deploy
+	return nil
+}
+
+func rolloutConfig(serviceName, field string, raw any) (map[string]any, error) {
+	if raw == nil {
+		return map[string]any{}, nil
+	}
+	config, ok := stringMap(raw)
+	if !ok {
+		return nil, fmt.Errorf("service %q deploy.%s must be an object", serviceName, field)
+	}
+	return config, nil
+}
+
+func setDefault(values map[string]any, key string, value any) {
+	if _, exists := values[key]; !exists {
+		values[key] = value
+	}
 }
 
 func ValidateRoute(route store.Route) error {
