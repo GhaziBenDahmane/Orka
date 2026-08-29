@@ -746,16 +746,17 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
+	var databaseID uuid.UUID
 	var engine, version, stackName, serviceName, encrypted string
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&engine, &version, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
 	})
 	if err != nil {
 		return err
 	}
-	plain, err := w.Box.Decrypt(encrypted, "database-credentials")
+	plain, err := w.Box.DecryptResource(encrypted, "database-credentials", databaseID.String(), "database-credentials")
 	if err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}
@@ -999,14 +1000,14 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	var backupID uuid.UUID
+	var backupID, databaseID uuid.UUID
 	var kind, engine, version, stackName, serviceName, encryptedCredentials, path, expectedHash, plaintextHash, encryptedDataKey, objectKey string
 	var artifactEncrypted bool
 	var expectedSize *int64
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
 	})
 	if err != nil {
 		return err
@@ -1016,7 +1017,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		if !ok {
 			return w.failRestore(ctx, j, restoreID, errors.New("remote cluster scheduler does not support artifact transport"))
 		}
-		return w.restoreDatabaseRemote(ctx, j, restoreID, backupID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey, expectedSize, destinationID, artifactEncrypted, remote)
+		return w.restoreDatabaseRemote(ctx, j, restoreID, backupID, databaseID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey, expectedSize, destinationID, artifactEncrypted, remote)
 	}
 	cleanRoot := filepath.Clean(w.BackupDirectory)
 	cleanPath := filepath.Clean(path)
@@ -1111,7 +1112,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 			return w.failRestore(ctx, j, restoreID, fmt.Errorf("restore drill database did not become ready: %w", readinessErr))
 		}
 	} else {
-		plain, decryptErr := w.Box.Decrypt(encryptedCredentials, "database-credentials")
+		plain, decryptErr := w.Box.DecryptResource(encryptedCredentials, "database-credentials", databaseID.String(), "database-credentials")
 		if decryptErr != nil {
 			return w.failRestore(ctx, j, restoreID, decryptErr)
 		}
@@ -1137,7 +1138,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	return err
 }
 
-func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, backupID uuid.UUID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey string, expectedSize *int64, destinationID *uuid.UUID, encrypted bool, remote RemoteSwarm) error {
+func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, backupID, databaseID uuid.UUID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey string, expectedSize *int64, destinationID *uuid.UUID, encrypted bool, remote RemoteSwarm) error {
 	if destinationID == nil || objectKey == "" || !encrypted {
 		return w.failRestore(ctx, j, restoreID, errors.New("remote restores require an encrypted S3 backup"))
 	}
@@ -1193,7 +1194,7 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 			return w.failRestore(ctx, j, restoreID, fmt.Errorf("remote restore drill database did not become ready: %w", readinessErr))
 		}
 	} else {
-		plain, decryptErr := w.Box.Decrypt(encryptedCredentials, "database-credentials")
+		plain, decryptErr := w.Box.DecryptResource(encryptedCredentials, "database-credentials", databaseID.String(), "database-credentials")
 		if decryptErr != nil {
 			return w.failRestore(ctx, j, restoreID, decryptErr)
 		}
@@ -1233,10 +1234,11 @@ func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
+	var databaseID uuid.UUID
 	var sourceEngine, sourceVersion, sourceHost, encryptedSource, targetEngine, targetVersion, targetHost, encryptedTarget, stackName, databaseStatus string
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_migrations m SET status='running',started_at=COALESCE(started_at,now()),error='' FROM database_instances d,compose_services s,environments e WHERE m.id=$1 AND d.id=m.database_instance_id AND s.id=d.compose_service_id AND e.id=d.environment_id RETURNING m.source_engine,m.source_version,m.source_host,m.encrypted_source_config,d.engine,d.version,d.slug,d.encrypted_credentials,s.stack_name,d.status,e.cluster_id`, migrationID).Scan(&sourceEngine, &sourceVersion, &sourceHost, &encryptedSource, &targetEngine, &targetVersion, &targetHost, &encryptedTarget, &stackName, &databaseStatus, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE database_migrations m SET status='running',started_at=COALESCE(started_at,now()),error='' FROM database_instances d,compose_services s,environments e WHERE m.id=$1 AND d.id=m.database_instance_id AND s.id=d.compose_service_id AND e.id=d.environment_id RETURNING d.id,m.source_engine,m.source_version,m.source_host,m.encrypted_source_config,d.engine,d.version,d.slug,d.encrypted_credentials,s.stack_name,d.status,e.cluster_id`, migrationID).Scan(&databaseID, &sourceEngine, &sourceVersion, &sourceHost, &encryptedSource, &targetEngine, &targetVersion, &targetHost, &encryptedTarget, &stackName, &databaseStatus, &clusterID)
 	})
 	if err != nil {
 		return err
@@ -1264,7 +1266,7 @@ func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
 		return fail(err)
 	}
 	redactions["sourcePassword"] = sourceConnection.Password
-	targetPlain, err := w.Box.Decrypt(encryptedTarget, "database-credentials")
+	targetPlain, err := w.Box.DecryptResource(encryptedTarget, "database-credentials", databaseID.String(), "database-credentials")
 	if err != nil {
 		return fail(err)
 	}

@@ -36,7 +36,7 @@ func TestWorkerMigratesDatabaseWithFencedNativeTransfer(t *testing.T) {
 	}
 	organizationID, projectID, environmentID, serviceID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	targetJSON, _ := json.Marshal(map[string]string{"username": "target", "password": "target-secret", "database": "app"})
-	encryptedTarget, _ := box.Encrypt(targetJSON, "database-credentials")
+	encryptedTarget, _ := box.Encrypt(targetJSON, cryptox.ResourceContext("database-credentials", databaseID.String()))
 	stackName := "migration-" + serviceID.String()
 	statements := []struct {
 		query string

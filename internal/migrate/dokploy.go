@@ -521,7 +521,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			return report, encryptErr
 		}
 		credentialsJSON, _ := json.Marshal(rendered.Credentials)
-		encryptedCredentials, encryptErr := box.Encrypt(credentialsJSON, "database-credentials")
+		encryptedCredentials, encryptErr := box.Encrypt(credentialsJSON, cryptox.ResourceContext("database-credentials", databaseID.String()))
 		if encryptErr != nil {
 			return report, encryptErr
 		}

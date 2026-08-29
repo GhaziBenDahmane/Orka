@@ -57,7 +57,7 @@ func TestWorkerBacksUpAndRestoresThroughS3(t *testing.T) {
 	orgID, userID := uuid.New(), uuid.New()
 	projectID, environmentID, serviceID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	databaseCredentials, _ := json.Marshal(map[string]string{"username": "dockyard", "password": "secret", "database": "app"})
-	encryptedDatabaseCredentials, err := box.Encrypt(databaseCredentials, "database-credentials")
+	encryptedDatabaseCredentials, err := box.Encrypt(databaseCredentials, cryptox.ResourceContext("database-credentials", databaseID.String()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -172,7 +172,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT d.encrypted_credentials,s.encrypted_env,d.config FROM database_instances d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1`, targetOrg).Scan(&encryptedCredentials, &encryptedEnvironment, &storedConfig); err != nil {
 		t.Fatal(err)
 	}
-	credentialsJSON, err := box.Decrypt(encryptedCredentials, "database-credentials")
+	credentialsJSON, err := box.Decrypt(encryptedCredentials, cryptox.ResourceContext("database-credentials", mappedID(options, "database:postgres", "pg1").String()))
 	if err != nil || !bytes.Contains(credentialsJSON, []byte("legacy-secret")) {
 		t.Fatalf("migrated credentials cannot be decrypted: %s, err = %v", credentialsJSON, err)
 	}

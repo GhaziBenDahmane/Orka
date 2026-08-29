@@ -930,7 +930,7 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	credentialJSON, _ := json.Marshal(rendered.Credentials)
-	encryptedCredentials, err := s.Box.Encrypt(credentialJSON, "database-credentials")
+	encryptedCredentials, err := s.Box.Encrypt(credentialJSON, cryptox.ResourceContext("database-credentials", databaseID.String()))
 	if err != nil {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
