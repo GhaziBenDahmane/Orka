@@ -13,6 +13,12 @@ probe; it performs a database ping with a two-second upper bound and returns
 but are not included in the response. Container health checks and smoke tests
 use `/readyz` so traffic is sent only to a usable control plane.
 
+Local password authentication is protected by PostgreSQL-backed fixed-window
+limits shared by every controller replica: 300 total login submissions and 10
+attempts per existing account per minute. Bootstrap is limited to five attempts
+per minute. Rejected requests return 429 with `Retry-After`; stored limiter keys
+are SHA-256 digests rather than email addresses or credentials.
+
 Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a
 Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,

@@ -290,3 +290,17 @@ func TestMigrateUpgradeFrom066AddsReconciliationState(t *testing.T) {
 		t.Fatalf("reconciliation table exists=%v err=%v", tableExists, err)
 	}
 }
+
+func TestMigrateUpgradeFrom067AddsAuthenticationRateLimits(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "067_service_reconciliation.sql"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('auth_rate_limits') IS NOT NULL`).Scan(&exists); err != nil || !exists {
+		t.Fatalf("authentication rate-limit table missing: exists=%v err=%v", exists, err)
+	}
+}

@@ -529,6 +529,9 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	if !s.allowAuthenticationAttempt(w, r, "bootstrap", cryptox.Digest("instance"), 5) {
+		return
+	}
 	if _, err := mail.ParseAddress(in.Email); err != nil {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
@@ -565,8 +568,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	if !s.allowAuthenticationAttempt(w, r, "login-global", cryptox.Digest("instance"), 300) {
+		return
+	}
 	userID, hash, err := s.Store.PasswordLogin(r.Context(), in.Email)
-	if err != nil || !auth.VerifyPassword(hash, in.Password) {
+	if err != nil {
+		time.Sleep(150 * time.Millisecond)
+		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
+		return
+	}
+	if !s.allowAuthenticationAttempt(w, r, "login", cryptox.Digest(in.Email), 10) {
+		return
+	}
+	if !auth.VerifyPassword(hash, in.Password) {
 		time.Sleep(150 * time.Millisecond)
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
 		return
@@ -586,6 +601,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"token": token})
+}
+
+func (s *Server) allowAuthenticationAttempt(w http.ResponseWriter, r *http.Request, bucket string, keyHash []byte, limit int) bool {
+	allowed, retryAfter, err := s.Store.ConsumeRateLimit(r.Context(), bucket, keyHash, limit, time.Minute)
+	if err != nil {
+		writeStoreError(w, err)
+		return false
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+		writeError(w, http.StatusTooManyRequests, "rate_limited", "too many authentication attempts")
+		return false
+	}
+	return true
 }
 
 func (s *Server) newSession(r *http.Request, userID uuid.UUID, method string) (string, error) {
