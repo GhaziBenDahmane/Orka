@@ -54,9 +54,24 @@ type AIAuditBackupPosture struct {
 }
 
 type AIAuditIdentityPosture struct {
-	RequireSSO           bool  `json:"requireSso"`
-	EnabledOIDCProviders int64 `json:"enabledOidcProviders"`
-	EnabledSAMLProviders int64 `json:"enabledSamlProviders"`
+	RequireSSO                      bool       `json:"requireSso"`
+	EnabledOIDCProviders            int64      `json:"enabledOidcProviders"`
+	EnabledSAMLProviders            int64      `json:"enabledSamlProviders"`
+	ActiveMembers                   int64      `json:"activeMembers"`
+	ActiveOwners                    int64      `json:"activeOwners"`
+	ActiveAdmins                    int64      `json:"activeAdmins"`
+	ActiveDevelopers                int64      `json:"activeDevelopers"`
+	ActiveViewers                   int64      `json:"activeViewers"`
+	DisabledMembers                 int64      `json:"disabledMembers"`
+	ActiveLocalSessions             int64      `json:"activeLocalSessions"`
+	ActiveOIDCSessions              int64      `json:"activeOidcSessions"`
+	ActiveSAMLSessions              int64      `json:"activeSamlSessions"`
+	ActiveServiceAccounts           int64      `json:"activeServiceAccounts"`
+	ActivePrivilegedServiceAccounts int64      `json:"activePrivilegedServiceAccounts"`
+	ExpiringServiceAccounts         int64      `json:"expiringServiceAccounts7d"`
+	ActiveAuditorServiceAccounts    int64      `json:"activeAuditorServiceAccounts"`
+	ActiveSCIMTokens                int64      `json:"activeScimTokens"`
+	OldestActiveSCIMTokenCreatedAt  *time.Time `json:"oldestActiveScimTokenCreatedAt,omitempty"`
 }
 
 type AIAuditNotificationPosture struct {
@@ -277,7 +292,41 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	err = s.Pool.QueryRow(ctx, `SELECT
 		COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false),
 		(SELECT count(*) FROM oidc_providers WHERE organization_id=$1 AND enabled),
-		(SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND enabled)`, organizationID).Scan(&snapshot.IdentityPosture.RequireSSO, &snapshot.IdentityPosture.EnabledOIDCProviders, &snapshot.IdentityPosture.EnabledSAMLProviders)
+		(SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND enabled),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role='owner' AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role='admin' AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role='developer' AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role='viewer' AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.disabled_at IS NOT NULL),
+		(SELECT count(*) FROM sessions session JOIN memberships m ON m.user_id=session.user_id JOIN users u ON u.id=session.user_id WHERE m.organization_id=$1 AND session.organization_id IS NULL AND session.auth_method='local' AND session.expires_at>now() AND u.disabled_at IS NULL AND (m.role='owner' OR NOT COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false))),
+		(SELECT count(*) FROM sessions session JOIN memberships m ON m.user_id=session.user_id AND m.organization_id=session.organization_id JOIN users u ON u.id=session.user_id WHERE session.organization_id=$1 AND session.auth_method='oidc' AND session.expires_at>now() AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM sessions session JOIN memberships m ON m.user_id=session.user_id AND m.organization_id=session.organization_id JOIN users u ON u.id=session.user_id WHERE session.organization_id=$1 AND session.auth_method='saml' AND session.expires_at>now() AND u.disabled_at IS NULL),
+		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
+		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND account.role IN ('admin','developer') AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
+		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now() AND token.expires_at<=now()+interval '7 days')),
+		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND account.role='auditor' AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
+		(SELECT count(*) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL),
+		(SELECT min(created_at) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL)`, organizationID).Scan(
+		&snapshot.IdentityPosture.RequireSSO,
+		&snapshot.IdentityPosture.EnabledOIDCProviders,
+		&snapshot.IdentityPosture.EnabledSAMLProviders,
+		&snapshot.IdentityPosture.ActiveMembers,
+		&snapshot.IdentityPosture.ActiveOwners,
+		&snapshot.IdentityPosture.ActiveAdmins,
+		&snapshot.IdentityPosture.ActiveDevelopers,
+		&snapshot.IdentityPosture.ActiveViewers,
+		&snapshot.IdentityPosture.DisabledMembers,
+		&snapshot.IdentityPosture.ActiveLocalSessions,
+		&snapshot.IdentityPosture.ActiveOIDCSessions,
+		&snapshot.IdentityPosture.ActiveSAMLSessions,
+		&snapshot.IdentityPosture.ActiveServiceAccounts,
+		&snapshot.IdentityPosture.ActivePrivilegedServiceAccounts,
+		&snapshot.IdentityPosture.ExpiringServiceAccounts,
+		&snapshot.IdentityPosture.ActiveAuditorServiceAccounts,
+		&snapshot.IdentityPosture.ActiveSCIMTokens,
+		&snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt,
+	)
 	if err != nil {
 		return err
 	}

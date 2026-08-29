@@ -36,6 +36,10 @@ keys make it a privileged service.
   pending/running service and database jobs. Queue counts cover only jobs with
   a resource key that resolves through the requesting organization; unscoped
   platform jobs and another organization's jobs are never included.
+- Identity posture is aggregate-only: active and disabled membership counts by
+  role, active local/OIDC/SAML sessions, active and soon-expiring service
+  accounts, auditor accounts, and active SCIM token count/age. User identities,
+  session metadata, token hashes, and provider configuration remain excluded.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy

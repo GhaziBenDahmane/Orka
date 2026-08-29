@@ -17,6 +17,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	db := &Store{Pool: pool}
 	organizationID, userID := uuid.New(), uuid.New()
+	developerUserID, disabledUserID, otherUserID := uuid.New(), uuid.New(), uuid.New()
 	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'AI test',$2)`, organizationID, "ai-"+organizationID.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +39,22 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	otherOrganizationID := uuid.New()
 	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other AI test',$2)`, otherOrganizationID, "other-ai-"+otherOrganizationID.String()); err != nil {
 		t.Fatal(err)
+	}
+	scimTokenCreatedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused'),($3,$4,'unused'),($5,$6,'unused')`, []any{developerUserID, developerUserID.String() + "@example.test", disabledUserID, disabledUserID.String() + "@example.test", otherUserID, otherUserID.String() + "@example.test"}},
+		{`UPDATE users SET disabled_at=now() WHERE id=$1`, []any{disabledUserID}},
+		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'developer'),($1,$4,'viewer'),($5,$6,'owner')`, []any{organizationID, userID, developerUserID, disabledUserID, otherOrganizationID, otherUserID}},
+		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local'),($4,$5,$6,now()+interval '1 hour','local'),($7,$8,$9,now()+interval '1 hour','local'),($10,$11,$12,now()+interval '1 hour','local')`, []any{uuid.New(), userID, []byte("target-owner-local"), uuid.New(), developerUserID, []byte("target-developer-local"), uuid.New(), disabledUserID, []byte("disabled-local"), uuid.New(), otherUserID, []byte("other-local")}},
+		{`INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc'),($5,$6,$7,$8,now()+interval '1 hour','saml')`, []any{uuid.New(), developerUserID, organizationID, []byte("target-oidc"), uuid.New(), otherUserID, otherOrganizationID, []byte("other-saml")}},
+		{`INSERT INTO scim_tokens(id,organization_id,name,token_hash,created_at) VALUES($1,$2,'Target SCIM',$3,$4),($5,$6,'Other SCIM',$7,now()-interval '1 year')`, []any{uuid.New(), organizationID, []byte("target-scim"), scimTokenCreatedAt, uuid.New(), otherOrganizationID, []byte("other-scim")}},
+	} {
+		if _, err = pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err = db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: otherOrganizationID, Name: "Wrong scope", Slug: "wrong-scope", RepositoryURL: "https://github.com/acme/templates", GitRef: "main", CredentialID: &credentialID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-organization catalog credential accepted: %v", err)
@@ -105,6 +122,12 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.CreateServiceAccount(ctx, organizationID, userID, "deployment-admin", "admin", []byte("admin-token-hash"), time.Now().Add(30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.CreateServiceAccount(ctx, otherOrganizationID, otherUserID, "other-admin", "admin", []byte("other-admin-token-hash"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	run, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "security", "v1", "test", json.RawMessage(`{"kind":"platform"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +189,10 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if len(snapshot.BackupPosture) != 1 || snapshot.BackupPosture[0].DatabaseID != databaseID || !snapshot.BackupPosture[0].VerifyRestore || snapshot.BackupPosture[0].LastBackupStatus != "succeeded" || snapshot.BackupPosture[0].LastRestoreDrillStatus != "succeeded" {
 		t.Fatalf("backup posture=%#v", snapshot.BackupPosture)
 	}
-	if !snapshot.IdentityPosture.RequireSSO || snapshot.IdentityPosture.EnabledOIDCProviders != 1 || snapshot.IdentityPosture.EnabledSAMLProviders != 0 {
+	if !snapshot.IdentityPosture.RequireSSO || snapshot.IdentityPosture.EnabledOIDCProviders != 1 || snapshot.IdentityPosture.EnabledSAMLProviders != 0 || snapshot.IdentityPosture.ActiveMembers != 2 || snapshot.IdentityPosture.ActiveOwners != 1 || snapshot.IdentityPosture.ActiveAdmins != 0 || snapshot.IdentityPosture.ActiveDevelopers != 1 || snapshot.IdentityPosture.ActiveViewers != 0 || snapshot.IdentityPosture.DisabledMembers != 1 {
+		t.Fatalf("identity membership posture=%#v", snapshot.IdentityPosture)
+	}
+	if snapshot.IdentityPosture.ActiveLocalSessions != 1 || snapshot.IdentityPosture.ActiveOIDCSessions != 1 || snapshot.IdentityPosture.ActiveSAMLSessions != 0 || snapshot.IdentityPosture.ActiveServiceAccounts != 2 || snapshot.IdentityPosture.ActivePrivilegedServiceAccounts != 1 || snapshot.IdentityPosture.ExpiringServiceAccounts != 1 || snapshot.IdentityPosture.ActiveAuditorServiceAccounts != 1 || snapshot.IdentityPosture.ActiveSCIMTokens != 1 || snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt == nil || !snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.Equal(scimTokenCreatedAt) {
 		t.Fatalf("identity posture=%#v", snapshot.IdentityPosture)
 	}
 	if len(snapshot.NotificationPosture) != 1 || snapshot.NotificationPosture[0].Name != "On-call" {
