@@ -33,9 +33,12 @@ keys make it a privileged service.
   enabled SSO provider counts, notification coverage, and template repository
   signing/synchronization posture so findings can identify concrete gaps. It
   also reports each service's desired and latest deployed revision plus
-  pending/running service and database jobs. Queue counts cover only jobs with
-  a resource key that resolves through the requesting organization; unscoped
-  platform jobs and another organization's jobs are never included.
+  pending/running service and database jobs. The latest agent upgrade for each
+  cluster includes its immutable target, state, attempt count, deadline, and
+  overdue flag, but never its encrypted command or result. Queue counts cover
+  only jobs with a resource key that resolves through the requesting
+  organization; unscoped platform jobs and another organization's jobs are
+  never included.
 - Identity posture is aggregate-only: active and disabled membership counts by
   role, active local/OIDC/SAML sessions, active and soon-expiring service
   accounts, auditor accounts, and active SCIM token count/age. User identities,

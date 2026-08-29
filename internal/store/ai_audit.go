@@ -19,6 +19,7 @@ type AIAuditSnapshot struct {
 	Routes               []Route                         `json:"routes"`
 	Databases            []DatabaseInstance              `json:"databases"`
 	Clusters             []Cluster                       `json:"clusters"`
+	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
@@ -51,6 +52,20 @@ type AIAuditBackupPosture struct {
 	LastBackupAt           *time.Time `json:"lastBackupAt,omitempty"`
 	LastRestoreDrillStatus string     `json:"lastRestoreDrillStatus,omitempty"`
 	LastRestoreDrillAt     *time.Time `json:"lastRestoreDrillAt,omitempty"`
+}
+
+type AIAuditAgentUpgradePosture struct {
+	ClusterID            uuid.UUID  `json:"clusterId"`
+	ClusterName          string     `json:"clusterName"`
+	CommandID            uuid.UUID  `json:"commandId"`
+	Status               string     `json:"status"`
+	TargetImage          string     `json:"targetImage"`
+	Attempts             int        `json:"attempts"`
+	LastError            string     `json:"lastError,omitempty"`
+	VerificationOverdue  bool       `json:"verificationOverdue"`
+	VerificationDeadline *time.Time `json:"verificationDeadline,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	FinishedAt           *time.Time `json:"finishedAt,omitempty"`
 }
 
 type AIAuditIdentityPosture struct {
@@ -118,7 +133,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -203,6 +218,37 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 
 func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
 	rows, err := s.Pool.Query(ctx, `
+		SELECT c.id,c.name,latest.id,latest.status,latest.target_image,latest.attempts,latest.last_error,
+			latest.status='verifying' AND latest.run_after<=now(),
+			CASE WHEN latest.status='verifying' THEN latest.run_after END,latest.created_at,latest.finished_at
+		FROM clusters c
+		JOIN LATERAL (
+			SELECT command.id,command.status,command.target_image,command.attempts,command.last_error,command.run_after,command.created_at,command.finished_at
+			FROM cluster_commands command
+			WHERE command.cluster_id=c.id AND command.kind='agent.upgrade'
+			ORDER BY command.created_at DESC,command.id DESC
+			LIMIT 1
+		) latest ON true
+		WHERE c.organization_id=$1
+		ORDER BY c.name,c.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditAgentUpgradePosture
+		if err = rows.Scan(&item.ClusterID, &item.ClusterName, &item.CommandID, &item.Status, &item.TargetImage, &item.Attempts, &item.LastError, &item.VerificationOverdue, &item.VerificationDeadline, &item.CreatedAt, &item.FinishedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.AgentUpgradePosture = append(snapshot.AgentUpgradePosture, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `
 		SELECT d.id,d.name,d.engine,d.status,
 			bp.id IS NOT NULL,COALESCE(bp.enabled,false),COALESCE(bp.interval_seconds,0),COALESCE(bp.retention_count,0),COALESCE(bp.verify_restore,false),bp.destination_id IS NOT NULL,
 			COALESCE(last_backup.status,''),last_backup.created_at,COALESCE(last_drill.status,''),last_drill.created_at
