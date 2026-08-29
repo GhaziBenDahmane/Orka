@@ -97,17 +97,34 @@ path = "/"
 	if !strings.Contains(text, `"name":"admin_email","default":"admin@example.test"`) || !strings.Contains(text, `"name":"password","generated":true,"sensitive":true`) {
 		t.Fatalf("template variable descriptors missing: %s", body)
 	}
+	previewVariables := map[string]string{
+		"admin_email": "operator@example.test",
+		"api_token":   "operator-token",
+		"hostname":    "custom.example.test",
+		"password":    "operator-password",
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/preview", viewerToken, orgID, http.MethodPost, map[string]any{"baseDomain": "example.test", "variables": previewVariables})
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"name":"app","image":"nginx:alpine"`)) || !bytes.Contains(body, []byte(`"host":"custom.example.test"`)) || !bytes.Contains(body, []byte(`"environmentKeys":["ADMIN_EMAIL","API_TOKEN","PASSWORD"]`)) {
+		t.Fatalf("template preview status = %d: %s", status, body)
+	}
+	if bytes.Contains(body, []byte("operator-password")) || bytes.Contains(body, []byte("operator-token")) || bytes.Contains(body, []byte("operator@example.test")) {
+		t.Fatalf("template preview leaked variable values: %s", body)
+	}
+	unsafePreviewVariables := map[string]string{}
+	for key, value := range previewVariables {
+		unsafePreviewVariables[key] = value
+	}
+	unsafePreviewVariables["hostname"] = "app.example.test`) || Host(`attacker.example.test"
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/preview", viewerToken, orgID, http.MethodPost, map[string]any{"variables": unsafePreviewVariables})
+	if status != http.StatusBadRequest || !bytes.Contains(body, []byte("invalid_template")) {
+		t.Fatalf("unsafe template route preview status = %d: %s", status, body)
+	}
 
 	instantiateBody := map[string]any{
 		"environmentId": environmentID,
 		"name":          "Customized App",
 		"baseDomain":    "example.test",
-		"variables": map[string]string{
-			"admin_email": "operator@example.test",
-			"api_token":   "operator-token",
-			"hostname":    "custom.example.test",
-			"password":    "operator-password",
-		},
+		"variables":     previewVariables,
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, instantiateBody)
 	if status != http.StatusCreated {
@@ -248,6 +265,10 @@ feature = "enabled"`, 1)
 	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-upgrades", otherToken, otherOrgID, http.MethodPost, map[string]any{"templateId": rollbackTemplate.ID})
 	if status != http.StatusNotFound {
 		t.Fatalf("cross-tenant template upgrade status = %d: %s", status, body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/preview", otherToken, otherOrgID, http.MethodPost, map[string]any{})
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-tenant template preview status = %d: %s", status, body)
 	}
 
 	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, map[string]any{"environmentId": environmentID, "name": "Rejected", "variables": map[string]string{"undeclared": "value"}})

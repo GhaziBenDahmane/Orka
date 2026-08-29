@@ -140,6 +140,12 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		}
 		input, err := parseJSONArgument(args[2], stdin)
 		return http.MethodPost, "/v1/templates/" + args[1] + "/instantiate", input, err
+	case "preview-template":
+		if len(args) != 3 {
+			return "", "", nil, usageError()
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPost, "/v1/templates/" + args[1] + "/preview", input, err
 	case "template-versions":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -292,5 +298,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|request>")
 }

@@ -26,3 +26,24 @@ func TestCompileRejectsHostMount(t *testing.T) {
 		t.Fatal("expected host mount rejection")
 	}
 }
+
+func TestCompileRejectsTraefikRuleInjection(t *testing.T) {
+	c := Compiler{PublicNetwork: "public"}
+	for _, route := range []store.Route{
+		{ServiceName: "web", Host: "app.example.com`) || Host(`evil.example.com", PathPrefix: "/", TargetPort: 80, TLS: true, CertificateResolver: "letsencrypt"},
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/`) || PathPrefix(`/admin", TargetPort: 80, TLS: true, CertificateResolver: "letsencrypt"},
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80, TLS: true, CertificateResolver: "bad resolver"},
+	} {
+		if _, err := c.Compile("services:\n  web:\n    image: nginx:alpine\n", []store.Route{route}); err == nil {
+			t.Fatalf("accepted unsafe route: %#v", route)
+		}
+	}
+}
+
+func TestValidateRouteAcceptsDNSHosts(t *testing.T) {
+	for _, host := range []string{"app.example.com", "nested.apps.example.com", "xn--bcher-kva.example"} {
+		if err := ValidateRoute(store.Route{ServiceName: "web", Host: host, PathPrefix: "/api/v1", TargetPort: 8080, TLS: true, CertificateResolver: "letsencrypt-prod"}); err != nil {
+			t.Fatalf("rejected %q: %v", host, err)
+		}
+	}
+}

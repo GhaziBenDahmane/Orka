@@ -216,6 +216,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 |---|---|---|
 | GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
 | POST | `/v1/templates/import/dokploy` | Import `template.toml` plus Compose YAML |
+| POST | `/v1/templates/{id}/preview` | Validate overrides and return secret-free service, route, environment-key, and managed-file-count topology |
 | POST | `/v1/templates/{id}/instantiate` | Create a service, encrypted secrets, files and routes; accepts declared `variables` overrides |
 | GET | `/v1/services/{id}/template-versions` | List other revisions of the service's source template |
 | POST | `/v1/services/{id}/template-upgrades` | Atomically apply another template revision while preserving generated secrets and explicit overrides |
@@ -223,7 +224,9 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
 
-Template instantiation is atomic: the Compose service, routes, and provenance
+Template previews execute the same variable resolution, mount conversion, and
+safe-Compose validation as creation, but omit secret environment values,
+commands, and inline file contents. Template instantiation is atomic: the Compose service, routes, and provenance
 record either commit together or are all rolled back. Service detail responses
 include redacted template key, version, checksum, base-domain provenance, and a
 Compose-drift flag;

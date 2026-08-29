@@ -179,6 +179,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/database-migrations/{migrationID}/cancel", s.requireResourceRole("admin", "migration", "migrationID", http.HandlerFunc(s.cancelDatabaseMigration)))
 	mux.Handle("GET /v1/templates", s.requireAuth(http.HandlerFunc(s.listTemplates)))
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
+	mux.Handle("POST /v1/templates/{templateID}/preview", s.requireAuth(http.HandlerFunc(s.previewTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireAuth(http.HandlerFunc(s.instantiateTemplate)))
 	mux.Handle("GET /v1/services/{serviceID}", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.getService)))
 	mux.Handle("GET /v1/services/{serviceID}/template-versions", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listTemplateVersions)))
@@ -1260,8 +1261,12 @@ func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
 	}
+	var routes []store.Route
 	if err == nil {
-		_, err = s.Compiler.Compile(instance.ComposeYAML, nil)
+		routes, err = templateRoutes(uuid.Nil, instance.Domains)
+	}
+	if err == nil {
+		_, err = s.Compiler.Compile(instance.ComposeYAML, routes)
 	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
@@ -1277,6 +1282,59 @@ func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "template.import", "template", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
+}
+
+func (s *Server) previewTemplate(w http.ResponseWriter, r *http.Request) {
+	templateID, err := uuid.Parse(r.PathValue("templateID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid template id")
+		return
+	}
+	var in struct {
+		BaseDomain string            `json:"baseDomain"`
+		Variables  map[string]string `json:"variables"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	item, err := s.Store.GetTemplate(r.Context(), principal(r).OrganizationID, templateID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	var config map[string]string
+	if err = json.Unmarshal(item.Config, &config); err != nil {
+		writeError(w, 500, "invalid_template", "stored template config is invalid")
+		return
+	}
+	template, err := templates.ParseDokploy([]byte(config["templateToml"]))
+	if err != nil {
+		writeError(w, 500, "invalid_template", "stored template definition is invalid")
+		return
+	}
+	instance, err := templates.InstantiateWithOverrides(template, item.ComposeYAML, in.BaseDomain, in.Variables)
+	if err == nil {
+		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
+	}
+	if err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	preview, err := templates.DescribeInstance(instance)
+	if err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	previewRoutes, err := templateRoutes(uuid.Nil, instance.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	if _, err = s.Compiler.Compile(instance.ComposeYAML, previewRoutes); err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"templateId": item.ID, "checksum": item.Checksum, "preview": preview})
 }
 
 func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
@@ -1331,9 +1389,6 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
 	}
-	if err == nil {
-		_, err = s.Compiler.Compile(instance.ComposeYAML, nil)
-	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
 		return
@@ -1359,14 +1414,14 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	shortID := strings.Split(serviceID.String(), "-")[0]
 	composeSum := sha256.Sum256([]byte(instance.ComposeYAML))
-	routes := make([]store.Route, 0, len(instance.Domains))
-	for _, domain := range instance.Domains {
-		port, portErr := templates.PortNumber(domain.Port)
-		if portErr != nil {
-			writeError(w, 400, "invalid_template", portErr.Error())
-			return
-		}
-		routes = append(routes, store.Route{ComposeServiceID: serviceID, ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"})
+	routes, err := templateRoutes(serviceID, instance.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	if _, err = s.Compiler.Compile(instance.ComposeYAML, routes); err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
 	}
 	templateRef := item.ID
 	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides})
@@ -1521,9 +1576,6 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 	if err == nil {
 		upgraded.ComposeYAML, err = templates.ApplyMounts(upgraded.ComposeYAML, upgraded.Mounts)
 	}
-	if err == nil {
-		_, err = s.Compiler.Compile(upgraded.ComposeYAML, nil)
-	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
 		return
@@ -1546,14 +1598,14 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
-	routes := make([]store.Route, 0, len(upgraded.Domains))
-	for _, domain := range upgraded.Domains {
-		port, portErr := templates.PortNumber(domain.Port)
-		if portErr != nil {
-			writeError(w, 400, "invalid_template", portErr.Error())
-			return
-		}
-		routes = append(routes, store.Route{ComposeServiceID: serviceID, ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"})
+	routes, err := templateRoutes(serviceID, upgraded.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
+	}
+	if _, err = s.Compiler.Compile(upgraded.ComposeYAML, routes); err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
+		return
 	}
 	upgradedSum := sha256.Sum256([]byte(upgraded.ComposeYAML))
 	targetRef := target.ID
@@ -1569,6 +1621,22 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Store.Audit(r.Context(), &p, "template.upgrade", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"fromTemplateId": provenance.TemplateID, "toTemplateId": target.ID, "fromVersion": provenance.TemplateVersion, "toVersion": target.Version, "replacedDrift": in.AllowDrift})
 	writeJSON(w, 200, map[string]any{"service": service, "routes": routes})
+}
+
+func templateRoutes(serviceID uuid.UUID, domains []templates.Domain) ([]store.Route, error) {
+	routes := make([]store.Route, 0, len(domains))
+	for _, domain := range domains {
+		port, err := templates.PortNumber(domain.Port)
+		if err != nil {
+			return nil, err
+		}
+		route := store.Route{ComposeServiceID: serviceID, ServiceName: domain.ServiceName, Host: strings.ToLower(strings.TrimSpace(domain.Host)), PathPrefix: domain.Path, TargetPort: port, TLS: true, CertificateResolver: "letsencrypt"}
+		if err = deploy.ValidateRoute(route); err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	return routes, nil
 }
 
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
@@ -1969,12 +2037,13 @@ func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
 	if in.TLS != nil {
 		tls = *in.TLS
 	}
-	if in.ServiceName == "" || !strings.Contains(in.Host, ".") || in.TargetPort < 1 || in.TargetPort > 65535 || !strings.HasPrefix(in.PathPrefix, "/") {
+	item := store.Route{ComposeServiceID: serviceID, ServiceName: in.ServiceName, Host: in.Host, PathPrefix: in.PathPrefix, TargetPort: in.TargetPort, TLS: tls, CertificateResolver: in.CertificateResolver}
+	if err = deploy.ValidateRoute(item); err != nil {
 		writeError(w, 400, "invalid_route", "invalid route")
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.AddRoute(r.Context(), p.OrganizationID, store.Route{ComposeServiceID: serviceID, ServiceName: in.ServiceName, Host: in.Host, PathPrefix: in.PathPrefix, TargetPort: in.TargetPort, TLS: tls, CertificateResolver: in.CertificateResolver})
+	item, err = s.Store.AddRoute(r.Context(), p.OrganizationID, item)
 	if err != nil {
 		writeStoreError(w, err)
 		return

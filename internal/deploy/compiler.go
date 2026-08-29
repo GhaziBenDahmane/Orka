@@ -12,6 +12,8 @@ import (
 )
 
 var safeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+var safeHostname = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var safeCertificateResolver = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
 type Compiler struct {
 	PublicNetwork string
@@ -50,6 +52,9 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		doc["networks"] = networks
 	}
 	for i, route := range routes {
+		if err := ValidateRoute(route); err != nil {
+			return "", err
+		}
 		service, ok := stringMap(services[route.ServiceName])
 		if !ok {
 			return "", fmt.Errorf("route references missing service %q", route.ServiceName)
@@ -84,6 +89,20 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		return "", fmt.Errorf("render compose yaml: %w", err)
 	}
 	return string(out), nil
+}
+
+func ValidateRoute(route store.Route) error {
+	host := strings.ToLower(strings.TrimSpace(route.Host))
+	if !safeName.MatchString(route.ServiceName) || len(host) > 253 || !safeHostname.MatchString(host) || route.TargetPort < 1 || route.TargetPort > 65535 {
+		return errors.New("invalid route")
+	}
+	if route.PathPrefix == "" || !strings.HasPrefix(route.PathPrefix, "/") || len(route.PathPrefix) > 2048 || strings.ContainsAny(route.PathPrefix, "`\r\n") {
+		return errors.New("invalid route")
+	}
+	if route.TLS && !safeCertificateResolver.MatchString(route.CertificateResolver) {
+		return errors.New("invalid route")
+	}
+	return nil
 }
 
 func validateSafeService(name string, service map[string]any) error {

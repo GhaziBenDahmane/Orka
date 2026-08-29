@@ -48,6 +48,23 @@ type Instance struct {
 	Variables   map[string]string
 }
 
+type Preview struct {
+	Services        []PreviewService `json:"services"`
+	Routes          []PreviewRoute   `json:"routes"`
+	EnvironmentKeys []string         `json:"environmentKeys"`
+	ManagedFiles    int              `json:"managedFiles"`
+}
+type PreviewService struct {
+	Name  string `json:"name"`
+	Image string `json:"image,omitempty"`
+}
+type PreviewRoute struct {
+	ServiceName string `json:"serviceName"`
+	Host        string `json:"host"`
+	Path        string `json:"path"`
+	TargetPort  int    `json:"targetPort"`
+}
+
 type VariableDescriptor struct {
 	Name      string `json:"name"`
 	Default   string `json:"default,omitempty"`
@@ -141,6 +158,40 @@ func UpgradeOverrides(template DokployTemplate, resolved, savedOverrides, reques
 }
 
 var directGenerator = regexp.MustCompile(`^\$\{(?:domain|password(?::[0-9]+)?|base64(?::[0-9]+)?|hash(?::[0-9]+)?|uuid|timestamp|timestampms|timestamps|randomPort|email|username(?::[0-9]+)?|jwt(?::[^}]+)?)\}$`)
+
+// DescribeInstance exposes only deploy topology. It deliberately omits
+// environment values, commands, and inline mount contents; resolved routes are
+// included because they are public ingress addresses after deployment.
+func DescribeInstance(instance Instance) (Preview, error) {
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(instance.ComposeYAML), &doc); err != nil {
+		return Preview{}, err
+	}
+	services, ok := doc["services"].(map[string]any)
+	if !ok || len(services) == 0 {
+		return Preview{}, fmt.Errorf("compose document has no services")
+	}
+	preview := Preview{}
+	for name, raw := range services {
+		service, _ := raw.(map[string]any)
+		image, _ := service["image"].(string)
+		preview.Services = append(preview.Services, PreviewService{Name: name, Image: image})
+	}
+	sort.Slice(preview.Services, func(i, j int) bool { return preview.Services[i].Name < preview.Services[j].Name })
+	for _, domain := range instance.Domains {
+		port, err := PortNumber(domain.Port)
+		if err != nil {
+			return Preview{}, err
+		}
+		preview.Routes = append(preview.Routes, PreviewRoute{ServiceName: domain.ServiceName, Host: domain.Host, Path: domain.Path, TargetPort: port})
+	}
+	for key := range instance.Environment {
+		preview.EnvironmentKeys = append(preview.EnvironmentKeys, key)
+	}
+	sort.Strings(preview.EnvironmentKeys)
+	preview.ManagedFiles = len(instance.Mounts)
+	return preview, nil
+}
 
 func LoadDokployDirectory(path, baseDomain string) (Instance, error) {
 	tomlBytes, err := os.ReadFile(filepath.Join(path, "template.toml"))
@@ -385,6 +436,7 @@ func InstantiateWithOverrides(template DokployTemplate, compose, baseDomain stri
 		if err != nil {
 			return Instance{}, err
 		}
+		domain.Host = strings.ToLower(strings.TrimSpace(domain.Host))
 		if domain.Path == "" {
 			domain.Path = "/"
 		}
