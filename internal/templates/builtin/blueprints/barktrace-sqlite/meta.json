@@ -1,1 +1,1 @@
-{"id":"barktrace-sqlite","name":"BarkTrace (SQLite)","version":"0.29.0","description":"Single-node BarkTrace observability platform with embedded SQLite storage, OIDC login, and a tagged release image"}
+{"id":"barktrace-sqlite","name":"BarkTrace (SQLite)","version":"0.31.0","description":"Single-node BarkTrace observability platform with embedded SQLite storage, OIDC login, and a tagged release image"}

@@ -117,10 +117,10 @@ for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
       variables='{"redis_password":"template-smoke-redis"}'
       ;;
     barktrace-sqlite)
-      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.29.0}\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
       ;;
     barktrace-postgres)
-      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.29.0}\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
       ;;
   esac
   service="$(curl --fail --silent --show-error "${headers[@]}" --data "{\"environmentId\":\"$environment_id\",\"name\":\"$template_key\",\"variables\":$variables}" "$base_url/v1/templates/$template_id/instantiate")"

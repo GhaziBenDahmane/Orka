@@ -1,6 +1,6 @@
 [variables]
 domain = "${domain}"
-barktrace_version = "0.29.0"
+barktrace_version = "0.31.0"
 postgres_version = "17.6-alpine"
 postgres_password = "${password:32}"
 oidc_issuer_url = "https://id.example.com"
