@@ -149,3 +149,20 @@ groups:
         annotations:
           summary: A remote agent certificate rotation is stalled
           description: Cluster {{ $labels.cluster }} has not authenticated with its issued replacement certificate.
+
+      - alert: DockyardControlPlaneCertificateExpiring
+        expr: dockyard_control_plane_certificate_expiry_seconds > 0 and dockyard_control_plane_certificate_expiry_seconds < 604800
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard control-plane certificate is approaching expiry
+          description: The {{ $labels.certificate }} certificate expires in less than seven days; rotate its Swarm secret and roll the controllers.
+
+      - alert: DockyardControlPlaneCertificateExpired
+        expr: dockyard_control_plane_certificate_expiry_seconds <= 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard control-plane certificate expired
+          description: The {{ $labels.certificate }} certificate is expired and remote agent authentication is impaired.

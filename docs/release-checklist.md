@@ -77,6 +77,10 @@ links for every item below.
   JIT provisioning, session authentication, and assertion replay rejection.
   Run the equivalent flow against Entra ID, Okta, and Google Workspace, and
   verify tenant isolation with users from two organizations.
+- Rotate the agent listener certificate and CA secrets in a staging controller
+  rollout. Confirm startup rejects a mismatched or expired credential, the
+  replacement listener accepts existing agents, and both control-plane expiry
+  gauges and seven-day alerts move to the new certificate deadlines.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact
   storage into an isolated Swarm. Confirm audit-chain continuity.
 - Re-run the final non-dry-run Dokploy import, deploy the imported current

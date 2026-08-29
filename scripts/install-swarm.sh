@@ -129,6 +129,8 @@ if [ "$mode" = ha ]; then
   [ -n "${DOCKYARD_AGENT_HOST:-}" ] || fail "DOCKYARD_AGENT_HOST is required for HA installation"
   is_dns_hostname "$DOCKYARD_AGENT_HOST" || fail "DOCKYARD_AGENT_HOST must be a DNS hostname"
   openssl verify -CAfile "$DOCKYARD_AGENT_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate verification failed"
+  openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_CA_CERT_FILE" >/dev/null || fail "agent CA certificate must remain valid for at least 7 days"
+  openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate must remain valid for at least 7 days"
   ca_public=$(openssl pkey -in "$DOCKYARD_AGENT_CA_KEY_FILE" -pubout 2>/dev/null) || fail "invalid agent CA private key"
   ca_certificate_public=$(openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -pubkey -noout 2>/dev/null) || fail "invalid agent CA certificate"
   [ "$ca_public" = "$ca_certificate_public" ] || fail "agent CA certificate and private key do not match"

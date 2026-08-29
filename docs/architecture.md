@@ -104,7 +104,12 @@ Heartbeats use a separate optional TLS listener configured with
 `DOCKYARD_AGENT_LISTEN_ADDR`, `DOCKYARD_AGENT_SERVER_CERT_FILE`, and
 `DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
 and matches its serial number against the cluster's current or pending database
-record. Reenrollment immediately supersedes both identities.
+record. Reenrollment immediately supersedes both identities. Controller startup
+validates that the configured CA is current, self-signed, signing-capable, and
+matches its private key, then verifies the server certificate chain, server-auth
+usage, validity window, and private key. Prometheus exposes fixed-label expiry
+gauges for the agent CA and server certificate so operators can rotate their
+Swarm secrets before either credential expires.
 
 Remote database utilities run on the target cluster. The controller grants a
 single-operation presigned S3 transfer URL and sends a per-backup encryption

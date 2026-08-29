@@ -29,13 +29,24 @@ type observation struct {
 }
 
 type Metrics struct {
-	mu         sync.RWMutex
-	http       map[string]*observation
-	operations map[string]*observation
+	mu           sync.RWMutex
+	http         map[string]*observation
+	operations   map[string]*observation
+	certificates map[string]time.Time
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation)}
+	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time)}
+}
+
+func (m *Metrics) SetCertificateExpiry(name string, expiresAt time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if expiresAt.IsZero() {
+		delete(m.certificates, name)
+		return
+	}
+	m.certificates[name] = expiresAt
 }
 
 func (m *Metrics) ObserveHTTP(method, route string, status int, elapsed time.Duration) {
@@ -160,11 +171,26 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	m.mu.RLock()
 	httpItems := clone(m.http)
 	operationItems := clone(m.operations)
+	certificateExpiries := make(map[string]time.Time, len(m.certificates))
+	for name, expiresAt := range m.certificates {
+		certificateExpiries[name] = expiresAt
+	}
 	m.mu.RUnlock()
 	renderCounter(w, "dockyard_http_requests_total", "HTTP requests by method, route, and status.", httpItems, []string{"method", "route", "status"})
 	renderHistogram(w, "dockyard_http_request_duration_seconds", "HTTP request latency.", httpItems, []string{"method", "route", "status"})
 	renderCounter(w, "dockyard_operations_total", "Completed background operations by kind and status.", operationItems, []string{"kind", "status"})
 	renderHistogram(w, "dockyard_operation_duration_seconds", "Background operation latency.", operationItems, []string{"kind", "status"})
+	fmt.Fprintln(w, "# HELP dockyard_control_plane_certificate_expiry_seconds Seconds until a configured control-plane certificate expires.")
+	fmt.Fprintln(w, "# TYPE dockyard_control_plane_certificate_expiry_seconds gauge")
+	names := make([]string, 0, len(certificateExpiries))
+	for name := range certificateExpiries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	now := time.Now()
+	for _, name := range names {
+		fmt.Fprintf(w, "dockyard_control_plane_certificate_expiry_seconds%s %g\n", labels([]string{"certificate"}, []string{name}), certificateExpiries[name].Sub(now).Seconds())
+	}
 }
 
 func clone(source map[string]*observation) map[string]observation {

@@ -117,8 +117,11 @@ The installer also supports this profile with
 `DOCKYARD_INSTALL_MODE=ha`. In addition to the variables above, set
 `DOCKYARD_AGENT_HOST` and the four `DOCKYARD_AGENT_*_FILE` variables shown
 below. Preflight verifies certificate validity, hostname coverage, the server
-chain, and both private-key matches before changing Docker state. The database
-URL file must contain `sslmode=verify-full`.
+chain, both private-key matches, and at least seven days of remaining validity
+for the CA and server certificate before changing Docker state. Controller
+startup independently rejects expired, not-yet-valid, mismatched, or
+untrusted agent TLS credentials. The database URL file must contain
+`sslmode=verify-full`.
 
 ```sh
 export DOCKYARD_INSTALL_MODE=ha
@@ -140,6 +143,9 @@ restore drills, stalled or failed Dokploy database migrations, and maintenance
 mode left enabled. They also detect missing remote-cluster heartbeats, stalled
 agent upgrades, missed image-verification deadlines, and paused or rolled-back
 Swarm agent updates, plus expiring, expired, or stalled certificate rotations.
+The `dockyard_control_plane_certificate_expiry_seconds` gauges separately track
+the configured agent CA and server certificate; warning alerts begin seven days
+before expiry.
 Route those alerts through Alertmanager to the team's email, Slack, PagerDuty,
 or other incident receiver.
 

@@ -10,31 +10,35 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 )
 
 type Config struct {
-	ListenAddr              string
-	DatabaseURL             string
-	RequireDatabaseTLS      bool
-	MasterKey               []byte
-	DockerBin               string
-	WorkerConcurrency       int
-	SessionTTL              time.Duration
-	TraefikNetwork          string
-	UnsafeWorkloads         bool
-	PublicURL               string
-	BackupDirectory         string
-	RequireRemoteBackups    bool
-	OTLPEndpoint            string
-	OTLPInsecure            bool
-	ServiceName             string
-	AgentCACertificate      []byte
-	AgentCAKey              []byte
-	AgentCertificateTTL     time.Duration
-	AgentListenAddr         string
-	AgentServerCertFile     string
-	AgentServerKeyFile      string
-	DatabaseDriverDirectory string
+	ListenAddr               string
+	DatabaseURL              string
+	RequireDatabaseTLS       bool
+	MasterKey                []byte
+	DockerBin                string
+	WorkerConcurrency        int
+	SessionTTL               time.Duration
+	TraefikNetwork           string
+	UnsafeWorkloads          bool
+	PublicURL                string
+	BackupDirectory          string
+	RequireRemoteBackups     bool
+	OTLPEndpoint             string
+	OTLPInsecure             bool
+	ServiceName              string
+	AgentCACertificate       []byte
+	AgentCAKey               []byte
+	AgentCertificateTTL      time.Duration
+	AgentCAExpiresAt         time.Time
+	AgentServerCertExpiresAt time.Time
+	AgentListenAddr          string
+	AgentServerCertFile      string
+	AgentServerKeyFile       string
+	DatabaseDriverDirectory  string
 }
 
 func Load() (Config, error) {
@@ -116,29 +120,55 @@ func Load() (Config, error) {
 	if err != nil || agentCertificateTTL < 5*time.Minute || agentCertificateTTL > 30*24*time.Hour {
 		return Config{}, errors.New("DOCKYARD_AGENT_CERTIFICATE_TTL must be between 5m and 720h")
 	}
+	var agentCAExpiresAt, agentServerCertExpiresAt time.Time
+	if agentCACertificate != "" {
+		authority, validationErr := agentpki.ValidateAuthority([]byte(agentCACertificate), []byte(agentCAKey), time.Now())
+		if validationErr != nil {
+			return Config{}, fmt.Errorf("validate agent CA: %w", validationErr)
+		}
+		agentCAExpiresAt = authority.NotAfter
+	}
+	if agentListenAddr != "" {
+		serverCertificate, readErr := os.ReadFile(agentServerCertFile)
+		if readErr != nil {
+			return Config{}, fmt.Errorf("read DOCKYARD_AGENT_SERVER_CERT_FILE: %w", readErr)
+		}
+		serverKey, readErr := os.ReadFile(agentServerKeyFile)
+		if readErr != nil {
+			return Config{}, fmt.Errorf("read DOCKYARD_AGENT_SERVER_KEY_FILE: %w", readErr)
+		}
+		authority, server, validationErr := agentpki.ValidateServerCredentials([]byte(agentCACertificate), []byte(agentCAKey), serverCertificate, serverKey, time.Now())
+		if validationErr != nil {
+			return Config{}, fmt.Errorf("validate agent TLS credentials: %w", validationErr)
+		}
+		agentCAExpiresAt = authority.NotAfter
+		agentServerCertExpiresAt = server.NotAfter
+	}
 	return Config{
-		ListenAddr:              env("DOCKYARD_LISTEN_ADDR", ":8080"),
-		DatabaseURL:             databaseURL,
-		RequireDatabaseTLS:      requireDatabaseTLS,
-		MasterKey:               key,
-		DockerBin:               env("DOCKYARD_DOCKER_BIN", "docker"),
-		WorkerConcurrency:       concurrency,
-		SessionTTL:              ttl,
-		TraefikNetwork:          env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
-		UnsafeWorkloads:         unsafeWorkloads,
-		PublicURL:               strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
-		BackupDirectory:         filepath.Clean(backupDirectory),
-		RequireRemoteBackups:    requireRemoteBackups,
-		OTLPEndpoint:            otlpEndpoint,
-		OTLPInsecure:            otlpInsecure,
-		ServiceName:             env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
-		AgentCACertificate:      []byte(agentCACertificate),
-		AgentCAKey:              []byte(agentCAKey),
-		AgentCertificateTTL:     agentCertificateTTL,
-		AgentListenAddr:         agentListenAddr,
-		AgentServerCertFile:     agentServerCertFile,
-		AgentServerKeyFile:      agentServerKeyFile,
-		DatabaseDriverDirectory: driverDirectory,
+		ListenAddr:               env("DOCKYARD_LISTEN_ADDR", ":8080"),
+		DatabaseURL:              databaseURL,
+		RequireDatabaseTLS:       requireDatabaseTLS,
+		MasterKey:                key,
+		DockerBin:                env("DOCKYARD_DOCKER_BIN", "docker"),
+		WorkerConcurrency:        concurrency,
+		SessionTTL:               ttl,
+		TraefikNetwork:           env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		UnsafeWorkloads:          unsafeWorkloads,
+		PublicURL:                strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
+		BackupDirectory:          filepath.Clean(backupDirectory),
+		RequireRemoteBackups:     requireRemoteBackups,
+		OTLPEndpoint:             otlpEndpoint,
+		OTLPInsecure:             otlpInsecure,
+		ServiceName:              env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
+		AgentCACertificate:       []byte(agentCACertificate),
+		AgentCAKey:               []byte(agentCAKey),
+		AgentCertificateTTL:      agentCertificateTTL,
+		AgentCAExpiresAt:         agentCAExpiresAt,
+		AgentServerCertExpiresAt: agentServerCertExpiresAt,
+		AgentListenAddr:          agentListenAddr,
+		AgentServerCertFile:      agentServerCertFile,
+		AgentServerKeyFile:       agentServerKeyFile,
+		DatabaseDriverDirectory:  driverDirectory,
 	}, nil
 }
 

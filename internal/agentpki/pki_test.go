@@ -68,3 +68,45 @@ func TestSignAgentCSRRejectsCAWithoutMinimumRemainingLifetime(t *testing.T) {
 		t.Fatal("expected certificate issuance to fail near CA expiry")
 	}
 }
+
+func TestValidateServerCredentials(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	caPEM, caKeyPEM, err := NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, caKey, err := parseCA(caPEM, caKeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := randomSerial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "agents.example.test"}, DNSNames: []string{"agents.example.test"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(12 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	encoded, err := x509.CreateCertificate(rand.Reader, template, ca, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: encoded})
+	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)})
+	validatedCA, validatedServer, err := ValidateServerCredentials(caPEM, caKeyPEM, serverPEM, serverKeyPEM, now)
+	if err != nil || !validatedCA.NotAfter.Equal(ca.NotAfter) || !validatedServer.NotAfter.Equal(template.NotAfter) {
+		t.Fatalf("CA=%v server=%v err=%v", validatedCA, validatedServer, err)
+	}
+	otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(otherKey)})
+	if _, _, err = ValidateServerCredentials(caPEM, caKeyPEM, serverPEM, otherKeyPEM, now); err == nil {
+		t.Fatal("mismatched server private key was accepted")
+	}
+	if _, _, err = ValidateServerCredentials(caPEM, caKeyPEM, serverPEM, serverKeyPEM, now.Add(13*time.Hour)); err == nil {
+		t.Fatal("expired server certificate was accepted")
+	}
+}

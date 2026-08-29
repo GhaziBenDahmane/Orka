@@ -350,6 +350,8 @@ func serve() error {
 		}
 	}
 	metrics := observability.NewMetrics()
+	metrics.SetCertificateExpiry("agent_ca", cfg.AgentCAExpiresAt)
+	metrics.SetCertificateExpiry("agent_server", cfg.AgentServerCertExpiresAt)
 	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
 		return deploy.RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 45 * time.Minute}

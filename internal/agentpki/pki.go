@@ -3,6 +3,7 @@ package agentpki
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -89,6 +90,50 @@ func ClusterIdentity(cert *x509.Certificate) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("parse cluster identity: %w", err)
 	}
 	return id, nil
+}
+
+func ValidateServerCredentials(caCertPEM, caKeyPEM, serverCertPEM, serverKeyPEM []byte, now time.Time) (*x509.Certificate, *x509.Certificate, error) {
+	ca, err := ValidateAuthority(caCertPEM, caKeyPEM, now)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pair, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	if err != nil || len(pair.Certificate) == 0 {
+		return nil, nil, errors.New("invalid agent server certificate or private key")
+	}
+	server, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return nil, nil, errors.New("invalid agent server certificate")
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	intermediates := x509.NewCertPool()
+	for _, encoded := range pair.Certificate[1:] {
+		certificate, parseErr := x509.ParseCertificate(encoded)
+		if parseErr != nil {
+			return nil, nil, errors.New("invalid agent server certificate chain")
+		}
+		intermediates.AddCert(certificate)
+	}
+	if _, err = server.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return nil, nil, fmt.Errorf("verify agent server certificate: %w", err)
+	}
+	return ca, server, nil
+}
+
+func ValidateAuthority(caCertPEM, caKeyPEM []byte, now time.Time) (*x509.Certificate, error) {
+	ca, _, err := parseCA(caCertPEM, caKeyPEM)
+	if err != nil {
+		return nil, err
+	}
+	if now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) || ca.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return nil, errors.New("agent CA certificate is not currently valid for signing")
+	}
+	if err = ca.CheckSignatureFrom(ca); err != nil {
+		return nil, errors.New("agent CA certificate is not self-signed")
+	}
+	return ca, nil
 }
 
 func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, *rsa.PrivateKey, error) {
