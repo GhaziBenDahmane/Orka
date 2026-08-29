@@ -86,7 +86,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/agent/commands/next` | Lease the next encrypted-at-rest Swarm command over mTLS |
 | POST | `/v1/agent/commands/{id}/lease` | Renew a command lease using its fencing ID |
 | POST | `/v1/agent/commands/{id}/complete` | Store a fenced command result |
-| POST | `/v1/agent/rotate` | Rotate the current short-lived client certificate |
+| POST | `/v1/agent/rotate` | Issue a pending short-lived certificate; first successful authentication promotes it and revokes the old serial |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 

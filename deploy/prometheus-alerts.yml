@@ -123,3 +123,29 @@ groups:
         annotations:
           summary: A remote agent upgrade is stalled
           description: Cluster {{ $labels.cluster }} has had an upgrade in {{ $labels.status }} state for more than fifteen minutes.
+
+      - alert: DockyardAgentCertificateExpiring
+        expr: dockyard_cluster_certificate_expiry_seconds > 0 and dockyard_cluster_certificate_expiry_seconds < 79200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A remote agent certificate is approaching expiry
+          description: Cluster {{ $labels.cluster }} has less than 22 hours of certificate validity and automatic rotation has not replaced it.
+
+      - alert: DockyardAgentCertificateExpired
+        expr: dockyard_cluster_certificate_expiry_seconds <= 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote agent certificate expired
+          description: Cluster {{ $labels.cluster }} can no longer authenticate until it is re-enrolled.
+
+      - alert: DockyardAgentCertificateRotationStalled
+        expr: dockyard_cluster_certificate_rotation_pending_age_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote agent certificate rotation is stalled
+          description: Cluster {{ $labels.cluster }} has not authenticated with its issued replacement certificate.

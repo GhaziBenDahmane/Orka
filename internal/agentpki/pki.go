@@ -64,6 +64,9 @@ func SignAgentCSR(caCertPEM, caKeyPEM, csrPEM []byte, clusterID uuid.UUID, now t
 	if notAfter.After(ca.NotAfter) {
 		notAfter = ca.NotAfter
 	}
+	if !notAfter.After(now.Add(5 * time.Minute)) {
+		return nil, nil, errors.New("agent CA expires too soon to issue a certificate")
+	}
 	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "dockyard-agent-" + clusterID.String()}, URIs: []*url.URL{identity}, NotBefore: now.Add(-time.Minute), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, template, ca, csr.PublicKey, key)
 	if err != nil {

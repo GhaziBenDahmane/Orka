@@ -55,11 +55,33 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if err = db.RotateClusterCertificate(ctx, cluster.ID, "012345", "6789ab", time.Now().Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "012345"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("old certificate after rotation error = %v", err)
+	var currentSerial, pendingSerial string
+	if err = db.Pool.QueryRow(ctx, `SELECT certificate_serial,pending_certificate_serial FROM clusters WHERE id=$1`, cluster.ID).Scan(&currentSerial, &pendingSerial); err != nil || currentSerial != "012345" || pendingSerial != "6789ab" {
+		t.Fatalf("two-phase rotation state current=%q pending=%q err=%v", currentSerial, pendingSerial, err)
+	}
+	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "012345"); err != nil {
+		t.Fatalf("current certificate was revoked before replacement confirmation: %v", err)
 	}
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "6789ab"); err != nil {
 		t.Fatalf("authenticate rotated certificate: %v", err)
+	}
+	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "012345"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old certificate remained valid after replacement confirmation: %v", err)
+	}
+	if err = db.RotateClusterCertificate(ctx, cluster.ID, "6789ab", "abcdef", time.Now().Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.RotateClusterCertificate(ctx, cluster.ID, "6789ab", "fedcba", time.Now().Add(2*time.Hour)); err != nil {
+		t.Fatalf("retry rotation with still-current certificate: %v", err)
+	}
+	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "abcdef"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("superseded pending certificate error = %v", err)
+	}
+	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "6789ab"); err != nil {
+		t.Fatalf("current certificate invalid during retried rotation: %v", err)
+	}
+	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "fedcba"); err != nil {
+		t.Fatalf("authenticate retried replacement certificate: %v", err)
 	}
 	if err = db.RecordClusterHeartbeat(ctx, cluster.ID, "1.2.3", "registry.example/dockyard@sha256:"+strings.Repeat("a", 64), "completed", "28.0.1", map[string]any{"nodes": 3}); err != nil {
 		t.Fatal(err)

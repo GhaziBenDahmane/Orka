@@ -48,3 +48,23 @@ func TestSignAgentCSRRejectsTampering(t *testing.T) {
 		t.Fatal("expected malformed CSR rejection")
 	}
 }
+
+func TestSignAgentCSRRejectsCAWithoutMinimumRemainingLifetime(t *testing.T) {
+	now := time.Now()
+	caPEM, caKey, err := NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nearCAExpiry := now.Add(24*time.Hour - 4*time.Minute)
+	if _, _, err = SignAgentCSR(caPEM, caKey, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), uuid.New(), nearCAExpiry, time.Hour); err == nil {
+		t.Fatal("expected certificate issuance to fail near CA expiry")
+	}
+}

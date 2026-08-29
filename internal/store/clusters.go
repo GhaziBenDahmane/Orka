@@ -134,7 +134,7 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 		return ErrBusy
 	}
 	if !deleting {
-		_, err = tx.Exec(ctx, `UPDATE clusters SET state='disabled',deletion_requested_at=now(),certificate_serial='',certificate_not_after=NULL,updated_at=now() WHERE id=$1`, clusterID)
+		_, err = tx.Exec(ctx, `UPDATE clusters SET state='disabled',deletion_requested_at=now(),certificate_serial='',certificate_not_after=NULL,pending_certificate_serial='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID)
 	}
 	if err != nil {
 		return err
@@ -151,7 +151,11 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 
 func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uuid.UUID, serial string) error {
 	var valid bool
-	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND state IN ('active','draining') AND certificate_serial=$2 AND certificate_not_after>now())`, clusterID, serial).Scan(&valid)
+	err := s.Pool.QueryRow(ctx, `WITH promoted AS (
+		UPDATE clusters SET certificate_serial=pending_certificate_serial,certificate_not_after=pending_certificate_not_after,pending_certificate_serial='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now()
+		WHERE id=$1 AND state IN ('active','draining') AND pending_certificate_serial=$2 AND pending_certificate_not_after>now()
+		RETURNING 1
+	) SELECT EXISTS(SELECT 1 FROM promoted) OR EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND state IN ('active','draining') AND certificate_serial=$2 AND certificate_not_after>now())`, clusterID, serial).Scan(&valid)
 	if err != nil {
 		return err
 	}
@@ -162,7 +166,7 @@ func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uu
 }
 
 func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUID, oldSerial, newSerial string, notAfter time.Time) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE clusters SET certificate_serial=$3,certificate_not_after=$4,updated_at=now() WHERE id=$1 AND certificate_serial=$2 AND state IN ('active','draining')`, clusterID, oldSerial, newSerial, notAfter)
+	tag, err := s.Pool.Exec(ctx, `UPDATE clusters SET pending_certificate_serial=$3,pending_certificate_not_after=$4,pending_certificate_created_at=now(),updated_at=now() WHERE id=$1 AND certificate_serial=$2 AND certificate_not_after>now() AND state IN ('active','draining')`, clusterID, oldSerial, newSerial, notAfter)
 	if err != nil {
 		return err
 	}
@@ -440,7 +444,7 @@ func (s *Store) ConsumeClusterEnrollmentToken(ctx context.Context, tokenHash []b
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,updated_at=now() WHERE id=$1`, clusterID, serial, notAfter); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,pending_certificate_serial='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID, serial, notAfter); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

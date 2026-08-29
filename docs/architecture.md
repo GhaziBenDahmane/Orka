@@ -93,13 +93,18 @@ Remote agent identities use short-lived X.509 client certificates issued from
 a dedicated Dockyard CA. Enrollment accepts a proof-of-possession CSR, ignores
 caller-supplied certificate identities, and binds the certificate to
 `spiffe://dockyard/cluster/{uuid}`. Agent certificates are client-auth only and
-capped by the CA lifetime; rotation reuses the same verified cluster identity.
+capped by the CA lifetime. Rotation reuses the same verified cluster identity,
+validates the replacement against the saved CA and newly generated private key
+before atomic persistence, and records it as pending. The controller promotes
+that serial and revokes the old one only after the replacement successfully
+authenticates, so an interrupted response or disk failure cannot strand the
+agent.
 
 Heartbeats use a separate optional TLS listener configured with
 `DOCKYARD_AGENT_LISTEN_ADDR`, `DOCKYARD_AGENT_SERVER_CERT_FILE`, and
 `DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
-and matches its serial number against the cluster's current database record,
-so reenrollment immediately supersedes the previous identity.
+and matches its serial number against the cluster's current or pending database
+record. Reenrollment immediately supersedes both identities.
 
 Remote database utilities run on the target cluster. The controller grants a
 single-operation presigned S3 transfer URL and sends a per-backup encryption

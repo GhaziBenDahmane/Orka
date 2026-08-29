@@ -3,8 +3,14 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
@@ -13,10 +19,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/google/uuid"
 )
 
 type fakeScheduler struct {
@@ -29,6 +38,92 @@ type fakeScheduler struct {
 	transfer           *deploy.DatabaseTransferJob
 	status             deploy.StackStatus
 	containerCalls     int
+}
+
+func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T) {
+	now := time.Now().UTC()
+	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterID := uuid.New()
+	newState := func(t *testing.T) (string, []byte) {
+		t.Helper()
+		directory := t.TempDir()
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "dockyard-agent"}}, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		certificate, _, err := agentpki.SignAgentCSR(caPEM, caKey, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr}), clusterID, now.Add(-50*time.Minute), time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identity := append(append([]byte{}, certificate...), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})...)
+		certPath, _, caPath := identityPaths(directory)
+		if err = writeIdentityFile(certPath, identity, 0600); err == nil {
+			err = writeIdentityFile(caPath, caPEM, 0644)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return directory, identity
+	}
+	rotationServer := func(t *testing.T, certificateCluster uuid.UUID) *httptest.Server {
+		t.Helper()
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var input struct {
+				CSR string `json:"csr"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			certificate, _, err := agentpki.SignAgentCSR(caPEM, caKey, []byte(input.CSR), certificateCluster, time.Now(), 7*24*time.Hour)
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"certificate": string(certificate)})
+		}))
+	}
+	t.Run("valid replacement", func(t *testing.T) {
+		directory, original := newState(t)
+		server := rotationServer(t, clusterID)
+		defer server.Close()
+		if _, err := rotateIfNeeded(context.Background(), Config{StateDirectory: directory, AgentURL: server.URL}, server.Client()); err != nil {
+			t.Fatal(err)
+		}
+		updated, err := os.ReadFile(filepath.Join(directory, "identity.pem"))
+		if err != nil || bytes.Equal(updated, original) {
+			t.Fatalf("identity was not replaced: err=%v", err)
+		}
+		if _, err = tls.LoadX509KeyPair(filepath.Join(directory, "identity.pem"), filepath.Join(directory, "identity.pem")); err != nil {
+			t.Fatalf("saved replacement identity is invalid: %v", err)
+		}
+	})
+	t.Run("wrong cluster identity", func(t *testing.T) {
+		directory, original := newState(t)
+		server := rotationServer(t, uuid.New())
+		defer server.Close()
+		current := server.Client()
+		preservedClient, err := rotateIfNeeded(context.Background(), Config{StateDirectory: directory, AgentURL: server.URL}, current)
+		if err == nil || !strings.Contains(err.Error(), "changed the cluster identity") {
+			t.Fatalf("rotation error=%v", err)
+		}
+		if preservedClient != current {
+			t.Fatal("rotation failure did not preserve the working HTTP client")
+		}
+		preserved, readErr := os.ReadFile(filepath.Join(directory, "identity.pem"))
+		if readErr != nil || !bytes.Equal(preserved, original) {
+			t.Fatalf("current identity changed after rejected rotation: err=%v", readErr)
+		}
+	})
 }
 
 func (f *fakeScheduler) Status(context.Context, string) (deploy.StackStatus, error) {

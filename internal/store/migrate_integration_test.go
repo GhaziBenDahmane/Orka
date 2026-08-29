@@ -88,6 +88,38 @@ func TestMigrateFreshInstallIsCompleteAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateUpgradeFrom073AddsTwoPhaseAgentCertificateRotation(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "073_cluster_command_history_index.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, clusterID := uuid.New(), uuid.New()
+	_, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Certificate migration',$2)`, organizationID, "certificate-migration-"+organizationID.String())
+	if err == nil {
+		_, err = pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,certificate_serial,certificate_not_after) VALUES($1,$2,'Remote','remote','active','current',now()+interval '1 day')`, clusterID, organizationID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var pending string
+	var pendingExpiry, pendingCreated *time.Time
+	if err := pool.QueryRow(ctx, `SELECT pending_certificate_serial,pending_certificate_not_after,pending_certificate_created_at FROM clusters WHERE id=$1`, clusterID).Scan(&pending, &pendingExpiry, &pendingCreated); err != nil {
+		t.Fatal(err)
+	}
+	if pending != "" || pendingExpiry != nil || pendingCreated != nil {
+		t.Fatalf("unexpected pending rotation after migration: serial=%q expiry=%v created=%v", pending, pendingExpiry, pendingCreated)
+	}
+	if err := (&Store{Pool: pool}).AuthenticateClusterCertificate(ctx, clusterID, "current"); err != nil {
+		t.Fatalf("existing agent certificate was not preserved: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE clusters SET pending_certificate_serial='broken' WHERE id=$1`, clusterID); err == nil {
+		t.Fatal("incomplete pending certificate state was accepted")
+	}
+}
+
 func TestMigrateUpgradeFrom062AddsRemoteCatalogTrustPolicy(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "062_ai_audits_and_template_repositories.sql"); err != nil {
@@ -238,7 +270,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)

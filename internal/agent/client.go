@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/google/uuid"
@@ -81,7 +83,10 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	httpClient, err = rotateIfNeeded(ctx, cfg, httpClient)
 	if err != nil {
-		return err
+		if httpClient == nil {
+			return err
+		}
+		slog.Warn("agent certificate rotation deferred", "error", err)
 	}
 	c := &Client{cfg: cfg, swarm: deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.Network, Timeout: 5 * time.Minute}, http: httpClient}
 	c.serviceState = c.inspectServiceState
@@ -89,7 +94,7 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*http.Client, error) {
-	certPath, keyPath, _ := identityPaths(cfg.StateDirectory)
+	certPath, keyPath, caPath := identityPaths(cfg.StateDirectory)
 	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, err
@@ -98,44 +103,92 @@ func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*htt
 	if err != nil {
 		return nil, err
 	}
-	if time.Until(certificate.NotAfter) > 24*time.Hour {
+	if time.Until(certificate.NotAfter) <= 0 {
+		return nil, errors.New("agent certificate expired before it could be rotated")
+	}
+	rotationWindow := certificate.NotAfter.Sub(certificate.NotBefore) / 3
+	if rotationWindow > 24*time.Hour {
+		rotationWindow = 24 * time.Hour
+	}
+	if rotationWindow < time.Minute {
+		rotationWindow = time.Minute
+	}
+	if time.Until(certificate.NotAfter) > rotationWindow {
 		return current, nil
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
-		return nil, err
+		return current, err
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "dockyard-agent"}}, key)
 	if err != nil {
-		return nil, err
+		return current, err
 	}
 	body, _ := json.Marshal(map[string]string{"csr": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.AgentURL, "/")+"/v1/agent/rotate", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return current, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	response, err := current.Do(req)
 	if err != nil {
-		return nil, err
+		return current, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return nil, fmt.Errorf("agent certificate rotation returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
+		return current, fmt.Errorf("agent certificate rotation returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
 	}
 	var rotated struct {
 		Certificate string `json:"certificate"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&rotated); err != nil {
-		return nil, err
+		return current, err
+	}
+	if err := validateRotatedCertificate([]byte(rotated.Certificate), key, certificate, caPath); err != nil {
+		return current, err
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	identityPEM := append([]byte(rotated.Certificate), keyPEM...)
 	if err := writeIdentityFile(certPath, identityPEM, 0600); err != nil {
-		return nil, err
+		return current, err
 	}
 	return mTLSClient(cfg.StateDirectory)
+}
+
+func validateRotatedCertificate(certificatePEM []byte, key *rsa.PrivateKey, previous *x509.Certificate, caPath string) error {
+	block, rest := pem.Decode(certificatePEM)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return errors.New("agent rotation returned an invalid certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return errors.New("agent rotation returned an invalid certificate")
+	}
+	publicKey, ok := certificate.PublicKey.(*rsa.PublicKey)
+	if !ok || !publicKey.Equal(&key.PublicKey) {
+		return errors.New("rotated agent certificate does not match the generated private key")
+	}
+	previousCluster, err := agentpki.ClusterIdentity(previous)
+	if err != nil {
+		return fmt.Errorf("read current agent identity: %w", err)
+	}
+	rotatedCluster, err := agentpki.ClusterIdentity(certificate)
+	if err != nil || rotatedCluster != previousCluster {
+		return errors.New("rotated agent certificate changed the cluster identity")
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return fmt.Errorf("read saved agent CA: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return errors.New("invalid saved agent CA")
+	}
+	if _, err = certificate.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		return fmt.Errorf("verify rotated agent certificate: %w", err)
+	}
+	return nil
 }
 
 func ensureIdentity(ctx context.Context, cfg Config) error {
@@ -233,7 +286,7 @@ func mTLSClient(directory string) (*http.Client, error) {
 func (c *Client) loop(ctx context.Context) error {
 	heartbeat := time.NewTicker(30 * time.Second)
 	poll := time.NewTicker(time.Second)
-	rotation := time.NewTicker(time.Hour)
+	rotation := time.NewTicker(time.Minute)
 	defer heartbeat.Stop()
 	defer poll.Stop()
 	defer rotation.Stop()
@@ -249,7 +302,11 @@ func (c *Client) loop(ctx context.Context) error {
 		case <-rotation.C:
 			client, err := rotateIfNeeded(ctx, c.cfg, c.http)
 			if err != nil {
-				return err
+				if client == nil {
+					return err
+				}
+				slog.Warn("agent certificate rotation deferred", "error", err)
+				continue
 			}
 			c.http = client
 		case <-poll.C:

@@ -3,7 +3,14 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,10 +20,105 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
+
+func TestAgentCertificateRotationPromotesOnlyAfterReplacementAuthentication(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	now := time.Now().UTC()
+	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterID, organizationID := uuid.New(), uuid.New()
+	makeCSR := func(t *testing.T) ([]byte, *rsa.PrivateKey) {
+		t.Helper()
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "dockyard-agent"}}, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: request}), key
+	}
+	oldCSR, _ := makeCSR(t)
+	_, oldCertificate, err := agentpki.SignAgentCSR(caPEM, caKey, oldCSR, clusterID, now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSerial := hex.EncodeToString(oldCertificate.SerialNumber.Bytes())
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Certificate rotation',$2)`, organizationID, "certificate-rotation-"+organizationID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,certificate_serial,certificate_not_after,last_seen_at) VALUES($1,$2,'Remote','remote','active',$3,$4,now())`, clusterID, organizationID, oldSerial, oldCertificate.NotAfter)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	rotationCSR, _ := makeCSR(t)
+	body, _ := json.Marshal(map[string]string{"csr": string(rotationCSR)})
+	request := httptest.NewRequest(http.MethodPost, "/v1/agent/rotate", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{oldCertificate}, VerifiedChains: [][]*x509.Certificate{{oldCertificate}}}
+	recorder := httptest.NewRecorder()
+	api := &Server{Store: db, AgentCACertificate: caPEM, AgentCAKey: caKey, AgentCertificateTTL: 7 * 24 * time.Hour}
+	api.AgentHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("rotate status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var rotated struct {
+		Certificate string `json:"certificate"`
+	}
+	if err = json.Unmarshal(recorder.Body.Bytes(), &rotated); err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(rotated.Certificate))
+	if block == nil {
+		t.Fatal("rotation response did not contain a certificate")
+	}
+	newCertificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSerial := hex.EncodeToString(newCertificate.SerialNumber.Bytes())
+	var currentSerial, pendingSerial string
+	if err = db.Pool.QueryRow(ctx, `SELECT certificate_serial,pending_certificate_serial FROM clusters WHERE id=$1`, clusterID).Scan(&currentSerial, &pendingSerial); err != nil || currentSerial != oldSerial || pendingSerial != newSerial {
+		t.Fatalf("issued rotation current=%q pending=%q err=%v", currentSerial, pendingSerial, err)
+	}
+	heartbeat := []byte(`{"agentVersion":"1.0.0","dockerVersion":"29.0.0","capacity":{}}`)
+	request = httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", bytes.NewReader(heartbeat))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{newCertificate}, VerifiedChains: [][]*x509.Certificate{{newCertificate}}}
+	recorder = httptest.NewRecorder()
+	api.AgentHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("replacement authentication status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", bytes.NewReader(heartbeat))
+	request.Header.Set("Content-Type", "application/json")
+	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{oldCertificate}, VerifiedChains: [][]*x509.Certificate{{oldCertificate}}}
+	recorder = httptest.NewRecorder()
+	api.AgentHandler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("superseded certificate status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")

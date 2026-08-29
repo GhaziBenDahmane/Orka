@@ -139,8 +139,9 @@ stale worker leases, queue backlog, failed operations, stale backups, overdue
 restore drills, stalled or failed Dokploy database migrations, and maintenance
 mode left enabled. They also detect missing remote-cluster heartbeats, stalled
 agent upgrades, missed image-verification deadlines, and paused or rolled-back
-Swarm agent updates. Route those alerts through Alertmanager to the team's
-email, Slack, PagerDuty, or other incident receiver.
+Swarm agent updates, plus expiring, expired, or stalled certificate rotations.
+Route those alerts through Alertmanager to the team's email, Slack, PagerDuty,
+or other incident receiver.
 
 Validate local rule changes with `make check-alerts`; CI runs the same pinned
 Prometheus `promtool` image.

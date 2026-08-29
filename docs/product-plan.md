@@ -182,7 +182,9 @@ replacement's deployment or job result.
   a replacement heartbeat reports the requested digest and completed Swarm
   update, and fail on paused or rolled-back update states. Heartbeats report
   ready/active/manager node counts plus active-node CPU and memory, all usable
-  as placement constraints.
+  as placement constraints. Client-certificate rotation is two-phase: the
+  existing serial remains valid until the replacement authenticates, while
+  pending-rotation age and certificate expiry are exported for alerting.
 - Run multiple stateless controllers and workers; prove job fencing and leader
   election behavior under partitions. A scheduled disposable three-manager
   Swarm conformance test now proves leader replacement, replica convergence,
