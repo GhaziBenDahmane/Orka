@@ -210,8 +210,10 @@ embedded React console for core workload, template, database, and cluster
   sites into a digest-pinned runtime, Nixpacks, and the production Railpack
   BuildKit frontend, Paketo and Heroku 24 Cloud Native Buildpacks, and custom
   digest-pinned CNB builders are supported. PostgreSQL, MySQL, MariaDB,
-  MongoDB, and Redis Dokploy data can be moved through confirmed, durable
-  native transfer jobs; other engines remain operator-assisted. The
+  MongoDB, Redis, and libSQL Dokploy data can be moved through confirmed,
+  durable native transfer jobs. Current Dokploy volume-backup policies are
+  retained as explicit manual-conversion parity records rather than silently
+  omitted. The
 Terraform/OpenTofu provider covers projects, environments, Compose services,
 routes, managed databases, source credentials, backup destinations, and backup
 policies. The console provides credential, backup-destination, OIDC, SAML,

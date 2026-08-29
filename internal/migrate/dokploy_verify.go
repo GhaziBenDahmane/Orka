@@ -118,7 +118,7 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 				return reason, runtimeErr
 			}
 		}
-		if requireOperational && migrationBackupCapableEngine(engine) {
+		if requireOperational && dokployTransferCapableEngine(engine) {
 			_, sourceID, found := strings.Cut(resource.SourceID, ":")
 			if !found || sourceID == "" {
 				return "database parity record has an invalid source id", nil

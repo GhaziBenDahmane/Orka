@@ -238,7 +238,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	if err != nil {
 		return report, err
 	}
-	report.BackupDestinations, report.BackupPolicies = len(backupDestinations), len(backupPolicies)
+	volumeBackupPolicies, err := readVolumeBackupPolicies(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	report.BackupDestinations, report.BackupPolicies = len(backupDestinations), len(backupPolicies)+len(volumeBackupPolicies)
 	sourceCredentials, err := readSourceCredentials(ctx, source, options.SourceOrganizationID)
 	if err != nil {
 		return report, err
@@ -285,6 +289,16 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_destination", SourceID: item.id, TargetID: &prepared.reportID, Status: "imported", Metadata: backupDestinationMetadata(item, "")})
 	}
 	preparedPolicies := []preparedBackupPolicy{}
+	for _, item := range volumeBackupPolicies {
+		reason := "volume backup policies require manual conversion"
+		report.Skipped++
+		report.Warnings = append(report.Warnings, fmt.Sprintf("volume backup policy %s was skipped: %s", item.id, reason))
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "volume_backup", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: map[string]any{
+			"name": item.name, "volumeName": item.volumeName, "prefix": item.prefix, "serviceType": item.serviceType,
+			"appName": item.appName, "serviceName": item.serviceName, "turnOff": item.turnOff, "schedule": item.cronExpression,
+			"retentionCount": item.retentionCount, "enabled": item.enabled, "destinationId": item.destinationID,
+		}})
+	}
 	seenDatabasePolicy := map[uuid.UUID]bool{}
 	for _, item := range backupPolicies {
 		policyID := mappedID(options, "backup-policy", item.id)
@@ -294,7 +308,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		databaseID := mappedID(options, "database:"+item.databaseType, item.databaseID)
 		if item.backupType != "database" {
 			reason = "Compose backup policies are not supported"
-		} else if !validDatabases[item.databaseType+":"+item.databaseID] || item.databaseID == "" || !migrationBackupCapableEngine(item.databaseType) {
+		} else if !validDatabases[item.databaseType+":"+item.databaseID] || item.databaseID == "" || !dokployTransferCapableEngine(item.databaseType) {
 			reason = "the referenced database was not imported or is not backup-capable"
 		} else if !supportedSchedule || interval < 900 || interval > 2_678_400 {
 			reason = "cron schedule cannot be represented as a fixed 15-minute to 31-day interval"
@@ -603,9 +617,9 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	return report, tx.Commit(ctx)
 }
 
-func migrationBackupCapableEngine(engine string) bool {
+func dokployTransferCapableEngine(engine string) bool {
 	switch engine {
-	case "postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql":
+	case "postgres", "mysql", "mariadb", "mongo", "redis", "libsql":
 		return true
 	default:
 		return false

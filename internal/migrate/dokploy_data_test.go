@@ -29,13 +29,13 @@ func TestParseDokployDatabaseTransferManifestAllowsPasswordOnlyStores(t *testing
 }
 
 func TestDokployDatabaseTransferSupportsEveryImportedRecoverableEngine(t *testing.T) {
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql"} {
-		if !migrationBackupCapableEngine(engine) {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
+		if !dokployTransferCapableEngine(engine) {
 			t.Fatalf("%s should support native Dokploy data transfer", engine)
 		}
 	}
-	for _, engine := range []string{"clickhouse", "qdrant", "meilisearch"} {
-		if migrationBackupCapableEngine(engine) {
+	for _, engine := range []string{"valkey", "clickhouse", "qdrant", "meilisearch"} {
+		if dokployTransferCapableEngine(engine) {
 			t.Fatalf("%s is not an imported Dokploy managed-database type", engine)
 		}
 	}

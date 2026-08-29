@@ -26,6 +26,13 @@ type sourceBackupPolicy struct {
 	enabled                                                                 bool
 }
 
+type sourceVolumeBackupPolicy struct {
+	id, name, volumeName, prefix, serviceType, appName, serviceName string
+	cronExpression, destinationID                                   string
+	retentionCount                                                  int
+	enabled, turnOff                                                bool
+}
+
 func prepareDokployBackupDestination(box *cryptox.Box, options DokployOptions, item sourceBackupDestination, prefix string) (preparedBackupDestination, error) {
 	if strings.TrimSpace(item.name) == "" || strings.TrimSpace(item.bucket) == "" || strings.Contains(prefix, "..") || (prefix != "" && path.Clean(prefix) != strings.TrimSuffix(prefix, "/")) {
 		return preparedBackupDestination{}, fmt.Errorf("invalid name, bucket, or object prefix")
@@ -93,6 +100,24 @@ func readBackupPolicies(ctx context.Context, db *pgxpool.Pool, organizationID st
 	for rows.Next() {
 		var item sourceBackupPolicy
 		if err = rows.Scan(&item.id, &item.schedule, &item.enabled, &item.database, &item.prefix, &item.destinationID, &item.retentionCount, &item.backupType, &item.databaseType, &item.databaseID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func readVolumeBackupPolicies(ctx context.Context, db *pgxpool.Pool, organizationID string) ([]sourceVolumeBackupPolicy, error) {
+	rows, err := db.Query(ctx, `SELECT v."volumeBackupId",v.name,v."volumeName",v.prefix,v."serviceType"::text,v."appName",COALESCE(v."serviceName",''),v."turnOff",v."cronExpression",COALESCE(v."keepLatestCount",1),COALESCE(v.enabled,false),v."destinationId"
+		FROM volume_backup v JOIN destination d ON d."destinationId"=v."destinationId" WHERE d."organizationId"=$1 ORDER BY v."volumeBackupId"`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("read Dokploy volume backup policies: %w", err)
+	}
+	defer rows.Close()
+	items := []sourceVolumeBackupPolicy{}
+	for rows.Next() {
+		var item sourceVolumeBackupPolicy
+		if err = rows.Scan(&item.id, &item.name, &item.volumeName, &item.prefix, &item.serviceType, &item.appName, &item.serviceName, &item.turnOff, &item.cronExpression, &item.retentionCount, &item.enabled, &item.destinationID); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

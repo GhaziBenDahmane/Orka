@@ -50,6 +50,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		`CREATE TABLE ` + quotedSchema + `.application ("applicationId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,env text,"sourceType" text,"buildType" text,"dockerImage" text,username text,password text,command text,args text[],replicas integer,repository text,owner text,branch text,"buildPath" text,dockerfile text,"dockerBuildStage" text,"buildArgs" text,"buildSecrets" text,"enableSubmodules" boolean,"githubId" text,"gitlabId" text,"giteaId" text,"bitbucketId" text,"registryId" text,"buildRegistryId" text)`,
 		`CREATE TABLE ` + quotedSchema + `.destination ("destinationId" text PRIMARY KEY,name text NOT NULL,provider text,"accessKey" text NOT NULL,"secretAccessKey" text NOT NULL,bucket text NOT NULL,region text NOT NULL,endpoint text NOT NULL,"additionalFlags" text[],"organizationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.backup ("backupId" text PRIMARY KEY,schedule text NOT NULL,enabled boolean,database text NOT NULL,prefix text NOT NULL,"destinationId" text NOT NULL,"keepLatestCount" integer,"backupType" text NOT NULL,"databaseType" text NOT NULL,"composeId" text,"postgresId" text,"mariadbId" text,"mysqlId" text,"mongoId" text,"libsqlId" text)`,
+		`CREATE TABLE ` + quotedSchema + `.volume_backup ("volumeBackupId" text PRIMARY KEY,name text NOT NULL,"volumeName" text NOT NULL,prefix text NOT NULL,"serviceType" text NOT NULL,"appName" text NOT NULL,"serviceName" text,"turnOff" boolean NOT NULL,"cronExpression" text NOT NULL,"keepLatestCount" integer,enabled boolean,"destinationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.slack ("slackId" text PRIMARY KEY,"webhookUrl" text NOT NULL,channel text)`,
 		`CREATE TABLE ` + quotedSchema + `.email ("emailId" text PRIMARY KEY,"smtpServer" text NOT NULL,"smtpPort" integer NOT NULL,username text NOT NULL,password text NOT NULL,"fromAddress" text NOT NULL,"toAddress" text[] NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.notification ("notificationId" text PRIMARY KEY,name text NOT NULL,"appDeploy" boolean NOT NULL DEFAULT false,"appBuildError" boolean NOT NULL DEFAULT false,"databaseBackup" boolean NOT NULL DEFAULT false,"volumeBackup" boolean NOT NULL DEFAULT false,"dokployRestart" boolean NOT NULL DEFAULT false,"dokployBackup" boolean NOT NULL DEFAULT false,"dockerCleanup" boolean NOT NULL DEFAULT false,"serverThreshold" boolean NOT NULL DEFAULT false,"notificationType" text NOT NULL,"slackId" text,"emailId" text,"organizationId" text NOT NULL)`,
@@ -74,7 +75,13 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
     image: nginx:alpine
 ','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","buildArgs","buildSecrets","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime','GO_VERSION=1.26','',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1',NULL,'`+fixtureHost+`','/','web',80,true,true,'letsencrypt'),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt')`)
 	if err == nil {
-		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.postgres VALUES('pg1','e1','Imported DB','legacy-postgres','legacydb','legacyuser','legacy-secret','postgres:16','EXTRA=value')`)
+		_, err = destination.Pool.Exec(ctx, `
+			INSERT INTO `+quotedSchema+`.postgres VALUES('pg1','e1','Imported PostgreSQL','legacy-postgres','legacydb','legacyuser','legacy-secret','postgres:16','EXTRA=value');
+			INSERT INTO `+quotedSchema+`.mysql VALUES('mysql1','e1','Imported MySQL','legacy-mysql','legacydb','legacyuser','legacy-secret','legacy-root','mysql:8','');
+			INSERT INTO `+quotedSchema+`.mariadb VALUES('maria1','e1','Imported MariaDB','legacy-mariadb','legacydb','legacyuser','legacy-secret','legacy-root','mariadb:11','');
+			INSERT INTO `+quotedSchema+`.mongo VALUES('mongo1','e1','Imported MongoDB','legacy-mongo','legacyuser','legacy-secret','mongo:7','');
+			INSERT INTO `+quotedSchema+`.redis VALUES('redis1','e1','Imported Redis','legacy-redis','legacy-secret','redis:7','');
+			INSERT INTO `+quotedSchema+`.libsql VALUES('libsql1','e1','Imported libSQL','legacy-libsql','legacyuser','legacy-secret','ghcr.io/tursodatabase/libsql-server:v0.24.32','')`)
 	}
 	sourceKey := bytes.Repeat([]byte{3}, 32)
 	if err == nil {
@@ -85,6 +92,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.destination VALUES('dst1','Archive','s3',$1,$2,'migration-bucket','eu-west-1','https://s3.example.test',ARRAY[]::text[],'source-org')`, encryptDokployFixture(t, sourceKey, "legacy-access"), encryptDokployFixture(t, sourceKey, "legacy-secret-key"))
+	}
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.volume_backup VALUES('volume1','Uploads','legacy-uploads','volumes','compose','web','web',true,'0 3 * * *',5,true,'dst1')`)
 	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.backup VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres',NULL,'pg1',NULL,NULL,NULL,NULL)`)
@@ -113,15 +123,15 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	parsed.RawQuery = query.Encode()
 	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
-	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 1 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 1 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 {
+	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 6 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 2 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
 	kindCounts := map[string]int{}
 	for _, resource := range report.Resources {
 		kindCounts[resource.SourceKind]++
 	}
-	expectedKinds := map[string]int{"project": 1, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 1, "backup_destination": 1, "backup_policy": 1, "source_credential": 2, "notification": 1}
-	if len(report.Resources) != 13 || !reflect.DeepEqual(kindCounts, expectedKinds) {
+	expectedKinds := map[string]int{"project": 1, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 6, "backup_destination": 1, "backup_policy": 1, "volume_backup": 1, "source_credential": 2, "notification": 1}
+	if len(report.Resources) != 19 || !reflect.DeepEqual(kindCounts, expectedKinds) {
 		t.Fatalf("migration parity resources = %#v", report.Resources)
 	}
 	encodedReport, _ := json.Marshal(report)
@@ -133,19 +143,19 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		t.Fatal(err)
 	}
 	controlPlaneVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, nil)
-	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 12 || controlPlaneVerification.Blocked != 1 {
+	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 17 || controlPlaneVerification.Blocked != 2 {
 		t.Fatalf("control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	if _, err = VerifyDokployImport(ctx, destination, targetOrg, "not-imported", false, nil); err == nil || !strings.Contains(err.Error(), "no persisted") {
 		t.Fatalf("missing manifest verification error=%v", err)
 	}
-	acknowledgements := []string{"source_credential:github:gh1"}
+	acknowledgements := []string{"source_credential:github:gh1", "volume_backup:volume1"}
 	controlPlaneVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, acknowledgements)
-	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 12 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
+	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 17 || controlPlaneVerification.Acknowledged != 2 || controlPlaneVerification.Blocked != 0 {
 		t.Fatalf("acknowledged control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	operationalVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 4 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 9 {
 		t.Fatalf("pre-deployment operational verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
@@ -157,8 +167,29 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &sourceCredentials, &notifications); err != nil {
 		t.Fatal(err)
 	}
-	if projects != 1 || services != 4 || routes != 2 || databases != 1 || applicationSources != 1 || backupDestinations != 2 || backupPolicies != 1 || sourceCredentials != 1 || notifications != 1 {
+	if projects != 1 || services != 9 || routes != 2 || databases != 6 || applicationSources != 1 || backupDestinations != 2 || backupPolicies != 1 || sourceCredentials != 1 || notifications != 1 {
 		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials, notifications)
+	}
+	rows, err := destination.Pool.Query(ctx, `SELECT engine FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1 ORDER BY engine`, targetOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var importedEngines []string
+	for rows.Next() {
+		var engine string
+		if err = rows.Scan(&engine); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		importedEngines = append(importedEngines, engine)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	if expected := []string{"libsql", "mariadb", "mongo", "mysql", "postgres", "redis"}; !reflect.DeepEqual(importedEngines, expected) {
+		t.Fatalf("imported database engines = %v, want %v", importedEngines, expected)
 	}
 	var encryptedNotificationURL string
 	notificationID := mappedID(options, "notification", "notification1")
@@ -169,7 +200,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || string(notificationURL) != "https://hooks.slack.example.test/services/secret-token" {
 		t.Fatalf("notification URL mismatch: %q, err=%v", notificationURL, err)
 	}
-	if err = destination.Pool.QueryRow(ctx, `SELECT d.encrypted_credentials,s.encrypted_env,d.config FROM database_instances d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1`, targetOrg).Scan(&encryptedCredentials, &encryptedEnvironment, &storedConfig); err != nil {
+	if err = destination.Pool.QueryRow(ctx, `SELECT d.encrypted_credentials,s.encrypted_env,d.config FROM database_instances d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1 AND d.id=$2`, targetOrg, mappedID(options, "database:postgres", "pg1")).Scan(&encryptedCredentials, &encryptedEnvironment, &storedConfig); err != nil {
 		t.Fatal(err)
 	}
 	credentialsJSON, err := box.Decrypt(encryptedCredentials, cryptox.ResourceContext("database-credentials", mappedID(options, "database:postgres", "pg1").String()))
@@ -215,16 +246,28 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		t.Fatalf("application build settings were not re-encrypted: %s err=%v", buildConfigJSON, err)
 	}
 	var migrationRecords, applicationMigrationRecords int
-	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 13 || applicationMigrationRecords != 2 {
+	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 19 || applicationMigrationRecords != 2 {
 		t.Fatalf("migration metadata records=%d application records=%d err=%v", migrationRecords, applicationMigrationRecords, err)
 	}
 
-	transferManifest := DokployDatabaseTransferManifest{Version: 1, Connections: []DokployDatabaseSourceConnection{{SourceID: "pg1", Host: "legacy-postgres.internal", Port: 15432, Username: "transfer-user", Password: "transfer-secret", Database: "legacydb"}}}
+	transferManifest := DokployDatabaseTransferManifest{Version: 1, Connections: []DokployDatabaseSourceConnection{
+		{SourceID: "pg1", Host: "legacy-postgres.internal", Port: 15432, Username: "transfer-user", Password: "transfer-secret", Database: "legacydb"},
+		{SourceID: "mysql1", Host: "legacy-mysql.internal", Port: 13306, Username: "transfer-user", Password: "transfer-secret", Database: "legacydb"},
+		{SourceID: "maria1", Host: "legacy-mariadb.internal", Port: 13307, Username: "transfer-user", Password: "transfer-secret", Database: "legacydb"},
+		{SourceID: "mongo1", Host: "legacy-mongo.internal", Port: 17017, Username: "transfer-user", Password: "transfer-secret", Database: "admin"},
+		{SourceID: "redis1", Host: "legacy-redis.internal", Port: 16379, Password: "transfer-secret"},
+		{SourceID: "libsql1", Host: "legacy-libsql.internal", Port: 18080, Username: "transfer-user", Password: "transfer-secret", Database: "app"},
+	}}
 	transferOptions := options
 	transferOptions.DryRun = true
 	transferReport, err := QueueDokployDatabaseTransfers(ctx, destination, box, transferOptions, transferManifest)
-	if err != nil || transferReport.Planned != 1 || transferReport.Queued != 0 || transferReport.Items[0].DatabaseInstanceID != mappedID(options, "database:postgres", "pg1") {
+	if err != nil || transferReport.Planned != 6 || transferReport.Queued != 0 || len(transferReport.Items) != 6 {
 		t.Fatalf("database transfer dry run=%#v err=%v", transferReport, err)
+	}
+	for index, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
+		if transferReport.Items[index].DatabaseInstanceID != mappedID(options, "database:"+engine, transferManifest.Connections[index].SourceID) || transferReport.Items[index].SourceEngine != engine {
+			t.Fatalf("database transfer %d = %#v", index, transferReport.Items[index])
+		}
 	}
 	encodedTransferReport, _ := json.Marshal(transferReport)
 	if bytes.Contains(encodedTransferReport, []byte("transfer-secret")) || bytes.Contains(encodedTransferReport, []byte("transfer-user")) {
@@ -232,7 +275,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	}
 	transferOptions.DryRun = false
 	transferReport, err = QueueDokployDatabaseTransfers(ctx, destination, box, transferOptions, transferManifest)
-	if err != nil || transferReport.Queued != 1 {
+	if err != nil || transferReport.Queued != 6 || len(transferReport.Items) != 6 {
 		t.Fatalf("database transfer queue=%#v err=%v", transferReport, err)
 	}
 	var encryptedSource string
@@ -243,20 +286,32 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || !bytes.Contains(sourceJSON, []byte(`"password":"transfer-secret"`)) || !bytes.Contains(sourceJSON, []byte(`"port":15432`)) {
 		t.Fatalf("database transfer source was not resource-bound and encrypted: %s err=%v", sourceJSON, err)
 	}
-	if _, err = destination.Pool.Exec(ctx, `UPDATE database_instances SET status='running' WHERE id=$1`, mappedID(options, "database:postgres", "pg1")); err != nil {
+	if _, err = destination.Pool.Exec(ctx, `UPDATE database_instances SET status='running' WHERE environment_id=$1`, mappedID(options, "environment", "e1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = destination.Pool.Exec(ctx, `UPDATE database_migrations SET status='succeeded',finished_at=now() WHERE id=$1`, transferReport.Items[0].ID); err != nil {
-		t.Fatal(err)
+	for _, item := range transferReport.Items {
+		if _, err = destination.Pool.Exec(ctx, `UPDATE database_migrations SET status='succeeded',finished_at=now() WHERE id=$1`, item.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
-	serviceIDs := []uuid.UUID{mappedID(options, "compose", "c1"), mappedID(options, "application-service", "a1"), mappedID(options, "application-service", "a2"), mappedID(options, "database-service:postgres", "pg1")}
+	serviceIDs := []uuid.UUID{mappedID(options, "compose", "c1"), mappedID(options, "application-service", "a1"), mappedID(options, "application-service", "a2")}
+	for _, item := range transferManifest.Connections {
+		engine := ""
+		for _, transfer := range transferReport.Items {
+			if transfer.SourceID == item.SourceID {
+				engine = transfer.SourceEngine
+				break
+			}
+		}
+		serviceIDs = append(serviceIDs, mappedID(options, "database-service:"+engine, item.SourceID))
+	}
 	for _, serviceID := range serviceIDs {
 		if _, err = destination.Pool.Exec(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger,finished_at) SELECT $1,s.id,s.revision,s.compose_yaml,'succeeded','migration-verification',now() FROM compose_services s WHERE s.id=$2`, uuid.New(), serviceID); err != nil {
 			t.Fatal(err)
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 4 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 9 {
 		t.Fatalf("operational verification without live observations=%#v err=%v", operationalVerification, err)
 	}
 	for _, serviceID := range serviceIDs {
@@ -265,7 +320,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 12 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
+	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 17 || operationalVerification.Acknowledged != 2 || operationalVerification.Blocked != 0 {
 		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
 	composeServiceID := mappedID(options, "compose", "c1")

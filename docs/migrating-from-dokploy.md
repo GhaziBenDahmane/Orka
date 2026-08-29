@@ -3,7 +3,7 @@
 The migration command reads Dokploy's PostgreSQL database and writes into an
 existing Dockyard organization. It never modifies the Dokploy database. The
 current converter targets the schema inspected at Dokploy commit
-`ab62080e9d378190594d2f104fbfa287507a5b84`.
+`532de2c59e4d9be13b0c4db2d7cb7f2da9a3cd48`.
 
 Always start with a dry run:
 
@@ -86,6 +86,8 @@ Reported for manual conversion:
   provider-specific private access;
 - application mounts, published host ports, custom Swarm health/restart/update/
   placement settings, redirects, and security rules;
+- volume-backup policies, which remain visible as acknowledgeable parity
+  records with their source schedule, volume, destination, and retention data;
 - Compose definitions stored only in a remote Git repository;
 - GitHub App credentials, SSH keys, certificates, unsupported or calendar-based
   backup schedules, additional policies for the same database, and Compose
@@ -198,7 +200,7 @@ mapping. With the default `--require-operational=true`, each imported service
 and managed-database stack must have a successful deployment of its current
 revision plus a healthy Swarm reconciliation observation from the previous
 five minutes. Each database must also be running, and each PostgreSQL, MySQL,
-MariaDB, MongoDB, or Redis database must have a successful Dokploy
+MariaDB, MongoDB, Redis, or libSQL database must have a successful Dokploy
 data-transfer record. Missing targets, stale or unhealthy stacks, and
 unconverted resources make the command exit non-zero. Allow the controller's
 one-minute reconciler to observe newly deployed stacks before running the

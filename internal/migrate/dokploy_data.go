@@ -108,7 +108,7 @@ func QueueDokployDatabaseTransfers(ctx context.Context, destination *store.Store
 		if !ok {
 			return report, fmt.Errorf("Dokploy database %q does not belong to the source organization", connection.SourceID)
 		}
-		if !migrationBackupCapableEngine(sourceDatabase.engine) {
+		if !dokployTransferCapableEngine(sourceDatabase.engine) {
 			return report, fmt.Errorf("database %s uses unsupported transfer engine %q", connection.SourceID, sourceDatabase.engine)
 		}
 		targetID := mappedID(options, "database:"+sourceDatabase.engine, sourceDatabase.id)
