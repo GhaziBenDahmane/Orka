@@ -197,10 +197,13 @@ console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
-- The idempotent Dokploy importer emits and persists a secret-safe parity
-  manifest for advanced application settings and unsupported build features;
-  compatible S3 destinations and fixed-interval database backup policies are
-  imported with secret re-encryption. Registry and static GitLab/Gitea/
+- The idempotent Dokploy importer emits and atomically replaces a secret-safe
+  parity manifest covering every discovered core and integration resource.
+  `verify-dokploy-import` fails closed on missing mappings, unacknowledged
+  manual conversions, undeployed current service revisions, non-running
+  databases, and incomplete native data transfers. Compatible S3 destinations
+  and fixed-interval database backup policies are imported with secret
+  re-encryption. Registry and static GitLab/Gitea/
   Bitbucket credentials are imported and host-matched to applications; GitHub
   App credentials and backup policies that cannot be represented losslessly
   remain operator-assisted.

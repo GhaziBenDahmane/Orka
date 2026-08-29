@@ -54,6 +54,11 @@ links for every item below.
   verify tenant isolation with users from two organizations.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact
   storage into an isolated Swarm. Confirm audit-chain continuity.
+- Re-run the final non-dry-run Dokploy import, deploy the imported current
+  revisions, complete database transfers, and preserve the JSON output from
+  `dockyard verify-dokploy-import`. Every manual conversion must have its own
+  documented `--acknowledge kind:source-id`; a blanket bypass is unavailable.
+  Then validate application behavior, DNS cutover, and rollback independently.
 
 ## Promotion and rollback
 

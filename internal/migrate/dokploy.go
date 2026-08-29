@@ -131,20 +131,33 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		return report, err
 	}
 	report.Projects, report.Environments, report.Services = len(projects), len(environments), len(services)
+	for _, item := range projects {
+		targetID := mappedID(options, "project", item.id)
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "project", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: map[string]any{"name": item.name}})
+	}
+	for _, item := range environments {
+		targetID := mappedID(options, "environment", item.id)
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "environment", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: map[string]any{"name": item.name, "projectId": item.projectID}})
+	}
 
 	validServices := map[string]bool{}
 	for _, service := range services {
+		targetID := mappedID(options, "compose", service.id)
+		metadata := map[string]any{"name": service.name, "environmentId": service.environmentID}
 		if strings.TrimSpace(service.compose) == "" {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("compose %s has no inline composeFile and was skipped", service.id))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose", SourceID: service.id, Status: "skipped", Reason: "no inline composeFile", Metadata: metadata})
 			continue
 		}
 		if _, compileErr := compiler.Compile(service.compose, nil); compileErr != nil {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("compose %s is incompatible: %v", service.id, compileErr))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose", SourceID: service.id, Status: "skipped", Reason: compileErr.Error(), Metadata: metadata})
 			continue
 		}
 		validServices[service.id] = true
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose", SourceID: service.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 		if strings.HasPrefix(service.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("compose %s has encrypted environment values; supply --encryption-key-file before import", service.id))
 		}
@@ -152,18 +165,23 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	filteredRoutes := make([]sourceRoute, 0, len(routes))
 	seenRoute := map[string]bool{}
 	for _, route := range routes {
+		metadata := map[string]any{"host": route.host, "path": route.path, "composeId": route.composeID}
 		if !route.enabled || !validServices[route.composeID] || route.serviceName == "" || route.port < 1 || route.port > 65535 {
 			report.Skipped++
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_route", SourceID: route.id, Status: "skipped", Reason: "disabled, invalid, or parent service was not imported", Metadata: metadata})
 			continue
 		}
 		key := strings.ToLower(route.host) + "\x00" + route.path
 		if seenRoute[key] {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, "duplicate route "+route.host+route.path+" was skipped")
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_route", SourceID: route.id, Status: "skipped", Reason: "duplicate host and path", Metadata: metadata})
 			continue
 		}
 		seenRoute[key] = true
 		filteredRoutes = append(filteredRoutes, route)
+		targetID := mappedID(options, "route", route.id)
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_route", SourceID: route.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 	}
 	validApplications := map[string]bool{}
 	for _, item := range applications {
@@ -187,18 +205,23 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	}
 	filteredApplicationRoutes := make([]sourceApplicationRoute, 0, len(applicationRoutes))
 	for _, route := range applicationRoutes {
+		metadata := map[string]any{"host": route.host, "path": route.path, "applicationId": route.applicationID}
 		if !route.enabled || !validApplications[route.applicationID] || route.port < 1 || route.port > 65535 {
 			report.Skipped++
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "application_route", SourceID: route.id, Status: "skipped", Reason: "disabled, invalid, or parent application was not imported", Metadata: metadata})
 			continue
 		}
 		key := strings.ToLower(route.host) + "\x00" + route.path
 		if seenRoute[key] {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, "duplicate route "+route.host+route.path+" was skipped")
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "application_route", SourceID: route.id, Status: "skipped", Reason: "duplicate host and path", Metadata: metadata})
 			continue
 		}
 		seenRoute[key] = true
 		filteredApplicationRoutes = append(filteredApplicationRoutes, route)
+		targetID := mappedID(options, "application-route", route.id)
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "application_route", SourceID: route.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 	}
 	report.Routes = len(filteredRoutes) + len(filteredApplicationRoutes)
 	databases, err := readDatabases(ctx, source, options.SourceOrganizationID)
@@ -229,13 +252,17 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	registry := database.NewRegistry()
 	validDatabases := map[string]bool{}
 	for _, item := range databases {
+		targetID := mappedID(options, "database:"+item.engine, item.id)
+		metadata := map[string]any{"name": item.name, "engine": item.engine, "environmentId": item.environmentID}
 		_, renderErr := registry.Render(item.engine, database.Request{Name: migratedSlug(item.appName, mappedID(options, "database:"+item.engine, item.id)), Version: imageVersion(item.dockerImage, "latest"), Config: databaseConfig(item)})
 		if renderErr != nil {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s is incompatible: %v", item.engine, item.id, renderErr))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.engine + ":" + item.id, Status: "skipped", Reason: renderErr.Error(), Metadata: metadata})
 			continue
 		}
 		validDatabases[item.engine+":"+item.id] = true
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.engine + ":" + item.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 		if strings.HasPrefix(item.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s has encrypted environment values; supply --encryption-key-file before import", item.engine, item.id))
 		}
@@ -558,6 +585,9 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if err != nil {
 			return report, fmt.Errorf("import application route %s: %w", item.id, err)
 		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id=$2`, options.TargetOrganizationID, options.SourceOrganizationID); err != nil {
+		return report, fmt.Errorf("replace Dokploy migration parity manifest: %w", err)
 	}
 	for _, resource := range report.Resources {
 		metadata, marshalErr := json.Marshal(resource.Metadata)

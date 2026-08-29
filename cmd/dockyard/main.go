@@ -32,7 +32,7 @@ var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
 		os.Exit(2)
 	}
 	var err error
@@ -57,8 +57,10 @@ func main() {
 		err = migrateDokploy(os.Args[2:])
 	case "migrate-dokploy-data":
 		err = migrateDokployData(os.Args[2:])
+	case "verify-dokploy-import":
+		err = verifyDokployImport(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|migrate-dokploy|migrate-dokploy-data>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
 		os.Exit(2)
 	}
 	if err != nil {
@@ -200,6 +202,54 @@ func migrateDokployData(arguments []string) error {
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
+}
+
+func verifyDokployImport(arguments []string) error {
+	flags := flag.NewFlagSet("verify-dokploy-import", flag.ContinueOnError)
+	sourceOrganization := flags.String("source-organization", "", "Dokploy organization ID used during import")
+	targetOrganization := flags.String("target-organization", "", "Dockyard organization UUID")
+	requireOperational := flags.Bool("require-operational", true, "require successful service deployments, running databases, and completed native data transfers")
+	acknowledgements := stringValues{}
+	flags.Var(&acknowledgements, "acknowledge", "acknowledge one documented manual conversion as kind:source-id (repeatable)")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	targetID, err := uuid.Parse(*targetOrganization)
+	if err != nil {
+		return errors.New("--target-organization must be a UUID")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	db, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Pool.Close()
+	report, err := dockyardmigrate.VerifyDokployImport(ctx, db, targetID, *sourceOrganization, *requireOperational, acknowledgements)
+	_ = json.NewEncoder(os.Stdout).Encode(report)
+	if err != nil {
+		return err
+	}
+	if !report.Ready {
+		return fmt.Errorf("Dokploy import verification blocked by %d resource checks", report.Blocked)
+	}
+	return nil
+}
+
+type stringValues []string
+
+func (values *stringValues) String() string { return strings.Join(*values, ",") }
+func (values *stringValues) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || !strings.Contains(value, ":") {
+		return errors.New("acknowledgement must use kind:source-id")
+	}
+	*values = append(*values, value)
+	return nil
 }
 
 func importTemplates(arguments []string) error {

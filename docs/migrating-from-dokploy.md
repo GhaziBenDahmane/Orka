@@ -180,6 +180,42 @@ writes before the final dump. Temporary dump files stay on the Swarm manager,
 are checksummed, and are removed after the attempt. Connection passwords are
 encrypted at rest and are not placed in command arguments, reports, or logs.
 
+## Verify the imported control plane
+
+After deploying every imported Compose/application service and completing the
+native database transfers, run the fail-closed verifier:
+
+```sh
+dockyard verify-dokploy-import \
+  --source-organization 'dokploy-organization-id' \
+  --target-organization 'dockyard-organization-uuid'
+```
+
+The JSON result checks every persisted project, environment, service, route,
+database, backup destination/policy, source credential, and notification
+mapping. With the default `--require-operational=true`, each imported service
+must have a successful deployment, each database must be running, and each
+PostgreSQL, MySQL, MariaDB, or MongoDB database must have a successful Dokploy
+data-transfer record. Missing targets and unconverted resources make the
+command exit non-zero.
+
+Some source features deliberately require manual conversion. After completing
+and documenting one, acknowledge its exact parity key explicitly; the entry
+and its reason remain visible in the report:
+
+```sh
+dockyard verify-dokploy-import \
+  --source-organization 'dokploy-organization-id' \
+  --target-organization 'dockyard-organization-uuid' \
+  --acknowledge 'source_credential:github:source-github-id'
+```
+
+Use repeatable `--acknowledge` flags rather than a blanket skip switch. Run the
+non-dry-run importer again before verification so older or changed Dokploy
+resources are reflected; manifests created before core-resource tracking are
+rejected. This verifier proves Dockyard-side mapping and recorded operation
+completion, not application-level correctness or DNS behavior.
+
 Keep Dokploy running until every reported resource has a documented mapping,
 then perform a maintenance-window dry run, database backup, final import,
 database transfer, DNS cutover, and application-level validation. The

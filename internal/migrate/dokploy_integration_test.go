@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -115,7 +116,12 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 1 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 1 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
-	if len(report.Resources) != 7 || report.Resources[0].SourceKind != "application" || report.Resources[2].SourceKind != "backup_destination" || report.Resources[3].SourceKind != "backup_policy" || report.Resources[4].SourceKind != "source_credential" || report.Resources[6].SourceKind != "notification" {
+	kindCounts := map[string]int{}
+	for _, resource := range report.Resources {
+		kindCounts[resource.SourceKind]++
+	}
+	expectedKinds := map[string]int{"project": 1, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 1, "backup_destination": 1, "backup_policy": 1, "source_credential": 2, "notification": 1}
+	if len(report.Resources) != 13 || !reflect.DeepEqual(kindCounts, expectedKinds) {
 		t.Fatalf("migration parity resources = %#v", report.Resources)
 	}
 	encodedReport, _ := json.Marshal(report)
@@ -125,6 +131,22 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	options.DryRun = false
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
+	}
+	controlPlaneVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, nil)
+	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 12 || controlPlaneVerification.Blocked != 1 {
+		t.Fatalf("control-plane verification=%#v err=%v", controlPlaneVerification, err)
+	}
+	if _, err = VerifyDokployImport(ctx, destination, targetOrg, "not-imported", false, nil); err == nil || !strings.Contains(err.Error(), "no persisted") {
+		t.Fatalf("missing manifest verification error=%v", err)
+	}
+	acknowledgements := []string{"source_credential:github:gh1"}
+	controlPlaneVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, acknowledgements)
+	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 12 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
+		t.Fatalf("acknowledged control-plane verification=%#v err=%v", controlPlaneVerification, err)
+	}
+	operationalVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 4 {
+		t.Fatalf("pre-deployment operational verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
@@ -192,9 +214,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || !bytes.Contains(buildConfigJSON, []byte(`"GO_VERSION":"1.26"`)) || !bytes.Contains(buildConfigJSON, []byte(`"NPM_TOKEN":"legacy-build-secret"`)) {
 		t.Fatalf("application build settings were not re-encrypted: %s err=%v", buildConfigJSON, err)
 	}
-	var migrationRecords int
-	if err = destination.Pool.QueryRow(ctx, `SELECT count(*) FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org' AND source_kind='application'`, targetOrg).Scan(&migrationRecords); err != nil || migrationRecords != 2 {
-		t.Fatalf("migration metadata records=%d err=%v", migrationRecords, err)
+	var migrationRecords, applicationMigrationRecords int
+	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 13 || applicationMigrationRecords != 2 {
+		t.Fatalf("migration metadata records=%d application records=%d err=%v", migrationRecords, applicationMigrationRecords, err)
 	}
 
 	transferManifest := DokployDatabaseTransferManifest{Version: 1, Connections: []DokployDatabaseSourceConnection{{SourceID: "pg1", Host: "legacy-postgres.internal", Port: 15432, Username: "transfer-user", Password: "transfer-secret", Database: "legacydb"}}}
@@ -220,6 +242,21 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	sourceJSON, err := box.Decrypt(encryptedSource, "database-migration-source:"+transferReport.Items[0].ID.String())
 	if err != nil || !bytes.Contains(sourceJSON, []byte(`"password":"transfer-secret"`)) || !bytes.Contains(sourceJSON, []byte(`"port":15432`)) {
 		t.Fatalf("database transfer source was not resource-bound and encrypted: %s err=%v", sourceJSON, err)
+	}
+	if _, err = destination.Pool.Exec(ctx, `UPDATE database_instances SET status='running' WHERE id=$1`, mappedID(options, "database:postgres", "pg1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = destination.Pool.Exec(ctx, `UPDATE database_migrations SET status='succeeded',finished_at=now() WHERE id=$1`, transferReport.Items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, serviceID := range []uuid.UUID{mappedID(options, "compose", "c1"), mappedID(options, "application-service", "a1"), mappedID(options, "application-service", "a2")} {
+		if _, err = destination.Pool.Exec(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger,finished_at) SELECT $1,s.id,s.revision,s.compose_yaml,'succeeded','migration-verification',now() FROM compose_services s WHERE s.id=$2`, uuid.New(), serviceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 12 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
+		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
 	unknownManifest := transferManifest
 	unknownManifest.Connections = []DokployDatabaseSourceConnection{{SourceID: "not-owned", Host: "db.internal", Username: "u", Password: "p", Database: "d"}}
