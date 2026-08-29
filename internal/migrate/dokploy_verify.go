@@ -87,22 +87,23 @@ func VerifyDokployImport(ctx context.Context, destination *store.Store, targetOr
 func verifyDokployTarget(ctx context.Context, destination *store.Store, organizationID uuid.UUID, resource store.MigrationResource, requireOperational bool) (string, error) {
 	id := *resource.TargetID
 	if resource.SourceKind == "compose" || resource.SourceKind == "application" {
-		var exists, deployed bool
-		err := destination.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2),EXISTS(SELECT 1 FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.compose_service_id=$1 AND d.revision=s.revision AND d.status='succeeded' AND p.organization_id=$2)`, id, organizationID).Scan(&exists, &deployed)
+		var exists bool
+		err := destination.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2)`, id, organizationID).Scan(&exists)
 		if err != nil {
 			return "", err
 		}
 		if !exists {
 			return "target service is missing", nil
 		}
-		if requireOperational && !deployed {
-			return "target service has no successful deployment", nil
+		if requireOperational {
+			return verifyDokployServiceRuntime(ctx, destination, organizationID, id)
 		}
 		return "", nil
 	}
 	if resource.SourceKind == "database" {
 		var status, engine string
-		err := destination.Pool.QueryRow(ctx, `SELECT d.status,d.engine FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&status, &engine)
+		var serviceID uuid.UUID
+		err := destination.Pool.QueryRow(ctx, `SELECT d.status,d.engine,d.compose_service_id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&status, &engine, &serviceID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "target database is missing", nil
 		}
@@ -111,6 +112,11 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		}
 		if requireOperational && status != "running" {
 			return "target database is not running", nil
+		}
+		if requireOperational {
+			if reason, runtimeErr := verifyDokployServiceRuntime(ctx, destination, organizationID, serviceID); runtimeErr != nil || reason != "" {
+				return reason, runtimeErr
+			}
 		}
 		if requireOperational && migrationBackupCapableEngine(engine) {
 			_, sourceID, found := strings.Cut(resource.SourceID, ":")
@@ -147,6 +153,40 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 	}
 	if !exists {
 		return "target resource is missing", nil
+	}
+	return "", nil
+}
+
+func verifyDokployServiceRuntime(ctx context.Context, destination *store.Store, organizationID, serviceID uuid.UUID) (string, error) {
+	var deployed bool
+	var reconciliationState string
+	var recentlyChecked bool
+	err := destination.Pool.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM deployments d WHERE d.compose_service_id=s.id AND d.revision=s.revision AND d.status='succeeded'),
+		COALESCE(r.state,''),
+		COALESCE(r.last_checked_at >= now()-interval '5 minutes',false)
+		FROM compose_services s
+		JOIN environments e ON e.id=s.environment_id
+		JOIN projects p ON p.id=e.project_id
+		LEFT JOIN service_reconciliations r ON r.compose_service_id=s.id
+		WHERE s.id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&deployed, &reconciliationState, &recentlyChecked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "target service is missing", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !deployed {
+		return "target service has no successful deployment of its current revision", nil
+	}
+	if reconciliationState == "" {
+		return "target service has no Swarm reconciliation observation", nil
+	}
+	if reconciliationState != "healthy" {
+		return fmt.Sprintf("target service Swarm reconciliation is %s", reconciliationState), nil
+	}
+	if !recentlyChecked {
+		return "target service Swarm reconciliation is stale", nil
 	}
 	return "", nil
 }

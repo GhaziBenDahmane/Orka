@@ -194,10 +194,13 @@ dockyard verify-dokploy-import \
 The JSON result checks every persisted project, environment, service, route,
 database, backup destination/policy, source credential, and notification
 mapping. With the default `--require-operational=true`, each imported service
-must have a successful deployment, each database must be running, and each
-PostgreSQL, MySQL, MariaDB, or MongoDB database must have a successful Dokploy
-data-transfer record. Missing targets and unconverted resources make the
-command exit non-zero.
+and managed-database stack must have a successful deployment of its current
+revision plus a healthy Swarm reconciliation observation from the previous
+five minutes. Each database must also be running, and each PostgreSQL, MySQL,
+MariaDB, or MongoDB database must have a successful Dokploy data-transfer
+record. Missing targets, stale or unhealthy stacks, and unconverted resources
+make the command exit non-zero. Allow the controller's one-minute reconciler
+to observe newly deployed stacks before running the final verification.
 
 Some source features deliberately require manual conversion. After completing
 and documenting one, acknowledge its exact parity key explicitly; the entry

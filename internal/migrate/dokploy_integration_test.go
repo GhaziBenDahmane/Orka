@@ -249,8 +249,18 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if _, err = destination.Pool.Exec(ctx, `UPDATE database_migrations SET status='succeeded',finished_at=now() WHERE id=$1`, transferReport.Items[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, serviceID := range []uuid.UUID{mappedID(options, "compose", "c1"), mappedID(options, "application-service", "a1"), mappedID(options, "application-service", "a2")} {
+	serviceIDs := []uuid.UUID{mappedID(options, "compose", "c1"), mappedID(options, "application-service", "a1"), mappedID(options, "application-service", "a2"), mappedID(options, "database-service:postgres", "pg1")}
+	for _, serviceID := range serviceIDs {
 		if _, err = destination.Pool.Exec(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger,finished_at) SELECT $1,s.id,s.revision,s.compose_yaml,'succeeded','migration-verification',now() FROM compose_services s WHERE s.id=$2`, uuid.New(), serviceID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 4 {
+		t.Fatalf("operational verification without live observations=%#v err=%v", operationalVerification, err)
+	}
+	for _, serviceID := range serviceIDs {
+		if _, err = destination.Pool.Exec(ctx, `INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'healthy',0,'',now())`, serviceID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -258,11 +268,35 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 12 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
 		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
+	composeServiceID := mappedID(options, "compose", "c1")
+	if _, err = destination.Pool.Exec(ctx, `UPDATE service_reconciliations SET state='degraded',last_checked_at=now() WHERE compose_service_id=$1`, composeServiceID); err != nil {
+		t.Fatal(err)
+	}
+	degradedVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || degradedVerification.Ready || degradedVerification.Blocked != 1 || !verificationReasonContains(degradedVerification, "compose", "c1", "degraded") {
+		t.Fatalf("degraded runtime verification=%#v err=%v", degradedVerification, err)
+	}
+	if _, err = destination.Pool.Exec(ctx, `UPDATE service_reconciliations SET state='healthy',last_checked_at=now()-interval '6 minutes' WHERE compose_service_id=$1`, composeServiceID); err != nil {
+		t.Fatal(err)
+	}
+	staleVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || staleVerification.Ready || staleVerification.Blocked != 1 || !verificationReasonContains(staleVerification, "compose", "c1", "stale") {
+		t.Fatalf("stale runtime verification=%#v err=%v", staleVerification, err)
+	}
 	unknownManifest := transferManifest
 	unknownManifest.Connections = []DokployDatabaseSourceConnection{{SourceID: "not-owned", Host: "db.internal", Username: "u", Password: "p", Database: "d"}}
 	if _, err = QueueDokployDatabaseTransfers(ctx, destination, box, transferOptions, unknownManifest); err == nil || !strings.Contains(err.Error(), "does not belong") {
 		t.Fatalf("unknown source ownership error=%v", err)
 	}
+}
+
+func verificationReasonContains(report DokployVerification, kind, sourceID, fragment string) bool {
+	for _, check := range report.Checks {
+		if check.SourceKind == kind && check.SourceID == sourceID {
+			return strings.Contains(check.Reason, fragment)
+		}
+	}
+	return false
 }
 
 func encryptDokployFixture(t *testing.T, key []byte, value string) string {
