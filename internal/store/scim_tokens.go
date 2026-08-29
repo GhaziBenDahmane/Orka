@@ -15,12 +15,13 @@ type SCIMToken struct {
 	Name           string     `json:"name"`
 	DefaultRole    string     `json:"defaultRole"`
 	CreatedAt      time.Time  `json:"createdAt"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
 	RevokedAt      *time.Time `json:"revokedAt,omitempty"`
 }
 
-func (s *Store) CreateSCIMToken(ctx context.Context, organizationID uuid.UUID, name, role string, hash []byte) (SCIMToken, error) {
-	item := SCIMToken{ID: uuid.New(), OrganizationID: organizationID, Name: name, DefaultRole: role}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role) SELECT $1,o.id,$3,$4,$5 FROM organizations o WHERE o.id=$2 RETURNING created_at`, item.ID, organizationID, name, hash, role).Scan(&item.CreatedAt)
+func (s *Store) CreateSCIMToken(ctx context.Context, organizationID uuid.UUID, name, role string, hash []byte, expiresAt time.Time) (SCIMToken, error) {
+	item := SCIMToken{ID: uuid.New(), OrganizationID: organizationID, Name: name, DefaultRole: role, ExpiresAt: expiresAt}
+	err := s.Pool.QueryRow(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,expires_at) SELECT $1,o.id,$3,$4,$5,$6 FROM organizations o WHERE o.id=$2 RETURNING created_at`, item.ID, organizationID, name, hash, role, expiresAt).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SCIMToken{}, ErrNotFound
 	}
@@ -28,7 +29,7 @@ func (s *Store) CreateSCIMToken(ctx context.Context, organizationID uuid.UUID, n
 }
 
 func (s *Store) ListSCIMTokens(ctx context.Context, organizationID uuid.UUID) ([]SCIMToken, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,default_role,created_at,revoked_at FROM scim_tokens WHERE organization_id=$1 ORDER BY created_at DESC,id`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,default_role,created_at,expires_at,revoked_at FROM scim_tokens WHERE organization_id=$1 ORDER BY created_at DESC,id`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +37,7 @@ func (s *Store) ListSCIMTokens(ctx context.Context, organizationID uuid.UUID) ([
 	items := []SCIMToken{}
 	for rows.Next() {
 		var item SCIMToken
-		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.DefaultRole, &item.CreatedAt, &item.RevokedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.DefaultRole, &item.CreatedAt, &item.ExpiresAt, &item.RevokedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

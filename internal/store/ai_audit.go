@@ -306,8 +306,8 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND account.role IN ('admin','developer') AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
 		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now() AND token.expires_at<=now()+interval '7 days')),
 		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND account.role='auditor' AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
-		(SELECT count(*) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL),
-		(SELECT min(created_at) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL)`, organizationID).Scan(
+		(SELECT count(*) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now()),
+		(SELECT min(created_at) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now())`, organizationID).Scan(
 		&snapshot.IdentityPosture.RequireSSO,
 		&snapshot.IdentityPosture.EnabledOIDCProviders,
 		&snapshot.IdentityPosture.EnabledSAMLProviders,

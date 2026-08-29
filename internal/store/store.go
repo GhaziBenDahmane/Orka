@@ -2165,7 +2165,7 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 func (s *Store) AuthenticateSCIM(ctx context.Context, hash []byte) (uuid.UUID, string, error) {
 	var orgID uuid.UUID
 	var role string
-	err := s.Pool.QueryRow(ctx, `SELECT organization_id,default_role FROM scim_tokens WHERE token_hash=$1 AND revoked_at IS NULL`, hash).Scan(&orgID, &role)
+	err := s.Pool.QueryRow(ctx, `SELECT organization_id,default_role FROM scim_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hash).Scan(&orgID, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, "", ErrNotFound
 	}

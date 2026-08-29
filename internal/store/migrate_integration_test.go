@@ -338,3 +338,33 @@ func TestMigrateUpgradeFrom068ScopesFederatedSessions(t *testing.T) {
 		t.Fatalf("scoped federated session was rejected: %v", err)
 	}
 }
+
+func TestMigrateUpgradeFrom069ExpiresLegacySCIMTokens(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "069_federated_session_scope.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, tokenID := uuid.New(), uuid.New()
+	tokenHash := []byte("legacy-scim-token")
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SCIM expiry',$2)`, organizationID, "scim-expiry-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,created_at) VALUES($1,$2,'legacy',$3,'developer',now()-interval '1 year')`, tokenID, organizationID, tokenHash); err != nil {
+		t.Fatal(err)
+	}
+	migratedAt := time.Now()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var expiresAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT expires_at FROM scim_tokens WHERE id=$1`, tokenID).Scan(&expiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if expiresAt.Before(migratedAt.Add(89*24*time.Hour)) || expiresAt.After(migratedAt.Add(91*24*time.Hour)) {
+		t.Fatalf("legacy SCIM token expiry=%s, want approximately 90 days after migration", expiresAt)
+	}
+	db := &Store{Pool: pool}
+	if authenticatedOrg, role, err := db.AuthenticateSCIM(ctx, tokenHash); err != nil || authenticatedOrg != organizationID || role != "developer" {
+		t.Fatalf("migrated SCIM token authentication org=%s role=%q err=%v", authenticatedOrg, role, err)
+	}
+}

@@ -64,7 +64,7 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/auth/saml/{providerID}/metadata` | Download signed-request SP metadata |
 | GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |
 | POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
-| GET/POST | `/v1/scim/tokens` | Inventory token metadata or create a one-time-visible SCIM bearer token |
+| GET/POST | `/v1/scim/tokens` | Inventory token metadata or create a one-time-visible, 1–365 day SCIM bearer token |
 | DELETE | `/v1/scim/tokens/{id}` | Revoke a tenant-scoped SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
@@ -84,6 +84,8 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
 SCIM user resources are bound to the organization that provisioned them.
+SCIM bearer tokens default to a 90-day lifetime, are shown only at creation,
+and stop authenticating immediately after expiration or explicit revocation.
 Deactivation removes access but retains that binding, so identity providers can
 query and reactivate an inactive user. A tenant cannot PATCH a global user ID
 that it does not own. Because email identities are shared across organizations,

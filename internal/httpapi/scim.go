@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
@@ -26,8 +27,9 @@ type scimUserResponse struct {
 
 func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name        string `json:"name"`
-		DefaultRole string `json:"defaultRole"`
+		Name          string `json:"name"`
+		DefaultRole   string `json:"defaultRole"`
+		ExpiresInDays int    `json:"expiresInDays"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -43,8 +45,15 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 	if in.DefaultRole == "" {
 		in.DefaultRole = "developer"
 	}
+	if in.ExpiresInDays == 0 {
+		in.ExpiresInDays = 90
+	}
 	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
+		return
+	}
+	if in.ExpiresInDays < 1 || in.ExpiresInDays > 365 {
+		writeError(w, 400, "invalid_expiry", "expiry must be from 1 to 365 days")
 		return
 	}
 	token, err := auth.NewToken()
@@ -53,12 +62,13 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateSCIMToken(r.Context(), p.OrganizationID, in.Name, in.DefaultRole, cryptox.Digest(token))
+	expiresAt := time.Now().Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour)
+	item, err := s.Store.CreateSCIMToken(r.Context(), p.OrganizationID, in.Name, in.DefaultRole, cryptox.Digest(token), expiresAt)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "scim.token.create", "scim_token", item.ID.String(), r.RemoteAddr, map[string]string{"name": item.Name, "defaultRole": item.DefaultRole})
+	s.Store.Audit(r.Context(), &p, "scim.token.create", "scim_token", item.ID.String(), r.RemoteAddr, map[string]any{"name": item.Name, "defaultRole": item.DefaultRole, "expiresAt": item.ExpiresAt})
 	writeJSON(w, 201, map[string]any{"scimToken": item, "token": token, "baseUrl": s.PublicURL + "/scim/v2"})
 }
 

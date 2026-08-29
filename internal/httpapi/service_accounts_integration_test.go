@@ -161,7 +161,7 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 		t.Fatalf("oversized audit summary status=%d, want 400", response.StatusCode)
 	}
 
-	response, data = do(http.MethodPost, "/v1/scim/tokens", userToken, []byte(`{"name":"identity-provider","defaultRole":"developer"}`))
+	response, data = do(http.MethodPost, "/v1/scim/tokens", userToken, []byte(`{"name":"identity-provider","defaultRole":"developer","expiresInDays":30}`))
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("create SCIM token status=%d: %s", response.StatusCode, data)
 	}
@@ -170,8 +170,20 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 		Token     string          `json:"token"`
 		BaseURL   string          `json:"baseUrl"`
 	}
-	if err = json.Unmarshal(data, &createdSCIM); err != nil || createdSCIM.SCIMToken.ID == uuid.Nil || createdSCIM.Token == "" || createdSCIM.BaseURL != "https://dockyard.example.test/scim/v2" {
+	if err = json.Unmarshal(data, &createdSCIM); err != nil || createdSCIM.SCIMToken.ID == uuid.Nil || createdSCIM.Token == "" || createdSCIM.SCIMToken.ExpiresAt.Before(time.Now().Add(29*24*time.Hour)) || createdSCIM.BaseURL != "https://dockyard.example.test/scim/v2" {
 		t.Fatalf("created SCIM token=%#v err=%v body=%s", createdSCIM, err, data)
+	}
+	response, _ = do(http.MethodPost, "/v1/scim/tokens", userToken, []byte(`{"name":"too-long-lived","expiresInDays":366}`))
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("overlong SCIM token expiry status=%d, want 400", response.StatusCode)
+	}
+	expiredSCIMToken := "expired-scim-" + uuid.NewString()
+	expiredSCIM, err := db.CreateSCIMToken(ctx, orgID, "expired-provider", "viewer", cryptox.Digest(expiredSCIMToken), time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, authenticateErr := db.AuthenticateSCIM(ctx, cryptox.Digest(expiredSCIMToken)); !errors.Is(authenticateErr, store.ErrNotFound) {
+		t.Fatalf("expired SCIM token authenticated: %v", authenticateErr)
 	}
 	response, data = do(http.MethodGet, "/v1/scim/tokens", userToken, nil)
 	if response.StatusCode != http.StatusOK || bytes.Contains(data, []byte(createdSCIM.Token)) || !bytes.Contains(data, []byte(createdSCIM.SCIMToken.ID.String())) {
@@ -183,7 +195,7 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrgID) })
 	otherSCIMToken := "other-scim-" + uuid.NewString()
-	otherSCIM, err := db.CreateSCIMToken(ctx, otherOrgID, "other-provider", "viewer", cryptox.Digest(otherSCIMToken))
+	otherSCIM, err := db.CreateSCIMToken(ctx, otherOrgID, "other-provider", "viewer", cryptox.Digest(otherSCIMToken), time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,8 +217,16 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	var listedSCIM struct {
 		Items []store.SCIMToken `json:"items"`
 	}
-	if err = json.Unmarshal(data, &listedSCIM); err != nil || len(listedSCIM.Items) != 1 || listedSCIM.Items[0].ID != createdSCIM.SCIMToken.ID || listedSCIM.Items[0].RevokedAt == nil {
+	if err = json.Unmarshal(data, &listedSCIM); err != nil || len(listedSCIM.Items) != 2 {
 		t.Fatalf("listed SCIM tokens=%#v err=%v body=%s", listedSCIM.Items, err, data)
+	}
+	var foundRevoked, foundExpired bool
+	for _, item := range listedSCIM.Items {
+		foundRevoked = foundRevoked || item.ID == createdSCIM.SCIMToken.ID && item.RevokedAt != nil
+		foundExpired = foundExpired || item.ID == expiredSCIM.ID && item.RevokedAt == nil && item.ExpiresAt.Before(time.Now())
+	}
+	if !foundRevoked || !foundExpired {
+		t.Fatalf("SCIM inventory missing revoked or expired token: %#v", listedSCIM.Items)
 	}
 	var scimAuditEvents int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND resource_id=$2 AND action IN ('scim.token.create','scim.token.revoke')`, orgID, createdSCIM.SCIMToken.ID.String()).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 2 {
