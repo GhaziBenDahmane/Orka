@@ -312,7 +312,8 @@ Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
 The engine response includes `backupCapable`; native verified backup/restore is
-currently available for PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and Valkey.
+currently available for PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, and
+Qdrant.
 Pass `destinationId` to a backup request or backup policy to upload through an
 S3-compatible multipart client. Restores download to an isolated temporary
 directory and verify the stored SHA-256 checksum before invoking native tools.
@@ -325,6 +326,10 @@ jobs briefly make the target a replica of an ephemeral, password-protected
 source loaded from that snapshot, wait for full synchronization, and promote
 the target back to primary. Schedule these destructive restores during a write
 maintenance window.
+Qdrant backups create one authenticated native snapshot per collection, stream
+the snapshots into a single manifest-bearing archive, and restore each
+collection through Qdrant's snapshot upload API. No server-local backup path or
+shared database volume is required.
 Set `verifyRestore` on a backup policy to enqueue one restore drill after each
 successful scheduled backup. Drills create a temporary isolated Swarm stack,
 restore the verified artifact with fresh credentials, record the result as a

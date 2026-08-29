@@ -122,6 +122,8 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 			Image: image, Command: []string{cli, "-h", host, "-p", nativePort(credentials, 6379), "--rdb", "/backup/" + filename},
 			Environment: map[string]string{"REDISCLI_AUTH": credentials["password"]}, Extension: "rdb",
 		}, nil
+	case "qdrant":
+		return qdrantBackupPlan(host, credentials, filename), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
@@ -155,6 +157,8 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 			},
 			Extension: "rdb",
 		}, nil
+	case "qdrant":
+		return qdrantRestorePlan(host, credentials, filename), nil
 	default:
 		return RestorePlan{}, fmt.Errorf("verified restore is not implemented for database engine %q", engine)
 	}
@@ -173,6 +177,8 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 		return "archive.gz", true
 	case "redis", "valkey":
 		return "rdb", true
+	case "qdrant":
+		return "tar.gz", true
 	default:
 		return "", false
 	}
@@ -201,17 +207,19 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 	case "redis", "valkey":
 		cli, _, image := redisTools(engine, version)
 		return BackupPlan{Image: image, Command: []string{cli, "-h", host, "-p", nativePort(credentials, 6379), "ping"}, Environment: map[string]string{"REDISCLI_AUTH": credentials["password"]}}, nil
+	case "qdrant":
+		return qdrantReadinessPlan(host, credentials), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
 	}
 }
 
 func validateNativePlan(engine, version, host string, credentials map[string]string, filename string) error {
-	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) || !regexp.MustCompile(`^[a-f0-9-]+\.(dump|sql|archive\.gz|rdb)$`).MatchString(filename) {
+	if !safeVersion.MatchString(version) || !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(host) || !regexp.MustCompile(`^[a-f0-9-]+\.(dump|sql|archive\.gz|rdb|tar\.gz)$`).MatchString(filename) {
 		return errors.New("invalid native backup parameters")
 	}
 	required := []string{"username", "password", "database"}
-	if engine == "redis" || engine == "valkey" {
+	if engine == "redis" || engine == "valkey" || engine == "qdrant" {
 		required = []string{"password"}
 	}
 	for _, key := range required {

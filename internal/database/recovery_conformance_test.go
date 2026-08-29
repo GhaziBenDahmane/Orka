@@ -46,6 +46,7 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 		mongoRecovery(),
 		redisRecovery("redis", "8"),
 		redisRecovery("valkey", "8"),
+		qdrantRecovery(),
 	}
 	for _, tc := range cases {
 		if len(wanted) > 0 && !wanted[tc.engine] {
@@ -61,10 +62,25 @@ type recoveryCase struct {
 	image        string
 	serverEnv    map[string]string
 	serverArgs   []string
+	clientImage  string
+	clientEnv    map[string]string
 	seedCommand  []string
 	clearCommand []string
 	readCommand  []string
 	want         string
+}
+
+func qdrantRecovery() recoveryCase {
+	return recoveryCase{
+		engine: "qdrant", version: "v1.15", image: "qdrant/qdrant",
+		serverEnv:    map[string]string{"QDRANT__SERVICE__API_KEY": "recovery-secret"},
+		clientImage:  qdrantTestClientImage,
+		clientEnv:    map[string]string{"QDRANT_API_KEY": "recovery-secret"},
+		seedCommand:  []string{"python3", "-c", qdrantSeedScript},
+		clearCommand: []string{"python3", "-c", qdrantClearScript},
+		readCommand:  []string{"python3", "-c", qdrantReadScript},
+		want:         "dockyard-recovery-ok",
+	}
 }
 
 func postgresRecovery() recoveryCase {
@@ -146,7 +162,11 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
 
 	clientEnv := map[string]string{"PGPASSWORD": credentials["password"], "MYSQL_PWD": credentials["password"], "REDISCLI_AUTH": credentials["password"]}
-	docker(t, ctx, clientEnv, append([]string{"exec"}, append(envArgs(clientEnv), append([]string{container}, tc.seedCommand...)...)...)...)
+	for key, value := range tc.clientEnv {
+		clientEnv[key] = value
+	}
+	clientEnv["QDRANT_HOST"] = container
+	runRecoveryClient(t, ctx, scheduler, network, container, tc, clientEnv, tc.seedCommand)
 	seededAt := time.Now()
 	directory := t.TempDir()
 	extension, ok := registry.BackupExtension(tc.engine)
@@ -168,7 +188,7 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("backup artifact missing or empty: size=%d err=%v", sizeOf(info), err)
 	}
-	docker(t, ctx, clientEnv, append([]string{"exec"}, append(envArgs(clientEnv), append([]string{container}, tc.clearCommand...)...)...)...)
+	runRecoveryClient(t, ctx, scheduler, network, container, tc, clientEnv, tc.clearCommand)
 
 	restore, err := registry.Restore(tc.engine, tc.version, container, credentials, filename)
 	if err != nil {
@@ -180,10 +200,10 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 		t.Fatal(err)
 	}
 	restoreFinished := time.Now()
-	verifyRecoveryData(t, ctx, clientEnv, container, tc)
+	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
 	docker(t, ctx, nil, "restart", container)
 	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
-	verifyRecoveryData(t, ctx, clientEnv, container, tc)
+	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
 	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true, "restartVerified": true})
 	t.Logf("RECOVERY_EVIDENCE %s", evidence)
 }
@@ -205,13 +225,53 @@ func waitForRecoveryDatabase(t *testing.T, ctx context.Context, scheduler deploy
 	}
 }
 
-func verifyRecoveryData(t *testing.T, ctx context.Context, clientEnv map[string]string, container string, tc recoveryCase) {
+func verifyRecoveryData(t *testing.T, ctx context.Context, scheduler deploy.Swarm, network string, clientEnv map[string]string, container string, tc recoveryCase) {
 	t.Helper()
-	output := strings.TrimSpace(docker(t, ctx, clientEnv, append([]string{"exec"}, append(envArgs(clientEnv), append([]string{container}, tc.readCommand...)...)...)...))
+	output := strings.TrimSpace(runRecoveryClient(t, ctx, scheduler, network, container, tc, clientEnv, tc.readCommand))
 	if !strings.Contains(output, tc.want) {
 		t.Fatalf("restored application data=%q, want %q", output, tc.want)
 	}
 }
+
+func runRecoveryClient(t *testing.T, ctx context.Context, scheduler deploy.Swarm, network, container string, tc recoveryCase, environment map[string]string, command []string) string {
+	t.Helper()
+	if tc.clientImage != "" {
+		output, err := scheduler.RunContainerJob(ctx, network, tc.clientImage, "", environment, command)
+		if err != nil {
+			t.Fatalf("database client job: %v\n%s", err, output)
+		}
+		return output
+	}
+	return docker(t, ctx, environment, append([]string{"exec"}, append(envArgs(environment), append([]string{container}, command...)...)...)...)
+}
+
+const qdrantTestClientImage = "python:3.13-alpine"
+
+const qdrantSeedScript = `
+import json, os, urllib.request
+base = "http://%s:6333" % os.environ["QDRANT_HOST"]
+headers = {"api-key": os.environ["QDRANT_API_KEY"], "content-type": "application/json"}
+def put(path, value):
+    data = json.dumps(value).encode()
+    with urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=headers, method="PUT"), timeout=30) as response:
+        if response.status < 200 or response.status >= 300: raise RuntimeError(response.status)
+put("/collections/recovery_probe", {"vectors": {"size": 4, "distance": "Cosine"}})
+put("/collections/recovery_probe/points?wait=true", {"points": [{"id": 1, "vector": [1, 0, 0, 0], "payload": {"value": "dockyard-recovery-ok"}}]})
+`
+
+const qdrantClearScript = `
+import os, urllib.request
+url = "http://%s:6333/collections/recovery_probe" % os.environ["QDRANT_HOST"]
+with urllib.request.urlopen(urllib.request.Request(url, headers={"api-key": os.environ["QDRANT_API_KEY"]}, method="DELETE"), timeout=30) as response:
+    if response.status < 200 or response.status >= 300: raise RuntimeError(response.status)
+`
+
+const qdrantReadScript = `
+import json, os, urllib.request
+url = "http://%s:6333/collections/recovery_probe/points/1" % os.environ["QDRANT_HOST"]
+with urllib.request.urlopen(urllib.request.Request(url, headers={"api-key": os.environ["QDRANT_API_KEY"]}), timeout=30) as response:
+    print(json.load(response)["result"]["payload"]["value"])
+`
 
 func envArgs(values map[string]string) []string {
 	args := make([]string, 0, len(values)*2)

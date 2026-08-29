@@ -25,7 +25,7 @@ func TestRegistryRendersAllDrivers(t *testing.T) {
 func TestNativeBackupAndRestorePlans(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "qdrant"} {
 		extension, ok := registry.BackupExtension(engine)
 		if !ok {
 			t.Fatalf("%s should support backups", engine)
@@ -48,6 +48,9 @@ func TestNativeBackupAndRestorePlans(t *testing.T) {
 		}
 		if (engine == "redis" || engine == "valkey") && (backup.Environment["REDISCLI_AUTH"] != credentials["password"] || restore.Environment["REDISCLI_AUTH"] != credentials["password"] || !strings.Contains(restore.Command[3], "REPLICAOF")) {
 			t.Fatalf("%s recovery plan is incomplete", engine)
+		}
+		if engine == "qdrant" && (backup.Environment["DOCKYARD_QDRANT_API_KEY"] != credentials["password"] || !strings.Contains(restore.Command[2], "multipart/form-data")) {
+			t.Fatal("qdrant recovery plan is incomplete")
 		}
 	}
 }
@@ -84,20 +87,24 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 	for _, tc := range []struct {
 		engine string
 		want   string
-	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}} {
+	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}} {
 		port := "13306"
 		if tc.engine == "postgres" {
 			port = "15432"
 		} else if tc.engine == "mongo" {
 			port = "17017"
-		} else if tc.engine == "redis" || tc.engine == "valkey" {
+		} else if tc.engine == "redis" || tc.engine == "valkey" || tc.engine == "qdrant" {
 			port = "16379"
 		}
 		plan, err := registry.Backup(tc.engine, "17", "source.internal", map[string]string{"username": "user", "password": "secret", "database": "app", "port": port}, "123e4567-e89b-12d3-a456-426614174000.dump")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.engine, err)
 		}
-		if got := strings.Join(plan.Command, " "); !strings.Contains(got, tc.want) {
+		got := strings.Join(plan.Command, " ")
+		if tc.engine == "qdrant" {
+			got = "DOCKYARD_QDRANT_PORT=" + plan.Environment["DOCKYARD_QDRANT_PORT"]
+		}
+		if !strings.Contains(got, tc.want) {
 			t.Fatalf("%s command %q does not contain %q", tc.engine, got, tc.want)
 		}
 	}
@@ -171,7 +178,7 @@ func TestStoredConfigRemovesPasswords(t *testing.T) {
 func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "app", "password": "very-secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "qdrant"} {
 		plan, err := registry.Readiness(engine, "17", "verify", credentials)
 		if err != nil {
 			t.Fatalf("%s readiness: %v", engine, err)
