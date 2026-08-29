@@ -23,6 +23,8 @@ type AIAuditSnapshot struct {
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
+	ServiceDeployments   []AIAuditServiceDeployment      `json:"serviceDeployments"`
+	QueuePosture         AIAuditQueuePosture             `json:"queuePosture"`
 	Reconciliation       []ServiceReconciliation         `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
 	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
@@ -78,11 +80,30 @@ type AIAuditTemplateRepositoryInfo struct {
 	LastSyncedAt         *time.Time `json:"lastSyncedAt,omitempty"`
 }
 
+type AIAuditServiceDeployment struct {
+	ServiceID                uuid.UUID  `json:"serviceId"`
+	Name                     string     `json:"name"`
+	DesiredRevision          int64      `json:"desiredRevision"`
+	LatestDeploymentStatus   string     `json:"latestDeploymentStatus,omitempty"`
+	LatestDeploymentRevision int64      `json:"latestDeploymentRevision,omitempty"`
+	LatestDeploymentAt       *time.Time `json:"latestDeploymentAt,omitempty"`
+	CurrentRevisionDeployed  bool       `json:"currentRevisionDeployed"`
+}
+
+type AIAuditQueuePosture struct {
+	Coverage            string     `json:"coverage"`
+	PendingServiceJobs  int64      `json:"pendingServiceJobs"`
+	RunningServiceJobs  int64      `json:"runningServiceJobs"`
+	PendingDatabaseJobs int64      `json:"pendingDatabaseJobs"`
+	RunningDatabaseJobs int64      `json:"runningDatabaseJobs"`
+	OldestPendingAt     *time.Time `json:"oldestPendingAt,omitempty"`
+}
+
 // BuildAIAuditSnapshot deliberately uses the list projections: Compose source,
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -193,6 +214,65 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `
+		SELECT s.id,s.name,s.revision,COALESCE(latest.status,''),COALESCE(latest.revision,0),latest.created_at,
+			EXISTS(SELECT 1 FROM deployments deployed WHERE deployed.compose_service_id=s.id AND deployed.revision=s.revision AND deployed.status='succeeded')
+		FROM compose_services s
+		JOIN environments e ON e.id=s.environment_id
+		JOIN projects p ON p.id=e.project_id
+		LEFT JOIN LATERAL (
+			SELECT d.status,d.revision,d.created_at
+			FROM deployments d
+			WHERE d.compose_service_id=s.id
+			ORDER BY d.created_at DESC,d.id DESC
+			LIMIT 1
+		) latest ON true
+		WHERE p.organization_id=$1 AND s.deletion_requested_at IS NULL
+		ORDER BY s.name,s.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditServiceDeployment
+		if err = rows.Scan(&item.ServiceID, &item.Name, &item.DesiredRevision, &item.LatestDeploymentStatus, &item.LatestDeploymentRevision, &item.LatestDeploymentAt, &item.CurrentRevisionDeployed); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.ServiceDeployments = append(snapshot.ServiceDeployments, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	err = s.Pool.QueryRow(ctx, `
+		WITH scoped_jobs AS (
+			SELECT j.status,j.created_at,'service'::text AS resource_type
+			FROM jobs j
+			JOIN compose_services s ON j.resource_key='service:' || s.id::text
+			JOIN environments e ON e.id=s.environment_id
+			JOIN projects p ON p.id=e.project_id
+			WHERE p.organization_id=$1 AND j.status IN ('pending','running')
+			UNION ALL
+			SELECT j.status,j.created_at,'database'::text AS resource_type
+			FROM jobs j
+			JOIN database_instances d ON j.resource_key='database:' || d.id::text
+			JOIN environments e ON e.id=d.environment_id
+			JOIN projects p ON p.id=e.project_id
+			WHERE p.organization_id=$1 AND j.status IN ('pending','running')
+		)
+		SELECT
+			count(*) FILTER (WHERE resource_type='service' AND status='pending'),
+			count(*) FILTER (WHERE resource_type='service' AND status='running'),
+			count(*) FILTER (WHERE resource_type='database' AND status='pending'),
+			count(*) FILTER (WHERE resource_type='database' AND status='running'),
+			min(created_at) FILTER (WHERE status='pending')
+		FROM scoped_jobs`, organizationID).Scan(&snapshot.QueuePosture.PendingServiceJobs, &snapshot.QueuePosture.RunningServiceJobs, &snapshot.QueuePosture.PendingDatabaseJobs, &snapshot.QueuePosture.RunningDatabaseJobs, &snapshot.QueuePosture.OldestPendingAt)
+	if err != nil {
+		return err
+	}
 
 	err = s.Pool.QueryRow(ctx, `SELECT
 		COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false),

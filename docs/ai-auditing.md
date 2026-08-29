@@ -31,7 +31,11 @@ keys make it a privileged service.
   database config, credentials, backup payloads, and secret material.
 - The snapshot includes per-database backup policy and restore-drill posture,
   enabled SSO provider counts, notification coverage, and template repository
-  signing/synchronization posture so findings can identify concrete gaps.
+  signing/synchronization posture so findings can identify concrete gaps. It
+  also reports each service's desired and latest deployed revision plus
+  pending/running service and database jobs. Queue counts cover only jobs with
+  a resource key that resolves through the requesting organization; unscoped
+  platform jobs and another organization's jobs are never included.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy
