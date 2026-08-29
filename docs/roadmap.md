@@ -45,3 +45,4 @@
 - Signed remote catalogs with per-repository Ed25519 signer pinning
 - Scheduled repository sync with singleton controller coordination
 - Private GitHub catalogs using encrypted organization credentials
+- Replay-safe GitHub push webhooks for immediate repository refresh

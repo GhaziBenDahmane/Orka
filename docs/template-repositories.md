@@ -45,6 +45,16 @@ response, audit event, or sync error. Deleting the credential safely returns
 the repository to unauthenticated access. Repository URLs remain restricted to
 canonical GitHub HTTPS URLs.
 
+An administrator can also create a repository-specific GitHub webhook from the
+console or with `POST /v1/template-repositories/{repositoryID}/webhook-secret`.
+The response contains the webhook URL and secret exactly once. Configure that
+URL in GitHub with JSON content, the returned secret, and only the `push` event.
+Signed pushes matching the repository branch, tag, or pinned commit queue a
+refresh for the controller scheduler. Delivery IDs are retained for 30 days to
+reject replay; non-matching refs are ignored. Rotating the secret invalidates
+the previous secret immediately. `DELETE` on the same endpoint disables
+webhook refresh without removing the repository or its scheduled sync policy.
+
 Create signed catalog artifacts with:
 
 ```sh
@@ -61,6 +71,9 @@ POST   /v1/template-repositories
 GET    /v1/template-repositories
 PATCH  /v1/template-repositories/{repositoryID}  # signing and sync schedule
 POST   /v1/template-repositories/{repositoryID}/sync
+POST   /v1/template-repositories/{repositoryID}/webhook-secret
+DELETE /v1/template-repositories/{repositoryID}/webhook-secret
+POST   /v1/hooks/template-repositories/{repositoryID}  # public GitHub delivery
 DELETE /v1/template-repositories/{repositoryID}
 GET    /v1/templates
 ```

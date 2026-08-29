@@ -3,10 +3,12 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"path"
 	"strings"
 
+	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
 	"github.com/google/uuid"
@@ -159,6 +161,101 @@ func (s *Server) templateRepositoryCredential(ctx context.Context, organizationI
 
 func validTemplateSyncInterval(seconds int) bool {
 	return seconds == 0 || seconds >= 300 && seconds <= 604800
+}
+
+func (s *Server) rotateTemplateRepositoryWebhookSecret(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("repositoryID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid template repository id")
+		return
+	}
+	secret, err := auth.NewToken()
+	if err != nil {
+		writeError(w, 500, "token_failed", err.Error())
+		return
+	}
+	encrypted, err := s.Box.Encrypt([]byte(secret), "template-repository-webhook:"+id.String())
+	if err != nil {
+		writeError(w, 500, "encryption_failed", "template repository webhook secret could not be encrypted")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.SetTemplateRepositoryWebhookSecret(r.Context(), p.OrganizationID, id, encrypted); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "template_repository.webhook.rotate", "template_repository", id.String(), r.RemoteAddr, nil)
+	writeJSON(w, http.StatusCreated, map[string]any{"secret": secret, "url": s.PublicURL + "/v1/hooks/template-repositories/" + id.String()})
+}
+
+func (s *Server) disableTemplateRepositoryWebhook(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("repositoryID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid template repository id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.ClearTemplateRepositoryWebhookSecret(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "template_repository.webhook.disable", "template_repository", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) templateRepositoryWebhook(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("repositoryID"))
+	if err != nil {
+		writeError(w, 404, "not_found", "template repository webhook not found")
+		return
+	}
+	repository, err := s.Store.GetTemplateRepositoryForWebhook(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	secret, err := s.Box.Decrypt(repository.EncryptedWebhookSecret, "template-repository-webhook:"+id.String())
+	if err != nil {
+		writeError(w, 500, "decryption_failed", "template repository webhook configuration cannot be decrypted")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, 400, "invalid_payload", "webhook body is too large")
+		return
+	}
+	deliveryID, refs, err := verifyProviderWebhook("github", string(secret), r.Header, body)
+	if errors.Is(err, errWebhookIgnored) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeError(w, 401, "invalid_webhook", "webhook signature or payload is invalid")
+		return
+	}
+	matched := false
+	wanted := strings.TrimPrefix(strings.TrimPrefix(repository.GitRef, "refs/heads/"), "refs/tags/")
+	for _, ref := range refs {
+		actual := strings.TrimPrefix(strings.TrimPrefix(ref.Branch, "refs/heads/"), "refs/tags/")
+		if actual == wanted || strings.EqualFold(ref.CommitSHA, repository.GitRef) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err = s.Store.RequestTemplateRepositorySync(r.Context(), id, deliveryID); errors.Is(err, store.ErrDuplicateDelivery) {
+		writeError(w, 409, "duplicate_delivery", err.Error())
+		return
+	} else if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.AuditOrganization(r.Context(), repository.OrganizationID, "template_repository.webhook", "template_repository", id.String(), r.RemoteAddr, map[string]any{"deliveryId": deliveryID, "gitRef": repository.GitRef})
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
 func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) {

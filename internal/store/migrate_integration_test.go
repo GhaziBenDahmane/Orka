@@ -179,6 +179,31 @@ func TestMigrateUpgradeFrom064AddsTemplateRepositoryCredentials(t *testing.T) {
 	}
 }
 
+func TestMigrateUpgradeFrom065AddsTemplateRepositoryWebhooks(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "065_template_repository_credentials.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, repositoryID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'webhook catalog org',$2)`, organizationID, "webhook-catalog-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref) VALUES($1,$2,'Catalog','catalog','https://github.com/acme/catalog','main')`, repositoryID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var encrypted string
+	var requestedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT encrypted_webhook_secret,sync_requested_at FROM template_repositories WHERE id=$1`, repositoryID).Scan(&encrypted, &requestedAt); err != nil {
+		t.Fatal(err)
+	}
+	if encrypted != "" || requestedAt != nil {
+		t.Fatalf("unexpected webhook migration defaults secret=%q requested=%v", encrypted, requestedAt)
+	}
+}
+
 func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "034_ssh_source_credentials.sql"); err != nil {

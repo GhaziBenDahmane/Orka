@@ -55,6 +55,26 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil || loaded.NextSyncAt == nil || !loaded.NextSyncAt.After(time.Now()) || loaded.LastSyncStatus != "succeeded" {
 		t.Fatalf("completed repository schedule=%#v err=%v", loaded, err)
 	}
+	if err = db.SetTemplateRepositoryWebhookSecret(ctx, organizationID, repository.ID, "encrypted-webhook-secret"); err != nil {
+		t.Fatal(err)
+	}
+	webhookRepository, err := db.GetTemplateRepositoryForWebhook(ctx, repository.ID)
+	if err != nil || webhookRepository.EncryptedWebhookSecret != "encrypted-webhook-secret" || !webhookRepository.WebhookConfigured {
+		t.Fatalf("webhook repository=%#v err=%v", webhookRepository, err)
+	}
+	if err = db.RequestTemplateRepositorySync(ctx, repository.ID, "delivery-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.RequestTemplateRepositorySync(ctx, repository.ID, "delivery-1"); !errors.Is(err, ErrDuplicateDelivery) {
+		t.Fatalf("duplicate webhook delivery accepted: %v", err)
+	}
+	claimed, err = db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID || claimed.SyncRequestedAt != nil {
+		t.Fatalf("webhook-requested repository=%#v err=%v", claimed, err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
 	template, err := db.UpsertRepositoryTemplate(ctx, Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "community/demo", Version: "1", Name: "Demo", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/demo", Checksum: "abc"})
 	if err != nil {
 		t.Fatal(err)

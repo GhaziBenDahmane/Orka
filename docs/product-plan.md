@@ -235,8 +235,9 @@ overlapping upstream IDs deterministic. Remote sync supports bounded public
 GitHub archives and optional mandatory Ed25519 signer pinning with verified
 provenance. HA-safe scheduled refresh is available at five-minute through
 seven-day intervals. Private GitHub catalogs reuse encrypted, tenant-scoped
-HTTPS Git credentials without copying tokens. Webhook-driven refresh remains
-release-gated follow-up work.
+HTTPS Git credentials without copying tokens. GitHub push webhooks use
+repository-specific encrypted secrets, ref matching, and 30-day delivery replay
+protection to queue refresh through the same singleton scheduler.
 
 ## Release policy
 

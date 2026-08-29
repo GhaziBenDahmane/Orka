@@ -1821,6 +1821,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/hooks/template-repositories/{repositoryID}:
+    post:
+      operationId: post_v1_hooks_template_repositories_repositoryID
+      tags: [hooks]
+      security: []
+      parameters:
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/me:
     get:
       operationId: get_v1_me
@@ -3114,6 +3142,52 @@ paths:
   /v1/template-repositories/{repositoryID}/sync:
     post:
       operationId: post_v1_template_repositories_repositoryID_sync
+      tags: [template-repositories]
+      parameters:
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/template-repositories/{repositoryID}/webhook-secret:
+    delete:
+      operationId: delete_v1_template_repositories_repositoryID_webhook_secret
+      tags: [template-repositories]
+      parameters:
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_template_repositories_repositoryID_webhook_secret
       tags: [template-repositories]
       parameters:
         - name: repositoryID
