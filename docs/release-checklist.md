@@ -6,10 +6,11 @@ links for every item below.
 
 ## Automated gates
 
-- Release publication is blocked on the complete reusable CI workflow and the
-  ten-engine database recovery conformance workflow. Tag pushes do not run a
-  second detached CI copy: the release workflow invokes both gates directly
-  and the publish job cannot start unless every CI and recovery job succeeds.
+- Release publication is blocked on the complete reusable CI, ten-engine
+  database recovery, real Keycloak SSO, and disposable three-manager Swarm HA
+  conformance workflows. Tag pushes do not run detached copies: the release
+  workflow invokes all gates directly and publishes only after every job
+  succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
   checkpoint-upgrade tests, high-contention exactly-once queue claiming across
@@ -90,8 +91,9 @@ links for every item below.
   signs the resulting digest with GitHub's OIDC identity, and verifies all
   three. It also creates the matching immutable GitHub Release with
   `promotion-manifest.json`, `image-digest.txt`, and a downloadable
-  `sbom.spdx.json` plus the ten-engine `database-recovery-evidence.json`; the
-  same files remain available as a workflow artifact.
+  `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
+  `sso-keycloak-evidence.json`, and `swarm-ha-conformance.json`; the same files
+  remain available as a workflow artifact.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a

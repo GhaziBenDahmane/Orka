@@ -31,11 +31,24 @@ jobs:
     permissions:
       contents: read
 
+  sso-conformance:
+    name: Verify SSO conformance
+    uses: ./.github/workflows/sso-conformance.yml
+    permissions:
+      contents: read
+
+  swarm-ha-conformance:
+    name: Verify Swarm HA conformance
+    uses: ./.github/workflows/swarm-ha-conformance.yml
+    permissions:
+      contents: read
+
   publish:
-    needs: [verify, database-recovery]
+    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
+      actions: read
       contents: write
       packages: write
       id-token: write
@@ -122,6 +135,13 @@ jobs:
           pattern: recovery-*
           path: recovery-evidence
 
+      - name: Download SSO and Swarm HA evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: "*-conformance"
+          path: conformance-evidence
+          merge-multiple: true
+
       - name: Aggregate database recovery evidence
         run: |
           set -euo pipefail
@@ -129,6 +149,10 @@ jobs:
           test "${#evidence_files[@]}" -eq 10
           jq -s 'sort_by(.engine)' "${evidence_files[@]}" > database-recovery-evidence.json
           jq -e 'length == 10 and ([.[].engine] | unique | length) == 10 and all(.[]; .dataVerified == true and .restartVerified == true)' database-recovery-evidence.json >/dev/null
+          cp conformance-evidence/sso-keycloak-evidence.json .
+          cp conformance-evidence/swarm-ha-conformance.json .
+          jq -e '.oidc and .samlSpInitiated and .samlIdpInitiated and .tenantIsolation and .replayRejected' sso-keycloak-evidence.json >/dev/null
+          jq -e '.minorityMutationRejected and .replicasConverged and .managers == 3' swarm-ha-conformance.json >/dev/null
 
       - name: Write promotion manifest
         env:
@@ -148,7 +172,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -161,6 +185,8 @@ jobs:
             image-digest.txt
             sbom.spdx.json
             database-recovery-evidence.json
+            sso-keycloak-evidence.json
+            swarm-ha-conformance.json
           if-no-files-found: error
 
       - name: Publish immutable release evidence
@@ -169,7 +195,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json)
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
