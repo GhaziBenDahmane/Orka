@@ -2,6 +2,7 @@ package database_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -46,6 +47,7 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 		mongoRecovery(),
 		redisRecovery("redis", "8"),
 		redisRecovery("valkey", "8"),
+		libSQLRecovery(),
 		qdrantRecovery(),
 		meilisearchRecovery(),
 	}
@@ -54,6 +56,20 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 			continue
 		}
 		t.Run(tc.engine, func(t *testing.T) { exerciseRecovery(t, ctx, network, tc) })
+	}
+}
+
+func libSQLRecovery() recoveryCase {
+	const user, password = "dockyard", "recovery-secret"
+	return recoveryCase{
+		engine: "libsql", version: "v0.24.33", image: "ghcr.io/tursodatabase/libsql-server",
+		serverEnv:    map[string]string{"SQLD_HTTP_AUTH": "basic:" + base64.StdEncoding.EncodeToString([]byte(user+":"+password))},
+		clientImage:  qdrantTestClientImage,
+		clientEnv:    map[string]string{"LIBSQL_USER": user, "LIBSQL_PASSWORD": password},
+		seedCommand:  []string{"python3", "-c", libSQLSeedScript},
+		clearCommand: []string{"python3", "-c", libSQLClearScript},
+		readCommand:  []string{"python3", "-c", libSQLReadScript},
+		want:         "dockyard-recovery-ok|0001FF|schema-ok",
 	}
 }
 
@@ -187,6 +203,7 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	}
 	clientEnv["QDRANT_HOST"] = container
 	clientEnv["MEILI_HOST"] = container
+	clientEnv["LIBSQL_HOST"] = container
 	runRecoveryClient(t, ctx, scheduler, network, container, tc, clientEnv, tc.seedCommand)
 	seededAt := time.Now()
 	directory := t.TempDir()
@@ -343,6 +360,49 @@ key = get("/keys/123e4567-e89b-4d3a-a456-426614174000")
 settings_ok = settings.get("filterableAttributes") == ["genre"] and settings.get("synonyms", {}).get("sci-fi") == ["science fiction"]
 key_ok = key.get("actions") == ["search"] and key.get("indexes") == ["recovery_probe"]
 print("%s|%s|%s" % (document["title"], "settings-ok" if settings_ok else "settings-bad", "key-ok" if key_ok else "key-bad"))
+`
+
+const libSQLSeedScript = `
+import base64, json, os, urllib.request
+base = "http://%s:8080" % os.environ["LIBSQL_HOST"]
+token = base64.b64encode((os.environ["LIBSQL_USER"] + ":" + os.environ["LIBSQL_PASSWORD"]).encode()).decode()
+headers = {"authorization": "Basic " + token, "content-type": "application/json"}
+statements = [
+    "CREATE TABLE recovery_probe(id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL, payload BLOB)",
+    "CREATE TABLE recovery_audit(value TEXT NOT NULL)",
+    "CREATE INDEX recovery_probe_value_idx ON recovery_probe(value)",
+    "CREATE TRIGGER recovery_probe_audit AFTER INSERT ON recovery_probe BEGIN INSERT INTO recovery_audit(value) VALUES (NEW.value); END",
+    "CREATE VIEW recovery_view AS SELECT id,value,payload FROM recovery_probe",
+    "INSERT INTO recovery_probe(value,payload) VALUES ('dockyard-recovery-ok',X'0001FF')",
+]
+body = json.dumps({"statements": statements}).encode()
+with urllib.request.urlopen(urllib.request.Request(base + "/", data=body, headers=headers, method="POST"), timeout=30) as response:
+    result = json.load(response)
+    if any(item.get("error") for item in result): raise RuntimeError(result)
+`
+
+const libSQLClearScript = `
+import base64, json, os, urllib.request
+base = "http://%s:8080" % os.environ["LIBSQL_HOST"]
+token = base64.b64encode((os.environ["LIBSQL_USER"] + ":" + os.environ["LIBSQL_PASSWORD"]).encode()).decode()
+headers = {"authorization": "Basic " + token, "content-type": "application/json"}
+body = json.dumps({"statements": ["DROP VIEW recovery_view", "DROP TABLE recovery_probe", "DROP TABLE recovery_audit"]}).encode()
+with urllib.request.urlopen(urllib.request.Request(base + "/", data=body, headers=headers, method="POST"), timeout=30) as response:
+    result = json.load(response)
+    if any(item.get("error") for item in result): raise RuntimeError(result)
+`
+
+const libSQLReadScript = `
+import base64, json, os, urllib.request
+base = "http://%s:8080" % os.environ["LIBSQL_HOST"]
+token = base64.b64encode((os.environ["LIBSQL_USER"] + ":" + os.environ["LIBSQL_PASSWORD"]).encode()).decode()
+headers = {"authorization": "Basic " + token, "content-type": "application/json"}
+statements = ["SELECT value,hex(payload) FROM recovery_view WHERE id=1", "SELECT count(*) FROM sqlite_schema WHERE name IN ('recovery_probe_value_idx','recovery_probe_audit','recovery_view')"]
+body = json.dumps({"statements": statements}).encode()
+with urllib.request.urlopen(urllib.request.Request(base + "/", data=body, headers=headers, method="POST"), timeout=30) as response: result = json.load(response)
+row = result[0]["results"]["rows"][0]
+schema_ok = result[1]["results"]["rows"][0][0] == 3
+print("%s|%s|%s" % (row[0], row[1], "schema-ok" if schema_ok else "schema-bad"))
 `
 
 func envArgs(values map[string]string) []string {

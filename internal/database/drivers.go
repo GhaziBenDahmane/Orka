@@ -126,6 +126,8 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 		return qdrantBackupPlan(host, credentials, filename), nil
 	case "meilisearch":
 		return meilisearchBackupPlan(host, credentials, filename), nil
+	case "libsql":
+		return libSQLBackupPlan(host, credentials, filename), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
@@ -163,6 +165,8 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 		return qdrantRestorePlan(host, credentials, filename), nil
 	case "meilisearch":
 		return meilisearchRestorePlan(host, credentials, filename), nil
+	case "libsql":
+		return libSQLRestorePlan(host, credentials, filename), nil
 	default:
 		return RestorePlan{}, fmt.Errorf("verified restore is not implemented for database engine %q", engine)
 	}
@@ -176,6 +180,8 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 	case "postgres":
 		return "dump", true
 	case "mysql", "mariadb":
+		return "sql", true
+	case "libsql":
 		return "sql", true
 	case "mongo":
 		return "archive.gz", true
@@ -215,6 +221,8 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 		return qdrantReadinessPlan(host, credentials), nil
 	case "meilisearch":
 		return meilisearchReadinessPlan(host, credentials), nil
+	case "libsql":
+		return libSQLReadinessPlan(host, credentials), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
 	}
@@ -324,6 +332,9 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 	databaseName := configString(req.Config, "database", "app")
 	password := configString(req.Config, "password", secret(32))
 	rootPassword := configString(req.Config, "rootPassword", secret(32))
+	if d.httpBasicAuth && strings.Contains(user, ":") {
+		return Result{}, fmt.Errorf("database username cannot contain a colon")
+	}
 	image := configString(req.Config, "image", d.image+":"+req.Version)
 	if !registryImagePattern.MatchString(image) || strings.Contains(image, "..") {
 		return Result{}, fmt.Errorf("invalid database image")

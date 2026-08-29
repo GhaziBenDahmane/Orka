@@ -30,6 +30,9 @@ func TestLibSQLUsesUsableBasicAuthentication(t *testing.T) {
 	if result.Version != "v0.24.33" {
 		t.Fatalf("libSQL default version = %q", result.Version)
 	}
+	if _, err = NewRegistry().Render("libsql", Request{Name: "embedded", Config: map[string]any{"username": "invalid:user"}}); err == nil {
+		t.Fatal("libSQL accepted an ambiguous Basic authentication username")
+	}
 }
 
 func TestRegistryRendersAllDrivers(t *testing.T) {
@@ -51,7 +54,7 @@ func TestRegistryRendersAllDrivers(t *testing.T) {
 func TestNativeBackupAndRestorePlans(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "qdrant", "meilisearch"} {
 		extension, ok := registry.BackupExtension(engine)
 		if !ok {
 			t.Fatalf("%s should support backups", engine)
@@ -86,6 +89,9 @@ func TestNativeBackupAndRestorePlans(t *testing.T) {
 		}
 		if engine == "meilisearch" && (backup.Environment["DOCKYARD_MEILI_MASTER_KEY"] != credentials["password"] || !strings.Contains(restore.Command[2], "/indexes/")) {
 			t.Fatal("meilisearch recovery plan is incomplete")
+		}
+		if engine == "libsql" && (backup.Environment["DOCKYARD_LIBSQL_PASSWORD"] != credentials["password"] || !strings.Contains(restore.Command[2], "/v2/pipeline")) {
+			t.Fatal("libSQL recovery plan is incomplete")
 		}
 	}
 }
@@ -122,13 +128,13 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 	for _, tc := range []struct {
 		engine string
 		want   string
-	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}, {"meilisearch", "DOCKYARD_MEILI_PORT=16379"}} {
+	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"libsql", "DOCKYARD_LIBSQL_PORT=16379"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}, {"meilisearch", "DOCKYARD_MEILI_PORT=16379"}} {
 		port := "13306"
 		if tc.engine == "postgres" {
 			port = "15432"
 		} else if tc.engine == "mongo" {
 			port = "17017"
-		} else if tc.engine == "redis" || tc.engine == "valkey" || tc.engine == "qdrant" || tc.engine == "meilisearch" {
+		} else if tc.engine == "redis" || tc.engine == "valkey" || tc.engine == "libsql" || tc.engine == "qdrant" || tc.engine == "meilisearch" {
 			port = "16379"
 		}
 		plan, err := registry.Backup(tc.engine, "17", "source.internal", map[string]string{"username": "user", "password": "secret", "database": "app", "port": port}, "123e4567-e89b-12d3-a456-426614174000.dump")
@@ -140,6 +146,8 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 			got = "DOCKYARD_QDRANT_PORT=" + plan.Environment["DOCKYARD_QDRANT_PORT"]
 		} else if tc.engine == "meilisearch" {
 			got = "DOCKYARD_MEILI_PORT=" + plan.Environment["DOCKYARD_MEILI_PORT"]
+		} else if tc.engine == "libsql" {
+			got = "DOCKYARD_LIBSQL_PORT=" + plan.Environment["DOCKYARD_LIBSQL_PORT"]
 		}
 		if !strings.Contains(got, tc.want) {
 			t.Fatalf("%s command %q does not contain %q", tc.engine, got, tc.want)
@@ -215,7 +223,7 @@ func TestStoredConfigRemovesPasswords(t *testing.T) {
 func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "app", "password": "very-secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "qdrant", "meilisearch"} {
 		plan, err := registry.Readiness(engine, "17", "verify", credentials)
 		if err != nil {
 			t.Fatalf("%s readiness: %v", engine, err)

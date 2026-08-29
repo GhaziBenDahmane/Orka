@@ -116,8 +116,8 @@ matching registry credential to local or remote Swarm managers.
 Managed-database import creates the destination Compose service and database
 record, but the control-plane import does not copy persistent volume contents.
 Use the native transfer command below for PostgreSQL, MySQL, MariaDB, MongoDB,
-and Redis. libSQL and other engines still require an operator-managed backup
-and restore.
+Redis, and libSQL. Other engines still require an operator-managed backup and
+restore.
 
 ## Transfer managed database data
 
