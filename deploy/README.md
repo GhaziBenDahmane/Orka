@@ -28,7 +28,12 @@ The installer rejects mutable image tags, non-manager nodes, unsafe or malformed
 DNS hostnames and ACME email addresses, loose secret-file permissions, malformed keys, and existing secrets unless reuse is explicitly
 acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
 fully rendered stack before creating the overlay network or secrets, then
-waits for every service to reach its desired replica count. Set
+waits for every service to hold its desired replica count continuously for 90
+seconds. This covers the bundled health-check start periods and retry windows,
+so a task that starts and then fails readiness does not produce a false
+installation success. `DOCKYARD_INSTALL_STABILITY_SECONDS` may extend this
+window for slower infrastructure but cannot exceed
+`DOCKYARD_INSTALL_WAIT_TIMEOUT`. Set
 `DOCKYARD_INSTALL_SKIP_WAIT=true` only when another deployment system owns the
 convergence check. If pre-deployment setup fails, resources created by that
 attempt are removed; once stack deployment begins, failed resources are left
@@ -153,7 +158,8 @@ scripts/install-agent.sh
 The installer requires HTTPS endpoints, an immutable image, an active Swarm
 manager, and a protected non-empty token file. It creates the workload overlay
 network when absent, derives the exact self-upgrade service name from
-`DOCKYARD_AGENT_STACK_NAME`, and waits for convergence. Existing enrollment
+`DOCKYARD_AGENT_STACK_NAME`, and requires the replica count to remain converged
+for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
 one when the corresponding agent identity volume is intact. The equivalent
 manual commands are:

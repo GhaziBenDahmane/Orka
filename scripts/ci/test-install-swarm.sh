@@ -24,6 +24,16 @@ case "$1 $2" in
     if [ "${DOCKYARD_INSTALL_TEST_FAIL_SECRET:-}" = "$3" ]; then exit 1; fi ;;
   "network inspect") exit 1 ;;
   "stack services")
+    if [ "${DOCKYARD_INSTALL_TEST_FLAP_ONCE:-false}" = true ]; then
+      count=0
+      [ ! -f "$DOCKYARD_INSTALL_TEST_STATE" ] || count=$(cat "$DOCKYARD_INSTALL_TEST_STATE")
+      count=$((count + 1))
+      printf '%s' "$count" >"$DOCKYARD_INSTALL_TEST_STATE"
+      if [ "$count" -eq 2 ]; then
+        printf '%s\n' 'dockyard_dockyard 0/1' 'dockyard_postgres 1/1' 'dockyard_traefik 1/1'
+        exit 0
+      fi
+    fi
     printf '%s\n' 'dockyard_dockyard 1/1' 'dockyard_postgres 1/1' 'dockyard_traefik 1/1' ;;
 esac
 MOCK
@@ -32,6 +42,7 @@ chmod +x "$temporary/bin/docker"
 digest='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 export PATH="$temporary/bin:$PATH"
 export DOCKYARD_INSTALL_TEST_LOG="$temporary/docker.log"
+export DOCKYARD_INSTALL_TEST_STATE="$temporary/state"
 export DOCKYARD_HOST='dockyard.example.test'
 export ACME_EMAIL='ops@example.test'
 export DOCKYARD_IMAGE="example/dockyard@$digest"
@@ -40,6 +51,7 @@ export TRAEFIK_IMAGE="traefik@$digest"
 export DOCKYARD_DB_PASSWORD_FILE="$temporary/secrets/database-password"
 export DOCKYARD_DATABASE_URL_FILE="$temporary/secrets/database-url"
 export DOCKYARD_MASTER_KEY_FILE="$temporary/secrets/master-key"
+export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-swarm.sh" | grep -q 'no resources were changed'
@@ -50,7 +62,7 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
-"$root/scripts/install-swarm.sh" | grep -q 'installed and converged'
+"$root/scripts/install-swarm.sh" | grep -q 'installed and remained converged'
 grep -q '^network create --driver overlay --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_db_password $DOCKYARD_DB_PASSWORD_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_INSTALL_TEST_LOG"
@@ -58,6 +70,15 @@ if grep -q 'correct horse battery staple' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'secret value leaked to Docker command log' >&2
   exit 1
 fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+rm -f "$DOCKYARD_INSTALL_TEST_STATE"
+DOCKYARD_INSTALL_TEST_FLAP_ONCE=true DOCKYARD_INSTALL_STABILITY_SECONDS=3 \
+  "$root/scripts/install-swarm.sh" | grep -q 'remained converged for 3s'
+[ "$(cat "$DOCKYARD_INSTALL_TEST_STATE")" -ge 4 ] || {
+  echo 'installer did not reset its stability window after replica loss' >&2
+  exit 1
+}
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_EXISTING_SECRETS='dockyard_master_key' "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
@@ -97,6 +118,12 @@ if DOCKYARD_IMAGE='example/dockyard:latest' "$root/scripts/install-swarm.sh" >"$
   exit 1
 fi
 grep -q 'DOCKYARD_IMAGE must be an image reference pinned by sha256 digest' "$temporary/err"
+
+if DOCKYARD_INSTALL_STABILITY_SECONDS=301 "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted a stability window longer than its timeout' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed' "$temporary/err"
 
 for unsafe_host in 'dockyard.example.test`)||Host(`attacker.example.test' 'bad_label.example.test' '-leading.example.test' 'single-label'; do
   : >"$DOCKYARD_INSTALL_TEST_LOG"

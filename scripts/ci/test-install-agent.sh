@@ -36,6 +36,7 @@ export DOCKYARD_CONTROL_PLANE_URL='https://dockyard.example.test'
 export DOCKYARD_AGENT_URL='https://agents.example.test:8444'
 export DOCKYARD_AGENT_STACK_NAME='edge'
 export DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE="$temporary/secrets/enrollment-token"
+export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" | grep -q 'no resources were changed'
@@ -47,7 +48,7 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
-"$root/scripts/install-agent.sh" | grep -q 'installed and converged'
+"$root/scripts/install-agent.sh" | grep -q 'installed and remained converged'
 grep -q '^network create --driver overlay --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_agent_enrollment_token $DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_INSTALL_TEST_LOG"
@@ -89,6 +90,12 @@ if DOCKYARD_IMAGE='example/dockyard:latest' "$root/scripts/install-agent.sh" >"$
   exit 1
 fi
 grep -q 'DOCKYARD_IMAGE must be an image reference pinned by sha256 digest' "$temporary/err"
+
+if DOCKYARD_INSTALL_STABILITY_SECONDS=301 "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a stability window longer than its timeout' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed' "$temporary/err"
 
 chmod 0644 "$temporary/secrets/enrollment-token"
 if "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then

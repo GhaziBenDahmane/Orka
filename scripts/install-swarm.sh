@@ -9,6 +9,7 @@ reuse=${DOCKYARD_REUSE_EXISTING_SECRETS:-false}
 dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
 wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
+stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
 
 fail() {
   echo "install-swarm: $*" >&2
@@ -48,6 +49,8 @@ case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
 case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer" ;; esac
 [ "$wait_timeout" -gt 0 ] || fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer"
+case "$stability_seconds" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_STABILITY_SECONDS must be a non-negative integer" ;; esac
+[ "$stability_seconds" -le "$wait_timeout" ] || fail "DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed DOCKYARD_INSTALL_WAIT_TIMEOUT"
 
 for command in awk base64 date docker find grep mktemp sleep tr wc; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
@@ -192,15 +195,24 @@ if [ "$skip_wait" = true ]; then
 fi
 
 deadline=$(( $(date +%s) + wait_timeout ))
+stable_since=
 while :; do
   services=$(docker stack services "$stack" --format '{{.Name}} {{.Replicas}}') || fail "could not inspect stack services"
   [ -n "$services" ] || fail "stack has no services"
   unconverged=$(printf '%s\n' "$services" | awk '{ split($2,n,"/"); if (n[1] != n[2]) print }')
-  [ -z "$unconverged" ] && break
-  if [ "$(date +%s)" -ge "$deadline" ]; then
+  now=$(date +%s)
+  if [ -z "$unconverged" ]; then
+    [ -n "$stable_since" ] || stable_since=$now
+    if [ $((now - stable_since)) -ge "$stability_seconds" ]; then
+      break
+    fi
+  else
+    stable_since=
+  fi
+  if [ "$now" -ge "$deadline" ]; then
     printf '%s\n' "$unconverged" >&2
-    fail "stack $stack did not converge within ${wait_timeout}s"
+    fail "stack $stack did not remain converged for ${stability_seconds}s within ${wait_timeout}s"
   fi
   sleep 2
 done
-echo "Stack $stack installed and converged in $mode mode."
+echo "Stack $stack installed and remained converged for ${stability_seconds}s in $mode mode."
