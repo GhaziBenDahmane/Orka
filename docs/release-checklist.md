@@ -6,6 +6,10 @@ links for every item below.
 
 ## Automated gates
 
+- Release publication is blocked on the complete reusable CI workflow. Tag
+  pushes do not run a second detached CI copy: the release workflow invokes
+  the gate directly and the publish job cannot start unless every CI job
+  succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
   checkpoint-upgrade tests, high-contention exactly-once queue claiming across
