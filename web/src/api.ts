@@ -38,6 +38,7 @@ export type AuditArchive = { id: string; backupDestinationId: string; name: stri
 export type NotificationEndpoint = { id: string; name: string; kind: "webhook" | "slack" | "smtp" | "pagerduty" | "opsgenie"; events: string[]; enabled: boolean; updatedAt: string };
 export type ServiceAccount = { id: string; name: string; role: string; enabled: boolean; tokenExpiresAt?: string };
 export type SCIMToken = { id: string; organizationId: string; name: string; defaultRole: "admin" | "developer" | "viewer"; createdAt: string; expiresAt: string; revokedAt?: string };
+export type OrganizationMember = { userId: string; email: string; displayName: string; role: Role; active: boolean; managedByScim: boolean; createdAt: string };
 export type AIAuditRun = { id: string; serviceAccountId: string; agentName: string; agentVersion: string; model: string; status: string; scope: Record<string, unknown>; summary: string; startedAt: string; completedAt?: string };
 export type AIAuditFinding = { id: string; runId: string; severity: string; category: string; title: string; description: string; resourceType?: string; resourceId?: string; evidence: Record<string, unknown>; remediation?: string; createdAt: string };
 
@@ -159,6 +160,9 @@ export const api = {
   scimTokens: () => request<Envelope<SCIMToken>>("/v1/scim/tokens"),
   createSCIMToken: (name: string, defaultRole: SCIMToken["defaultRole"], expiresInDays: number) => request<{ scimToken: SCIMToken; token: string; baseUrl: string }>("/v1/scim/tokens", { method: "POST", body: JSON.stringify({ name, defaultRole, expiresInDays }) }),
   revokeSCIMToken: (id: string) => request<void>(`/v1/scim/tokens/${id}`, { method: "DELETE" }),
+  members: () => request<Envelope<OrganizationMember>>("/v1/members"),
+  updateMemberRole: (userId: string, role: Role) => request<OrganizationMember>(`/v1/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  deleteMember: (userId: string) => request<void>(`/v1/members/${userId}`, { method: "DELETE" }),
   policy: (scope: "organization" | "project" | "environment", id = "") => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`),
   putPolicy: (scope: "organization" | "project" | "environment", id: string, body: Pick<ResourcePolicy, "maintenance" | "maintenanceReason" | "maxProjects" | "maxEnvironments" | "maxServices" | "maxDatabases">) => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`, { method: "PUT", body: JSON.stringify(body) }),
   auditEvents: (beforeId = 0, limit = 100) => request<Envelope<AuditEvent>>(`/v1/audit-events?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`),

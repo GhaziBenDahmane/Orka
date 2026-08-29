@@ -87,6 +87,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/sessions", s.requireAuth(http.HandlerFunc(s.listSessions)))
 	mux.Handle("DELETE /v1/sessions/{sessionID}", s.requireAuth(http.HandlerFunc(s.revokeSession)))
 	mux.Handle("POST /v1/sessions/revoke-others", s.requireAuth(http.HandlerFunc(s.revokeOtherSessions)))
+	mux.Handle("GET /v1/members", s.requireRole("admin", http.HandlerFunc(s.listOrganizationMembers)))
+	mux.Handle("PATCH /v1/members/{userID}", s.requireRole("admin", http.HandlerFunc(s.updateOrganizationMember)))
+	mux.Handle("DELETE /v1/members/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteOrganizationMember)))
 	mux.Handle("GET /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.getAuthSettings)))
 	mux.Handle("PUT /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.putAuthSettings)))
 	mux.Handle("GET /v1/service-accounts", s.requireRole("admin", http.HandlerFunc(s.listServiceAccounts)))
@@ -2360,6 +2363,18 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
 func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrOwnerRequired) {
+		writeError(w, http.StatusForbidden, "owner_required", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrLastOwner) {
+		writeError(w, http.StatusConflict, "last_owner", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrSCIMManaged) {
+		writeError(w, http.StatusConflict, "scim_managed", err.Error())
+		return
+	}
 	if errors.Is(err, store.ErrMaintenance) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, http.StatusServiceUnavailable, "maintenance_mode", "resource is in maintenance mode")

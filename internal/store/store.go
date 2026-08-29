@@ -21,6 +21,9 @@ var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
 var ErrNoCapacity = errors.New("no eligible cluster has the requested placement capacity")
 var ErrRemoteBackupRequired = errors.New("a remote backup destination is required")
+var ErrLastOwner = errors.New("organization must retain an active owner")
+var ErrSCIMManaged = errors.New("membership is managed by SCIM")
+var ErrOwnerRequired = errors.New("organization owner role is required")
 
 type Store struct {
 	Pool                 *pgxpool.Pool

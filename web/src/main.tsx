@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, DatabaseBackup, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceReconciliation, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, DatabaseBackup, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceReconciliation, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -354,6 +354,7 @@ function Governance({ principal, projects, projectId, environments, environmentI
   const [scope, setScope] = useState<PolicyScope>("organization");
   const [draft, setDraft] = useState<PolicyDraft>(emptyPolicy);
   const [requireSso, setRequireSso] = useState(false);
+  const [members, setMembers] = useState<OrganizationMember[]>([]);
   const [scimTokens, setSCIMTokens] = useState<SCIMToken[]>([]);
   const [scimName, setSCIMName] = useState("identity-provider");
   const [scimRole, setSCIMRole] = useState<SCIMToken["defaultRole"]>("developer");
@@ -363,8 +364,10 @@ function Governance({ principal, projects, projectId, environments, environmentI
   const scopeId = scope === "organization" ? principal.organizationId : scope === "project" ? projectId : environmentId;
 
   const applyPolicy = (item: ResourcePolicy) => setDraft({ maintenance: item.maintenance, maintenanceReason: item.maintenanceReason, maxProjects: item.maxProjects?.toString() ?? "", maxEnvironments: item.maxEnvironments?.toString() ?? "", maxServices: item.maxServices?.toString() ?? "", maxDatabases: item.maxDatabases?.toString() ?? "" });
+  const refreshMembers = useCallback(async () => setMembers((await api.members()).items), []);
   const refreshSCIMTokens = useCallback(async () => setSCIMTokens((await api.scimTokens()).items), []);
   useEffect(() => { api.authSettings().then(x => setRequireSso(x.requireSso)).catch(reason => setError(message(reason))); }, [setError]);
+  useEffect(() => { void refreshMembers().catch(reason => setError(message(reason))); }, [refreshMembers, setError]);
   useEffect(() => { void refreshSCIMTokens().catch(reason => setError(message(reason))); }, [refreshSCIMTokens, setError]);
   useEffect(() => {
     if (!scopeId) { setDraft(emptyPolicy); return; }
@@ -388,7 +391,19 @@ function Governance({ principal, projects, projectId, environments, environmentI
     setBusy(true); try { await api.revokeSCIMToken(item.id); await refreshSCIMTokens(); flash("SCIM token revoked"); }
     catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
+  async function updateMemberRole(item: OrganizationMember, role: Role) {
+    setBusy(true); try { await api.updateMemberRole(item.userId, role); await refreshMembers(); flash(`${item.email} is now ${role}`); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  async function removeMember(item: OrganizationMember) {
+    if (!window.confirm(`Remove ${item.email} from ${principal.organization}? Their project and environment grants will also be removed.`)) return;
+    setBusy(true); try { await api.deleteMember(item.userId); await refreshMembers(); flash(`${item.email} removed`); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  const activeOwners = members.filter(item => item.active && item.role === "owner").length;
+  const canManageMember = (item: OrganizationMember) => !item.managedByScim && (principal.role === "owner" || item.role !== "owner") && !(item.userId === principal.userId && item.role === "owner" && activeOwners <= 1);
   return <div className="settings-grid">
+    <section className="card settings-card"><p className="eyebrow">Organization access</p><h2>Members</h2><p className="muted">Manage organization roles and remove access. Directory-managed members must be changed in the identity provider.</p><div className="admin-items">{members.map(item => { const manageable = canManageMember(item); return <article key={item.userId}><div><strong>{item.displayName || item.email}{item.userId === principal.userId ? " · You" : ""}</strong><small>{item.email} · {item.active ? "active" : "disabled"}{item.managedByScim ? " · SCIM managed" : ""}</small></div><div className="actions">{manageable ? <select aria-label={`Role for ${item.email}`} value={item.role} disabled={busy} onChange={event => void updateMemberRole(item, event.target.value as Role)}>{principal.role === "owner" && <option value="owner">Owner</option>}<option value="admin">Admin</option><option value="developer">Developer</option><option value="viewer">Viewer</option></select> : <Status value={item.role} />}{manageable && <button type="button" className="danger-button" disabled={busy} onClick={() => void removeMember(item)}>Remove</button>}</div></article>; })}{!members.length && <p className="muted">No organization members.</p>}</div></section>
     <section className="card settings-card"><p className="eyebrow">Resource guardrails</p><h2>Policy and quotas</h2><form onSubmit={savePolicy}>
       <label>Scope<select value={scope} onChange={e => setScope(e.target.value as PolicyScope)}><option value="organization">Organization · {principal.organization}</option><option value="project" disabled={!projectId}>Project · {projects.find(x => x.id === projectId)?.name ?? "select under Workloads"}</option><option value="environment" disabled={!environmentId}>Environment · {environments.find(x => x.id === environmentId)?.name ?? "select under Workloads"}</option></select></label>
       <label className="check"><input type="checkbox" checked={draft.maintenance} onChange={e => setDraft({ ...draft, maintenance: e.target.checked })} /> Block mutations for maintenance</label>

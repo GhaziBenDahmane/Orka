@@ -37,6 +37,9 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/sessions` | List the caller's active device sessions |
 | DELETE | `/v1/sessions/{id}` | Revoke one of the caller's sessions |
 | POST | `/v1/sessions/revoke-others` | Revoke every session except the caller's |
+| GET | `/v1/members` | List organization members, roles, status, and SCIM ownership |
+| PATCH | `/v1/members/{userID}` | Change a manually managed organization membership role |
+| DELETE | `/v1/members/{userID}` | Remove a manually managed member and their scoped grants |
 | GET/PUT | `/v1/sso/settings` | Read or enforce organization-wide SSO |
 | GET/POST | `/v1/service-accounts` | List or create scoped automation identities |
 | POST | `/v1/service-accounts/{id}/rotate` | Revoke old tokens and issue a replacement |
@@ -91,6 +94,12 @@ query and reactivate an inactive user. A tenant cannot PATCH a global user ID
 that it does not own. Because email identities are shared across organizations,
 SCIM rejects `displayName` changes while the identity is visible in another
 organization; this prevents one tenant from rewriting another tenant's profile.
+Organization administrators can manage manually provisioned members, while
+only owners can assign or alter the owner role. Role changes and removals are
+serialized per organization and cannot remove its last active owner. Members
+owned by SCIM are read-only through the membership API so the identity provider
+remains authoritative. Removing a member also removes their project and
+environment grants and revokes federated sessions for that organization.
 
 Creating an environment accepts either an explicit `clusterId` or a
 `placementSelector` map plus `minimumNodes`, `minimumNanoCpus`, and
