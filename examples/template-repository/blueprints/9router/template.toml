@@ -1,0 +1,31 @@
+[variables]
+domain = "${domain}"
+router_version = "latest"
+headroom_version = "latest"
+
+[[config.domains]]
+serviceName = "router"
+port = 20128
+host = "${domain}"
+path = "/"
+
+[[config.env]]
+DATA_DIR = "/app/data"
+
+[[config.env]]
+PORT = "20128"
+
+[[config.env]]
+HOSTNAME = "0.0.0.0"
+
+[[config.env]]
+NODE_ENV = "production"
+
+[[config.env]]
+HEADROOM_URL = "http://headroom:8787"
+
+[[config.env]]
+ROUTER_VERSION = "${router_version}"
+
+[[config.env]]
+HEADROOM_VERSION = "${headroom_version}"

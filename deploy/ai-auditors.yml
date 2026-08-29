@@ -1,0 +1,71 @@
+services:
+  9router:
+    image: ${NINEROUTER_IMAGE:?set a digest-pinned 9Router image}
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      HEADROOM_URL: http://headroom:8787
+    volumes: [nine-router-data:/app/data]
+    networks: [dockyard-public]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure, delay: 10s}
+
+  headroom:
+    image: ${HEADROOM_IMAGE:?set a digest-pinned Headroom image}
+    networks: [dockyard-public]
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure, delay: 10s}
+
+  security-auditor:
+    image: ${DOCKYARD_IMAGE:?set a digest-pinned Dockyard image}
+    command: ["ai-auditor"]
+    environment:
+      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:-http://dockyard:8080}
+      DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_auditor_token
+      DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
+      DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
+      DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI-compatible model name}
+      DOCKYARD_AI_AGENT_NAME: security-auditor
+      DOCKYARD_AI_AUDIT_FOCUS: identity, access control, exposed services, suspicious audit activity, and secret-handling risks
+      DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
+    secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
+    networks: [dockyard-public]
+    read_only: true
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure, delay: 10s, max_attempts: 5}
+      placement:
+        constraints: [node.role == manager]
+
+  reliability-auditor:
+    image: ${DOCKYARD_IMAGE:?set a digest-pinned Dockyard image}
+    command: ["ai-auditor"]
+    environment:
+      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:-http://dockyard:8080}
+      DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_auditor_token
+      DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
+      DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
+      DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI-compatible model name}
+      DOCKYARD_AI_AGENT_NAME: reliability-auditor
+      DOCKYARD_AI_AUDIT_FOCUS: stale clusters, capacity, failed deployments, drift, availability, and recovery readiness
+      DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
+    secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
+    networks: [dockyard-public]
+    read_only: true
+    deploy:
+      replicas: 1
+      restart_policy: {condition: on-failure, delay: 10s, max_attempts: 5}
+      placement:
+        constraints: [node.role == manager]
+
+secrets:
+  dockyard_ai_auditor_token: {external: true}
+  dockyard_ai_api_key: {external: true}
+networks:
+  dockyard-public: {external: true}
+volumes:
+  nine-router-data: {}

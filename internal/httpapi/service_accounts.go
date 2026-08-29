@@ -23,8 +23,8 @@ func (s *Server) createServiceAccount(w http.ResponseWriter, r *http.Request) {
 	if in.ExpiresInDays == 0 {
 		in.ExpiresInDays = 90
 	}
-	if in.Name == "" || roleRank(in.Role) < 1 || in.Role == "owner" || in.ExpiresInDays < 1 || in.ExpiresInDays > 365 {
-		writeError(w, 400, "invalid_service_account", "name, admin/developer/viewer role, and expiry from 1 to 365 days are required")
+	if in.Name == "" || (roleRank(in.Role) < 1 && in.Role != "auditor") || in.Role == "owner" || in.ExpiresInDays < 1 || in.ExpiresInDays > 365 {
+		writeError(w, 400, "invalid_service_account", "name, admin/developer/viewer/auditor role, and expiry from 1 to 365 days are required")
 		return
 	}
 	token, err := auth.NewToken()

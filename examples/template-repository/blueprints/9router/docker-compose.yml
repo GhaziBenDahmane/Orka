@@ -1,0 +1,16 @@
+services:
+  router:
+    image: decolua/9router:${ROUTER_VERSION}
+    environment:
+      DATA_DIR: ${DATA_DIR}
+      PORT: ${PORT}
+      HOSTNAME: ${HOSTNAME}
+      NODE_ENV: ${NODE_ENV}
+      HEADROOM_URL: ${HEADROOM_URL}
+    volumes:
+      - router-data:/app/data
+    depends_on: [headroom]
+  headroom:
+    image: ghcr.io/chopratejas/headroom:${HEADROOM_VERSION}
+volumes:
+  router-data: {}

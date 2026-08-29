@@ -145,6 +145,7 @@ type DatabaseInstance struct {
 type Template struct {
 	ID             uuid.UUID       `json:"id"`
 	OrganizationID *uuid.UUID      `json:"organizationId,omitempty"`
+	RepositoryID   *uuid.UUID      `json:"repositoryId,omitempty"`
 	Key            string          `json:"key"`
 	Version        string          `json:"version"`
 	Name           string          `json:"name"`
@@ -152,6 +153,7 @@ type Template struct {
 	ComposeYAML    string          `json:"composeYaml,omitempty"`
 	Config         json.RawMessage `json:"-"`
 	Source         string          `json:"source"`
+	SourcePath     string          `json:"sourcePath,omitempty"`
 	Checksum       string          `json:"checksum"`
 	CreatedAt      time.Time       `json:"createdAt"`
 }
@@ -1680,7 +1682,7 @@ func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID
 
 func (s *Store) CreateTemplate(ctx context.Context, item Template) (Template, error) {
 	item.ID = uuid.New()
-	err := s.Pool.QueryRow(ctx, `INSERT INTO templates(id,organization_id,template_key,version,name,description,compose_yaml,config,source,checksum) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING created_at`, item.ID, item.OrganizationID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.Checksum).Scan(&item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING created_at`, item.ID, item.OrganizationID, item.RepositoryID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum).Scan(&item.CreatedAt)
 	return item, err
 }
 
@@ -1700,7 +1702,7 @@ func (s *Store) UpsertGlobalTemplate(ctx context.Context, item Template) (Templa
 }
 
 func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]Template, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,template_key,version,name,description,config,source,checksum,created_at FROM templates WHERE organization_id IS NULL OR organization_id=$1 ORDER BY name,version DESC`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,repository_id,template_key,version,name,description,config,source,source_path,checksum,created_at FROM templates WHERE organization_id IS NULL OR organization_id=$1 ORDER BY name,version DESC`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1708,7 +1710,7 @@ func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]
 	items := []Template{}
 	for rows.Next() {
 		var item Template
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Config, &item.Source, &item.Checksum, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.RepositoryID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Config, &item.Source, &item.SourcePath, &item.Checksum, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -1718,7 +1720,7 @@ func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]
 
 func (s *Store) GetTemplate(ctx context.Context, organizationID, id uuid.UUID) (Template, error) {
 	var item Template
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,template_key,version,name,description,compose_yaml,config,source,checksum,created_at FROM templates WHERE id=$1 AND (organization_id IS NULL OR organization_id=$2)`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Key, &item.Version, &item.Name, &item.Description, &item.ComposeYAML, &item.Config, &item.Source, &item.Checksum, &item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum,created_at FROM templates WHERE id=$1 AND (organization_id IS NULL OR organization_id=$2)`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.RepositoryID, &item.Key, &item.Version, &item.Name, &item.Description, &item.ComposeYAML, &item.Config, &item.Source, &item.SourcePath, &item.Checksum, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Template{}, ErrNotFound
 	}

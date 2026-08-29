@@ -113,6 +113,21 @@ Application deploy, removal, logs, and node operations use encrypted-at-rest
 commands claimed by the outbound agent. Expiring leases are retried and every
 renewal/completion is fenced by a per-attempt UUID.
 
+## AI auditing
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/ai/audit-snapshot` | Return a secret-free organization inventory to an auditor identity |
+| POST | `/v1/ai/audit-runs` | Start an attributed audit run |
+| POST | `/v1/ai/audit-runs/{id}/findings` | Upsert a structured finding by fingerprint |
+| PATCH | `/v1/ai/audit-runs/{id}` | Complete or fail the caller's active run |
+| GET | `/v1/ai/audit-runs` | List runs as an organization administrator |
+| GET | `/v1/ai/audit-runs/{id}/findings` | Review findings as an organization administrator |
+
+The first four endpoints require an `auditor` service account; the last two
+require an administrator. Auditor identities have no normal RBAC rank and
+cannot mutate workloads. See `ai-auditing.md` for the deployment contract.
+
 OIDC uses Authorization Code flow with PKCE, nonce validation, one-time state,
 an encrypted browser-bound HttpOnly cookie, and exact issuer/audience
 validation.
@@ -225,6 +240,9 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
+| GET/POST | `/v1/template-repositories` | List or register organization GitHub catalogs |
+| POST | `/v1/template-repositories/{id}/sync` | Fetch and import a bounded Dokploy-compatible catalog archive |
+| DELETE | `/v1/template-repositories/{id}` | Remove a catalog and its template entries |
 | POST | `/v1/templates/import/dokploy` | Import `template.toml` plus Compose YAML |
 | POST | `/v1/templates/{id}/preview` | Validate overrides and return secret-free service, route, environment-key, and managed-file-count topology |
 | POST | `/v1/templates/{id}/instantiate` | Create a service, encrypted secrets, files and routes; accepts declared `variables` overrides |

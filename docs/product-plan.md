@@ -220,6 +220,21 @@ console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
 Exit gate: a representative Dokploy installation can be imported, compared,
 deployed, and rolled back without manual database edits.
 
+## AI-first operations
+
+The first AI workload is defensive auditing, not autonomous remediation. A
+dedicated `auditor` service-account role can read a redacted platform snapshot
+and write structured findings, but has no access to normal workload APIs. The
+built-in Go runner is the default low-footprint agent and can use 9Router or any
+OpenAI-compatible endpoint. Hermes remains an optional interactive adapter for
+investigations that need its larger tool ecosystem. See `ai-auditing.md`.
+
+Catalogs are federated through organization-owned GitHub repository records.
+Each repository uses the Dokploy blueprint layout and gets a namespace, making
+overlapping upstream IDs deterministic. Initial remote sync supports bounded
+public GitHub archives; signed catalogs, private credentials, scheduled sync,
+and webhook-driven refresh remain release-gated follow-up work.
+
 ## Release policy
 
 Do not describe the project as production-ready until all release-blocking

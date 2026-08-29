@@ -76,6 +76,66 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 	return report, nil
 }
 
+// ImportRepositoryCatalog imports a Dokploy-compatible catalog while namespacing
+// keys by repository slug. This keeps identically named templates from multiple
+// repositories independent and makes their provenance explicit.
+func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository store.TemplateRepository, root string) (ImportReport, error) {
+	blueprints := filepath.Join(root, filepath.FromSlash(repository.CatalogPath), "blueprints")
+	entries, err := os.ReadDir(blueprints)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	report := ImportReport{Failed: map[string]string{}}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(blueprints, entry.Name())
+		metaBytes, readErr := os.ReadFile(filepath.Join(path, "meta.json"))
+		if readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
+		var meta metadata
+		if readErr = json.Unmarshal(metaBytes, &meta); readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
+		tomlBytes, readErr := os.ReadFile(filepath.Join(path, "template.toml"))
+		if readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
+		compose, readErr := os.ReadFile(filepath.Join(path, "docker-compose.yml"))
+		if readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
+		if _, readErr = ParseDokploy(tomlBytes); readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
+		if meta.ID == "" || meta.Version == "" || meta.Name == "" {
+			report.Failed[entry.Name()] = "meta.json requires id, version, and name"
+			continue
+		}
+		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef})
+		sum := sha256.Sum256(append(tomlBytes, compose...))
+		organizationID, repositoryID := repository.OrganizationID, repository.ID
+		_, readErr = db.UpsertRepositoryTemplate(ctx, store.Template{OrganizationID: &organizationID, RepositoryID: &repositoryID, Key: repository.Slug + "/" + meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "github", SourcePath: filepath.ToSlash(filepath.Join(repository.CatalogPath, "blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
+		if readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
+		report.Imported++
+	}
+	if report.Imported == 0 && len(report.Failed) > 0 {
+		return report, fmt.Errorf("no templates imported")
+	}
+	return report, nil
+}
+
 func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport, error) {
 	entries, err := os.ReadDir(filepath.Join(root, "blueprints"))
 	if err != nil {

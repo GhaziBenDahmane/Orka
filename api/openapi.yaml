@@ -380,6 +380,124 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/audit-runs:
+    get:
+      operationId: get_v1_ai_audit_runs
+      tags: [ai]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_ai_audit_runs
+      tags: [ai]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/audit-runs/{runID}:
+    patch:
+      operationId: patch_v1_ai_audit_runs_runID
+      tags: [ai]
+      parameters:
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/audit-runs/{runID}/findings:
+    get:
+      operationId: get_v1_ai_audit_runs_runID_findings
+      tags: [ai]
+      parameters:
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_ai_audit_runs_runID_findings
+      tags: [ai]
+      parameters:
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/audit-snapshot:
+    get:
+      operationId: get_v1_ai_audit_snapshot
+      tags: [ai]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/audit-archives:
     get:
       operationId: get_v1_audit_archives
@@ -2906,6 +3024,85 @@ paths:
     get:
       operationId: get_v1_swarm_nodes
       tags: [swarm]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/template-repositories:
+    get:
+      operationId: get_v1_template_repositories
+      tags: [template-repositories]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_template_repositories
+      tags: [template-repositories]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/template-repositories/{repositoryID}:
+    delete:
+      operationId: delete_v1_template_repositories_repositoryID
+      tags: [template-repositories]
+      parameters:
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/template-repositories/{repositoryID}/sync:
+    post:
+      operationId: post_v1_template_repositories_repositoryID_sync
+      tags: [template-repositories]
+      parameters:
+        - name: repositoryID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
       responses:
         '2XX':
           description: Successful response

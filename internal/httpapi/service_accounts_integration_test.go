@@ -118,6 +118,29 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 		t.Fatalf("service account audit present = %v, err = %v", audited, err)
 	}
 
+	response, data = do(http.MethodPost, "/v1/service-accounts", userToken, []byte(`{"name":"ai-auditor","role":"auditor","expiresInDays":30}`))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create auditor status = %d: %s", response.StatusCode, data)
+	}
+	var auditor struct {
+		Token string `json:"token"`
+	}
+	if err = json.Unmarshal(data, &auditor); err != nil || auditor.Token == "" {
+		t.Fatalf("auditor response=%s err=%v", data, err)
+	}
+	response, _ = do(http.MethodGet, "/v1/projects", auditor.Token, nil)
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("auditor normal API status=%d, want 403", response.StatusCode)
+	}
+	response, data = do(http.MethodGet, "/v1/ai/audit-snapshot", auditor.Token, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("auditor snapshot status=%d: %s", response.StatusCode, data)
+	}
+	response, data = do(http.MethodPost, "/v1/ai/audit-runs", auditor.Token, []byte(`{"agentName":"test-auditor","model":"test"}`))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("auditor run status=%d: %s", response.StatusCode, data)
+	}
+
 	response, _ = do(http.MethodDelete, "/v1/service-accounts/"+created.ServiceAccount.ID.String(), userToken, nil)
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("disable status = %d, want 204", response.StatusCode)

@@ -90,6 +90,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/service-accounts", s.requireRole("admin", http.HandlerFunc(s.createServiceAccount)))
 	mux.Handle("POST /v1/service-accounts/{accountID}/rotate", s.requireRole("admin", http.HandlerFunc(s.rotateServiceAccountToken)))
 	mux.Handle("DELETE /v1/service-accounts/{accountID}", s.requireRole("admin", http.HandlerFunc(s.deleteServiceAccount)))
+	mux.Handle("GET /v1/ai/audit-snapshot", s.requireAuditor(http.HandlerFunc(s.aiAuditSnapshot)))
+	mux.Handle("POST /v1/ai/audit-runs", s.requireAuditor(http.HandlerFunc(s.createAIAuditRun)))
+	mux.Handle("POST /v1/ai/audit-runs/{runID}/findings", s.requireAuditor(http.HandlerFunc(s.createAIAuditFinding)))
+	mux.Handle("PATCH /v1/ai/audit-runs/{runID}", s.requireAuditor(http.HandlerFunc(s.finishAIAuditRun)))
+	mux.Handle("GET /v1/ai/audit-runs", s.requireRole("admin", http.HandlerFunc(s.listAIAuditRuns)))
+	mux.Handle("GET /v1/ai/audit-runs/{runID}/findings", s.requireRole("admin", http.HandlerFunc(s.listAIAuditFindings)))
 	mux.Handle("GET /v1/audit-events", s.requireRole("admin", http.HandlerFunc(s.auditEvents)))
 	mux.Handle("GET /v1/audit-events/export", s.requireRole("admin", http.HandlerFunc(s.exportAuditEvents)))
 	mux.Handle("GET /v1/audit-retention", s.requireRole("admin", http.HandlerFunc(s.getAuditRetention)))
@@ -182,6 +188,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/database-migrations/{migrationID}", s.requireResourceRole("viewer", "migration", "migrationID", http.HandlerFunc(s.getDatabaseMigration)))
 	mux.Handle("POST /v1/database-migrations/{migrationID}/cancel", s.requireResourceRole("admin", "migration", "migrationID", http.HandlerFunc(s.cancelDatabaseMigration)))
 	mux.Handle("GET /v1/templates", s.requireAuth(http.HandlerFunc(s.listTemplates)))
+	mux.Handle("GET /v1/template-repositories", s.requireRole("developer", http.HandlerFunc(s.listTemplateRepositories)))
+	mux.Handle("POST /v1/template-repositories", s.requireRole("admin", http.HandlerFunc(s.createTemplateRepository)))
+	mux.Handle("POST /v1/template-repositories/{repositoryID}/sync", s.requireRole("developer", http.HandlerFunc(s.syncTemplateRepository)))
+	mux.Handle("DELETE /v1/template-repositories/{repositoryID}", s.requireRole("admin", http.HandlerFunc(s.deleteTemplateRepository)))
 	mux.Handle("POST /v1/templates/import/dokploy", s.requireRole("developer", http.HandlerFunc(s.importDokployTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/preview", s.requireAuth(http.HandlerFunc(s.previewTemplate)))
 	mux.Handle("POST /v1/templates/{templateID}/instantiate", s.requireAuth(http.HandlerFunc(s.instantiateTemplate)))
@@ -312,6 +322,10 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		p, err := s.Store.Authenticate(r.Context(), cryptox.Digest(token), orgID)
 		if err != nil {
 			writeError(w, 401, "unauthorized", "invalid or expired session")
+			return
+		}
+		if p.Role == "auditor" && !strings.HasPrefix(r.URL.Path, "/v1/ai/") {
+			writeError(w, 403, "auditor_scope", "auditor identities may only use AI audit endpoints")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))

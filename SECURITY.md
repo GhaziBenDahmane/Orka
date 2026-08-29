@@ -14,6 +14,12 @@ authority, and local Swarm manager are trusted control-plane components.
 Compose documents, source repositories, images, webhooks, template catalogs,
 tenants, and workload containers are untrusted.
 
+AI models, model gateways, prompts, and findings are also untrusted. Auditor
+tokens use the isolated `auditor` role, snapshots exclude stored secrets and
+Compose bodies, and findings are advisory data only. Never give Hermes,
+9Router, or another AI workload the manager Docker socket or a controller
+administrator token.
+
 The local controller mounts the Swarm manager Docker socket. Possession of that
 socket is effectively root access to the cluster. Restrict controller
 administration, do not expose the socket over TCP, and isolate the manager from

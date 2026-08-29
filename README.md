@@ -13,6 +13,7 @@ The initial implementation includes:
 - Docker Swarm stack deployment and rollback;
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;
+- multiple GitHub template repositories with namespaced Dokploy-compatible Compose catalogs;
 - ten built-in managed databases plus a versioned external driver protocol and Go SDK;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
 - public or authenticated HTTPS/SSH Git builds and encrypted, hardened ZIP uploads, pushed to authenticated OCI registries;
@@ -24,11 +25,15 @@ The initial implementation includes:
 - durable signed webhooks, Slack-compatible notifications, TLS SMTP email, PagerDuty, and Opsgenie alerts.
 - inherited organization/project/environment maintenance controls and resource quotas.
 - an embedded React console for core project, workload, template, database, and cluster workflows.
+- isolated, read-only AI audit agents with structured findings and optional 9Router model routing.
 
 See [docs/architecture.md](docs/architecture.md) and
 [docs/roadmap.md](docs/roadmap.md). The detailed clean-room comparison, effort
 estimate, delivery order, and release gates are in
 [docs/product-plan.md](docs/product-plan.md).
+AI deployment and trust boundaries are documented in
+[docs/ai-auditing.md](docs/ai-auditing.md); remote catalog layout is in
+[docs/template-repositories.md](docs/template-repositories.md).
 
 ## Development
 

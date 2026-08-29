@@ -32,7 +32,7 @@ var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
 		os.Exit(2)
 	}
 	var err error
@@ -41,6 +41,8 @@ func main() {
 		err = serve()
 	case "agent":
 		err = runAgent()
+	case "ai-auditor":
+		err = runAIAuditor()
 	case "import-dokploy-templates":
 		err = importTemplates(os.Args[2:])
 	case "sign-template-catalog":
@@ -60,7 +62,7 @@ func main() {
 	case "verify-dokploy-import":
 		err = verifyDokployImport(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
+		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
 		os.Exit(2)
 	}
 	if err != nil {

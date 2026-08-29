@@ -34,3 +34,12 @@
 - CLI, Terraform/OpenTofu provider, documented REST/OpenAPI API
 - Signed catalogs and external driver RPC SDK
 - Conformance, chaos, upgrade, backup, and security test suites
+
+## R6 — AI-first operations and catalog federation
+
+- Isolated auditor service accounts and secret-free whole-platform snapshots
+- Structured audit runs and deduplicated findings with immutable attribution
+- Lightweight built-in OpenAI-compatible auditor; optional 9Router gateway
+- Hermes-compatible auditor API for interactive investigations without Docker-socket access
+- Multiple namespaced GitHub template repositories using Dokploy Compose format
+- Signed remote catalogs, private repository credentials, and scheduled sync
