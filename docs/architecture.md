@@ -15,8 +15,10 @@ Docker Compose remains the portable workload definition.
    adds conservative Swarm update/rollback defaults when the application did
    not declare its own rollout policy. Job-mode services are left unchanged.
 5. The Swarm adapter runs `docker stack deploy --prune --resolve-image=always`.
-6. The worker polls Swarm services until replicas converge or the deadline is
-   exceeded, then records events and an audit entry.
+6. The worker polls both replica counts and each service's Swarm update state.
+   It records success only after replicas converge and any update completes;
+   paused updates and automatic rollbacks remain failed deployments instead of
+   being mistaken for success when the old replicas return.
 7. Rollback creates a new deployment from the last successful snapshot. History
    is never edited in place.
 

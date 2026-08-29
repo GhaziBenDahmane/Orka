@@ -98,11 +98,12 @@ func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[st
 		args = append(args, "--with-registry-auth")
 	}
 	args = append(args, stackName)
+	startedAt := time.Now().UTC()
 	output, err := s.runEnv(ctx, processEnv, args...)
 	if err != nil {
 		return output, err
 	}
-	waitOutput, err := s.waitConverged(ctx, stackName)
+	waitOutput, err := s.waitConverged(ctx, stackName, startedAt)
 	return output + waitOutput, err
 }
 
@@ -298,7 +299,7 @@ func (s Swarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransferJob)
 	return result, nil
 }
 
-func (s Swarm) waitConverged(parent context.Context, stack string) (string, error) {
+func (s Swarm) waitConverged(parent context.Context, stack string, startedAt time.Time) (string, error) {
 	timeout := s.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
@@ -309,37 +310,92 @@ func (s Swarm) waitConverged(parent context.Context, stack string) (string, erro
 	defer ticker.Stop()
 	var last string
 	for {
-		output, err := s.run(ctx, "service", "ls", "--filter", "label=com.docker.stack.namespace="+stack, "--format", "{{.Name}} {{.Replicas}}")
-		if err == nil && strings.TrimSpace(output) != "" {
+		done, output, err := s.convergenceStatus(ctx, stack, startedAt)
+		if output != "" {
 			last = output
-			all := true
-			for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) < 2 {
-					all = false
-					continue
-				}
-				parts := strings.SplitN(fields[len(fields)-1], "/", 2)
-				if len(parts) != 2 {
-					all = false
-					continue
-				}
-				current, e1 := strconv.Atoi(parts[0])
-				desired, e2 := strconv.Atoi(parts[1])
-				if e1 != nil || e2 != nil || current != desired {
-					all = false
-				}
+		}
+		if err != nil {
+			var terminal *rolloutFailure
+			if errors.As(err, &terminal) {
+				return "\n" + last, err
 			}
-			if all {
-				return "\n" + last, nil
-			}
+		} else if done {
+			return "\n" + last, nil
 		}
 		select {
 		case <-ctx.Done():
+			if err != nil {
+				return "\n" + last, fmt.Errorf("stack did not converge: %w: last inspection: %v", ctx.Err(), err)
+			}
 			return "\n" + last, fmt.Errorf("stack did not converge: %w", ctx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+type rolloutFailure struct{ message string }
+
+func (e *rolloutFailure) Error() string { return e.message }
+
+type swarmUpdateStatus struct {
+	State     string    `json:"State"`
+	Message   string    `json:"Message"`
+	StartedAt time.Time `json:"StartedAt"`
+}
+
+func (s Swarm) convergenceStatus(ctx context.Context, stack string, startedAt time.Time) (bool, string, error) {
+	output, err := s.run(ctx, "service", "ls", "--filter", "label=com.docker.stack.namespace="+stack, "--format", "{{.Name}} {{.Replicas}}")
+	if err != nil {
+		return false, output, err
+	}
+	if strings.TrimSpace(output) == "" {
+		return false, output, errors.New("stack has no services")
+	}
+	all := true
+	var details strings.Builder
+	details.WriteString(output)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			return false, details.String(), &rolloutFailure{message: fmt.Sprintf("invalid Swarm service status %q", line)}
+		}
+		parts := strings.SplitN(fields[1], "/", 2)
+		if len(parts) != 2 {
+			return false, details.String(), &rolloutFailure{message: fmt.Sprintf("invalid replica status for service %s", fields[0])}
+		}
+		current, currentErr := strconv.Atoi(parts[0])
+		desired, desiredErr := strconv.Atoi(parts[1])
+		if currentErr != nil || desiredErr != nil || current != desired {
+			all = false
+		}
+
+		statusJSON, inspectErr := s.run(ctx, "service", "inspect", fields[0], "--format", "{{json .UpdateStatus}}")
+		if inspectErr != nil {
+			return false, details.String(), inspectErr
+		}
+		statusJSON = strings.TrimSpace(statusJSON)
+		if statusJSON == "" || statusJSON == "null" || statusJSON == "<nil>" {
+			continue
+		}
+		var status swarmUpdateStatus
+		if err = json.Unmarshal([]byte(statusJSON), &status); err != nil {
+			return false, details.String(), &rolloutFailure{message: fmt.Sprintf("decode update status for service %s: %v", fields[0], err)}
+		}
+		details.WriteString(fmt.Sprintf("%s update=%s message=%s\n", fields[0], status.State, status.Message))
+		if !startedAt.IsZero() && !status.StartedAt.IsZero() && status.StartedAt.Before(startedAt) {
+			continue
+		}
+		switch status.State {
+		case "", "completed":
+		case "updating", "rollback_started":
+			all = false
+		case "paused", "rollback_paused", "rollback_completed":
+			return false, details.String(), &rolloutFailure{message: fmt.Sprintf("service %s update entered %s: %s", fields[0], status.State, status.Message)}
+		default:
+			return false, details.String(), &rolloutFailure{message: fmt.Sprintf("service %s returned unknown update state %q", fields[0], status.State)}
+		}
+	}
+	return all, details.String(), nil
 }
 
 func (s Swarm) run(ctx context.Context, args ...string) (string, error) {
