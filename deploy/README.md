@@ -137,8 +137,10 @@ and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
 account configured as an HTTP bearer token. The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, stale backups, overdue
 restore drills, stalled or failed Dokploy database migrations, and maintenance
-mode left enabled. Route those alerts through Alertmanager to the team's email,
-Slack, PagerDuty, or other incident receiver.
+mode left enabled. They also detect missing remote-cluster heartbeats, stalled
+agent upgrades, missed image-verification deadlines, and paused or rolled-back
+Swarm agent updates. Route those alerts through Alertmanager to the team's
+email, Slack, PagerDuty, or other incident receiver.
 
 ## Remote Swarm agent
 

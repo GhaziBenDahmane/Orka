@@ -87,3 +87,39 @@ groups:
         annotations:
           summary: Dockyard maintenance mode has remained enabled
           description: At least one resource scope has been in maintenance mode for four hours.
+
+      - alert: DockyardRemoteClusterHeartbeatMissing
+        expr: dockyard_cluster_heartbeat_missing == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote Dockyard cluster has stopped heartbeating
+          description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} has been silent for more than two minutes or has never completed its first heartbeat.
+
+      - alert: DockyardAgentUpgradeRollback
+        expr: dockyard_cluster_agent_update_failure == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote agent upgrade paused or rolled back
+          description: Cluster {{ $labels.cluster }} reports Swarm update state {{ $labels.state }}; inspect the service and upgrade history before retrying.
+
+      - alert: DockyardAgentUpgradeVerificationOverdue
+        expr: dockyard_agent_upgrade_verification_overdue > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote agent upgrade missed its verification deadline
+          description: Cluster {{ $labels.cluster }} did not confirm the requested image digest before the controller deadline.
+
+      - alert: DockyardAgentUpgradeStalled
+        expr: dockyard_agent_upgrade_active_age_seconds{status=~"pending|leased"} > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A remote agent upgrade is stalled
+          description: Cluster {{ $labels.cluster }} has had an upgrade in {{ $labels.status }} state for more than fifteen minutes.
