@@ -81,6 +81,7 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stateCookies := startResponse.Cookies()
 	var started map[string]string
 	decodeResponse(t, startResponse, http.StatusOK, &started)
 
@@ -113,7 +114,11 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 		t.Fatalf("Keycloak login status=%d location=%q", loginResponse.StatusCode, callbackURL)
 	}
 
-	callbackResponse, err := http.Get(callbackURL)
+	callbackRequest, _ := http.NewRequest(http.MethodGet, callbackURL, nil)
+	for _, cookie := range stateCookies {
+		callbackRequest.AddCookie(cookie)
+	}
+	callbackResponse, err := http.DefaultClient.Do(callbackRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

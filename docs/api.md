@@ -109,12 +109,18 @@ Application deploy, removal, logs, and node operations use encrypted-at-rest
 commands claimed by the outbound agent. Expiring leases are retried and every
 renewal/completion is fenced by a per-attempt UUID.
 
+OIDC uses Authorization Code flow with PKCE, nonce validation, one-time state,
+an encrypted browser-bound HttpOnly cookie, and exact issuer/audience
+validation.
+
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in
 `allowIdpInitiated` flag. Dockyard generates an encrypted per-provider RSA key,
 signs authentication requests with RSA-SHA256, validates signed assertions,
-binds SP-initiated responses to one-time RelayState, and rejects assertion
-replays. Register the provider metadata URL with the IdP.
+binds SP-initiated responses to one-time RelayState and an encrypted
+`SameSite=None; Secure` browser cookie, and rejects assertion replays.
+Explicitly enabled IdP-initiated login remains cookie-independent. Register the
+provider metadata URL with the IdP.
 Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
 Once enabled, local-password sessions cannot access that organization.
 Service-account tokens are shown once, stored as hashes, expire within 365

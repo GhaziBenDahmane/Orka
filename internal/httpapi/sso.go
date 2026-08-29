@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/hex"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -142,6 +143,10 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	if err = s.setLoginStateCookie(w, "oidc", state, http.SameSiteLaxMode); err != nil {
+		writeError(w, 500, "state_failed", "could not bind login state")
+		return
+	}
 	cfg := oauth2.Config{ClientID: provider.ClientID, Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}
 	writeJSON(w, 200, map[string]string{"url": cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce))})
 }
@@ -150,6 +155,10 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	stateValue, code := r.URL.Query().Get("state"), r.URL.Query().Get("code")
 	if stateValue == "" || code == "" {
 		writeError(w, 400, "invalid_callback", "state and code are required")
+		return
+	}
+	if !s.consumeLoginStateCookie(w, r, "oidc", stateValue, http.SameSiteLaxMode) {
+		writeError(w, 400, "invalid_state", "state is not bound to this browser")
 		return
 	}
 	providerID, verifierValue, nonce, err := s.Store.ConsumeOIDCState(r.Context(), cryptox.Digest(stateValue))
@@ -230,6 +239,36 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeLoginSuccess(w, r, token)
+}
+
+func (s *Server) setLoginStateCookie(w http.ResponseWriter, kind, state string, sameSite http.SameSite) error {
+	name := loginStateCookieName(kind, state)
+	value, err := s.Box.Encrypt([]byte(state), "login-state:"+name)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/v1/auth/", MaxAge: 600, HttpOnly: true, Secure: strings.HasPrefix(strings.ToLower(s.PublicURL), "https://"), SameSite: sameSite})
+	return nil
+}
+
+func (s *Server) consumeLoginStateCookie(w http.ResponseWriter, r *http.Request, kind, state string, sameSite http.SameSite) bool {
+	name := loginStateCookieName(kind, state)
+	cookie, err := r.Cookie(name)
+	s.setExpiredLoginStateCookie(w, name, sameSite)
+	if err != nil {
+		return false
+	}
+	plain, err := s.Box.Decrypt(cookie.Value, "login-state:"+name)
+	return err == nil && subtle.ConstantTimeCompare(plain, []byte(state)) == 1
+}
+
+func (s *Server) setExpiredLoginStateCookie(w http.ResponseWriter, name string, sameSite http.SameSite) {
+	http.SetCookie(w, &http.Cookie{Name: name, Path: "/v1/auth/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(strings.ToLower(s.PublicURL), "https://"), SameSite: sameSite})
+}
+
+func loginStateCookieName(kind, state string) string {
+	digest := cryptox.Digest(state)
+	return "dockyard_" + kind + "_state_" + hex.EncodeToString(digest[:8])
 }
 
 func oidcEmail(raw string) (string, string, bool) {

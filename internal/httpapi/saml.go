@@ -171,6 +171,10 @@ func (s *Server) startSAML(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	if err = s.setLoginStateCookie(w, "saml", relayState, http.SameSiteNoneMode); err != nil {
+		writeError(w, 500, "state_failed", "could not bind login state")
+		return
+	}
 	redirectURL, err := request.Redirect(relayState, sp)
 	if err != nil {
 		writeError(w, 500, "saml_request_failed", "could not encode authentication request")
@@ -202,6 +206,10 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	}
 	requestIDs := []string(nil)
 	if relayState != "" {
+		if !s.consumeLoginStateCookie(w, r, "saml", relayState, http.SameSiteNoneMode) {
+			writeError(w, 400, "invalid_state", "RelayState is not bound to this browser")
+			return
+		}
 		requestID, stateErr := s.Store.ConsumeSAMLState(r.Context(), cryptox.Digest(relayState), providerID)
 		if stateErr != nil {
 			writeError(w, 400, "invalid_state", "state is invalid or expired")

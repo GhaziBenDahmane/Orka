@@ -138,6 +138,7 @@ func TestSAMLProviderCreationMetadataAndStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stateCookies := response.Cookies()
 	data, _ = io.ReadAll(response.Body)
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -173,7 +174,15 @@ func TestSAMLProviderCreationMetadataAndStart(t *testing.T) {
 	}
 	callbackURL, _ := url.Parse(form.URL)
 	postValues := url.Values{"SAMLResponse": {form.SAMLResponse}, "RelayState": {form.RelayState}}
-	response, err = http.PostForm(server.URL+callbackURL.Path, postValues)
+	request, err := http.NewRequest(http.MethodPost, server.URL+callbackURL.Path, strings.NewReader(postValues.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, cookie := range stateCookies {
+		request.AddCookie(cookie)
+	}
+	response, err = http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

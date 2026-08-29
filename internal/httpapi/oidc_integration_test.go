@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -63,7 +64,11 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer((&Server{Store: db, PublicURL: "https://dockyard.example.test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
+	box, err := cryptox.New(bytes.Repeat([]byte{23}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer((&Server{Store: db, Box: box, PublicURL: "https://dockyard.example.test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	defer server.Close()
 	response, err := http.Get(server.URL + "/v1/auth/sso/" + providerID.String() + "/start")
 	if err != nil {
@@ -73,6 +78,10 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(response.Body)
 		t.Fatalf("start status=%d: %s", response.StatusCode, data)
+	}
+	cookies := response.Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].MaxAge <= 0 {
+		t.Fatalf("OIDC start did not set a hardened state cookie: %#v", cookies)
 	}
 	var started map[string]string
 	if err = json.NewDecoder(response.Body).Decode(&started); err != nil {
@@ -104,5 +113,35 @@ func TestOIDCEmailValidationRejectsMalformedClaims(t *testing.T) {
 	email, domain, ok := oidcEmail("User@Example.Test")
 	if !ok || email != "user@example.test" || domain != "example.test" {
 		t.Fatalf("valid claim normalized to email=%q domain=%q ok=%v", email, domain, ok)
+	}
+}
+
+func TestLoginStateCookieIsOpaqueAndBrowserBound(t *testing.T) {
+	box, err := cryptox.New(bytes.Repeat([]byte{29}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Box: box, PublicURL: "https://dockyard.example.test"}
+	state := "state-visible-in-callback-url"
+	setRecorder := httptest.NewRecorder()
+	if err = server.setLoginStateCookie(setRecorder, "oidc", state, http.SameSiteLaxMode); err != nil {
+		t.Fatal(err)
+	}
+	cookies := setRecorder.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == state || cookies[0].Value == string(cryptox.Digest(state)) || !cookies[0].Secure || !cookies[0].HttpOnly {
+		t.Fatalf("state cookie was not opaque and hardened: %#v", cookies)
+	}
+	if server.consumeLoginStateCookie(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/auth/sso/callback", nil), "oidc", state, http.SameSiteLaxMode) {
+		t.Fatal("callback without the initiating browser cookie was accepted")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/callback", nil)
+	request.AddCookie(cookies[0])
+	clearRecorder := httptest.NewRecorder()
+	if !server.consumeLoginStateCookie(clearRecorder, request, "oidc", state, http.SameSiteLaxMode) {
+		t.Fatal("callback with the initiating browser cookie was rejected")
+	}
+	cleared := clearRecorder.Result().Cookies()
+	if len(cleared) != 1 || cleared[0].MaxAge >= 0 {
+		t.Fatalf("state cookie was not cleared: %#v", cleared)
 	}
 }
