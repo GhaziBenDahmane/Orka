@@ -94,3 +94,15 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 		t.Fatalf("stored nonce %q does not match authorization nonce %q", storedNonce, query.Get("nonce"))
 	}
 }
+
+func TestOIDCEmailValidationRejectsMalformedClaims(t *testing.T) {
+	for _, value := range []string{"", "missing-at-sign", "Display Name <user@example.test>", "@example.test", "user@"} {
+		if _, _, ok := oidcEmail(value); ok {
+			t.Fatalf("accepted malformed OIDC email claim %q", value)
+		}
+	}
+	email, domain, ok := oidcEmail("User@Example.Test")
+	if !ok || email != "user@example.test" || domain != "example.test" {
+		t.Fatalf("valid claim normalized to email=%q domain=%q ok=%v", email, domain, ok)
+	}
+}

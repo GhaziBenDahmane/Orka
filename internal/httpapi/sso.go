@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -208,12 +209,16 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "email_unverified", "verified email is required")
 		return
 	}
-	domain := strings.ToLower(strings.SplitN(claims.Email, "@", 2)[1])
+	email, domain, ok := oidcEmail(claims.Email)
+	if !ok {
+		writeError(w, 401, "invalid_claims", "identity token lacks a valid email address")
+		return
+	}
 	if !contains(provider.Domains, domain) {
 		writeError(w, 403, "domain_not_allowed", "email domain is not allowed")
 		return
 	}
-	userID, err := s.Store.JITOIDCUser(r.Context(), provider, claims.Subject, claims.Email, claims.Name)
+	userID, err := s.Store.JITOIDCUser(r.Context(), provider, claims.Subject, email, claims.Name)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -225,6 +230,19 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeLoginSuccess(w, r, token)
+}
+
+func oidcEmail(raw string) (string, string, bool) {
+	raw = strings.TrimSpace(raw)
+	parsed, err := mail.ParseAddress(raw)
+	if err != nil || parsed.Address != raw {
+		return "", "", false
+	}
+	parts := strings.SplitN(strings.ToLower(parsed.Address), "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return strings.ToLower(parsed.Address), parts[1], true
 }
 
 func contains(items []string, want string) bool {
