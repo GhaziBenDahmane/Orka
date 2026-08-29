@@ -62,6 +62,16 @@ image:
 docker build --secret id=build_ca,src=/path/to/corporate-ca.crt .
 ```
 
+If the public Go module proxy is blocked, pass an internal proxy URL as a
+BuildKit secret as well; neither value is retained in the image or build
+history:
+
+```sh
+DOCKYARD_GOPROXY=https://proxy.example.com \
+  docker build --secret id=goproxy,env=DOCKYARD_GOPROXY \
+  --secret id=build_ca,src=/path/to/corporate-ca.crt .
+```
+
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Run `make web` after changing files under `web/`.
 
