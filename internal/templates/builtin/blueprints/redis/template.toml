@@ -1,0 +1,7 @@
+[variables]
+redis_version = "8-alpine"
+redis_password = "${password:32}"
+
+[config.env]
+REDIS_VERSION = "${redis_version}"
+REDIS_PASSWORD = "${redis_password}"

@@ -1,0 +1,38 @@
+name: Template request
+description: Suggest a product for the built-in Docker Compose catalog
+title: "template: "
+labels: [template]
+body:
+  - type: input
+    id: project
+    attributes:
+      label: Upstream project
+      description: Link to the official project and container image documentation.
+    validations: {required: true}
+  - type: input
+    id: images
+    attributes:
+      label: Container images
+      description: List the official image names and tested versions or digests.
+    validations: {required: true}
+  - type: textarea
+    id: topology
+    attributes:
+      label: Compose topology
+      description: Describe services, ports, named volumes, health checks, and dependencies.
+    validations: {required: true}
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Configuration and secrets
+      description: List operator inputs and which values must be generated and encrypted.
+    validations: {required: true}
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Swarm safety
+      options:
+        - label: The template does not require privileged mode, host namespaces, host bind mounts, or the Docker socket.
+          required: true
+        - label: I have identified an upstream health check or readiness probe.
+          required: true

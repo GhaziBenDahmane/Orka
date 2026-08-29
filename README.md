@@ -14,6 +14,7 @@ The initial implementation includes:
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;
 - multiple GitHub template repositories with namespaced Dokploy-compatible Compose catalogs;
+- startup-seeded PostgreSQL, Redis, and 9Router templates, plus a documented community contribution path;
 - ten built-in managed databases plus a versioned external driver protocol and Go SDK;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
 - public or authenticated HTTPS/SSH Git builds and encrypted, hardened ZIP uploads, pushed to authenticated OCI registries;
@@ -54,6 +55,11 @@ docker build --secret id=build_ca,src=/path/to/corporate-ca.crt .
 
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Run `make web` after changing files under `web/`.
+
+Run `make test-templates` to start an isolated controller, instantiate the
+built-in PostgreSQL and Redis products through the API, deploy them to Docker
+Swarm, and verify that both services converge. 9Router is catalog-validated but
+is intentionally excluded from this product smoke test.
 
 Import the complete upstream Dokploy template checkout with:
 

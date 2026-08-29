@@ -329,6 +329,11 @@ func serve() error {
 	}
 	defer db.Pool.Close()
 	db.RequireRemoteBackups = cfg.RequireRemoteBackups
+	if report, seedErr := templates.SeedBuiltinCatalog(ctx, db); seedErr != nil {
+		return fmt.Errorf("seed built-in template catalog: %w", seedErr)
+	} else {
+		logger.Info("built-in template catalog ready", "templates", report.Imported)
+	}
 	if err = db.ValidateBackupConfiguration(ctx); err != nil {
 		return fmt.Errorf("validate backup configuration: %w", err)
 	}

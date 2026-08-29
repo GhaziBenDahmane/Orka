@@ -41,3 +41,7 @@ GET    /v1/templates
 Deleting a repository also removes its catalog entries. Existing services keep
 their immutable Compose revision and template provenance snapshot.
 
+The controller seeds PostgreSQL, Redis, and 9Router templates at startup. To
+suggest another built-in product, use `.github/ISSUE_TEMPLATE/template-request.yml`;
+to contribute it directly, follow `CONTRIBUTING.md` and add a validated
+blueprint under `internal/templates/builtin/blueprints`.

@@ -1,0 +1,11 @@
+[variables]
+postgres_version = "17-alpine"
+postgres_user = "app"
+postgres_password = "${password:32}"
+postgres_database = "app"
+
+[config.env]
+POSTGRES_VERSION = "${postgres_version}"
+POSTGRES_USER = "${postgres_user}"
+POSTGRES_PASSWORD = "${postgres_password}"
+POSTGRES_DB = "${postgres_database}"
