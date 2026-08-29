@@ -1,0 +1,49 @@
+services:
+  barktrace-postgres:
+    image: ghcr.io/barktrace/bark:${BARKTRACE_VERSION}
+    environment:
+      BARKTRACE_PUBLIC_URL: ${BARKTRACE_PUBLIC_URL}
+      BARKTRACE_DATABASE_URL: postgresql://barktrace:${POSTGRES_PASSWORD}@postgres:5432/barktrace?sslmode=disable
+      BARKTRACE_DEFAULT_ORG_NAME: ${BARKTRACE_DEFAULT_ORG_NAME}
+      BARKTRACE_DEFAULT_ORG_SLUG: ${BARKTRACE_DEFAULT_ORG_SLUG}
+      BARKTRACE_AUTO_PROVISION: ${BARKTRACE_AUTO_PROVISION}
+      BARKTRACE_SESSION_LIFETIME_HOURS: ${BARKTRACE_SESSION_LIFETIME_HOURS}
+      BARKTRACE_MCP_TOKEN: ${BARKTRACE_MCP_TOKEN}
+      BARKTRACE_UPTIME_ALLOW_PRIVATE_TARGETS: ${BARKTRACE_UPTIME_ALLOW_PRIVATE_TARGETS}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME}
+      OIDC_SCOPES: ${OIDC_SCOPES}
+      OIDC_REQUIRE_EMAIL_VERIFIED: ${OIDC_REQUIRE_EMAIL_VERIFIED}
+      GOMEMLIMIT: ${GOMEMLIMIT}
+    volumes:
+      - barktrace-postgres-data:/data
+    healthcheck:
+      test: ["CMD", "/app/barktrace", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 256M
+  postgres:
+    image: postgres:${POSTGRES_VERSION}
+    environment:
+      POSTGRES_USER: barktrace
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: barktrace
+    volumes:
+      - barktrace-postgres-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barktrace -d barktrace"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  barktrace-postgres-data: {}
+  barktrace-postgres-db: {}

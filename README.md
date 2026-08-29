@@ -14,7 +14,7 @@ The initial implementation includes:
 - Traefik label and overlay-network generation;
 - a versioned template catalog with Dokploy template import support;
 - multiple GitHub template repositories with namespaced Dokploy-compatible Compose catalogs;
-- startup-seeded PostgreSQL, Redis, 9Router, and BarkTrace SQLite templates, plus a documented community contribution path;
+- startup-seeded PostgreSQL, Redis, 9Router, and BarkTrace SQLite/PostgreSQL templates, plus a documented community contribution path;
 - ten built-in managed databases plus a versioned external driver protocol and Go SDK;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
 - public or authenticated HTTPS/SSH Git builds and encrypted, hardened ZIP uploads, pushed to authenticated OCI registries;

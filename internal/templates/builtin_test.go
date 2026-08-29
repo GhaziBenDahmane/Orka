@@ -19,11 +19,13 @@ func TestBuiltinCatalogIsSwarmSafe(t *testing.T) {
 }
 
 func TestBarkTraceTemplatePinsReleasedImage(t *testing.T) {
-	definition, err := fs.ReadFile(builtinCatalog, "builtin/blueprints/barktrace-sqlite/template.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(definition), `barktrace_version = "sha-071bf79"`) {
-		t.Fatal("BarkTrace template must pin the released sha-071bf79 image")
+	for _, name := range []string{"barktrace-sqlite", "barktrace-postgres"} {
+		definition, err := fs.ReadFile(builtinCatalog, "builtin/blueprints/"+name+"/template.toml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(definition), `barktrace_version = "0.13.0"`) {
+			t.Fatalf("%s template must pin the released 0.13.0 image", name)
+		}
 	}
 }
