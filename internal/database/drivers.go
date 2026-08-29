@@ -124,6 +124,8 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 		}, nil
 	case "qdrant":
 		return qdrantBackupPlan(host, credentials, filename), nil
+	case "meilisearch":
+		return meilisearchBackupPlan(host, credentials, filename), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
@@ -159,6 +161,8 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 		}, nil
 	case "qdrant":
 		return qdrantRestorePlan(host, credentials, filename), nil
+	case "meilisearch":
+		return meilisearchRestorePlan(host, credentials, filename), nil
 	default:
 		return RestorePlan{}, fmt.Errorf("verified restore is not implemented for database engine %q", engine)
 	}
@@ -177,7 +181,7 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 		return "archive.gz", true
 	case "redis", "valkey":
 		return "rdb", true
-	case "qdrant":
+	case "qdrant", "meilisearch":
 		return "tar.gz", true
 	default:
 		return "", false
@@ -209,6 +213,8 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 		return BackupPlan{Image: image, Command: []string{cli, "-h", host, "-p", nativePort(credentials, 6379), "ping"}, Environment: map[string]string{"REDISCLI_AUTH": credentials["password"]}}, nil
 	case "qdrant":
 		return qdrantReadinessPlan(host, credentials), nil
+	case "meilisearch":
+		return meilisearchReadinessPlan(host, credentials), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
 	}
@@ -219,7 +225,7 @@ func validateNativePlan(engine, version, host string, credentials map[string]str
 		return errors.New("invalid native backup parameters")
 	}
 	required := []string{"username", "password", "database"}
-	if engine == "redis" || engine == "valkey" || engine == "qdrant" {
+	if engine == "redis" || engine == "valkey" || engine == "qdrant" || engine == "meilisearch" {
 		required = []string{"password"}
 	}
 	for _, key := range required {

@@ -311,9 +311,9 @@ authenticated context and is never returned by the API.
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
-The engine response includes `backupCapable`; native verified backup/restore is
-currently available for PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, and
-Qdrant.
+The engine response includes `backupCapable`; verified engine-specific
+backup/restore is currently available for PostgreSQL, MySQL, MariaDB, MongoDB,
+Redis, Valkey, Qdrant, and Meilisearch.
 Pass `destinationId` to a backup request or backup policy to upload through an
 S3-compatible multipart client. Restores download to an isolated temporary
 directory and verify the stored SHA-256 checksum before invoking native tools.
@@ -330,6 +330,10 @@ Qdrant backups create one authenticated native snapshot per collection, stream
 the snapshots into a single manifest-bearing archive, and restore each
 collection through Qdrant's snapshot upload API. No server-local backup path or
 shared database volume is required.
+Meilisearch backups stream index definitions, settings, documents, and API-key
+definitions into a portable logical archive. Restore waits for every
+asynchronous Meilisearch task and preserves key UIDs; API key values remain
+stable when the managed database's master key is preserved.
 Set `verifyRestore` on a backup policy to enqueue one restore drill after each
 successful scheduled backup. Drills create a temporary isolated Swarm stack,
 restore the verified artifact with fresh credentials, record the result as a
