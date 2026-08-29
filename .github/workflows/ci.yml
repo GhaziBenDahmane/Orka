@@ -66,6 +66,8 @@ jobs:
       - run: go build ./cmd/dockyard
       - run: go build ./cmd/terraform-provider-dockyard
       - run: docker compose config --quiet
+      - name: Validate Prometheus alert rules
+        run: make check-alerts
       - name: Check operational scripts
         run: |
           sh -n scripts/backup-control-plane.sh scripts/restore-control-plane.sh scripts/install-swarm.sh scripts/install-agent.sh scripts/ci/check-image-digests.sh

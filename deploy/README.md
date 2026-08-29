@@ -142,6 +142,9 @@ agent upgrades, missed image-verification deadlines, and paused or rolled-back
 Swarm agent updates. Route those alerts through Alertmanager to the team's
 email, Slack, PagerDuty, or other incident receiver.
 
+Validate local rule changes with `make check-alerts`; CI runs the same pinned
+Prometheus `promtool` image.
+
 ## Remote Swarm agent
 
 Configure the controller with a dedicated TLS 1.3 listener and a private agent
