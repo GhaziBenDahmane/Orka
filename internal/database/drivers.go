@@ -58,7 +58,7 @@ func NewRegistry() *Registry {
 		simpleDriver{name: "mongo", version: "8", image: "mongo", port: 27017, userKey: "MONGO_INITDB_ROOT_USERNAME", passwordKey: "MONGO_INITDB_ROOT_PASSWORD", databaseKey: "MONGO_INITDB_DATABASE", dataPath: "/data/db", scheme: "mongodb"},
 		simpleDriver{name: "valkey", version: "8", image: "valkey/valkey", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true, commandBinary: "valkey-server", passwordOnlyURL: true},
 		simpleDriver{name: "redis", version: "8", image: "redis", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true, commandBinary: "redis-server", passwordOnlyURL: true},
-		simpleDriver{name: "libsql", version: "latest", image: "ghcr.io/tursodatabase/libsql-server", port: 8080, passwordKey: "SQLD_AUTH_JWT_KEY", dataPath: "/var/lib/sqld", scheme: "http"},
+		simpleDriver{name: "libsql", version: "v0.24.33", image: "ghcr.io/tursodatabase/libsql-server", port: 8080, dataPath: "/var/lib/sqld", scheme: "http", basicAuthURL: true, httpBasicAuth: true},
 		simpleDriver{name: "clickhouse", version: "25", image: "clickhouse/clickhouse-server", port: 8123, userKey: "CLICKHOUSE_USER", passwordKey: "CLICKHOUSE_PASSWORD", databaseKey: "CLICKHOUSE_DB", dataPath: "/var/lib/clickhouse", scheme: "http", basicAuthURL: true},
 		simpleDriver{name: "qdrant", version: "v1.15", image: "qdrant/qdrant", port: 6333, passwordKey: "QDRANT__SERVICE__API_KEY", dataPath: "/qdrant/storage", scheme: "http"},
 		simpleDriver{name: "meilisearch", version: "v1.20", image: "getmeili/meilisearch", port: 7700, passwordKey: "MEILI_MASTER_KEY", dataPath: "/meili_data", scheme: "http"},
@@ -311,6 +311,7 @@ type simpleDriver struct {
 	commandPassword                                                      bool
 	commandBinary                                                        string
 	passwordOnlyURL, basicAuthURL                                        bool
+	httpBasicAuth                                                        bool
 }
 
 func (d simpleDriver) Name() string           { return d.name }
@@ -344,6 +345,9 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 	}
 	if d.commandPassword {
 		env["DATABASE_PASSWORD"] = password
+	}
+	if d.httpBasicAuth {
+		env["SQLD_HTTP_AUTH"] = "basic:" + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
 	}
 	service := map[string]any{"image": image, "volumes": []any{req.Name + "-data:" + d.dataPath}, "networks": []any{"default"}, "deploy": map[string]any{"restart_policy": map[string]any{"condition": "on-failure"}}}
 	if len(env) > 0 {

@@ -1,10 +1,36 @@
 package database
 
 import (
+	"encoding/base64"
 	"net/url"
 	"strings"
 	"testing"
 )
+
+func TestLibSQLUsesUsableBasicAuthentication(t *testing.T) {
+	result, err := NewRegistry().Render("libsql", Request{Name: "embedded", Config: map[string]any{"username": "libsql-user", "password": "libsql-password"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAuth := "basic:" + base64.StdEncoding.EncodeToString([]byte("libsql-user:libsql-password"))
+	if result.Environment["SQLD_HTTP_AUTH"] != wantAuth {
+		t.Fatalf("SQLD_HTTP_AUTH = %q, want basic authentication", result.Environment["SQLD_HTTP_AUTH"])
+	}
+	if _, exists := result.Environment["SQLD_AUTH_JWT_KEY"]; exists {
+		t.Fatal("libSQL was configured with a JWT verification key but no signing credential")
+	}
+	parsed, err := url.Parse(result.InternalURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, ok := parsed.User.Password()
+	if !ok || parsed.User.Username() != "libsql-user" || password != "libsql-password" {
+		t.Fatalf("libSQL internal URL does not contain usable credentials: %q", result.InternalURL)
+	}
+	if result.Version != "v0.24.33" {
+		t.Fatalf("libSQL default version = %q", result.Version)
+	}
+}
 
 func TestRegistryRendersAllDrivers(t *testing.T) {
 	registry := NewRegistry()
