@@ -15,6 +15,32 @@ fail() {
   exit 1
 }
 
+is_dns_hostname() {
+  value=$1
+  printf '%s\n' "$value" | awk '
+    NR != 1 { exit 1 }
+    length($0) < 1 || length($0) > 253 { exit 1 }
+    {
+      count = split($0, labels, ".")
+      if (count < 2) exit 1
+      for (i = 1; i <= count; i++) {
+        if (length(labels[i]) < 1 || length(labels[i]) > 63) exit 1
+        if (labels[i] !~ /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) exit 1
+      }
+    }
+    END { if (NR != 1) exit 1 }
+  '
+}
+
+validate_email() {
+  value=$1
+  local_part=${value%@*}
+  domain=${value#*@}
+  [ "$local_part@$domain" = "$value" ] || fail "ACME_EMAIL must be a valid email address"
+  case "$local_part" in ""|.*|*.|*[!A-Za-z0-9._+-]*) fail "ACME_EMAIL must be a valid email address" ;; esac
+  is_dns_hostname "$domain" || fail "ACME_EMAIL must be a valid email address"
+}
+
 case "$mode" in single|ha) ;; *) fail "DOCKYARD_INSTALL_MODE must be single or ha" ;; esac
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_STACK_NAME" ;; esac
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
@@ -28,8 +54,8 @@ for command in awk base64 date docker find grep mktemp sleep tr wc; do
 done
 [ -n "${DOCKYARD_HOST:-}" ] || fail "DOCKYARD_HOST is required"
 [ -n "${ACME_EMAIL:-}" ] || fail "ACME_EMAIL is required"
-case "$DOCKYARD_HOST" in -*|*[/[:space:]]*|*..*|.*|*.) fail "DOCKYARD_HOST must be a DNS hostname" ;; esac
-case "$ACME_EMAIL" in *@*.*) ;; *) fail "ACME_EMAIL must be an email address" ;; esac
+is_dns_hostname "$DOCKYARD_HOST" || fail "DOCKYARD_HOST must be a DNS hostname"
+validate_email "$ACME_EMAIL"
 
 DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
 POSTGRES_IMAGE=${POSTGRES_IMAGE:-}
@@ -98,7 +124,7 @@ if [ "$mode" = ha ]; then
   validate_secret_file DOCKYARD_AGENT_SERVER_CERT_FILE "${DOCKYARD_AGENT_SERVER_CERT_FILE:-}"
   validate_secret_file DOCKYARD_AGENT_SERVER_KEY_FILE "${DOCKYARD_AGENT_SERVER_KEY_FILE:-}"
   [ -n "${DOCKYARD_AGENT_HOST:-}" ] || fail "DOCKYARD_AGENT_HOST is required for HA installation"
-  case "$DOCKYARD_AGENT_HOST" in -*|*[/[:space:]]*|*..*|.*|*.) fail "DOCKYARD_AGENT_HOST must be a DNS hostname" ;; esac
+  is_dns_hostname "$DOCKYARD_AGENT_HOST" || fail "DOCKYARD_AGENT_HOST must be a DNS hostname"
   openssl verify -CAfile "$DOCKYARD_AGENT_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate verification failed"
   ca_public=$(openssl pkey -in "$DOCKYARD_AGENT_CA_KEY_FILE" -pubout 2>/dev/null) || fail "invalid agent CA private key"
   ca_certificate_public=$(openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -pubkey -noout 2>/dev/null) || fail "invalid agent CA certificate"

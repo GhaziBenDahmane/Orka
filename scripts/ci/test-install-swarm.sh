@@ -98,6 +98,32 @@ if DOCKYARD_IMAGE='example/dockyard:latest' "$root/scripts/install-swarm.sh" >"$
 fi
 grep -q 'DOCKYARD_IMAGE must be an image reference pinned by sha256 digest' "$temporary/err"
 
+for unsafe_host in 'dockyard.example.test`)||Host(`attacker.example.test' 'bad_label.example.test' '-leading.example.test' 'single-label'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_HOST="$unsafe_host" "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe hostname: $unsafe_host" >&2
+    exit 1
+  fi
+  grep -q 'DOCKYARD_HOST must be a DNS hostname' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe hostname mutated Docker state: $unsafe_host" >&2
+    exit 1
+  fi
+done
+
+for unsafe_email in 'ops@example.test,attacker@example.test' 'ops@bad_label.example.test' '.ops@example.test'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if ACME_EMAIL="$unsafe_email" "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe ACME email: $unsafe_email" >&2
+    exit 1
+  fi
+  grep -q 'ACME_EMAIL must be a valid email address' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe ACME email mutated Docker state: $unsafe_email" >&2
+    exit 1
+  fi
+done
+
 if DOCKYARD_INSTALL_MODE=ha "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'HA installer accepted a database URL without certificate verification' >&2
   exit 1
@@ -135,5 +161,13 @@ if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
   exit 1
 fi
 grep -q 'server certificate and private key do not match' "$temporary/err"
+
+if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
+  DOCKYARD_AGENT_HOST='agents.example.test`)||Host(`attacker.example.test' \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'HA installer accepted an unsafe agent hostname' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_AGENT_HOST must be a DNS hostname' "$temporary/err"
 
 printf '%s\n' 'Swarm installer preflight, mutation, reuse, and immutability checks passed.'

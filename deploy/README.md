@@ -24,8 +24,8 @@ DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
 scripts/install-swarm.sh
 ```
 
-The installer rejects mutable image tags, non-manager nodes, loose secret-file
-permissions, malformed keys, and existing secrets unless reuse is explicitly
+The installer rejects mutable image tags, non-manager nodes, unsafe or malformed
+DNS hostnames and ACME email addresses, loose secret-file permissions, malformed keys, and existing secrets unless reuse is explicitly
 acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
 fully rendered stack before creating the overlay network or secrets, then
 waits for every service to reach its desired replica count. Set
