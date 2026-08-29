@@ -63,9 +63,12 @@ links for every item below.
   with the release; repeat on production-equivalent storage because CI timings
   are not SLOs.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
-  procedure. `make test-keycloak-oidc` provisions a real TLS-enabled Keycloak
-  realm and verifies discovery, authorization-code login, PKCE, nonce binding,
-  JIT provisioning, session authentication, and callback replay rejection.
+  procedure. `make test-keycloak-sso` provisions a real TLS-enabled Keycloak
+  realm. Its OIDC flow verifies discovery, authorization-code login, PKCE,
+  nonce binding, JIT provisioning, session authentication, and callback replay
+  rejection. Its SAML flow imports the generated SP metadata into Keycloak and
+  verifies a signed AuthnRequest, signed response, JIT provisioning, session
+  authentication, and assertion replay rejection.
   Run the equivalent flow against Entra ID, Okta, and Google Workspace, and
   verify tenant isolation with users from two organizations.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact

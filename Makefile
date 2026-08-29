@@ -1,4 +1,4 @@
-.PHONY: test test-database-recovery test-install test-keycloak-oidc test-swarm-ha test-templates lint build run web generate-openapi check-openapi check-release-images
+.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-swarm-ha test-templates lint build run web generate-openapi check-openapi check-release-images
 
 test:
 	go test ./...
@@ -10,8 +10,11 @@ test-install:
 	./scripts/ci/test-install-swarm.sh
 	./scripts/ci/test-install-agent.sh
 
-test-keycloak-oidc:
+test-keycloak-sso:
 	./scripts/ci/test-keycloak-oidc.sh
+
+# Backward-compatible alias for the original OIDC-only target.
+test-keycloak-oidc: test-keycloak-sso
 
 test-swarm-ha:
 	./scripts/ci/test-swarm-ha.sh
