@@ -668,7 +668,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "forbidden", "service accounts do not have interactive sessions")
 		return
 	}
-	items, err := s.Store.ListSessions(r.Context(), p.UserID, p.SessionID)
+	items, err := s.Store.ListSessions(r.Context(), p.UserID, p.SessionID, p.SessionOrganizationID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -686,7 +686,8 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid session id")
 		return
 	}
-	if err = s.Store.RevokeSession(r.Context(), principal(r).UserID, id); err != nil {
+	p := principal(r)
+	if err = s.Store.RevokeSession(r.Context(), p.UserID, id, p.SessionOrganizationID); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -699,7 +700,7 @@ func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "forbidden", "service accounts do not have interactive sessions")
 		return
 	}
-	count, err := s.Store.RevokeOtherSessions(r.Context(), p.UserID, p.SessionID)
+	count, err := s.Store.RevokeOtherSessions(r.Context(), p.UserID, p.SessionID, p.SessionOrganizationID)
 	if err != nil {
 		writeStoreError(w, err)
 		return

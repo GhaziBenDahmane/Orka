@@ -153,6 +153,35 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrganizationID)
 	})
 	assertConformanceSession(t, server.URL, otherOrganizationID, login.Token, http.StatusUnauthorized, "")
+	localSessionID, err := db.CreateSessionWithMetadata(ctx, me.UserID, nil, cryptox.Digest("other-tenant-local-session"), time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionsRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/sessions", nil)
+	sessionsRequest.Header.Set("Authorization", "Bearer "+login.Token)
+	sessionsRequest.Header.Set("X-Organization-ID", organizationID.String())
+	sessionsResponse, err := http.DefaultClient.Do(sessionsRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessions struct {
+		Items []store.Session `json:"items"`
+	}
+	decodeResponse(t, sessionsResponse, http.StatusOK, &sessions)
+	if len(sessions.Items) != 1 || !sessions.Items[0].Current || sessions.Items[0].OrganizationID == nil || *sessions.Items[0].OrganizationID != organizationID {
+		t.Fatalf("federated session list escaped organization scope: %#v", sessions.Items)
+	}
+	revokeRequest, _ := http.NewRequest(http.MethodDelete, server.URL+"/v1/sessions/"+localSessionID.String(), nil)
+	revokeRequest.Header.Set("Authorization", "Bearer "+login.Token)
+	revokeRequest.Header.Set("X-Organization-ID", organizationID.String())
+	revokeResponse, err := http.DefaultClient.Do(revokeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokeResponse.Body.Close()
+	if revokeResponse.StatusCode != http.StatusNotFound {
+		t.Fatalf("federated session revoked an account-wide local session: status=%d", revokeResponse.StatusCode)
+	}
 
 	settingsBody, _ := json.Marshal(map[string]bool{"requireSso": true})
 	settingsRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/sso/settings", bytes.NewReader(settingsBody))

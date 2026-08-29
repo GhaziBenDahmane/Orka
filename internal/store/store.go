@@ -44,24 +44,26 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 }
 
 type Principal struct {
-	UserID           uuid.UUID  `json:"userId"`
-	SessionID        uuid.UUID  `json:"-"`
-	ServiceAccountID *uuid.UUID `json:"serviceAccountId,omitempty"`
-	Email            string     `json:"email"`
-	OrganizationID   uuid.UUID  `json:"organizationId"`
-	Organization     string     `json:"organization"`
-	Role             string     `json:"role"`
+	UserID                uuid.UUID  `json:"userId"`
+	SessionID             uuid.UUID  `json:"-"`
+	SessionOrganizationID *uuid.UUID `json:"-"`
+	ServiceAccountID      *uuid.UUID `json:"serviceAccountId,omitempty"`
+	Email                 string     `json:"email"`
+	OrganizationID        uuid.UUID  `json:"organizationId"`
+	Organization          string     `json:"organization"`
+	Role                  string     `json:"role"`
 }
 
 type Session struct {
-	ID         uuid.UUID `json:"id"`
-	AuthMethod string    `json:"authMethod"`
-	UserAgent  string    `json:"userAgent"`
-	IPAddress  string    `json:"ipAddress"`
-	ExpiresAt  time.Time `json:"expiresAt"`
-	CreatedAt  time.Time `json:"createdAt"`
-	LastSeenAt time.Time `json:"lastSeenAt"`
-	Current    bool      `json:"current"`
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID *uuid.UUID `json:"organizationId,omitempty"`
+	AuthMethod     string     `json:"authMethod"`
+	UserAgent      string     `json:"userAgent"`
+	IPAddress      string     `json:"ipAddress"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	LastSeenAt     time.Time  `json:"lastSeenAt"`
+	Current        bool       `json:"current"`
 }
 
 type OrganizationAuthSettings struct {
@@ -404,7 +406,7 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organizationID *uuid.UUID) (Principal, error) {
-	query := `SELECT u.id,s.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (s.organization_id IS NULL OR s.organization_id=o.id) AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
+	query := `SELECT u.id,s.id,s.organization_id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (s.organization_id IS NULL OR s.organization_id=o.id) AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
 	args := []any{tokenHash}
 	if organizationID != nil {
 		query += ` AND o.id=$2`
@@ -412,7 +414,7 @@ func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organization
 	}
 	query += ` ORDER BY m.created_at LIMIT 1`
 	var p Principal
-	if err := s.Pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.SessionID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
+	if err := s.Pool.QueryRow(ctx, query, args...).Scan(&p.UserID, &p.SessionID, &p.SessionOrganizationID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return Principal{}, err
 		}
@@ -508,8 +510,15 @@ func (s *Store) DisableServiceAccount(ctx context.Context, organizationID, id uu
 	return nil
 }
 
-func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID) ([]Session, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,auth_method,user_agent,ip_address,expires_at,created_at,last_seen_at,id=$2 FROM sessions WHERE user_id=$1 AND expires_at>now() ORDER BY last_seen_at DESC`, userID, currentID)
+func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID, organizationID *uuid.UUID) ([]Session, error) {
+	query := `SELECT id,organization_id,auth_method,user_agent,ip_address,expires_at,created_at,last_seen_at,id=$2 FROM sessions WHERE user_id=$1 AND expires_at>now()`
+	args := []any{userID, currentID}
+	if organizationID != nil {
+		query += ` AND organization_id=$3`
+		args = append(args, *organizationID)
+	}
+	query += ` ORDER BY last_seen_at DESC`
+	rows, err := s.Pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +526,7 @@ func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID) (
 	items := []Session{}
 	for rows.Next() {
 		var item Session
-		if err = rows.Scan(&item.ID, &item.AuthMethod, &item.UserAgent, &item.IPAddress, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &item.Current); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.AuthMethod, &item.UserAgent, &item.IPAddress, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &item.Current); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -525,8 +534,14 @@ func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID) (
 	return items, rows.Err()
 }
 
-func (s *Store) RevokeSession(ctx context.Context, userID, sessionID uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM sessions WHERE id=$1 AND user_id=$2`, sessionID, userID)
+func (s *Store) RevokeSession(ctx context.Context, userID, sessionID uuid.UUID, organizationID *uuid.UUID) error {
+	query := `DELETE FROM sessions WHERE id=$1 AND user_id=$2`
+	args := []any{sessionID, userID}
+	if organizationID != nil {
+		query += ` AND organization_id=$3`
+		args = append(args, *organizationID)
+	}
+	tag, err := s.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -536,8 +551,14 @@ func (s *Store) RevokeSession(ctx context.Context, userID, sessionID uuid.UUID) 
 	return nil
 }
 
-func (s *Store) RevokeOtherSessions(ctx context.Context, userID, currentID uuid.UUID) (int64, error) {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`, userID, currentID)
+func (s *Store) RevokeOtherSessions(ctx context.Context, userID, currentID uuid.UUID, organizationID *uuid.UUID) (int64, error) {
+	query := `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`
+	args := []any{userID, currentID}
+	if organizationID != nil {
+		query += ` AND organization_id=$3`
+		args = append(args, *organizationID)
+	}
+	tag, err := s.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}

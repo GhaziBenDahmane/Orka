@@ -95,17 +95,17 @@ func TestMandatorySSOAndSessionAdministration(t *testing.T) {
 	if _, err = db.Authenticate(ctx, samlHash, &otherOrgID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("federated session crossed organization boundary: %v", err)
 	}
-	sessions, err := db.ListSessions(ctx, developerID, samlID)
-	if err != nil || len(sessions) != 2 {
+	sessions, err := db.ListSessions(ctx, developerID, samlID, &orgID)
+	if err != nil || len(sessions) != 1 || sessions[0].OrganizationID == nil || *sessions[0].OrganizationID != orgID {
 		t.Fatalf("sessions = %#v, err = %v", sessions, err)
 	}
-	if count, revokeErr := db.RevokeOtherSessions(ctx, developerID, samlID); revokeErr != nil || count != 1 {
+	if count, revokeErr := db.RevokeOtherSessions(ctx, developerID, samlID, &orgID); revokeErr != nil || count != 0 {
 		t.Fatalf("revoked other sessions = %d, err = %v", count, revokeErr)
 	}
-	if err = db.RevokeSession(ctx, developerID, localID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("already revoked session error = %v, want not found", err)
+	if err = db.RevokeSession(ctx, developerID, localID, &orgID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("federated session revoked an unscoped local session: %v", err)
 	}
-	if err = db.RevokeSession(ctx, developerID, samlID); err != nil {
+	if err = db.RevokeSession(ctx, developerID, samlID, &orgID); err != nil {
 		t.Fatal(err)
 	}
 }

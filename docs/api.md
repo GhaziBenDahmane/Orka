@@ -146,7 +146,9 @@ OIDC uses Authorization Code flow with PKCE, nonce validation, one-time state,
 an encrypted browser-bound HttpOnly cookie, and exact issuer/audience
 validation. Federated sessions are bound to the organization that owns the
 provider and cannot be reused to select another organization where the same
-user has a membership.
+user has a membership. Session listing and revocation from a federated session
+are restricted to sessions issued by that same organization; local sessions
+retain account-wide device administration.
 
 SAML providers accept identity-provider metadata XML, allowed email domains,
 email/name attribute mappings, a default role, and an opt-in
