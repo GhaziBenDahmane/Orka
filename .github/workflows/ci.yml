@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Deploy built-in PostgreSQL and Redis products
+      - name: Deploy and exercise built-in PostgreSQL and Redis products
         run: scripts/ci/smoke-templates.sh
 
   supply-chain:

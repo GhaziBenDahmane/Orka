@@ -26,6 +26,9 @@ links for every item below.
   smoke test then backs up the control plane, rejects active-controller,
   modified-dump, and wrong-key restores, deletes live data, restores the dump,
   and verifies the authenticated workload state after restart.
+- Built-in PostgreSQL and Redis templates deploy through the public API, accept
+  authenticated application-level writes and reads, and retain those values
+  across a forced Swarm task replacement.
 
 ## Staging gates
 
