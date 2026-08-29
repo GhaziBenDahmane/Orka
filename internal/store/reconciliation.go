@@ -185,6 +185,29 @@ func (s *Store) ListServiceReconciliations(ctx context.Context, organizationID u
 	return items, rows.Err()
 }
 
+// GetServiceReconciliation returns the latest runtime observation for a
+// service in the requested organization. A service can legitimately have no
+// observation yet, in which case it returns nil without exposing whether a
+// service with the same ID exists in another tenant.
+func (s *Store) GetServiceReconciliation(ctx context.Context, organizationID, serviceID uuid.UUID) (*ServiceReconciliation, error) {
+	var item ServiceReconciliation
+	err := s.Pool.QueryRow(ctx, `SELECT r.compose_service_id,r.state,r.consecutive_failures,r.detail,r.last_checked_at,r.last_repair_at
+		FROM service_reconciliations r
+		JOIN compose_services s ON s.id=r.compose_service_id
+		JOIN environments e ON e.id=s.environment_id
+		JOIN projects p ON p.id=e.project_id
+		WHERE r.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(
+		&item.ComposeServiceID, &item.State, &item.ConsecutiveFailures, &item.Detail, &item.LastCheckedAt, &item.LastRepairAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 func sameOptionalUUID(left, right *uuid.UUID) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil

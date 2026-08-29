@@ -1488,7 +1488,12 @@ func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, provenanceErr)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"service": item, "routes": routes, "source": source, "template": templateInstance})
+	reconciliation, err := s.Store.GetServiceReconciliation(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"service": item, "routes": routes, "source": source, "template": templateInstance, "reconciliation": reconciliation})
 }
 
 func (s *Server) listTemplateVersions(w http.ResponseWriter, r *http.Request) {

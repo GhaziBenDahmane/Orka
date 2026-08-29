@@ -172,12 +172,31 @@ path = "/"
 	if err = db.Pool.QueryRow(ctx, `SELECT host FROM routes WHERE compose_service_id=$1`, created.Service.ID).Scan(&routeHost); err != nil || routeHost != "custom.example.test" {
 		t.Fatalf("route host = %q, err = %v", routeHost, err)
 	}
+	checkedAt := time.Date(2026, time.August, 29, 14, 30, 0, 0, time.UTC)
+	repairedAt := checkedAt.Add(-5 * time.Minute)
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at,last_repair_at)
+		VALUES($1,'degraded',2,'replica shortfall',$2,$3)`, created.Service.ID, checkedAt, repairedAt); err != nil {
+		t.Fatal(err)
+	}
 	status, detailBody := scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"templateKey":"variable-test"`)) || !bytes.Contains(detailBody, []byte(`"templateVersion":"1"`)) || !bytes.Contains(detailBody, []byte(`"drifted":false`)) {
 		t.Fatalf("service template provenance status = %d: %s", status, detailBody)
 	}
+	var detail struct {
+		Reconciliation *store.ServiceReconciliation `json:"reconciliation"`
+	}
+	if err = json.Unmarshal(detailBody, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Reconciliation == nil || detail.Reconciliation.ComposeServiceID != created.Service.ID || detail.Reconciliation.State != "degraded" || detail.Reconciliation.ConsecutiveFailures != 2 || detail.Reconciliation.Detail != "replica shortfall" || !detail.Reconciliation.LastCheckedAt.Equal(checkedAt) || detail.Reconciliation.LastRepairAt == nil || !detail.Reconciliation.LastRepairAt.Equal(repairedAt) {
+		t.Fatalf("service reconciliation = %#v", detail.Reconciliation)
+	}
 	if bytes.Contains(detailBody, []byte("operator-password")) || bytes.Contains(detailBody, []byte("encryptedVariables")) {
 		t.Fatalf("service detail leaked template variables: %s", detailBody)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), otherToken, otherOrgID, http.MethodGet, nil)
+	if status != http.StatusNotFound || bytes.Contains(body, []byte("replica shortfall")) {
+		t.Fatalf("cross-tenant service reconciliation status = %d: %s", status, body)
 	}
 	customCompose := "services:\n  app:\n    image: nginx:stable-alpine\n"
 	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodPatch, map[string]any{"composeYaml": customCompose})

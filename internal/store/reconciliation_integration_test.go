@@ -87,9 +87,17 @@ func TestReconciliationQueuesImmutableRepairAndSuppressesDuplicates(t *testing.T
 	if err != nil || len(items) != 1 || items[0].State != "repairing" || items[0].ConsecutiveFailures != 4 || items[0].LastRepairAt == nil {
 		t.Fatalf("reconciliation=%#v err=%v", items, err)
 	}
+	item, err := db.GetServiceReconciliation(ctx, organizationID, serviceID)
+	if err != nil || item == nil || item.ComposeServiceID != serviceID || item.State != "repairing" || item.ConsecutiveFailures != 4 || item.LastRepairAt == nil {
+		t.Fatalf("service reconciliation=%#v err=%v", item, err)
+	}
 	other, err := db.ListServiceReconciliations(ctx, otherOrganizationID)
 	if err != nil || len(other) != 0 {
 		t.Fatalf("cross-tenant reconciliation=%#v err=%v", other, err)
+	}
+	otherItem, err := db.GetServiceReconciliation(ctx, otherOrganizationID, serviceID)
+	if err != nil || otherItem != nil {
+		t.Fatalf("cross-tenant service reconciliation=%#v err=%v", otherItem, err)
 	}
 	requested, err := db.QueueDeployment(ctx, organizationID, serviceID, uuid.Nil, "manual")
 	if err != nil {

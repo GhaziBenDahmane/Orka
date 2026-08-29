@@ -265,7 +265,9 @@ safe-Compose validation as creation, but omit secret environment values,
 commands, and inline file contents. Template instantiation is atomic: the Compose service, routes, and provenance
 record either commit together or are all rolled back. Service detail responses
 include redacted template key, version, checksum, base-domain provenance, and a
-Compose-drift flag;
+Compose-drift flag. They also include the tenant-scoped latest Swarm
+`reconciliation` state, check timestamp, consecutive failure count, diagnostic
+detail, and optional last automatic-repair timestamp;
 the resolved template-variable set is encrypted with the service ID as
 authenticated context and is never returned by the API.
 | GET/POST | `/v1/databases/{id}/backups` | List or queue verified native backups |
