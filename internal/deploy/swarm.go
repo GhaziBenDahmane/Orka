@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/database"
 	"gopkg.in/yaml.v3"
 )
 
@@ -297,6 +298,9 @@ func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource 
 	if !safeName.MatchString(network) {
 		return "", fmt.Errorf("invalid network name %q", network)
 	}
+	if err := database.ValidateUtilityPlan(database.BackupPlan{Image: image, Command: command, Environment: environment}); err != nil {
+		return "", err
+	}
 	if len(command) == 0 || !safeName.MatchString(command[0]) {
 		return "", errors.New("container job command is required")
 	}
@@ -324,8 +328,8 @@ func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource 
 
 func (s Swarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransferJob) (DatabaseTransferResult, error) {
 	var result DatabaseTransferResult
-	if filepath.Base(job.ArtifactName) != job.ArtifactName || job.ArtifactName == "." || job.ArtifactName == "" {
-		return result, errors.New("invalid database transfer artifact name")
+	if err := ValidateDatabaseTransferJob(job); err != nil {
+		return result, err
 	}
 	directory, err := os.MkdirTemp("", "dockyard-database-transfer-*")
 	if err != nil {

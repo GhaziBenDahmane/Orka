@@ -28,6 +28,7 @@ type fakeScheduler struct {
 	nodes              []deploy.Node
 	transfer           *deploy.DatabaseTransferJob
 	status             deploy.StackStatus
+	containerCalls     int
 }
 
 func (f *fakeScheduler) Status(context.Context, string) (deploy.StackStatus, error) {
@@ -48,6 +49,7 @@ func (*fakeScheduler) RemoveVolumes(context.Context, string) (string, error) { r
 func (*fakeScheduler) Logs(context.Context, string, int) (string, error)     { return "", nil }
 func (f *fakeScheduler) Nodes(context.Context) ([]deploy.Node, error)        { return f.nodes, nil }
 func (f *fakeScheduler) RunContainerJob(_ context.Context, _, _, mount string, _ map[string]string, command []string) (string, error) {
+	f.containerCalls++
 	if f.artifact != nil {
 		return "dumped", os.WriteFile(filepath.Join(mount, command[len(command)-1]), f.artifact, 0600)
 	}
@@ -62,6 +64,46 @@ func (f *fakeScheduler) RunContainerJob(_ context.Context, _, _, mount string, _
 		return "restored", nil
 	}
 	return "", errors.New("unused")
+}
+
+func TestExecuteArtifactJobRejectsUnsafePlansBeforeFilesystemOrDocker(t *testing.T) {
+	state := t.TempDir()
+	key := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	tests := map[string]deploy.RemoteArtifactJob{
+		"traversal":   {Mode: "upload", Network: "db_default", Image: "postgres:17", Command: []string{"pg_dump", "backup.dump"}, ArtifactName: "backup.dump", EncryptionKey: key, Files: map[string]string{"../../escape": "secret"}},
+		"backslash":   {Mode: "upload", Network: "db_default", Image: "postgres:17", Command: []string{"pg_dump", "backup.dump"}, ArtifactName: "backup.dump", EncryptionKey: key, Files: map[string]string{`..\escape`: "secret"}},
+		"environment": {Mode: "upload", Network: "db_default", Image: "postgres:17", Command: []string{"pg_dump", "backup.dump"}, ArtifactName: "backup.dump", EncryptionKey: key, Environment: map[string]string{"BAD-NAME": "secret"}},
+		"command":     {Mode: "upload", Network: "db_default", Image: "postgres:17", Command: []string{"pg_dump", ""}, ArtifactName: "backup.dump", EncryptionKey: key},
+	}
+	for name, job := range tests {
+		t.Run(name, func(t *testing.T) {
+			scheduler := &fakeScheduler{}
+			client := &Client{cfg: Config{StateDirectory: state}, swarm: scheduler}
+			payload, _ := json.Marshal(job)
+			if _, err := client.executeCommand(context.Background(), command{Kind: "database.utility", Payload: payload}); err == nil {
+				t.Fatal("expected unsafe remote plan rejection")
+			}
+			if scheduler.containerCalls != 0 {
+				t.Fatalf("Docker was called %d times", scheduler.containerCalls)
+			}
+			entries, err := os.ReadDir(state)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("remote plan touched agent filesystem: entries=%v err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestExecuteDatabaseTransferRejectsUnsafePlanBeforeDispatch(t *testing.T) {
+	scheduler := &fakeScheduler{}
+	job := deploy.DatabaseTransferJob{Network: "db_default", ArtifactName: "migration.dump", Backup: database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}, Files: map[string]string{"/escape": "secret"}}, Restore: database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore"}}}
+	payload, _ := json.Marshal(job)
+	if _, err := (&Client{swarm: scheduler}).executeCommand(context.Background(), command{Kind: "database.transfer", Payload: payload}); err == nil {
+		t.Fatal("expected unsafe database transfer rejection")
+	}
+	if scheduler.transfer != nil {
+		t.Fatal("unsafe transfer was dispatched")
+	}
 }
 
 func TestExecuteArtifactJobEncryptsUploadAndDecryptsDownload(t *testing.T) {

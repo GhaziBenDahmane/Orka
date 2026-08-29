@@ -57,15 +57,31 @@ func (d *externalDriver) BackupExtension() (string, bool) {
 }
 
 func (d *externalDriver) plan(operation string, request databaseplugin.UtilityRequest) (BackupPlan, error) {
+	if (operation == "backup" || operation == "restore") && !d.hasCapability("backup-restore") {
+		return BackupPlan{}, errors.New("external database driver does not declare backup and restore support")
+	}
 	response, err := d.call(databaseplugin.Request{Utility: &request}, operation)
 	if err != nil || response.Plan == nil {
 		return BackupPlan{}, responseError(err, "driver returned no utility plan")
 	}
 	p := response.Plan
-	if !registryImagePattern.MatchString(p.Image) || len(p.Command) == 0 || !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`).MatchString(p.Extension) {
+	plan := BackupPlan{Image: p.Image, Command: p.Command, Environment: p.Environment, Extension: p.Extension, Files: p.Files}
+	if err := ValidateUtilityPlan(plan); err != nil {
 		return BackupPlan{}, errors.New("external driver returned an unsafe utility plan")
 	}
-	return BackupPlan{Image: p.Image, Command: p.Command, Environment: p.Environment, Extension: p.Extension, Files: p.Files}, nil
+	if (operation == "backup" || operation == "restore") && plan.Extension != d.description.BackupExtension {
+		return BackupPlan{}, errors.New("external driver returned an inconsistent artifact extension")
+	}
+	return plan, nil
+}
+
+func (d *externalDriver) hasCapability(expected string) bool {
+	for _, capability := range d.description.Capabilities {
+		if capability == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *externalDriver) call(request databaseplugin.Request, operation string) (databaseplugin.Response, error) {

@@ -375,6 +375,9 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		if err := json.Unmarshal(cmd.Payload, &job); err != nil {
 			return "", err
 		}
+		if err := deploy.ValidateDatabaseTransferJob(job); err != nil {
+			return "", err
+		}
 		transferScheduler, ok := c.swarm.(interface {
 			RunDatabaseTransfer(context.Context, deploy.DatabaseTransferJob) (deploy.DatabaseTransferResult, error)
 		})
@@ -403,11 +406,8 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 	if err := json.Unmarshal(raw, &job); err != nil {
 		return "", err
 	}
-	if job.Mode != "upload" && job.Mode != "download" {
-		return "", errors.New("invalid artifact transfer mode")
-	}
-	if filepath.Base(job.ArtifactName) != job.ArtifactName || job.ArtifactName == "." {
-		return "", errors.New("invalid artifact name")
+	if err := deploy.ValidateRemoteArtifactJob(job); err != nil {
+		return "", err
 	}
 	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
 	if err != nil || len(key) != 32 {
@@ -424,11 +424,18 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 	}
 	defer os.RemoveAll(directory)
 	for name, contents := range job.Files {
-		if filepath.Base(name) != name {
-			return "", errors.New("invalid utility file name")
+		path := filepath.Join(directory, name)
+		file, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if createErr != nil {
+			return "", createErr
 		}
-		if err = os.WriteFile(filepath.Join(directory, name), []byte(contents), 0600); err != nil {
-			return "", err
+		_, writeErr := io.WriteString(file, contents)
+		closeErr := file.Close()
+		if writeErr != nil {
+			return "", writeErr
+		}
+		if closeErr != nil {
+			return "", closeErr
 		}
 	}
 	plainPath := filepath.Join(directory, job.ArtifactName)

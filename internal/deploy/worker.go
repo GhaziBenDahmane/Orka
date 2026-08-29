@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -867,6 +868,9 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}
+	if err = database.ValidateUtilityPlan(plan); err != nil {
+		return w.failBackup(ctx, j, backupID, err)
+	}
 	if clusterID != nil {
 		remote, ok := w.scheduler(clusterID).(RemoteSwarm)
 		if !ok {
@@ -1216,6 +1220,9 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	}
 	plan, err := w.Databases.Restore(engine, version, serviceName, credentials, filepath.Base(cleanPath))
 	if err != nil {
+		return w.failRestore(ctx, j, restoreID, err)
+	}
+	if err = database.ValidateUtilityPlan(plan); err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
 	if err = writePlanFiles(filepath.Dir(cleanPath), plan.Files); err != nil {
@@ -1673,11 +1680,29 @@ func writeEncryptedBackup(box *cryptox.Box, input io.Reader, destination, contex
 }
 
 func writePlanFiles(directory string, files map[string]string) error {
-	for name, content := range files {
-		if filepath.Base(name) != name {
-			return errors.New("invalid backup helper filename")
+	if err := database.ValidateUtilityFiles(files); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	created := make([]string, 0, len(names))
+	for _, name := range names {
+		path := filepath.Join(directory, name)
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err == nil {
+			created = append(created, path)
+			_, err = io.WriteString(file, files[name])
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
 		}
-		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0600); err != nil {
+		if err != nil {
+			for _, createdPath := range created {
+				_ = os.Remove(createdPath)
+			}
 			return err
 		}
 	}
@@ -1685,6 +1710,9 @@ func writePlanFiles(directory string, files map[string]string) error {
 }
 
 func removePlanFiles(directory string, files map[string]string) {
+	if database.ValidateUtilityFiles(files) != nil {
+		return
+	}
 	for name := range files {
 		_ = os.Remove(filepath.Join(directory, name))
 	}

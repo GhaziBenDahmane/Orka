@@ -61,6 +61,9 @@ func (s RemoteSwarm) RunContainerJob(ctx context.Context, network, image, mountS
 	if mountSource != "" {
 		return "", errors.New("remote container jobs cannot mount controller paths")
 	}
+	if err := database.ValidateUtilityPlan(database.BackupPlan{Image: image, Command: command, Environment: environment}); err != nil {
+		return "", err
+	}
 	return s.run(ctx, "container.run", map[string]any{"network": network, "image": image, "environment": environment, "command": command})
 }
 
@@ -102,6 +105,9 @@ type DatabaseTransferResult struct {
 
 func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) (RemoteArtifactResult, error) {
 	var result RemoteArtifactResult
+	if err := ValidateRemoteArtifactJob(job); err != nil {
+		return result, err
+	}
 	output, err := s.run(ctx, "database.utility", job)
 	if err != nil {
 		return result, err
@@ -114,6 +120,9 @@ func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) 
 
 func (s RemoteSwarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransferJob) (DatabaseTransferResult, error) {
 	var result DatabaseTransferResult
+	if err := ValidateDatabaseTransferJob(job); err != nil {
+		return result, err
+	}
 	if s.Timeout < 2*time.Hour {
 		s.Timeout = 2 * time.Hour
 	}
@@ -125,6 +134,44 @@ func (s RemoteSwarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransf
 		return result, fmt.Errorf("decode remote database transfer result: %w", err)
 	}
 	return result, nil
+}
+
+func ValidateRemoteArtifactJob(job RemoteArtifactJob) error {
+	if job.Mode != "upload" && job.Mode != "download" {
+		return errors.New("invalid artifact transfer mode")
+	}
+	if !safeName.MatchString(job.Network) {
+		return errors.New("invalid artifact network")
+	}
+	if err := database.ValidateUtilityFileName(job.ArtifactName); err != nil {
+		return errors.New("invalid artifact name")
+	}
+	if _, exists := job.Files[job.ArtifactName]; exists {
+		return errors.New("utility file conflicts with artifact name")
+	}
+	return database.ValidateUtilityPlan(database.BackupPlan{Image: job.Image, Command: job.Command, Environment: job.Environment, Files: job.Files})
+}
+
+func ValidateDatabaseTransferJob(job DatabaseTransferJob) error {
+	if !safeName.MatchString(job.Network) {
+		return errors.New("invalid database transfer network")
+	}
+	if err := database.ValidateUtilityFileName(job.ArtifactName); err != nil {
+		return errors.New("invalid database transfer artifact name")
+	}
+	if _, exists := job.Backup.Files[job.ArtifactName]; exists {
+		return errors.New("backup utility file conflicts with artifact name")
+	}
+	if _, exists := job.Restore.Files[job.ArtifactName]; exists {
+		return errors.New("restore utility file conflicts with artifact name")
+	}
+	if err := database.ValidateUtilityPlan(job.Backup); err != nil {
+		return fmt.Errorf("invalid backup utility plan: %w", err)
+	}
+	if err := database.ValidateUtilityPlan(job.Restore); err != nil {
+		return fmt.Errorf("invalid restore utility plan: %w", err)
+	}
+	return nil
 }
 
 func (s RemoteSwarm) run(ctx context.Context, kind string, payload any) (string, error) {

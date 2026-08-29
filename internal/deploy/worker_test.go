@@ -44,4 +44,25 @@ func TestWritePlanFilesUsesPrivatePermissions(t *testing.T) {
 	if err = writePlanFiles(directory, map[string]string{"../escape": "bad"}); err == nil {
 		t.Fatal("expected path traversal rejection")
 	}
+	if err = writePlanFiles(directory, map[string]string{`..\escape`: "bad"}); err == nil {
+		t.Fatal("expected portable path traversal rejection")
+	}
+}
+
+func TestWritePlanFilesDoesNotOverwriteAndRollsBack(t *testing.T) {
+	directory := t.TempDir()
+	collision := filepath.Join(directory, "existing.conf")
+	if err := os.WriteFile(collision, []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePlanFiles(directory, map[string]string{"aaa.conf": "temporary", "existing.conf": "overwrite"}); err == nil {
+		t.Fatal("expected existing helper file rejection")
+	}
+	contents, err := os.ReadFile(collision)
+	if err != nil || string(contents) != "preserve" {
+		t.Fatalf("existing file changed: contents=%q err=%v", contents, err)
+	}
+	if _, err = os.Stat(filepath.Join(directory, "aaa.conf")); !os.IsNotExist(err) {
+		t.Fatalf("partially-created helper file was not rolled back: %v", err)
+	}
 }

@@ -169,6 +169,48 @@ echo '{"protocolVersion":1,"description":{"name":"environment-test","defaultVers
 	}
 }
 
+func TestExternalDriverRequiresDeclaredRecoveryCapability(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "no-recovery-driver")
+	script := `#!/bin/sh
+case "$(cat)" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"no-recovery","defaultVersion":"1","capabilities":[],"backupExtension":"dump"}}' ;;
+  *) echo '{"protocolVersion":1,"plan":{"image":"tools:1","command":["dump"],"extension":"dump"}}' ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Backup("no-recovery", "1", "db", map[string]string{}, "backup.dump"); err == nil || !strings.Contains(err.Error(), "does not declare") {
+		t.Fatalf("undeclared recovery capability error=%v", err)
+	}
+}
+
+func TestExternalDriverRequiresConsistentArtifactExtension(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "extension-driver")
+	script := `#!/bin/sh
+case "$(cat)" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"extension-test","defaultVersion":"1","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
+  *) echo '{"protocolVersion":1,"plan":{"image":"tools:1","command":["dump"],"extension":"sql"}}' ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Backup("extension-test", "1", "db", map[string]string{}, "backup.dump"); err == nil || !strings.Contains(err.Error(), "inconsistent") {
+		t.Fatalf("inconsistent extension error=%v", err)
+	}
+}
+
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {
