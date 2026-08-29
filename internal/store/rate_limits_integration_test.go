@@ -58,4 +58,11 @@ func TestConsumeRateLimitIsAtomicAndResets(t *testing.T) {
 	if err := db.Pool.QueryRow(context.Background(), `SELECT attempts FROM auth_rate_limits WHERE bucket='test' AND key_hash=$1`, key).Scan(&attempts); err != nil || attempts != 1 {
 		t.Fatalf("attempts=%d err=%v", attempts, err)
 	}
+	if _, err := db.Pool.Exec(context.Background(), `UPDATE auth_rate_limits SET window_started_at=now()-interval '25 hours' WHERE bucket='test' AND key_hash=$1`, key); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := db.PruneAuthenticationRateLimits(context.Background(), 24*time.Hour)
+	if err != nil || deleted < 1 {
+		t.Fatalf("deleted=%d err=%v", deleted, err)
+	}
 }

@@ -39,3 +39,27 @@ func TestBootstrapRateLimitReturnsRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+func TestLoginDatabaseFailureIsNotReportedAsBadCredentials(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	db, err := store.Open(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := (&Server{Store: db}).Handler()
+	db.Pool.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{"email":"user@example.test","password":"wrong-password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError || !bytes.Contains(recorder.Body.Bytes(), []byte(`"code":"internal_error"`)) {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if bytes.Contains(recorder.Body.Bytes(), []byte("closed pool")) {
+		t.Fatalf("database detail leaked: %q", recorder.Body.String())
+	}
+}

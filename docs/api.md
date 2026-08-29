@@ -18,6 +18,7 @@ limits shared by every controller replica: 300 total login submissions and 10
 attempts per existing account per minute. Bootstrap is limited to five attempts
 per minute. Rejected requests return 429 with `Retry-After`; stored limiter keys
 are SHA-256 digests rather than email addresses or credentials.
+Expired limiter state is pruned by the singleton hourly maintenance loop.
 
 Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a

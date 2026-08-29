@@ -190,6 +190,9 @@ func (w *Worker) pruneAuditEvents(ctx context.Context) {
 			if _, err := w.Store.PruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
 				w.Logger.Error("prune audit events", "error", err)
 			}
+			if _, err := w.Store.PruneAuthenticationRateLimits(ctx, 24*time.Hour); err != nil && ctx.Err() == nil {
+				w.Logger.Error("prune authentication rate limits", "error", err)
+			}
 		}
 		select {
 		case <-ctx.Done():

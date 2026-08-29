@@ -574,6 +574,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, hash, err := s.Store.PasswordLogin(r.Context(), in.Email)
 	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			writeStoreError(w, err)
+			return
+		}
 		time.Sleep(150 * time.Millisecond)
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
 		return

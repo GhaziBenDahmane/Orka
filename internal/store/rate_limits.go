@@ -24,3 +24,11 @@ func (s *Store) ConsumeRateLimit(ctx context.Context, bucket string, keyHash []b
 		bucket, keyHash, seconds).Scan(&attempts, &retryAfter)
 	return attempts <= limit, retryAfter, err
 }
+
+func (s *Store) PruneAuthenticationRateLimits(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if olderThan < time.Minute {
+		return 0, errors.New("rate limit retention must be at least one minute")
+	}
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM auth_rate_limits WHERE window_started_at < now()-make_interval(secs => $1)`, int(olderThan/time.Second))
+	return tag.RowsAffected(), err
+}
