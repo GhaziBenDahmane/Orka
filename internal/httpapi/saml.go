@@ -104,6 +104,61 @@ func (s *Server) listSAMLProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 
+func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	var in struct {
+		Name, MetadataXML, EmailAttribute, NameAttribute, DefaultRole string
+		Domains                                                       []string
+		AllowIDPInitiated                                             bool
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	if in.EmailAttribute == "" {
+		in.EmailAttribute = "email"
+	}
+	if in.NameAttribute == "" {
+		in.NameAttribute = "name"
+	}
+	if in.DefaultRole == "" {
+		in.DefaultRole = "developer"
+	}
+	metadata, parseErr := samlsp.ParseMetadata([]byte(in.MetadataXML))
+	if in.Name == "" || len(in.Domains) == 0 || parseErr != nil || len(metadata.IDPSSODescriptors) == 0 {
+		writeError(w, 400, "invalid_provider", "name, valid metadataXml, and domains are required")
+		return
+	}
+	metadataValidator := saml.ServiceProvider{IDPMetadata: metadata}
+	if metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding) == "" {
+		writeError(w, 400, "invalid_metadata", "identity-provider metadata must advertise HTTP-Redirect SSO")
+		return
+	}
+	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
+		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
+		return
+	}
+	for i, domain := range in.Domains {
+		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
+		if !strings.Contains(in.Domains[i], ".") {
+			writeError(w, 400, "invalid_domain", "valid email domains are required")
+			return
+		}
+	}
+	p := principal(r)
+	provider, err := s.Store.UpdateSAMLProvider(r.Context(), p.OrganizationID, store.SAMLProvider{ID: id, Name: in.Name, IDPMetadata: in.MetadataXML, Domains: in.Domains, EmailAttribute: in.EmailAttribute, NameAttribute: in.NameAttribute, DefaultRole: in.DefaultRole, AllowIDPInitiated: in.AllowIDPInitiated})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.saml.update", "saml_provider", id.String(), r.RemoteAddr, nil)
+	writeJSON(w, 200, provider)
+}
+
 func (s *Server) deleteSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("providerID"))
 	if err != nil {

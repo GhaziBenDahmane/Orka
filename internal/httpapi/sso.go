@@ -45,6 +45,9 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	if in.DefaultRole == "" {
 		in.DefaultRole = "developer"
 	}
+	if len(in.Scopes) == 0 {
+		in.Scopes = []string{"openid", "profile", "email"}
+	}
 	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
 		return
@@ -80,6 +83,60 @@ func (s *Server) listOIDCProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
+
+func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	var in struct {
+		Name, Issuer, ClientID, ClientSecret, DefaultRole string
+		Domains, Scopes                                   []string
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	issuer, err := url.Parse(in.Issuer)
+	if err != nil || issuer.Scheme != "https" || issuer.Host == "" || in.Name == "" || in.ClientID == "" || len(in.Domains) == 0 {
+		writeError(w, 400, "invalid_provider", "name, HTTPS issuer, client ID, and domains are required")
+		return
+	}
+	if in.DefaultRole == "" {
+		in.DefaultRole = "developer"
+	}
+	if len(in.Scopes) == 0 {
+		in.Scopes = []string{"openid", "profile", "email"}
+	}
+	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
+		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
+		return
+	}
+	for i, domain := range in.Domains {
+		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
+		if !strings.Contains(in.Domains[i], ".") {
+			writeError(w, 400, "invalid_domain", "valid email domains are required")
+			return
+		}
+	}
+	encrypted := ""
+	if in.ClientSecret != "" {
+		encrypted, err = s.Box.Encrypt([]byte(in.ClientSecret), "oidc-client-secret:"+id.String())
+		if err != nil {
+			writeError(w, 500, "encryption_failed", err.Error())
+			return
+		}
+	}
+	p := principal(r)
+	provider, err := s.Store.UpdateOIDCProvider(r.Context(), p.OrganizationID, store.OIDCProvider{ID: id, Name: strings.TrimSpace(in.Name), Issuer: strings.TrimRight(in.Issuer, "/"), ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.oidc.update", "oidc_provider", id.String(), r.RemoteAddr, map[string]any{"rotatedSecret": in.ClientSecret != ""})
+	writeJSON(w, 200, provider)
+}
+
 func (s *Server) deleteOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("providerID"))
 	if err != nil {

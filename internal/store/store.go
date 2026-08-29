@@ -1837,6 +1837,25 @@ func (s *Store) CreateOIDCProvider(ctx context.Context, p OIDCProvider) (OIDCPro
 	return p, err
 }
 
+func (s *Store) UpdateOIDCProvider(ctx context.Context, organizationID uuid.UUID, p OIDCProvider) (OIDCProvider, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `UPDATE oidc_providers SET name=$3,issuer=$4,client_id=$5,encrypted_client_secret=CASE WHEN $6='' THEN encrypted_client_secret ELSE $6 END,domains=$7,scopes=$8,default_role=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled`, p.ID, organizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OIDCProvider{}, ErrNotFound
+	}
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM oidc_states WHERE provider_id=$1`, p.ID); err != nil {
+		return OIDCProvider{}, err
+	}
+	return p, tx.Commit(ctx)
+}
+
 func (s *Store) GetOIDCProvider(ctx context.Context, id uuid.UUID) (OIDCProvider, error) {
 	var p OIDCProvider
 	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role,enabled FROM oidc_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.EncryptedClientSecret, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled)
@@ -1951,6 +1970,25 @@ func (s *Store) CreateSAMLProvider(ctx context.Context, p SAMLProvider) (SAMLPro
 	p.Enabled = true
 	err := s.Pool.QueryRow(ctx, `INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.IDPMetadata, p.CertificatePEM, p.EncryptedPrivateKey, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.Enabled)
 	return p, err
+}
+
+func (s *Store) UpdateSAMLProvider(ctx context.Context, organizationID uuid.UUID, p SAMLProvider) (SAMLProvider, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SAMLProvider{}, ErrNotFound
+	}
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM saml_states WHERE provider_id=$1`, p.ID); err != nil {
+		return SAMLProvider{}, err
+	}
+	return p, tx.Commit(ctx)
 }
 
 func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider, error) {

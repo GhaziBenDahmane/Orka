@@ -432,6 +432,7 @@ function Settings({ flash, setError }: { flash: (s: string) => void; setError: (
   const [destination, setDestination] = useState({ name: "", endpoint: "https://", region: "", bucket: "", prefix: "", useTls: true, accessKey: "", secretKey: "" });
   const [oidcInput, setOIDCInput] = useState({ name: "", issuer: "https://", clientId: "", clientSecret: "", domains: "", scopes: "openid,email,profile", defaultRole: "developer" });
   const [samlInput, setSAMLInput] = useState({ name: "", metadataXml: "", domains: "", emailAttribute: "email", nameAttribute: "name", defaultRole: "developer", allowIdpInitiated: false });
+  const [editingOIDC, setEditingOIDC] = useState(""); const [editingSAML, setEditingSAML] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -468,31 +469,31 @@ function Settings({ flash, setError }: { flash: (s: string) => void; setError: (
       <button className="primary" disabled={busy}>Verify and add</button>
     </form><AdminItems items={destinations.map(x => ({ id: x.id, title: x.name, detail: `${x.bucket} · ${x.endpoint}` }))} action="Remove" onAction={id => run(() => api.deleteBackupDestination(id), "Destination removed")} /></section>
 
-    <section className="card settings-card"><p className="eyebrow">Single sign-on</p><h2>OIDC providers</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createOIDCProvider({ ...oidcInput, domains: domains(oidcInput.domains), scopes: domains(oidcInput.scopes) }), "OIDC provider enabled"); }}>
+    <section className="card settings-card"><p className="eyebrow">Single sign-on</p><h2>OIDC providers</h2><form onSubmit={event => { event.preventDefault(); const body = { ...oidcInput, domains: domains(oidcInput.domains), scopes: domains(oidcInput.scopes) }; void run(() => editingOIDC ? api.updateOIDCProvider(editingOIDC, body) : api.createOIDCProvider(body), editingOIDC ? "OIDC provider updated" : "OIDC provider enabled"); }}>
       <label>Name<input value={oidcInput.name} onChange={e => setOIDCInput({ ...oidcInput, name: e.target.value })} required /></label>
       <label>Issuer<input value={oidcInput.issuer} onChange={e => setOIDCInput({ ...oidcInput, issuer: e.target.value })} required /></label>
       <label>Client ID<input value={oidcInput.clientId} onChange={e => setOIDCInput({ ...oidcInput, clientId: e.target.value })} required /></label>
-      <label>Client secret<input type="password" value={oidcInput.clientSecret} onChange={e => setOIDCInput({ ...oidcInput, clientSecret: e.target.value })} required /></label>
+      <label>Client secret<input type="password" value={oidcInput.clientSecret} onChange={e => setOIDCInput({ ...oidcInput, clientSecret: e.target.value })} required={!editingOIDC} placeholder={editingOIDC ? "Leave blank to preserve current secret" : ""} /></label>
       <label>Email domains<input placeholder="example.com, subsidiary.test" value={oidcInput.domains} onChange={e => setOIDCInput({ ...oidcInput, domains: e.target.value })} required /></label>
       <label>Scopes<input value={oidcInput.scopes} onChange={e => setOIDCInput({ ...oidcInput, scopes: e.target.value })} /></label>
       <label>Default role<select value={oidcInput.defaultRole} onChange={e => setOIDCInput({ ...oidcInput, defaultRole: e.target.value })}><option>viewer</option><option>developer</option><option>admin</option></select></label>
-      <button className="primary" disabled={busy}>Add OIDC provider</button>
-    </form><AdminItems items={oidc.map(x => ({ id: x.id, title: x.name, detail: `${x.issuer} · ${x.defaultRole}${x.enabled ? "" : " · disabled"}` }))} action="Disable" onAction={id => run(() => api.disableOIDCProvider(id), "OIDC provider disabled")} /></section>
+      <button className="primary" disabled={busy}>{editingOIDC ? "Update / rotate" : "Add OIDC provider"}</button>{editingOIDC && <button type="button" onClick={() => setEditingOIDC("")}>Cancel edit</button>}
+    </form><AdminItems items={oidc.map(x => ({ id: x.id, title: x.name, detail: `${x.issuer} · ${x.defaultRole}${x.enabled ? "" : " · disabled"}` }))} action="Disable" onEdit={id => { const x = oidc.find(item => item.id === id); if (x) { setEditingOIDC(id); setOIDCInput({ name: x.name, issuer: x.issuer, clientId: x.clientId, clientSecret: "", domains: x.domains.join(", "), scopes: x.scopes.join(", "), defaultRole: x.defaultRole }); } }} onAction={id => run(() => api.disableOIDCProvider(id), "OIDC provider disabled")} /></section>
 
-    <section className="card settings-card"><p className="eyebrow">Enterprise federation</p><h2>SAML providers</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createSAMLProvider({ ...samlInput, domains: domains(samlInput.domains) }), "SAML provider enabled"); }}>
+    <section className="card settings-card"><p className="eyebrow">Enterprise federation</p><h2>SAML providers</h2><form onSubmit={event => { event.preventDefault(); const body = { ...samlInput, domains: domains(samlInput.domains) }; void run(() => editingSAML ? api.updateSAMLProvider(editingSAML, body) : api.createSAMLProvider(body), editingSAML ? "SAML provider updated" : "SAML provider enabled"); }}>
       <label>Name<input value={samlInput.name} onChange={e => setSAMLInput({ ...samlInput, name: e.target.value })} required /></label>
       <label>IdP metadata XML<textarea className="compact-code" value={samlInput.metadataXml} onChange={e => setSAMLInput({ ...samlInput, metadataXml: e.target.value })} required /></label>
       <label>Email domains<input value={samlInput.domains} onChange={e => setSAMLInput({ ...samlInput, domains: e.target.value })} required /></label>
       <div className="field-row"><label>Email attribute<input value={samlInput.emailAttribute} onChange={e => setSAMLInput({ ...samlInput, emailAttribute: e.target.value })} /></label><label>Name attribute<input value={samlInput.nameAttribute} onChange={e => setSAMLInput({ ...samlInput, nameAttribute: e.target.value })} /></label></div>
       <label>Default role<select value={samlInput.defaultRole} onChange={e => setSAMLInput({ ...samlInput, defaultRole: e.target.value })}><option>viewer</option><option>developer</option><option>admin</option></select></label>
       <label className="check"><input type="checkbox" checked={samlInput.allowIdpInitiated} onChange={e => setSAMLInput({ ...samlInput, allowIdpInitiated: e.target.checked })} /> Allow IdP-initiated login</label>
-      <button className="primary" disabled={busy}>Add SAML provider</button>
-    </form><AdminItems items={saml.map(x => ({ id: x.id, title: x.name, detail: `${x.domains.join(", ")} · ${x.defaultRole}${x.enabled ? "" : " · disabled"}` }))} action="Disable" onAction={id => run(() => api.disableSAMLProvider(id), "SAML provider disabled")} /></section>
+      <button className="primary" disabled={busy}>{editingSAML ? "Update metadata" : "Add SAML provider"}</button>{editingSAML && <button type="button" onClick={() => setEditingSAML("")}>Cancel edit</button>}
+    </form><AdminItems items={saml.map(x => ({ id: x.id, title: x.name, detail: `${x.domains.join(", ")} · ${x.defaultRole}${x.enabled ? "" : " · disabled"}` }))} action="Disable" onEdit={id => { const x = saml.find(item => item.id === id); if (x) { setEditingSAML(id); setSAMLInput({ name: x.name, metadataXml: "", domains: x.domains.join(", "), emailAttribute: x.emailAttribute, nameAttribute: x.nameAttribute, defaultRole: x.defaultRole, allowIdpInitiated: x.allowIdpInitiated }); } }} onAction={id => run(() => api.disableSAMLProvider(id), "SAML provider disabled")} /></section>
   </div>;
 }
 
-function AdminItems({ items, action, onAction }: { items: { id: string; title: string; detail: string }[]; action: string; onAction: (id: string) => Promise<unknown> }) {
-  return <div className="admin-items">{items.map(item => <article key={item.id}><div><strong>{item.title}</strong><small>{item.detail}</small></div><button type="button" onClick={() => { if (window.confirm(`${action} ${item.title}?`)) void onAction(item.id); }}>{action}</button></article>)}{!items.length && <p className="muted">None configured.</p>}</div>;
+function AdminItems({ items, action, onAction, onEdit }: { items: { id: string; title: string; detail: string }[]; action: string; onAction: (id: string) => Promise<unknown>; onEdit?: (id: string) => void }) {
+  return <div className="admin-items">{items.map(item => <article key={item.id}><div><strong>{item.title}</strong><small>{item.detail}</small></div><div className="actions">{onEdit && <button type="button" onClick={() => onEdit(item.id)}>Edit</button>}<button type="button" onClick={() => { if (window.confirm(`${action} ${item.title}?`)) void onAction(item.id); }}>{action}</button></div></article>)}{!items.length && <p className="muted">None configured.</p>}</div>;
 }
 
 function Status({ value }: { value: string }) { return <span className={`status ${value}`}>{value.replaceAll("_", " ")}</span>; }

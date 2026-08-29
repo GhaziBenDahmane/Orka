@@ -38,10 +38,12 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/PUT | `/v1/projects/{id}/policy` | Project maintenance mode and quotas |
 | GET/PUT | `/v1/environments/{id}/policy` | Environment maintenance mode and quotas |
 | GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
+| PUT | `/v1/sso/oidc-providers/{id}` | Update discovery settings and optionally rotate the encrypted client secret |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
 | GET | `/v1/auth/sso/callback` | Verify the ID token and create a session |
 | GET/POST | `/v1/sso/saml-providers` | List or configure SAML identity providers |
+| PUT | `/v1/sso/saml-providers/{id}` | Refresh IdP metadata and mappings while preserving the SP key and entity ID |
 | GET | `/v1/auth/saml/discover?email=…` | Discover SAML providers by email domain |
 | GET | `/v1/auth/saml/{providerID}/metadata` | Download signed-request SP metadata |
 | GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |

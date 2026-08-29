@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -101,6 +102,18 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 	}
 	if storedNonce != query.Get("nonce") {
 		t.Fatalf("stored nonce %q does not match authorization nonce %q", storedNonce, query.Get("nonce"))
+	}
+	updated, err := db.UpdateOIDCProvider(ctx, organizationID, store.OIDCProvider{ID: providerID, Name: "renamed", Issuer: issuer, ClientID: "dockyard-v2", Domains: []string{"example.test"}, Scopes: []string{"openid", "email"}, DefaultRole: "viewer"})
+	if err != nil || updated.Name != "renamed" || updated.ClientID != "dockyard-v2" {
+		t.Fatalf("provider update = %#v, %v", updated, err)
+	}
+	var preservedSecret string
+	var remainingStates int
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_client_secret,(SELECT count(*) FROM oidc_states WHERE provider_id=$1) FROM oidc_providers WHERE id=$1`, providerID).Scan(&preservedSecret, &remainingStates); err != nil || preservedSecret != "unused" || remainingStates != 0 {
+		t.Fatalf("provider update did not preserve secret and revoke pending states: secret=%q states=%d err=%v", preservedSecret, remainingStates, err)
+	}
+	if _, err = db.UpdateOIDCProvider(ctx, uuid.New(), store.OIDCProvider{ID: providerID, Name: "cross-tenant", Issuer: issuer, ClientID: "x", Domains: []string{"example.test"}, Scopes: []string{"openid"}, DefaultRole: "viewer"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-tenant provider update error = %v", err)
 	}
 }
 

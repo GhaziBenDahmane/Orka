@@ -118,6 +118,14 @@ func TestSAMLProviderCreationMetadataAndStart(t *testing.T) {
 	if encryptedKey == "" || strings.Contains(encryptedKey, "PRIVATE KEY") {
 		t.Fatal("SAML private key was not encrypted")
 	}
+	provider, err = db.UpdateSAMLProvider(ctx, orgID, store.SAMLProvider{ID: provider.ID, Name: "workforce-updated", IDPMetadata: string(metadataXML), Domains: []string{"example.test"}, EmailAttribute: "mail", NameAttribute: "displayName", DefaultRole: "developer", AllowIDPInitiated: true})
+	if err != nil || provider.Name != "workforce-updated" {
+		t.Fatalf("SAML provider update = %#v, %v", provider, err)
+	}
+	var preservedKey string
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_private_key FROM saml_providers WHERE id=$1`, provider.ID).Scan(&preservedKey); err != nil || preservedKey != encryptedKey {
+		t.Fatalf("SAML update replaced the SP key: %v", err)
+	}
 
 	response, err = http.Get(server.URL + "/v1/auth/saml/" + provider.ID.String() + "/metadata")
 	if err != nil {
