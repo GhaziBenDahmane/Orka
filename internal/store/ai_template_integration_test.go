@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,8 +119,47 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, run.ID, "completed", "one finding"); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID); err != nil || snapshot.Organization != organizationID {
+	projectID, environmentID, databaseID := uuid.New(), uuid.New(), uuid.New()
+	backupID, policyID := uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audit project','audit-project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Primary','primary','postgres','17','encrypted','ready')`, []any{databaseID, environmentID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,verify_restore) VALUES($1,$2,3600,14,true,now(),true)`, []any{policyID, databaseID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,finished_at) VALUES($1,$2,'succeeded','dump',now())`, []any{backupID, databaseID}},
+		{`INSERT INTO database_restores(id,database_backup_id,status,kind,finished_at) VALUES($1,$2,'succeeded','drill',now())`, []any{uuid.New(), backupID}},
+		{`INSERT INTO organization_auth_settings(organization_id,require_sso) VALUES($1,true)`, []any{organizationID}},
+		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,enabled) VALUES($1,$2,'Company','https://id.example.test','client','encrypted',true)`, []any{uuid.New(), organizationID}},
+		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,enabled) VALUES($1,$2,'Legacy','metadata','certificate','encrypted',false)`, []any{uuid.New(), organizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,'On-call','webhook','encrypted','encrypted',ARRAY['backup.failed'],true)`, []any{uuid.New(), organizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,'Other','webhook','other-secret-url','other-secret',ARRAY['backup.failed'],true)`, []any{uuid.New(), otherOrganizationID}},
+	} {
+		if _, err = pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil || snapshot.Organization != organizationID {
 		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
+	}
+	if len(snapshot.BackupPosture) != 1 || snapshot.BackupPosture[0].DatabaseID != databaseID || !snapshot.BackupPosture[0].VerifyRestore || snapshot.BackupPosture[0].LastBackupStatus != "succeeded" || snapshot.BackupPosture[0].LastRestoreDrillStatus != "succeeded" {
+		t.Fatalf("backup posture=%#v", snapshot.BackupPosture)
+	}
+	if !snapshot.IdentityPosture.RequireSSO || snapshot.IdentityPosture.EnabledOIDCProviders != 1 || snapshot.IdentityPosture.EnabledSAMLProviders != 0 {
+		t.Fatalf("identity posture=%#v", snapshot.IdentityPosture)
+	}
+	if len(snapshot.NotificationPosture) != 1 || snapshot.NotificationPosture[0].Name != "On-call" {
+		t.Fatalf("notification posture=%#v", snapshot.NotificationPosture)
+	}
+	if len(snapshot.TemplateRepositories) != 1 || snapshot.TemplateRepositories[0].ID != repository.ID || !snapshot.TemplateRepositories[0].RequireSignature || !snapshot.TemplateRepositories[0].CredentialConfigured || !snapshot.TemplateRepositories[0].WebhookConfigured {
+		t.Fatalf("template repository posture=%#v", snapshot.TemplateRepositories)
+	}
+	encodedSnapshot, err := json.Marshal(snapshot)
+	if err != nil || strings.Contains(string(encodedSnapshot), "encrypted-webhook-secret") || strings.Contains(string(encodedSnapshot), "other-secret") {
+		t.Fatalf("snapshot leaked encrypted data: err=%v body=%s", err, encodedSnapshot)
 	}
 	if err = db.DeleteTemplateRepository(ctx, organizationID, repository.ID); err != nil {
 		t.Fatal(err)

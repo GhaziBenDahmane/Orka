@@ -42,12 +42,17 @@ func (s *Server) createAIAuditRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.AgentName = strings.TrimSpace(in.AgentName)
-	if in.AgentName == "" || len(in.AgentName) > 120 {
-		writeError(w, 400, "invalid_audit_run", "agentName is required")
+	in.AgentVersion = strings.TrimSpace(in.AgentVersion)
+	in.Model = strings.TrimSpace(in.Model)
+	if len(in.Scope) == 0 {
+		in.Scope = json.RawMessage(`{}`)
+	}
+	if in.AgentName == "" || len(in.AgentName) > 120 || len(in.AgentVersion) > 200 || len(in.Model) > 300 || !validAuditObject(in.Scope, 64<<10) {
+		writeError(w, 400, "invalid_audit_run", "audit run metadata is invalid or exceeds safety limits")
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateAIAuditRun(r.Context(), p.OrganizationID, *p.ServiceAccountID, in.AgentName, strings.TrimSpace(in.AgentVersion), strings.TrimSpace(in.Model), in.Scope)
+	item, err := s.Store.CreateAIAuditRun(r.Context(), p.OrganizationID, *p.ServiceAccountID, in.AgentName, in.AgentVersion, in.Model, in.Scope)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -70,14 +75,19 @@ func (s *Server) createAIAuditFinding(w http.ResponseWriter, r *http.Request) {
 	in.Severity = strings.ToLower(strings.TrimSpace(in.Severity))
 	in.Category = strings.TrimSpace(in.Category)
 	in.Title = strings.TrimSpace(in.Title)
-	if !valid[in.Severity] || in.Category == "" || in.Title == "" || in.Description == "" {
-		writeError(w, 400, "invalid_finding", "severity, category, title, and description are required")
-		return
-	}
-	in.RunID = runID
+	in.Description = strings.TrimSpace(in.Description)
+	in.ResourceType = strings.TrimSpace(in.ResourceType)
+	in.ResourceID = strings.TrimSpace(in.ResourceID)
+	in.Remediation = strings.TrimSpace(in.Remediation)
+	in.Fingerprint = strings.TrimSpace(in.Fingerprint)
 	if len(in.Evidence) == 0 {
 		in.Evidence = json.RawMessage(`{}`)
 	}
+	if !valid[in.Severity] || in.Category == "" || len(in.Category) > 120 || in.Title == "" || len(in.Title) > 300 || in.Description == "" || len(in.Description) > 8000 || len(in.ResourceType) > 120 || len(in.ResourceID) > 200 || len(in.Remediation) > 8000 || len(in.Fingerprint) > 200 || !validAuditObject(in.Evidence, 64<<10) {
+		writeError(w, 400, "invalid_finding", "audit finding is invalid or exceeds safety limits")
+		return
+	}
+	in.RunID = runID
 	if in.Fingerprint == "" {
 		sum := sha256.Sum256([]byte(in.Category + "\x00" + in.Title + "\x00" + in.ResourceType + "\x00" + in.ResourceID))
 		in.Fingerprint = hex.EncodeToString(sum[:])
@@ -108,6 +118,11 @@ func (s *Server) finishAIAuditRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_status", "status must be completed or failed")
 		return
 	}
+	in.Summary = strings.TrimSpace(in.Summary)
+	if len(in.Summary) > 8000 {
+		writeError(w, 400, "invalid_summary", "summary exceeds 8000 bytes")
+		return
+	}
 	p := principal(r)
 	if err = s.Store.FinishAIAuditRun(r.Context(), p.OrganizationID, *p.ServiceAccountID, runID, in.Status, in.Summary); err != nil {
 		writeStoreError(w, err)
@@ -115,6 +130,14 @@ func (s *Server) finishAIAuditRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "ai_audit."+in.Status, "ai_audit_run", runID.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validAuditObject(value json.RawMessage, maxBytes int) bool {
+	if len(value) == 0 || len(value) > maxBytes {
+		return false
+	}
+	var object map[string]any
+	return json.Unmarshal(value, &object) == nil && object != nil
 }
 
 func (s *Server) listAIAuditRuns(w http.ResponseWriter, r *http.Request) {

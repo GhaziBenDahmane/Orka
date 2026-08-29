@@ -11,16 +11,20 @@ import (
 )
 
 type AIAuditSnapshot struct {
-	GeneratedAt  time.Time          `json:"generatedAt"`
-	Organization uuid.UUID          `json:"organizationId"`
-	Projects     []Project          `json:"projects"`
-	Environments []Environment      `json:"environments"`
-	Services     []ComposeService   `json:"services"`
-	Routes       []Route            `json:"routes"`
-	Databases    []DatabaseInstance `json:"databases"`
-	Clusters     []Cluster          `json:"clusters"`
-	Signals      []AIAuditSignal    `json:"signals30d"`
-	AuditEvents  []AuditEvent       `json:"recentAuditEvents"`
+	GeneratedAt          time.Time                       `json:"generatedAt"`
+	Organization         uuid.UUID                       `json:"organizationId"`
+	Projects             []Project                       `json:"projects"`
+	Environments         []Environment                   `json:"environments"`
+	Services             []ComposeService                `json:"services"`
+	Routes               []Route                         `json:"routes"`
+	Databases            []DatabaseInstance              `json:"databases"`
+	Clusters             []Cluster                       `json:"clusters"`
+	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
+	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
+	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
+	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
+	Signals              []AIAuditSignal                 `json:"signals30d"`
+	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
 }
 
 type AIAuditSignal struct {
@@ -29,11 +33,55 @@ type AIAuditSignal struct {
 	Count  int64  `json:"count"`
 }
 
+type AIAuditBackupPosture struct {
+	DatabaseID             uuid.UUID  `json:"databaseId"`
+	Name                   string     `json:"name"`
+	Engine                 string     `json:"engine"`
+	Status                 string     `json:"status"`
+	PolicyConfigured       bool       `json:"policyConfigured"`
+	PolicyEnabled          bool       `json:"policyEnabled"`
+	IntervalSeconds        int        `json:"intervalSeconds"`
+	RetentionCount         int        `json:"retentionCount"`
+	VerifyRestore          bool       `json:"verifyRestore"`
+	RemoteDestination      bool       `json:"remoteDestination"`
+	LastBackupStatus       string     `json:"lastBackupStatus,omitempty"`
+	LastBackupAt           *time.Time `json:"lastBackupAt,omitempty"`
+	LastRestoreDrillStatus string     `json:"lastRestoreDrillStatus,omitempty"`
+	LastRestoreDrillAt     *time.Time `json:"lastRestoreDrillAt,omitempty"`
+}
+
+type AIAuditIdentityPosture struct {
+	RequireSSO           bool  `json:"requireSso"`
+	EnabledOIDCProviders int64 `json:"enabledOidcProviders"`
+	EnabledSAMLProviders int64 `json:"enabledSamlProviders"`
+}
+
+type AIAuditNotificationPosture struct {
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	Kind    string    `json:"kind"`
+	Events  []string  `json:"events"`
+	Enabled bool      `json:"enabled"`
+}
+
+type AIAuditTemplateRepositoryInfo struct {
+	ID                   uuid.UUID  `json:"id"`
+	Name                 string     `json:"name"`
+	GitRef               string     `json:"gitRef"`
+	RequireSignature     bool       `json:"requireSignature"`
+	CredentialConfigured bool       `json:"credentialConfigured"`
+	WebhookConfigured    bool       `json:"webhookConfigured"`
+	SyncIntervalSeconds  int        `json:"syncIntervalSeconds"`
+	Enabled              bool       `json:"enabled"`
+	LastSyncStatus       string     `json:"lastSyncStatus"`
+	LastSyncedAt         *time.Time `json:"lastSyncedAt,omitempty"`
+}
+
 // BuildAIAuditSnapshot deliberately uses the list projections: Compose source,
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -75,6 +123,9 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	snapshot.Clusters = clusters
+	if err = s.loadAIAuditOperationalPosture(ctx, organizationID, &snapshot); err != nil {
+		return snapshot, err
+	}
 	events, err := s.ListAuditEvents(ctx, organizationID, 0, 500, false)
 	if err != nil {
 		return snapshot, err
@@ -106,6 +157,60 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT d.id,d.name,d.engine,d.status,
+			bp.id IS NOT NULL,COALESCE(bp.enabled,false),COALESCE(bp.interval_seconds,0),COALESCE(bp.retention_count,0),COALESCE(bp.verify_restore,false),bp.destination_id IS NOT NULL,
+			COALESCE(last_backup.status,''),last_backup.created_at,COALESCE(last_drill.status,''),last_drill.created_at
+		FROM database_instances d
+		JOIN environments e ON e.id=d.environment_id
+		JOIN projects p ON p.id=e.project_id
+		LEFT JOIN backup_policies bp ON bp.database_instance_id=d.id
+		LEFT JOIN LATERAL (SELECT b.status,b.created_at FROM database_backups b WHERE b.database_instance_id=d.id ORDER BY b.created_at DESC LIMIT 1) last_backup ON true
+		LEFT JOIN LATERAL (SELECT r.status,r.created_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id WHERE b.database_instance_id=d.id AND r.kind='drill' ORDER BY r.created_at DESC LIMIT 1) last_drill ON true
+		WHERE p.organization_id=$1 ORDER BY d.name,d.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditBackupPosture
+		if err = rows.Scan(&item.DatabaseID, &item.Name, &item.Engine, &item.Status, &item.PolicyConfigured, &item.PolicyEnabled, &item.IntervalSeconds, &item.RetentionCount, &item.VerifyRestore, &item.RemoteDestination, &item.LastBackupStatus, &item.LastBackupAt, &item.LastRestoreDrillStatus, &item.LastRestoreDrillAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.BackupPosture = append(snapshot.BackupPosture, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	err = s.Pool.QueryRow(ctx, `SELECT
+		COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false),
+		(SELECT count(*) FROM oidc_providers WHERE organization_id=$1 AND enabled),
+		(SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND enabled)`, organizationID).Scan(&snapshot.IdentityPosture.RequireSSO, &snapshot.IdentityPosture.EnabledOIDCProviders, &snapshot.IdentityPosture.EnabledSAMLProviders)
+	if err != nil {
+		return err
+	}
+
+	endpoints, err := s.ListNotificationEndpoints(ctx, organizationID)
+	if err != nil {
+		return err
+	}
+	for _, endpoint := range endpoints {
+		snapshot.NotificationPosture = append(snapshot.NotificationPosture, AIAuditNotificationPosture{ID: endpoint.ID, Name: endpoint.Name, Kind: endpoint.Kind, Events: endpoint.Events, Enabled: endpoint.Enabled})
+	}
+	repositories, err := s.ListTemplateRepositories(ctx, organizationID)
+	if err != nil {
+		return err
+	}
+	for _, repository := range repositories {
+		snapshot.TemplateRepositories = append(snapshot.TemplateRepositories, AIAuditTemplateRepositoryInfo{ID: repository.ID, Name: repository.Name, GitRef: repository.GitRef, RequireSignature: repository.RequireSignature, CredentialConfigured: repository.CredentialID != nil, WebhookConfigured: repository.WebhookConfigured, SyncIntervalSeconds: repository.SyncIntervalSeconds, Enabled: repository.Enabled, LastSyncStatus: repository.LastSyncStatus, LastSyncedAt: repository.LastSyncedAt})
+	}
+	return nil
 }
 
 type AIAuditRun struct {

@@ -29,10 +29,16 @@ keys make it a privileged service.
   viewer/developer/admin rank and therefore cannot invoke normal resource APIs.
 - `GET /v1/ai/audit-snapshot` excludes Compose content, environment values,
   database config, credentials, backup payloads, and secret material.
+- The snapshot includes per-database backup policy and restore-drill posture,
+  enabled SSO provider counts, notification coverage, and template repository
+  signing/synchronization posture so findings can identify concrete gaps.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy
   change, or remediation without a separate human-approved workflow.
+- Snapshot strings are explicitly treated as untrusted data. The built-in
+  runner bounds model responses and finding counts, validates every structured
+  field, and rejects oversized evidence before submitting results.
 - Each run records agent name/version, model, scope, timestamps, summary, and
   structured findings. Lifecycle transitions also enter the normal audit log.
 

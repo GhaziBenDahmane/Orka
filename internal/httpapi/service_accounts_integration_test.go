@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +140,20 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	response, data = do(http.MethodPost, "/v1/ai/audit-runs", auditor.Token, []byte(`{"agentName":"test-auditor","model":"test"}`))
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("auditor run status=%d: %s", response.StatusCode, data)
+	}
+	var auditRun struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err = json.Unmarshal(data, &auditRun); err != nil || auditRun.ID == uuid.Nil {
+		t.Fatalf("audit run response=%s err=%v", data, err)
+	}
+	response, _ = do(http.MethodPost, "/v1/ai/audit-runs/"+auditRun.ID.String()+"/findings", auditor.Token, []byte(`{"severity":"high","category":"security","title":"Invalid evidence","description":"must be an object","evidence":[]}`))
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-object audit evidence status=%d, want 400", response.StatusCode)
+	}
+	response, _ = do(http.MethodPatch, "/v1/ai/audit-runs/"+auditRun.ID.String(), auditor.Token, []byte(`{"status":"completed","summary":"`+strings.Repeat("x", 8001)+`"}`))
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized audit summary status=%d, want 400", response.StatusCode)
 	}
 
 	response, _ = do(http.MethodDelete, "/v1/service-accounts/"+created.ServiceAccount.ID.String(), userToken, nil)
