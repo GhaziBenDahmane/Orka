@@ -32,8 +32,13 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
 		in.Name = "default"
+	}
+	if len(in.Name) > 120 {
+		writeError(w, 400, "invalid_name", "name must not exceed 120 bytes")
+		return
 	}
 	if in.DefaultRole == "" {
 		in.DefaultRole = "developer"
@@ -48,12 +53,37 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CreateSCIMToken(r.Context(), p.OrganizationID, in.Name, in.DefaultRole, cryptox.Digest(token)); err != nil {
+	item, err := s.Store.CreateSCIMToken(r.Context(), p.OrganizationID, in.Name, in.DefaultRole, cryptox.Digest(token))
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "scim.token.create", "organization", p.OrganizationID.String(), r.RemoteAddr, nil)
-	writeJSON(w, 201, map[string]string{"token": token, "baseUrl": s.PublicURL + "/scim/v2"})
+	s.Store.Audit(r.Context(), &p, "scim.token.create", "scim_token", item.ID.String(), r.RemoteAddr, map[string]string{"name": item.Name, "defaultRole": item.DefaultRole})
+	writeJSON(w, 201, map[string]any{"scimToken": item, "token": token, "baseUrl": s.PublicURL + "/scim/v2"})
+}
+
+func (s *Server) listSCIMTokens(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListSCIMTokens(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) revokeSCIMToken(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("tokenID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid SCIM token id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.RevokeSCIMToken(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "scim.token.revoke", "scim_token", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) scimPrincipal(r *http.Request) (uuid.UUID, string, error) {

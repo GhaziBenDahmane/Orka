@@ -2254,6 +2254,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
   /v1/scim/tokens:
+    get:
+      operationId: get_v1_scim_tokens
+      tags: [scim]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     post:
       operationId: post_v1_scim_tokens
       tags: [scim]
@@ -2264,6 +2276,26 @@ paths:
             schema:
               type: object
               additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/scim/tokens/{tokenID}:
+    delete:
+      operationId: delete_v1_scim_tokens_tokenID
+      tags: [scim]
+      parameters:
+        - name: tokenID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         '2XX':
           description: Successful response

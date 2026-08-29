@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, DatabaseBackup, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, Principal, Project, ResourcePolicy, Role, SAMLProvider, Service, ServiceReconciliation, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, Database, DatabaseBackup, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceReconciliation, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -354,11 +354,17 @@ function Governance({ principal, projects, projectId, environments, environmentI
   const [scope, setScope] = useState<PolicyScope>("organization");
   const [draft, setDraft] = useState<PolicyDraft>(emptyPolicy);
   const [requireSso, setRequireSso] = useState(false);
+  const [scimTokens, setSCIMTokens] = useState<SCIMToken[]>([]);
+  const [scimName, setSCIMName] = useState("identity-provider");
+  const [scimRole, setSCIMRole] = useState<SCIMToken["defaultRole"]>("developer");
+  const [createdSCIM, setCreatedSCIM] = useState<{ token: string; baseUrl: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const scopeId = scope === "organization" ? principal.organizationId : scope === "project" ? projectId : environmentId;
 
   const applyPolicy = (item: ResourcePolicy) => setDraft({ maintenance: item.maintenance, maintenanceReason: item.maintenanceReason, maxProjects: item.maxProjects?.toString() ?? "", maxEnvironments: item.maxEnvironments?.toString() ?? "", maxServices: item.maxServices?.toString() ?? "", maxDatabases: item.maxDatabases?.toString() ?? "" });
+  const refreshSCIMTokens = useCallback(async () => setSCIMTokens((await api.scimTokens()).items), []);
   useEffect(() => { api.authSettings().then(x => setRequireSso(x.requireSso)).catch(reason => setError(message(reason))); }, [setError]);
+  useEffect(() => { void refreshSCIMTokens().catch(reason => setError(message(reason))); }, [refreshSCIMTokens, setError]);
   useEffect(() => {
     if (!scopeId) { setDraft(emptyPolicy); return; }
     api.policy(scope, scopeId).then(applyPolicy).catch(reason => setError(message(reason)));
@@ -371,6 +377,16 @@ function Governance({ principal, projects, projectId, environments, environmentI
       applyPolicy(item); flash(`${scope} policy saved`);
     } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
+  async function createSCIMToken(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setCreatedSCIM(null);
+    try { const result = await api.createSCIMToken(scimName, scimRole); setCreatedSCIM({ token: result.token, baseUrl: result.baseUrl }); await refreshSCIMTokens(); flash("SCIM token created"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  async function revokeSCIMToken(item: SCIMToken) {
+    if (!window.confirm(`Revoke ${item.name}? Provisioning with this token will stop immediately.`)) return;
+    setBusy(true); try { await api.revokeSCIMToken(item.id); await refreshSCIMTokens(); flash("SCIM token revoked"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
   return <div className="settings-grid">
     <section className="card settings-card"><p className="eyebrow">Resource guardrails</p><h2>Policy and quotas</h2><form onSubmit={savePolicy}>
       <label>Scope<select value={scope} onChange={e => setScope(e.target.value as PolicyScope)}><option value="organization">Organization · {principal.organization}</option><option value="project" disabled={!projectId}>Project · {projects.find(x => x.id === projectId)?.name ?? "select under Workloads"}</option><option value="environment" disabled={!environmentId}>Environment · {environments.find(x => x.id === environmentId)?.name ?? "select under Workloads"}</option></select></label>
@@ -381,6 +397,7 @@ function Governance({ principal, projects, projectId, environments, environmentI
       <button className="primary" disabled={busy || !scopeId}>Save policy</button>
     </form></section>
     <section className="card settings-card"><p className="eyebrow">Authentication policy</p><h2>Mandatory SSO</h2><p className="muted">Require interactive users to authenticate through an enabled OIDC or SAML provider. Existing local sessions are revoked except for the owner break-glass account.</p><label className="check"><input type="checkbox" checked={requireSso} onChange={e => setRequireSso(e.target.checked)} /> Require SSO for this organization</label><button className="primary spaced-button" disabled={busy} onClick={() => { setBusy(true); api.putAuthSettings(requireSso).then(() => flash("Authentication policy saved")).catch(reason => setError(message(reason))).finally(() => setBusy(false)); }}>Save authentication policy</button></section>
+    <section className="card settings-card"><p className="eyebrow">Directory provisioning</p><h2>SCIM tokens</h2><p className="muted">Issue a bearer token for one identity provider. Tokens remain active until explicitly revoked.</p><form onSubmit={createSCIMToken}><label>Name<input value={scimName} maxLength={120} onChange={e => setSCIMName(e.target.value)} required /></label><label>Default role<select value={scimRole} onChange={e => setSCIMRole(e.target.value as SCIMToken["defaultRole"])}><option value="viewer">Viewer</option><option value="developer">Developer</option><option value="admin">Admin</option></select></label><button className="primary" disabled={busy}>Create token</button></form>{createdSCIM && <div className="credential-card spaced"><p className="eyebrow">Save now</p><p className="muted">Base URL: <code>{createdSCIM.baseUrl}</code></p><code>{createdSCIM.token}</code><button type="button" onClick={() => navigator.clipboard.writeText(createdSCIM.token)}>Copy token</button></div>}<div className="admin-items">{scimTokens.map(item => <article key={item.id}><div><strong>{item.name}</strong><small>{item.defaultRole} · created {new Date(item.createdAt).toLocaleDateString()}</small></div><Status value={item.revokedAt ? "revoked" : "active"} />{!item.revokedAt && <button type="button" className="danger-button" disabled={busy} onClick={() => void revokeSCIMToken(item)}>Revoke</button>}</article>)}{!scimTokens.length && <p className="muted">No SCIM tokens issued.</p>}</div></section>
   </div>;
 }
 

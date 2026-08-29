@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -133,6 +134,10 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("auditor normal API status=%d, want 403", response.StatusCode)
 	}
+	response, _ = do(http.MethodGet, "/v1/scim/tokens", auditor.Token, nil)
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("auditor SCIM token inventory status=%d, want 403", response.StatusCode)
+	}
 	response, data = do(http.MethodGet, "/v1/ai/audit-snapshot", auditor.Token, nil)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("auditor snapshot status=%d: %s", response.StatusCode, data)
@@ -154,6 +159,58 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	response, _ = do(http.MethodPatch, "/v1/ai/audit-runs/"+auditRun.ID.String(), auditor.Token, []byte(`{"status":"completed","summary":"`+strings.Repeat("x", 8001)+`"}`))
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized audit summary status=%d, want 400", response.StatusCode)
+	}
+
+	response, data = do(http.MethodPost, "/v1/scim/tokens", userToken, []byte(`{"name":"identity-provider","defaultRole":"developer"}`))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create SCIM token status=%d: %s", response.StatusCode, data)
+	}
+	var createdSCIM struct {
+		SCIMToken store.SCIMToken `json:"scimToken"`
+		Token     string          `json:"token"`
+		BaseURL   string          `json:"baseUrl"`
+	}
+	if err = json.Unmarshal(data, &createdSCIM); err != nil || createdSCIM.SCIMToken.ID == uuid.Nil || createdSCIM.Token == "" || createdSCIM.BaseURL != "https://dockyard.example.test/scim/v2" {
+		t.Fatalf("created SCIM token=%#v err=%v body=%s", createdSCIM, err, data)
+	}
+	response, data = do(http.MethodGet, "/v1/scim/tokens", userToken, nil)
+	if response.StatusCode != http.StatusOK || bytes.Contains(data, []byte(createdSCIM.Token)) || !bytes.Contains(data, []byte(createdSCIM.SCIMToken.ID.String())) {
+		t.Fatalf("list SCIM tokens status=%d body=%s", response.StatusCode, data)
+	}
+	otherOrgID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other service accounts',$2)`, otherOrgID, "other-service-accounts-"+otherOrgID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrgID) })
+	otherSCIMToken := "other-scim-" + uuid.NewString()
+	otherSCIM, err := db.CreateSCIMToken(ctx, otherOrgID, "other-provider", "viewer", cryptox.Digest(otherSCIMToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, _ = do(http.MethodDelete, "/v1/scim/tokens/"+otherSCIM.ID.String(), userToken, nil)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("cross-tenant SCIM revoke status=%d, want 404", response.StatusCode)
+	}
+	if authenticatedOrg, _, authenticateErr := db.AuthenticateSCIM(ctx, cryptox.Digest(otherSCIMToken)); authenticateErr != nil || authenticatedOrg != otherOrgID {
+		t.Fatalf("cross-tenant revoke changed token: org=%s err=%v", authenticatedOrg, authenticateErr)
+	}
+	response, _ = do(http.MethodDelete, "/v1/scim/tokens/"+createdSCIM.SCIMToken.ID.String(), userToken, nil)
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("revoke SCIM token status=%d, want 204", response.StatusCode)
+	}
+	if _, _, authenticateErr := db.AuthenticateSCIM(ctx, cryptox.Digest(createdSCIM.Token)); !errors.Is(authenticateErr, store.ErrNotFound) {
+		t.Fatalf("revoked SCIM token authenticated: %v", authenticateErr)
+	}
+	response, data = do(http.MethodGet, "/v1/scim/tokens", userToken, nil)
+	var listedSCIM struct {
+		Items []store.SCIMToken `json:"items"`
+	}
+	if err = json.Unmarshal(data, &listedSCIM); err != nil || len(listedSCIM.Items) != 1 || listedSCIM.Items[0].ID != createdSCIM.SCIMToken.ID || listedSCIM.Items[0].RevokedAt == nil {
+		t.Fatalf("listed SCIM tokens=%#v err=%v body=%s", listedSCIM.Items, err, data)
+	}
+	var scimAuditEvents int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND resource_id=$2 AND action IN ('scim.token.create','scim.token.revoke')`, orgID, createdSCIM.SCIMToken.ID.String()).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 2 {
+		t.Fatalf("SCIM token audit events=%d err=%v", scimAuditEvents, err)
 	}
 
 	response, _ = do(http.MethodDelete, "/v1/service-accounts/"+created.ServiceAccount.ID.String(), userToken, nil)

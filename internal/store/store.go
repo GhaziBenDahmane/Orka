@@ -2162,10 +2162,6 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 	return userID, tx.Commit(ctx)
 }
 
-func (s *Store) CreateSCIMToken(ctx context.Context, organizationID uuid.UUID, name, role string, hash []byte) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role) VALUES($1,$2,$3,$4,$5)`, uuid.New(), organizationID, name, hash, role)
-	return err
-}
 func (s *Store) AuthenticateSCIM(ctx context.Context, hash []byte) (uuid.UUID, string, error) {
 	var orgID uuid.UUID
 	var role string

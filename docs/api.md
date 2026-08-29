@@ -64,7 +64,8 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET | `/v1/auth/saml/{providerID}/metadata` | Download signed-request SP metadata |
 | GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |
 | POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
-| POST | `/v1/scim/tokens` | Create a one-time-visible SCIM bearer token |
+| GET/POST | `/v1/scim/tokens` | Inventory token metadata or create a one-time-visible SCIM bearer token |
+| DELETE | `/v1/scim/tokens/{id}` | Revoke a tenant-scoped SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
 | GET | `/v1/migration-resources?sourceOrganizationId=…` | Inspect persisted, secret-safe Dokploy application parity records |
