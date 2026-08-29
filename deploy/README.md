@@ -29,10 +29,12 @@ DNS hostnames and ACME email addresses, loose secret-file permissions, malformed
 acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
 fully rendered stack before creating the overlay network or secrets, then
 waits for every service to hold its desired replica count continuously for 90
-seconds. This covers the bundled health-check start periods and retry windows,
-so a task that starts and then fails readiness does not produce a false
-installation success. `DOCKYARD_INSTALL_STABILITY_SECONDS` may extend this
-window for slower infrastructure but cannot exceed
+seconds. It also requires every control-plane service to run the exact requested
+image digest and rejects any updating, paused, or rolled-back service state.
+This covers the bundled health-check start periods and retry windows, so a task
+that starts and then fails readiness—or silently returns to an older image—does
+not produce a false installation success. `DOCKYARD_INSTALL_STABILITY_SECONDS`
+may extend this window for slower infrastructure but cannot exceed
 `DOCKYARD_INSTALL_WAIT_TIMEOUT`. Set
 `DOCKYARD_INSTALL_SKIP_WAIT=true` only when another deployment system owns the
 convergence check. If pre-deployment setup fails, resources created by that

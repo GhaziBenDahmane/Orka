@@ -23,6 +23,16 @@ case "$1 $2" in
   "secret create")
     if [ "${DOCKYARD_INSTALL_TEST_FAIL_SECRET:-}" = "$3" ]; then exit 1; fi ;;
   "network inspect") exit 1 ;;
+  "service inspect")
+    service=$5
+    state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
+    case "$service" in
+      *_dockyard) image=${DOCKYARD_INSTALL_TEST_CONTROLLER_IMAGE:-$DOCKYARD_IMAGE} ;;
+      *_postgres) image=$POSTGRES_IMAGE ;;
+      *_traefik) image=$TRAEFIK_IMAGE ;;
+      *) exit 1 ;;
+    esac
+    printf '%s|%s\n' "$image" "$state" ;;
   "stack services")
     if [ "${DOCKYARD_INSTALL_TEST_FLAP_ONCE:-false}" = true ]; then
       count=0
@@ -124,6 +134,21 @@ if DOCKYARD_INSTALL_STABILITY_SECONDS=301 "$root/scripts/install-swarm.sh" >"$te
   exit 1
 fi
 grep -q 'DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed' "$temporary/err"
+
+if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 \
+  DOCKYARD_INSTALL_TEST_CONTROLLER_IMAGE="example/dockyard@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted a rolled-back controller image' >&2
+  exit 1
+fi
+grep -q 'dockyard_dockyard image is .* expected' "$temporary/err"
+
+if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_completed \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted a completed Swarm rollback' >&2
+  exit 1
+fi
+grep -q 'dockyard_dockyard update state is rollback_completed' "$temporary/err"
 
 for unsafe_host in 'dockyard.example.test`)||Host(`attacker.example.test' 'bad_label.example.test' '-leading.example.test' 'single-label'; do
   : >"$DOCKYARD_INSTALL_TEST_LOG"

@@ -200,8 +200,23 @@ while :; do
   services=$(docker stack services "$stack" --format '{{.Name}} {{.Replicas}}') || fail "could not inspect stack services"
   [ -n "$services" ] || fail "stack has no services"
   unconverged=$(printf '%s\n' "$services" | awk '{ split($2,n,"/"); if (n[1] != n[2]) print }')
+  release_pending=""
+  while IFS='|' read -r service expected_image; do
+    inspection=$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' "$service" 2>/dev/null || true)
+    actual_image=${inspection%%|*}
+    update_state=${inspection#*|}
+    if [ -z "$inspection" ] || [ "$actual_image" != "$expected_image" ]; then
+      release_pending="$release_pending\n$service image is ${actual_image:-unavailable}; expected $expected_image"
+    elif [ -n "$update_state" ] && [ "$update_state" != completed ]; then
+      release_pending="$release_pending\n$service update state is $update_state"
+    fi
+  done <<EOF
+${stack}_dockyard|$DOCKYARD_IMAGE
+${stack}_postgres|$POSTGRES_IMAGE
+${stack}_traefik|$TRAEFIK_IMAGE
+EOF
   now=$(date +%s)
-  if [ -z "$unconverged" ]; then
+  if [ -z "$unconverged" ] && [ -z "$release_pending" ]; then
     [ -n "$stable_since" ] || stable_since=$now
     if [ $((now - stable_since)) -ge "$stability_seconds" ]; then
       break
@@ -211,7 +226,8 @@ while :; do
   fi
   if [ "$now" -ge "$deadline" ]; then
     printf '%s\n' "$unconverged" >&2
-    fail "stack $stack did not remain converged for ${stability_seconds}s within ${wait_timeout}s"
+    printf '%b\n' "$release_pending" >&2
+    fail "stack $stack did not run the requested images and remain converged for ${stability_seconds}s within ${wait_timeout}s"
   fi
   sleep 2
 done
