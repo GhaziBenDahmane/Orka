@@ -46,7 +46,7 @@ service_container() {
 }
 
 probe_product() {
-  local template_key="$1" service_name="$2" container_id
+  local template_key="$1" service_name="$2" stack="$3" container_id postgres_id migration_count
   container_id="$(service_container "$service_name")"
   test -n "$container_id"
   case "$template_key" in
@@ -60,6 +60,17 @@ probe_product() {
     redis)
       docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis SET dockyard:template:smoke persisted >/dev/null
       test "$(docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis GET dockyard:template:smoke)" = persisted
+      ;;
+    barktrace-sqlite)
+      docker exec "$container_id" /app/barktrace healthcheck
+      docker run --rm --volume "${stack}_barktrace-data:/data:ro" alpine:3.22 test -s /data/barktrace.db
+      ;;
+    barktrace-postgres)
+      docker exec "$container_id" /app/barktrace healthcheck
+      postgres_id="$(service_container "${stack}_postgres")"
+      test -n "$postgres_id"
+      migration_count="$(docker exec --env PGPASSWORD=template-smoke-barktrace "$postgres_id" psql --username barktrace --dbname barktrace --tuples-only --no-align --command 'SELECT count(*) FROM schema_migrations')"
+      test "$migration_count" -gt 0
       ;;
   esac
 }
@@ -96,13 +107,22 @@ project_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"name":
 environment_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"name":"Test","slug":"test"}' "$base_url/v1/projects/$project_id/environments" | jq -er '.id')"
 catalog="$(curl --fail --silent --show-error "${headers[@]}" "$base_url/v1/templates")"
 
-for template_key in postgres redis; do
+for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
   template_id="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .id' <<<"$catalog")"
-  if [[ "$template_key" == postgres ]]; then
-    variables='{"postgres_user":"smoke","postgres_password":"template-smoke-postgres","postgres_database":"smoke"}'
-  else
-    variables='{"redis_password":"template-smoke-redis"}'
-  fi
+  case "$template_key" in
+    postgres)
+      variables='{"postgres_user":"smoke","postgres_password":"template-smoke-postgres","postgres_database":"smoke"}'
+      ;;
+    redis)
+      variables='{"redis_password":"template-smoke-redis"}'
+      ;;
+    barktrace-sqlite)
+      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.29.0}\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      ;;
+    barktrace-postgres)
+      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.29.0}\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      ;;
+  esac
   service="$(curl --fail --silent --show-error "${headers[@]}" --data "{\"environmentId\":\"$environment_id\",\"name\":\"$template_key\",\"variables\":$variables}" "$base_url/v1/templates/$template_id/instantiate")"
   service_id="$(jq -er '.service.id' <<<"$service")"
   stack="$(jq -er '.service.stackName' <<<"$service")"
@@ -110,12 +130,13 @@ for template_key in postgres redis; do
   deployment_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{}' "$base_url/v1/services/$service_id/deployments" | jq -er '.id')"
   wait_for_deployment "$deployment_id"
   service_name="${stack}_${template_key}"
+  if [[ "$template_key" == barktrace-sqlite ]]; then service_name="${stack}_barktrace"; fi
   wait_for_service "$service_name"
-  probe_product "$template_key" "$service_name"
+  probe_product "$template_key" "$service_name" "$stack"
 
   docker service update --force --detach=false "$service_name" >/dev/null
   wait_for_service "$service_name"
-  probe_product "$template_key" "$service_name"
+  probe_product "$template_key" "$service_name" "$stack"
 done
 
-printf 'Built-in PostgreSQL and Redis templates deployed, accepted authenticated writes, and retained data across Swarm task replacement.\n'
+printf 'Built-in PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL templates deployed and retained state across Swarm task replacement.\n'

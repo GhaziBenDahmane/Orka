@@ -31,9 +31,11 @@ links for every item below.
   smoke test then backs up the control plane, rejects active-controller,
   modified-dump, and wrong-key restores, deletes live data, restores the dump,
   and verifies the authenticated workload state after restart.
-- Built-in PostgreSQL and Redis templates deploy through the public API, accept
-  authenticated application-level writes and reads, and retain those values
-  across a forced Swarm task replacement.
+- Built-in PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL
+  templates deploy through the public API and remain healthy across a forced
+  Swarm task replacement. The data services also accept authenticated
+  application-level writes and reads; the BarkTrace checks verify its SQLite
+  file or PostgreSQL migration state survives replacement.
 
 ## Staging gates
 
