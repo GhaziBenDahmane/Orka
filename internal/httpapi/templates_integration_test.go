@@ -126,7 +126,7 @@ path = "/"
 	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&encryptedEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	plain, err := box.Decrypt(encryptedEnvironment, "compose-env")
+	plain, err := box.Decrypt(encryptedEnvironment, cryptox.ResourceContext("compose-env", created.Service.ID.String()))
 	if err != nil {
 		t.Fatal(err)
 	}

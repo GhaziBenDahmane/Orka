@@ -56,6 +56,21 @@ func (b *Box) Decrypt(encoded, context string) ([]byte, error) {
 	return plaintext, nil
 }
 
+func ResourceContext(kind, resourceID string) string {
+	return kind + ":" + resourceID
+}
+
+// DecryptResource accepts the former unbound context during rolling upgrades.
+// New ciphertext must always be written with ResourceContext so copying it to
+// another resource fails authentication.
+func (b *Box) DecryptResource(encoded, kind, resourceID, legacyContext string) ([]byte, error) {
+	plaintext, err := b.Decrypt(encoded, ResourceContext(kind, resourceID))
+	if err == nil || legacyContext == "" {
+		return plaintext, err
+	}
+	return b.Decrypt(encoded, legacyContext)
+}
+
 // EncryptStream writes a framed AES-GCM stream. Each chunk and the terminal
 // frame is authenticated independently, allowing large artifacts to be
 // encrypted without buffering them in memory while detecting truncation.

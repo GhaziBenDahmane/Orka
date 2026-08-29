@@ -848,7 +848,9 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &service.EnvironmentID, "services"); err != nil {
 		return ComposeService{}, err
 	}
-	service.ID = uuid.New()
+	if service.ID == uuid.Nil {
+		service.ID = uuid.New()
+	}
 	service.Revision = 1
 	err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1608,13 +1610,17 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &instance.EnvironmentID, "databases"); err != nil {
 		return DatabaseInstance{}, err
 	}
-	service.ID = uuid.New()
+	if service.ID == uuid.Nil {
+		service.ID = uuid.New()
+	}
 	service.EnvironmentID = instance.EnvironmentID
 	service.Revision = 1
 	if err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv).Scan(&service.CreatedAt, &service.UpdatedAt); err != nil {
 		return DatabaseInstance{}, err
 	}
-	instance.ID = uuid.New()
+	if instance.ID == uuid.Nil {
+		instance.ID = uuid.New()
+	}
 	instance.ComposeServiceID = service.ID
 	instance.Status = "pending"
 	config, _ := json.Marshal(instance.Config)

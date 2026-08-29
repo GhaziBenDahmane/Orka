@@ -176,7 +176,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err != nil || !bytes.Contains(credentialsJSON, []byte("legacy-secret")) {
 		t.Fatalf("migrated credentials cannot be decrypted: %s, err = %v", credentialsJSON, err)
 	}
-	environmentJSON, err := box.Decrypt(encryptedEnvironment, "compose-env")
+	environmentJSON, err := box.Decrypt(encryptedEnvironment, cryptox.ResourceContext("compose-env", mappedID(options, "database-service:postgres", "pg1").String()))
 	if err != nil || !bytes.Contains(environmentJSON, []byte(`"EXTRA":"value"`)) || !bytes.Contains(environmentJSON, []byte(`"POSTGRES_PASSWORD":"legacy-secret"`)) {
 		t.Fatalf("migrated environment cannot be decrypted: %s, err = %v", environmentJSON, err)
 	}
@@ -196,7 +196,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT s.compose_yaml,s.encrypted_env FROM compose_services s WHERE s.id=$1`, mappedID(options, "application-service", "a1")).Scan(&applicationCompose, &applicationEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	applicationEnvJSON, err := box.Decrypt(applicationEnvironment, "compose-env")
+	applicationEnvJSON, err := box.Decrypt(applicationEnvironment, cryptox.ResourceContext("compose-env", mappedID(options, "application-service", "a1").String()))
 	if err != nil || !bytes.Contains(applicationEnvJSON, []byte(`"WORKERS":"2"`)) || !bytes.Contains([]byte(applicationCompose), []byte("ghcr.io/example/worker:1.2")) {
 		t.Fatalf("application was not converted correctly: compose=%s env=%s err=%v", applicationCompose, applicationEnvJSON, err)
 	}

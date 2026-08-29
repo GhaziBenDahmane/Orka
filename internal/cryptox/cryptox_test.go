@@ -23,6 +23,32 @@ func TestRoundTripAndContextBinding(t *testing.T) {
 	}
 }
 
+func TestResourceContextRejectsCiphertextTransplantAndReadsLegacy(t *testing.T) {
+	box, err := New(bytes.Repeat([]byte{9}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := box.Encrypt([]byte("environment"), ResourceContext("compose-env", "service-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := box.DecryptResource(bound, "compose-env", "service-a", "compose-env")
+	if err != nil || string(plain) != "environment" {
+		t.Fatalf("bound resource decrypt = %q, %v", plain, err)
+	}
+	if _, err = box.DecryptResource(bound, "compose-env", "service-b", "compose-env"); err == nil {
+		t.Fatal("resource-bound ciphertext was accepted for another service")
+	}
+	legacy, err := box.Encrypt([]byte("legacy"), "compose-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err = box.DecryptResource(legacy, "compose-env", "service-a", "compose-env")
+	if err != nil || string(plain) != "legacy" {
+		t.Fatalf("legacy decrypt = %q, %v", plain, err)
+	}
+}
+
 func TestEncryptedStreamRoundTripAndTamperDetection(t *testing.T) {
 	box, err := New(bytes.Repeat([]byte{3}, 32))
 	if err != nil {

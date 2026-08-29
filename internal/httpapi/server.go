@@ -851,17 +851,17 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_compose", err.Error())
 		return
 	}
+	id := uuid.New()
 	encrypted := ""
 	if len(in.Environment) > 0 {
 		plain, _ := json.Marshal(in.Environment)
-		encrypted, err = s.Box.Encrypt(plain, "compose-env")
+		encrypted, err = s.Box.Encrypt(plain, composeEnvironmentContext(id))
 		if err != nil {
 			writeError(w, 500, "encryption_failed", err.Error())
 			return
 		}
 	}
 	p := principal(r)
-	id := uuid.New()
 	item, err := s.Store.CreateComposeService(r.Context(), p.OrganizationID, store.ComposeService{ID: id, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, StackName: "dy-" + in.Slug + "-" + strings.Split(id.String(), "-")[0], ComposeYAML: in.ComposeYAML, EncryptedEnv: encrypted})
 	if err != nil {
 		writeStoreError(w, err)
@@ -922,8 +922,9 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_database", err.Error())
 		return
 	}
+	serviceID, databaseID := uuid.New(), uuid.New()
 	envJSON, _ := json.Marshal(rendered.Environment)
-	encryptedEnv, err := s.Box.Encrypt(envJSON, "compose-env")
+	encryptedEnv, err := s.Box.Encrypt(envJSON, composeEnvironmentContext(serviceID))
 	if err != nil {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
@@ -935,9 +936,9 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	shortID := strings.Split(uuid.NewString(), "-")[0]
+	shortID := strings.Split(serviceID.String(), "-")[0]
 	stackName := "db-" + in.Slug + "-" + shortID
-	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, Config: database.StoredConfig(in.Config)}, store.ComposeService{Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
+	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, Config: database.StoredConfig(in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1334,14 +1335,15 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_template", err.Error())
 		return
 	}
+	serviceID := uuid.New()
 	envJSON, _ := json.Marshal(instance.Environment)
-	encryptedEnv, err := s.Box.Encrypt(envJSON, "compose-env")
+	encryptedEnv, err := s.Box.Encrypt(envJSON, composeEnvironmentContext(serviceID))
 	if err != nil {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
-	shortID := strings.Split(uuid.NewString(), "-")[0]
-	service, err := s.Store.CreateComposeService(r.Context(), p.OrganizationID, store.ComposeService{EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv})
+	shortID := strings.Split(serviceID.String(), "-")[0]
+	service, err := s.Store.CreateComposeService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1434,7 +1436,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 	encrypted := ""
 	if len(in.Environment) > 0 {
 		plain, _ := json.Marshal(in.Environment)
-		encrypted, err = s.Box.Encrypt(plain, "compose-env")
+		encrypted, err = s.Box.Encrypt(plain, composeEnvironmentContext(id))
 		if err != nil {
 			writeError(w, 500, "encryption_failed", err.Error())
 			return
@@ -1994,6 +1996,10 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 		return false
 	}
 	return true
+}
+
+func composeEnvironmentContext(serviceID uuid.UUID) string {
+	return cryptox.ResourceContext("compose-env", serviceID.String())
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

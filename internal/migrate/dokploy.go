@@ -418,7 +418,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			}
 			environment := parseEnv(plain)
 			data, _ := json.Marshal(environment)
-			encryptedEnv, err = box.Encrypt(data, "compose-env")
+			encryptedEnv, err = box.Encrypt(data, cryptox.ResourceContext("compose-env", id.String()))
 			if err != nil {
 				return report, err
 			}
@@ -448,7 +448,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			return report, fmt.Errorf("prepare application %s: %w", item.ID, prepareErr)
 		}
 		environmentJSON, _ := json.Marshal(prepared.environment)
-		encryptedEnvironment, encryptErr := box.Encrypt(environmentJSON, "compose-env")
+		encryptedEnvironment, encryptErr := box.Encrypt(environmentJSON, cryptox.ResourceContext("compose-env", prepared.serviceID.String()))
 		if encryptErr != nil {
 			return report, encryptErr
 		}
@@ -516,7 +516,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			environment[key] = value
 		}
 		environmentJSON, _ := json.Marshal(environment)
-		encryptedEnvironment, encryptErr := box.Encrypt(environmentJSON, "compose-env")
+		encryptedEnvironment, encryptErr := box.Encrypt(environmentJSON, cryptox.ResourceContext("compose-env", serviceID.String()))
 		if encryptErr != nil {
 			return report, encryptErr
 		}

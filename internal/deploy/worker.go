@@ -434,10 +434,11 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
+	var serviceID uuid.UUID
 	var stack, compose, encrypted string
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.stack_name,d.compose_snapshot,d.env_snapshot,e.cluster_id`, id).Scan(&stack, &compose, &encrypted, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.id,s.stack_name,d.compose_snapshot,d.env_snapshot,e.cluster_id`, id).Scan(&serviceID, &stack, &compose, &encrypted, &clusterID)
 	})
 	if err != nil {
 		return err
@@ -463,7 +464,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	env := map[string]string{}
 	if encrypted != "" {
-		plain, e := w.Box.Decrypt(encrypted, "compose-env")
+		plain, e := w.Box.DecryptResource(encrypted, "compose-env", serviceID.String(), "compose-env")
 		if e != nil {
 			err = e
 		} else if e = json.Unmarshal(plain, &env); e != nil {
