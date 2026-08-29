@@ -1,0 +1,113 @@
+name: Release image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer release tag, including the leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Resolve immutable release coordinates
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$REQUESTED_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "release version must be a v-prefixed SemVer value" >&2
+            exit 1
+          fi
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf 'version=%s\n' "$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-architecture image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}
+          build-args: VERSION=${{ steps.release.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+
+      - name: Sign and verify immutable digest
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          subject="$IMAGE@$DIGEST"
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign sign --yes "$subject"
+          cosign verify --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
+          cosign verify-attestation --type slsaprovenance --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
+          cosign verify-attestation --type spdxjson --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
+
+      - name: Write promotion manifest
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          schema_version="$(find internal/store/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1 | cut -d_ -f1)"
+          test -n "$schema_version"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg image "$IMAGE@$DIGEST" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg schemaVersion "$schema_version" \
+            --arg operator "$GITHUB_ACTOR" \
+            --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg createdAt "$created_at" \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json"}' \
+            > promotion-manifest.json
+          printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
+          cat promotion-manifest.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: promotion-${{ steps.release.outputs.version }}
+          path: |
+            promotion-manifest.json
+            image-digest.txt
+          if-no-files-found: error

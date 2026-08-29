@@ -225,6 +225,9 @@ upgrades, stale-worker takeover, API security classification, clean Compose
 installation, live Swarm convergence, restart persistence, immutable rollback,
 and a destructive control-plane backup/restore drill with dump, image, schema,
 and key-fingerprint verification. It also covers vulnerability/license checks,
-an SPDX SBOM, and container scanning. The
-staging-only conformance, load, real-provider, full Dokploy cutover, and
-measured disaster-recovery gates remain open; see `docs/release-checklist.md`.
+an SPDX SBOM, container scanning, and a tag/manual promotion workflow that
+publishes an amd64/arm64 digest with BuildKit provenance and SBOM attestations,
+then keylessly signs and verifies it through Sigstore. An actual signed
+promotion and its soak evidence, plus the staging-only conformance, load,
+real-provider, full Dokploy cutover, and measured disaster-recovery gates,
+remain open; see `docs/release-checklist.md`.

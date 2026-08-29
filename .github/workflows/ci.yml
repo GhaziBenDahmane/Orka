@@ -42,13 +42,17 @@ jobs:
         run: npm ci && npm run build
       - name: Check generated assets
         run: git diff --exit-code -- internal/webui/dist
+      - name: Check generated OpenAPI contract
+        run: |
+          go run ./tools/generate-openapi
+          git diff --exit-code -- api/openapi.yaml
       - name: Start S3-compatible test storage
         run: |
           docker run -d --name dockyard-minio-test -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin \
             -e MINIO_ROOT_PASSWORD=minioadmin123 \
             minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
-          for attempt in {1..30}; do
+          for _ in {1..30}; do
             curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
             sleep 1
           done
@@ -64,6 +68,8 @@ jobs:
         run: |
           sh -n scripts/backup-control-plane.sh scripts/restore-control-plane.sh scripts/ci/check-image-digests.sh
           bash -n scripts/ci/smoke-compose.sh scripts/ci/test-keycloak-oidc.sh
+      - name: Validate GitHub Actions workflows
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
       - name: Validate immutable production images
         env:
           DOCKYARD_IMAGE: example/dockyard@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

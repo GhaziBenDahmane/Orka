@@ -57,6 +57,12 @@ links for every item below.
 
 ## Promotion and rollback
 
+- Push a protected `vMAJOR.MINOR.PATCH` tag, or explicitly dispatch the
+  `Release image` workflow with that version. It publishes amd64/arm64 to
+  `ghcr.io/<owner>/<repository>`, attaches SLSA provenance and an SPDX SBOM,
+  signs the resulting digest with GitHub's OIDC identity, verifies all three,
+  and uploads `promotion-manifest.json` plus `image-digest.txt`. Treat the
+  manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
   PostgreSQL backup before promotion.
 - Sign the image and catalog artifacts, publish their digests and SBOM, deploy
