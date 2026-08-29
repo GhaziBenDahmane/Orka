@@ -214,9 +214,9 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/templates` | List global and organization templates |
+| GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
 | POST | `/v1/templates/import/dokploy` | Import `template.toml` plus Compose YAML |
-| POST | `/v1/templates/{id}/instantiate` | Create a service, secrets, files and routes |
+| POST | `/v1/templates/{id}/instantiate` | Create a service, encrypted secrets, files and routes; accepts declared `variables` overrides |
 | GET | `/v1/database-engines` | List built-in database drivers |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |

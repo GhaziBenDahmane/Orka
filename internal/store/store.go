@@ -1675,7 +1675,7 @@ func (s *Store) UpsertGlobalTemplate(ctx context.Context, item Template) (Templa
 }
 
 func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]Template, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,template_key,version,name,description,source,checksum,created_at FROM templates WHERE organization_id IS NULL OR organization_id=$1 ORDER BY name,version DESC`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,template_key,version,name,description,config,source,checksum,created_at FROM templates WHERE organization_id IS NULL OR organization_id=$1 ORDER BY name,version DESC`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1683,7 +1683,7 @@ func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]
 	items := []Template{}
 	for rows.Next() {
 		var item Template
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Source, &item.Checksum, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Config, &item.Source, &item.Checksum, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

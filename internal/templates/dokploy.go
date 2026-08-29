@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,74 @@ type Instance struct {
 	Domains     []Domain
 	Mounts      []Mount
 	Variables   map[string]string
+}
+
+type VariableDescriptor struct {
+	Name      string `json:"name"`
+	Default   string `json:"default,omitempty"`
+	Generated bool   `json:"generated"`
+	Sensitive bool   `json:"sensitive"`
+}
+
+const (
+	maxVariableOverrides  = 128
+	maxVariableNameBytes  = 128
+	maxVariableValueBytes = 8 << 10
+	maxVariableTotalBytes = 64 << 10
+)
+
+var sensitiveVariableName = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|encryption[_-]?key|signing[_-]?key|credential|auth|salt)`)
+
+// DescribeVariables returns the operator-editable template inputs without ever
+// resolving generators or disclosing literal values that look secret.
+func DescribeVariables(template DokployTemplate) []VariableDescriptor {
+	sensitiveVariables := classifySensitiveVariables(template.Variables)
+	descriptors := make([]VariableDescriptor, 0, len(template.Variables))
+	for name, value := range template.Variables {
+		generated := expression.MatchString(value)
+		sensitive := sensitiveVariables[name]
+		descriptor := VariableDescriptor{Name: name, Generated: generated, Sensitive: sensitive}
+		if !generated && !sensitive {
+			descriptor.Default = value
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	sort.Slice(descriptors, func(i, j int) bool { return descriptors[i].Name < descriptors[j].Name })
+	return descriptors
+}
+
+func classifySensitiveVariables(variables map[string]string) map[string]bool {
+	sensitive := make(map[string]bool, len(variables))
+	for name, value := range variables {
+		sensitive[name] = sensitiveVariableName.MatchString(name) || containsSensitiveGenerator(value)
+	}
+	for changed := true; changed; {
+		changed = false
+		for name, value := range variables {
+			if sensitive[name] {
+				continue
+			}
+			for _, match := range expression.FindAllStringSubmatch(value, -1) {
+				if sensitive[strings.SplitN(match[1], ":", 2)[0]] {
+					sensitive[name] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return sensitive
+}
+
+func containsSensitiveGenerator(value string) bool {
+	for _, match := range expression.FindAllStringSubmatch(value, -1) {
+		helper := strings.SplitN(match[1], ":", 2)[0]
+		switch helper {
+		case "password", "base64", "hash", "jwt":
+			return true
+		}
+	}
+	return false
 }
 
 func LoadDokployDirectory(path, baseDomain string) (Instance, error) {
@@ -207,18 +276,44 @@ func sanitize(value string) string {
 }
 
 func Instantiate(template DokployTemplate, compose, baseDomain string) (Instance, error) {
-	resolved := map[string]string{}
-	for i := 0; i < len(template.Variables)+1; i++ {
-		for key, value := range template.Variables {
-			next, err := resolve(value, resolved, baseDomain)
-			if err == nil {
-				resolved[key] = next
-			}
+	return InstantiateWithOverrides(template, compose, baseDomain, nil)
+}
+
+// InstantiateWithOverrides applies literal operator-provided values only to
+// variables declared by the template. Overrides are deliberately not expanded
+// as helper expressions, which prevents callers from injecting generators.
+func InstantiateWithOverrides(template DokployTemplate, compose, baseDomain string, overrides map[string]string) (Instance, error) {
+	if err := validateOverrides(template, overrides); err != nil {
+		return Instance{}, err
+	}
+	resolved := make(map[string]string, len(template.Variables))
+	for key, value := range overrides {
+		resolved[key] = value
+	}
+	unresolved := make(map[string]string, len(template.Variables)-len(resolved))
+	for key, value := range template.Variables {
+		if _, overridden := resolved[key]; !overridden {
+			unresolved[key] = value
 		}
 	}
-	for key, value := range template.Variables {
-		if _, ok := resolved[key]; !ok {
-			return Instance{}, fmt.Errorf("cannot resolve variable %q=%q", key, value)
+	for len(unresolved) > 0 {
+		progress := false
+		for key, value := range unresolved {
+			if !dependenciesResolved(key, value, template.Variables, resolved) {
+				continue
+			}
+			next, err := resolve(value, resolved, baseDomain)
+			if err != nil {
+				return Instance{}, fmt.Errorf("resolve variable %q: %w", key, err)
+			}
+			resolved[key] = next
+			delete(unresolved, key)
+			progress = true
+		}
+		if !progress {
+			for key := range unresolved {
+				return Instance{}, fmt.Errorf("cannot resolve variable %q", key)
+			}
 		}
 	}
 	instance := Instance{ComposeYAML: compose, Environment: map[string]string{}, Variables: resolved}
@@ -282,6 +377,50 @@ func Instantiate(template DokployTemplate, compose, baseDomain string) (Instance
 		instance.Mounts = append(instance.Mounts, mount)
 	}
 	return instance, nil
+}
+
+func validateOverrides(template DokployTemplate, overrides map[string]string) error {
+	if len(overrides) > maxVariableOverrides {
+		return fmt.Errorf("too many variable overrides (maximum %d)", maxVariableOverrides)
+	}
+	total := 0
+	for key, value := range overrides {
+		if _, ok := template.Variables[key]; !ok {
+			return fmt.Errorf("unknown template variable %q", key)
+		}
+		if key == "" || len(key) > maxVariableNameBytes {
+			return fmt.Errorf("invalid template variable name")
+		}
+		if len(value) > maxVariableValueBytes {
+			return fmt.Errorf("template variable %q exceeds %d bytes", key, maxVariableValueBytes)
+		}
+		total += len(key) + len(value)
+		if total > maxVariableTotalBytes {
+			return fmt.Errorf("template variable overrides exceed %d bytes", maxVariableTotalBytes)
+		}
+	}
+	return nil
+}
+
+func dependenciesResolved(currentKey, value string, declared, resolved map[string]string) bool {
+	for _, match := range expression.FindAllStringSubmatch(value, -1) {
+		parts := strings.Split(match[1], ":")
+		if _, isVariable := declared[parts[0]]; isVariable && parts[0] != currentKey {
+			if _, ok := resolved[parts[0]]; !ok {
+				return false
+			}
+		}
+		if parts[0] == "jwt" {
+			for _, dependency := range parts[1:] {
+				if _, isVariable := declared[dependency]; isVariable {
+					if _, ok := resolved[dependency]; !ok {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
 }
 
 func addEnvLine(target map[string]string, line string, variables map[string]string, baseDomain string) error {

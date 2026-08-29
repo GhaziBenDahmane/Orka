@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,80 @@ func TestInstantiateDokployTemplate(t *testing.T) {
 	}
 	if !strings.HasSuffix(instance.Domains[0].Host, ".example.com") {
 		t.Fatalf("unexpected domain %q", instance.Domains[0].Host)
+	}
+}
+
+func TestInstantiateWithOverridesUsesDeclaredLiteralValues(t *testing.T) {
+	var template DokployTemplate
+	template.Variables = map[string]string{
+		"admin_email": "admin@example.test",
+		"password":    "${password:24}",
+		"dsn":         "postgres://app:${password}@db/app",
+	}
+	template.Config.Env = map[string]any{"ADMIN_EMAIL": "${admin_email}", "DATABASE_URL": "${dsn}", "PASSWORD": "${password}"}
+	overrides := map[string]string{"admin_email": "operator@example.test", "password": "literal-${password:99}"}
+	instance, err := InstantiateWithOverrides(template, "services: {}\n", "example.test", overrides)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := instance.Environment["ADMIN_EMAIL"]; got != overrides["admin_email"] {
+		t.Fatalf("admin email = %q", got)
+	}
+	if got := instance.Environment["PASSWORD"]; got != overrides["password"] {
+		t.Fatalf("override was expanded instead of treated literally: %q", got)
+	}
+	if got := instance.Environment["DATABASE_URL"]; !strings.Contains(got, overrides["password"]) {
+		t.Fatalf("dependent variable did not use override: %q", got)
+	}
+}
+
+func TestInstantiateWithOverridesRejectsUnknownAndOversizedValues(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{"name": "default"}}
+	if _, err := InstantiateWithOverrides(template, "services: {}\n", "", map[string]string{"other": "value"}); err == nil || !strings.Contains(err.Error(), "unknown template variable") {
+		t.Fatalf("unknown override error = %v", err)
+	}
+	if _, err := InstantiateWithOverrides(template, "services: {}\n", "", map[string]string{"name": strings.Repeat("x", maxVariableValueBytes+1)}); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized override error = %v", err)
+	}
+	manyVariables, manyOverrides := map[string]string{}, map[string]string{}
+	for index := 0; index <= maxVariableOverrides; index++ {
+		name := fmt.Sprintf("variable_%d", index)
+		manyVariables[name], manyOverrides[name] = "default", "override"
+	}
+	if _, err := InstantiateWithOverrides(DokployTemplate{Variables: manyVariables}, "services: {}\n", "", manyOverrides); err == nil || !strings.Contains(err.Error(), "too many") {
+		t.Fatalf("override count error = %v", err)
+	}
+}
+
+func TestDescribeVariablesRedactsGeneratedAndSensitiveDefaults(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{
+		"admin_email": "admin@example.test",
+		"api_token":   "do-not-disclose",
+		"hostname":    "${domain}",
+		"password":    "${password:32}",
+		"dsn":         "postgres://app:${api_token}@db/app",
+	}}
+	descriptors := DescribeVariables(template)
+	if len(descriptors) != 5 || descriptors[0].Name != "admin_email" {
+		t.Fatalf("descriptors are incomplete or unsorted: %#v", descriptors)
+	}
+	byName := map[string]VariableDescriptor{}
+	for _, descriptor := range descriptors {
+		byName[descriptor.Name] = descriptor
+	}
+	if byName["admin_email"].Default != "admin@example.test" || byName["admin_email"].Sensitive {
+		t.Fatalf("safe default missing: %#v", byName["admin_email"])
+	}
+	for _, name := range []string{"api_token", "password"} {
+		if !byName[name].Sensitive || byName[name].Default != "" {
+			t.Fatalf("secret descriptor leaked a default: %#v", byName[name])
+		}
+	}
+	if !byName["dsn"].Sensitive {
+		t.Fatalf("derived secret was not classified: %#v", byName["dsn"])
+	}
+	if !byName["hostname"].Generated || byName["hostname"].Sensitive || byName["hostname"].Default != "" {
+		t.Fatalf("domain descriptor = %#v", byName["hostname"])
 	}
 }
 

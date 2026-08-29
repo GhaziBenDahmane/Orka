@@ -1210,7 +1210,25 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"items": items})
+	type catalogItem struct {
+		store.Template
+		Variables []templates.VariableDescriptor `json:"variables"`
+	}
+	response := make([]catalogItem, 0, len(items))
+	for _, item := range items {
+		var config map[string]string
+		if err = json.Unmarshal(item.Config, &config); err != nil {
+			writeError(w, 500, "invalid_template", "stored template config is invalid")
+			return
+		}
+		template, parseErr := templates.ParseDokploy([]byte(config["templateToml"]))
+		if parseErr != nil {
+			writeError(w, 500, "invalid_template", "stored template definition is invalid")
+			return
+		}
+		response = append(response, catalogItem{Template: item, Variables: templates.DescribeVariables(template)})
+	}
+	writeJSON(w, 200, map[string]any{"items": response})
 }
 
 func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
@@ -1264,10 +1282,11 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		EnvironmentID uuid.UUID `json:"environmentId"`
-		Name          string    `json:"name"`
-		Slug          string    `json:"slug"`
-		BaseDomain    string    `json:"baseDomain"`
+		EnvironmentID uuid.UUID         `json:"environmentId"`
+		Name          string            `json:"name"`
+		Slug          string            `json:"slug"`
+		BaseDomain    string            `json:"baseDomain"`
+		Variables     map[string]string `json:"variables"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -1304,7 +1323,7 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "invalid_template", err.Error())
 		return
 	}
-	instance, err := templates.Instantiate(template, item.ComposeYAML, in.BaseDomain)
+	instance, err := templates.InstantiateWithOverrides(template, item.ComposeYAML, in.BaseDomain, in.Variables)
 	if err == nil {
 		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
 	}
