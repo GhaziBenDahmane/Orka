@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -54,10 +56,10 @@ func NewRegistry() *Registry {
 		simpleDriver{name: "mysql", version: "8.4", image: "mysql", port: 3306, userKey: "MYSQL_USER", passwordKey: "MYSQL_PASSWORD", databaseKey: "MYSQL_DATABASE", rootPasswordKey: "MYSQL_ROOT_PASSWORD", dataPath: "/var/lib/mysql", scheme: "mysql"},
 		simpleDriver{name: "mariadb", version: "11.8", image: "mariadb", port: 3306, userKey: "MARIADB_USER", passwordKey: "MARIADB_PASSWORD", databaseKey: "MARIADB_DATABASE", rootPasswordKey: "MARIADB_ROOT_PASSWORD", dataPath: "/var/lib/mysql", scheme: "mysql"},
 		simpleDriver{name: "mongo", version: "8", image: "mongo", port: 27017, userKey: "MONGO_INITDB_ROOT_USERNAME", passwordKey: "MONGO_INITDB_ROOT_PASSWORD", databaseKey: "MONGO_INITDB_DATABASE", dataPath: "/data/db", scheme: "mongodb"},
-		simpleDriver{name: "valkey", version: "8", image: "valkey/valkey", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true},
-		simpleDriver{name: "redis", version: "8", image: "redis", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true},
+		simpleDriver{name: "valkey", version: "8", image: "valkey/valkey", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true, commandBinary: "valkey-server", passwordOnlyURL: true},
+		simpleDriver{name: "redis", version: "8", image: "redis", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true, commandBinary: "redis-server", passwordOnlyURL: true},
 		simpleDriver{name: "libsql", version: "latest", image: "ghcr.io/tursodatabase/libsql-server", port: 8080, passwordKey: "SQLD_AUTH_JWT_KEY", dataPath: "/var/lib/sqld", scheme: "http"},
-		simpleDriver{name: "clickhouse", version: "25", image: "clickhouse/clickhouse-server", port: 8123, userKey: "CLICKHOUSE_USER", passwordKey: "CLICKHOUSE_PASSWORD", databaseKey: "CLICKHOUSE_DB", dataPath: "/var/lib/clickhouse", scheme: "http"},
+		simpleDriver{name: "clickhouse", version: "25", image: "clickhouse/clickhouse-server", port: 8123, userKey: "CLICKHOUSE_USER", passwordKey: "CLICKHOUSE_PASSWORD", databaseKey: "CLICKHOUSE_DB", dataPath: "/var/lib/clickhouse", scheme: "http", basicAuthURL: true},
 		simpleDriver{name: "qdrant", version: "v1.15", image: "qdrant/qdrant", port: 6333, passwordKey: "QDRANT__SERVICE__API_KEY", dataPath: "/qdrant/storage", scheme: "http"},
 		simpleDriver{name: "meilisearch", version: "v1.20", image: "getmeili/meilisearch", port: 7700, passwordKey: "MEILI_MASTER_KEY", dataPath: "/meili_data", scheme: "http"},
 	} {
@@ -220,6 +222,8 @@ type simpleDriver struct {
 	port                                                                 int
 	userKey, passwordKey, databaseKey, rootPasswordKey, dataPath, scheme string
 	commandPassword                                                      bool
+	commandBinary                                                        string
+	passwordOnlyURL, basicAuthURL                                        bool
 }
 
 func (d simpleDriver) Name() string           { return d.name }
@@ -251,6 +255,9 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 		env[d.rootPasswordKey] = rootPassword
 		credentials["rootPassword"] = rootPassword
 	}
+	if d.commandPassword {
+		env["DATABASE_PASSWORD"] = password
+	}
 	service := map[string]any{"image": image, "volumes": []any{req.Name + "-data:" + d.dataPath}, "networks": []any{"default"}, "deploy": map[string]any{"restart_policy": map[string]any{"condition": "on-failure"}}}
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
@@ -265,23 +272,22 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 		service["environment"] = refs
 	}
 	if d.commandPassword {
-		service["command"] = []any{"valkey-server", "--appendonly", "yes", "--requirepass", "${DATABASE_PASSWORD}"}
-		env["DATABASE_PASSWORD"] = password
+		service["command"] = []any{d.commandBinary, "--appendonly", "yes", "--requirepass", "${DATABASE_PASSWORD}"}
 	}
 	doc := map[string]any{"services": map[string]any{req.Name: service}, "volumes": map[string]any{req.Name + "-data": map[string]any{}}, "networks": map[string]any{"default": map[string]any{"attachable": true}}}
 	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return Result{}, err
 	}
-	auth := ""
-	if user != "" {
-		auth = user + ":" + password + "@"
+	connection := &url.URL{Scheme: d.scheme, Host: net.JoinHostPort(req.Name, strconv.Itoa(d.port))}
+	if d.passwordOnlyURL {
+		connection.User = url.UserPassword("", password)
+		connection.Path = "/0"
+	} else if d.scheme != "http" || d.basicAuthURL {
+		connection.User = url.UserPassword(user, password)
+		connection.Path = "/" + databaseName
 	}
-	url := fmt.Sprintf("%s://%s%s:%d/%s", d.scheme, auth, req.Name, d.port, databaseName)
-	if d.scheme == "http" {
-		url = fmt.Sprintf("http://%s:%d", req.Name, d.port)
-	}
-	return Result{ComposeYAML: string(out), Environment: env, Credentials: credentials, InternalURL: url, Version: req.Version}, nil
+	return Result{ComposeYAML: string(out), Environment: env, Credentials: credentials, InternalURL: connection.String(), Version: req.Version}, nil
 }
 
 var registryImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)

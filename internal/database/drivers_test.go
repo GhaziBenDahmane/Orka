@@ -1,6 +1,7 @@
 package database
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -93,6 +94,43 @@ func TestRegistryUsesImportedCredentialsAndImage(t *testing.T) {
 		if !strings.Contains(result.ComposeYAML, expected) {
 			t.Fatalf("compose does not contain %q:\n%s", expected, result.ComposeYAML)
 		}
+	}
+}
+
+func TestRedisCompatibleDriversUseTheirOwnServerAndPasswordEnvironment(t *testing.T) {
+	registry := NewRegistry()
+	for _, tc := range []struct {
+		engine string
+		binary string
+	}{{"redis", "redis-server"}, {"valkey", "valkey-server"}} {
+		result, err := registry.Render(tc.engine, Request{Name: "cache", Config: map[string]any{"password": "cache-secret"}})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.engine, err)
+		}
+		for _, expected := range []string{tc.binary, "DATABASE_PASSWORD=${DATABASE_PASSWORD}", "--requirepass", "redis://:cache-secret@cache:6379/0"} {
+			value := result.ComposeYAML
+			if strings.HasPrefix(expected, "redis://") {
+				value = result.InternalURL
+			}
+			if !strings.Contains(value, expected) {
+				t.Fatalf("%s output does not contain %q: compose=%q url=%q", tc.engine, expected, result.ComposeYAML, result.InternalURL)
+			}
+		}
+	}
+}
+
+func TestConnectionURLSafelyEscapesCredentials(t *testing.T) {
+	result, err := NewRegistry().Render("postgres", Request{Name: "data", Config: map[string]any{"username": "user@example.test", "password": "p@ss:/?#", "database": "app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(result.InternalURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, ok := parsed.User.Password()
+	if !ok || parsed.User.Username() != "user@example.test" || password != "p@ss:/?#" || parsed.Host != "data:5432" || parsed.Path != "/app" {
+		t.Fatalf("connection URL did not round-trip safely: %q", result.InternalURL)
 	}
 }
 
