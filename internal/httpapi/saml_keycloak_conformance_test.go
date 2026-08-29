@@ -151,6 +151,47 @@ func TestKeycloakSAMLConformance(t *testing.T) {
 	if replayError.Error.Code != "saml_replay" {
 		t.Fatalf("replayed SAML callback code=%q, want saml_replay", replayError.Error.Code)
 	}
+
+	idpJar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idpBrowser := &http.Client{Jar: idpJar, Timeout: 30 * time.Second}
+	idpLoginPage, err := idpBrowser.Get(issuer + "/protocol/saml/clients/dockyard-conformance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idpLoginAction := keycloakLoginAction(t, idpLoginPage)
+	idpLoginResponse, err := idpBrowser.PostForm(idpLoginAction, url.Values{"username": {"conformance"}, "password": {"correct-horse-battery-staple"}, "credentialId": {""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idpACSURL, idpValues := keycloakSAMLPost(t, idpLoginResponse)
+	if !strings.HasPrefix(idpACSURL, server.URL+"/v1/auth/saml/") || idpValues.Get("SAMLResponse") == "" || idpValues.Get("RelayState") != "" {
+		t.Fatalf("unexpected IdP-initiated SAML form action=%q values=%v", idpACSURL, idpValues)
+	}
+	assertSignedSAMLResponse(t, idpValues.Get("SAMLResponse"))
+	idpResponse, err := http.PostForm(idpACSURL, idpValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idpLogin struct {
+		Token string `json:"token"`
+	}
+	decodeResponse(t, idpResponse, http.StatusOK, &idpLogin)
+	if idpLogin.Token == "" {
+		t.Fatal("IdP-initiated SAML callback did not create a session")
+	}
+	assertConformanceSession(t, server.URL, organizationID, idpLogin.Token, http.StatusOK, "developer")
+
+	idpReplayResponse, err := http.PostForm(idpACSURL, idpValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeResponse(t, idpReplayResponse, http.StatusUnauthorized, &replayError)
+	if replayError.Error.Code != "saml_replay" {
+		t.Fatalf("replayed IdP-initiated SAML callback code=%q, want saml_replay", replayError.Error.Code)
+	}
 }
 
 func keycloakSAMLMetadata(t *testing.T, issuer string) []byte {
@@ -227,6 +268,12 @@ func importKeycloakSAMLClient(t *testing.T, issuer, token string, metadata []byt
 	var client map[string]any
 	decodeResponse(t, response, http.StatusOK, &client)
 	client["enabled"] = true
+	attributes, _ := client["attributes"].(map[string]any)
+	if attributes == nil {
+		attributes = map[string]any{}
+	}
+	attributes["saml_idp_initiated_sso_url_name"] = "dockyard-conformance"
+	client["attributes"] = attributes
 	client["protocolMappers"] = []map[string]any{
 		{"name": "email", "protocol": "saml", "protocolMapper": "saml-user-property-mapper", "consentRequired": false, "config": map[string]string{"attribute.name": "email", "attribute.nameformat": "Basic", "user.attribute": "email"}},
 		{"name": "displayName", "protocol": "saml", "protocolMapper": "saml-user-property-mapper", "consentRequired": false, "config": map[string]string{"attribute.name": "displayName", "attribute.nameformat": "Basic", "user.attribute": "firstName"}},

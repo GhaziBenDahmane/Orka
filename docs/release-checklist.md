@@ -67,8 +67,8 @@ links for every item below.
   realm. Its OIDC flow verifies discovery, authorization-code login, PKCE,
   nonce binding, JIT provisioning, session authentication, and callback replay
   rejection. Its SAML flow imports the generated SP metadata into Keycloak and
-  verifies a signed AuthnRequest, signed response, JIT provisioning, session
-  authentication, and assertion replay rejection.
+  verifies a signed AuthnRequest, signed responses, SP- and IdP-initiated login,
+  JIT provisioning, session authentication, and assertion replay rejection.
   Run the equivalent flow against Entra ID, Okta, and Google Workspace, and
   verify tenant isolation with users from two organizations.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact

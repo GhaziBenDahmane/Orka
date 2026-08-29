@@ -109,7 +109,7 @@ rotation, SCIM users/groups, group-to-role mapping, owner protection, inherited
 project/environment grants, resumable audit export, and configurable audit
 retention implemented. Scheduled real-provider conformance exercises both OIDC
 and SAML against TLS-enabled Keycloak, including signed metadata-derived SAML
-configuration and replay rejection.
+configuration, SP- and IdP-initiated login, and replay rejection.
 
 - External write-once audit archives use S3 Object Lock COMPLIANCE retention,
   hash-chained manifests, durable retries, delivery inspection, failure
