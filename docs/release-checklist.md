@@ -58,8 +58,9 @@ links for every item below.
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. On a Swarm manager, `make test-database-recovery`
   exercises the exact engine-specific readiness, backup, and restore commands
-  against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, Qdrant,
-  and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON record per engine.
+  against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
+  ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON
+  record per engine.
   Preserve the workflow artifact with the release; repeat on
   production-equivalent storage because CI timings are not SLOs.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass

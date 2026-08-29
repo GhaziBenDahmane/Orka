@@ -76,7 +76,8 @@ access; worker-kill and Docker-daemon-loss tests pass.
 
 ### 2. Catalog and managed databases
 
-Status: core implementation complete; storage breadth remains.
+Status: core implementation and built-in storage breadth complete; production
+recovery evidence remains.
 
 - Native catalog plus Dokploy `template.toml` compatibility and bulk importer.
 - Safety classifications instead of silently granting host access.
@@ -85,9 +86,9 @@ Status: core implementation complete; storage breadth remains.
   revisions without rotating generated credentials.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
-- PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, Qdrant, and
-  Meilisearch engine-specific backup/restore, streaming checksums, interval
-  policies, retention, and opt-in isolated restore drills.
+- PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
+  Qdrant, and Meilisearch engine-specific backup/restore, streaming checksums,
+  interval policies, retention, and opt-in isolated restore drills.
 - S3-compatible multipart storage with encrypted destination credentials and
   client-side, per-backup envelope encryption for local and remote artifacts.
 - Remote backup and restore execution through outbound agents using short-lived
@@ -95,7 +96,7 @@ Status: core implementation complete; storage breadth remains.
 - Scheduled drill failure notifications, overdue alerts, and per-database
   recovery-duration metrics are implemented. An opt-in real-engine conformance
   suite verifies seeded application data and emits RPO/RTO evidence for all
-  nine backup-capable engines. Production RPO/RTO values still require drills
+  ten backup-capable engines. Production RPO/RTO values still require drills
   on production-equivalent storage and publication for each deployment.
 
 Exit gate: automated restore verification and documented RPO/RTO for every

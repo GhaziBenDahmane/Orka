@@ -59,7 +59,7 @@ func NewRegistry() *Registry {
 		simpleDriver{name: "valkey", version: "8", image: "valkey/valkey", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true, commandBinary: "valkey-server", passwordOnlyURL: true},
 		simpleDriver{name: "redis", version: "8", image: "redis", port: 6379, dataPath: "/data", scheme: "redis", commandPassword: true, commandBinary: "redis-server", passwordOnlyURL: true},
 		simpleDriver{name: "libsql", version: "v0.24.33", image: "ghcr.io/tursodatabase/libsql-server", port: 8080, dataPath: "/var/lib/sqld", scheme: "http", basicAuthURL: true, httpBasicAuth: true},
-		simpleDriver{name: "clickhouse", version: "25", image: "clickhouse/clickhouse-server", port: 8123, userKey: "CLICKHOUSE_USER", passwordKey: "CLICKHOUSE_PASSWORD", databaseKey: "CLICKHOUSE_DB", dataPath: "/var/lib/clickhouse", scheme: "http", basicAuthURL: true},
+		simpleDriver{name: "clickhouse", version: "25.8-alpine", image: "clickhouse/clickhouse-server", port: 8123, userKey: "CLICKHOUSE_USER", passwordKey: "CLICKHOUSE_PASSWORD", databaseKey: "CLICKHOUSE_DB", dataPath: "/var/lib/clickhouse", scheme: "http", basicAuthURL: true},
 		simpleDriver{name: "qdrant", version: "v1.15", image: "qdrant/qdrant", port: 6333, passwordKey: "QDRANT__SERVICE__API_KEY", dataPath: "/qdrant/storage", scheme: "http"},
 		simpleDriver{name: "meilisearch", version: "v1.20", image: "getmeili/meilisearch", port: 7700, passwordKey: "MEILI_MASTER_KEY", dataPath: "/meili_data", scheme: "http"},
 	} {
@@ -128,6 +128,8 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 		return meilisearchBackupPlan(host, credentials, filename), nil
 	case "libsql":
 		return libSQLBackupPlan(host, credentials, filename), nil
+	case "clickhouse":
+		return clickHouseBackupPlan(version, host, credentials, filename), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("verified backups are not implemented for database engine %q", engine)
 	}
@@ -167,6 +169,8 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 		return meilisearchRestorePlan(host, credentials, filename), nil
 	case "libsql":
 		return libSQLRestorePlan(host, credentials, filename), nil
+	case "clickhouse":
+		return clickHouseRestorePlan(version, host, credentials, filename), nil
 	default:
 		return RestorePlan{}, fmt.Errorf("verified restore is not implemented for database engine %q", engine)
 	}
@@ -183,6 +187,8 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 		return "sql", true
 	case "libsql":
 		return "sql", true
+	case "clickhouse":
+		return "tar.gz", true
 	case "mongo":
 		return "archive.gz", true
 	case "redis", "valkey":
@@ -223,6 +229,8 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 		return meilisearchReadinessPlan(host, credentials), nil
 	case "libsql":
 		return libSQLReadinessPlan(host, credentials), nil
+	case "clickhouse":
+		return clickHouseReadinessPlan(version, host, credentials), nil
 	default:
 		return BackupPlan{}, fmt.Errorf("readiness probe is not implemented for database engine %q", engine)
 	}

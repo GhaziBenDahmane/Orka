@@ -11,7 +11,8 @@
 
 - Native versioned catalog and Dokploy `template.toml` compatibility importer
 - Template validation, generated secrets, previews, and upgrade metadata
-- PostgreSQL, MySQL, MariaDB, MongoDB, Valkey, and libSQL drivers
+- PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
+  Qdrant, and Meilisearch drivers
 - S3-compatible backup scheduling, restore verification, and retention
 
 ## R3 — enterprise identity and policy

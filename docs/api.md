@@ -313,7 +313,7 @@ Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
 The engine response includes `backupCapable`; verified engine-specific
 backup/restore is currently available for PostgreSQL, MySQL, MariaDB, MongoDB,
-Redis, Valkey, libSQL, Qdrant, and Meilisearch.
+Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch.
 Pass `destinationId` to a backup request or backup policy to upload through an
 S3-compatible multipart client. Restores download to an isolated temporary
 directory and verify the stored SHA-256 checksum before invoking native tools.
@@ -338,6 +338,11 @@ libSQL backups use sqld's transactionally consistent streaming SQL dump and
 restore it through a long-lived Hrana transaction. Schema objects, triggers,
 views, indexes, row IDs, and binary values are covered without direct access to
 the database volume.
+ClickHouse backups store UUID-free `SHOW CREATE` definitions and each table's
+Native-format data in one archive. Materialized views with private storage are
+preserved without archiving their hidden internal tables. Because tables are
+streamed individually, quiesce writes when cross-table point-in-time
+consistency is required.
 Set `verifyRestore` on a backup policy to enqueue one restore drill after each
 successful scheduled backup. Drills create a temporary isolated Swarm stack,
 restore the verified artifact with fresh credentials, record the result as a

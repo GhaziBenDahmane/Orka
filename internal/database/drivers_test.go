@@ -35,6 +35,16 @@ func TestLibSQLUsesUsableBasicAuthentication(t *testing.T) {
 	}
 }
 
+func TestClickHouseUsesTestedImageVersion(t *testing.T) {
+	result, err := NewRegistry().Render("clickhouse", Request{Name: "analytics", Config: map[string]any{"password": "clickhouse-password"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "25.8-alpine" || !strings.Contains(result.ComposeYAML, "clickhouse/clickhouse-server:25.8-alpine") {
+		t.Fatalf("ClickHouse image is not pinned to the tested release: version=%q compose=%q", result.Version, result.ComposeYAML)
+	}
+}
+
 func TestRegistryRendersAllDrivers(t *testing.T) {
 	registry := NewRegistry()
 	if len(registry.Names()) < 10 {
@@ -54,7 +64,7 @@ func TestRegistryRendersAllDrivers(t *testing.T) {
 func TestNativeBackupAndRestorePlans(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "clickhouse", "qdrant", "meilisearch"} {
 		extension, ok := registry.BackupExtension(engine)
 		if !ok {
 			t.Fatalf("%s should support backups", engine)
@@ -93,6 +103,9 @@ func TestNativeBackupAndRestorePlans(t *testing.T) {
 		if engine == "libsql" && (backup.Environment["DOCKYARD_LIBSQL_PASSWORD"] != credentials["password"] || !strings.Contains(restore.Command[2], "/v2/pipeline")) {
 			t.Fatal("libSQL recovery plan is incomplete")
 		}
+		if engine == "clickhouse" && (backup.Environment["CLICKHOUSE_PASSWORD"] != credentials["password"] || !strings.Contains(restore.Command[3], "FORMAT Native")) {
+			t.Fatal("ClickHouse recovery plan is incomplete")
+		}
 	}
 }
 
@@ -128,7 +141,7 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 	for _, tc := range []struct {
 		engine string
 		want   string
-	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"libsql", "DOCKYARD_LIBSQL_PORT=16379"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}, {"meilisearch", "DOCKYARD_MEILI_PORT=16379"}} {
+	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"libsql", "DOCKYARD_LIBSQL_PORT=16379"}, {"clickhouse", "DOCKYARD_CLICKHOUSE_PORT=19000"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}, {"meilisearch", "DOCKYARD_MEILI_PORT=16379"}} {
 		port := "13306"
 		if tc.engine == "postgres" {
 			port = "15432"
@@ -136,6 +149,8 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 			port = "17017"
 		} else if tc.engine == "redis" || tc.engine == "valkey" || tc.engine == "libsql" || tc.engine == "qdrant" || tc.engine == "meilisearch" {
 			port = "16379"
+		} else if tc.engine == "clickhouse" {
+			port = "19000"
 		}
 		plan, err := registry.Backup(tc.engine, "17", "source.internal", map[string]string{"username": "user", "password": "secret", "database": "app", "port": port}, "123e4567-e89b-12d3-a456-426614174000.dump")
 		if err != nil {
@@ -148,6 +163,8 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 			got = "DOCKYARD_MEILI_PORT=" + plan.Environment["DOCKYARD_MEILI_PORT"]
 		} else if tc.engine == "libsql" {
 			got = "DOCKYARD_LIBSQL_PORT=" + plan.Environment["DOCKYARD_LIBSQL_PORT"]
+		} else if tc.engine == "clickhouse" {
+			got = "DOCKYARD_CLICKHOUSE_PORT=" + plan.Environment["DOCKYARD_CLICKHOUSE_PORT"]
 		}
 		if !strings.Contains(got, tc.want) {
 			t.Fatalf("%s command %q does not contain %q", tc.engine, got, tc.want)
@@ -223,7 +240,7 @@ func TestStoredConfigRemovesPasswords(t *testing.T) {
 func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "app", "password": "very-secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "clickhouse", "qdrant", "meilisearch"} {
 		plan, err := registry.Readiness(engine, "17", "verify", credentials)
 		if err != nil {
 			t.Fatalf("%s readiness: %v", engine, err)

@@ -48,6 +48,7 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 		redisRecovery("redis", "8"),
 		redisRecovery("valkey", "8"),
 		libSQLRecovery(),
+		clickHouseRecovery(),
 		qdrantRecovery(),
 		meilisearchRecovery(),
 	}
@@ -56,6 +57,17 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 			continue
 		}
 		t.Run(tc.engine, func(t *testing.T) { exerciseRecovery(t, ctx, network, tc) })
+	}
+}
+
+func clickHouseRecovery() recoveryCase {
+	return recoveryCase{
+		engine: "clickhouse", version: "25.8-alpine", image: "clickhouse/clickhouse-server",
+		serverEnv:    map[string]string{"CLICKHOUSE_USER": "dockyard", "CLICKHOUSE_PASSWORD": "recovery-secret", "CLICKHOUSE_DB": "app"},
+		seedCommand:  []string{"clickhouse-client", "--user", "dockyard", "--database", "app", "--multiquery", "--query", "CREATE TABLE recovery_probe(id UInt64,value String,payload String,day Date,INDEX value_idx value TYPE bloom_filter GRANULARITY 1) ENGINE=MergeTree ORDER BY id; CREATE MATERIALIZED VIEW recovery_mv ENGINE=MergeTree ORDER BY id AS SELECT id,value FROM recovery_probe; CREATE VIEW recovery_view AS SELECT id,value,payload,day FROM recovery_probe; INSERT INTO recovery_probe VALUES (1,'dockyard-recovery-ok',unhex('0001FF'),'2026-08-29')"},
+		clearCommand: []string{"clickhouse-client", "--user", "dockyard", "--database", "app", "--multiquery", "--query", "DROP VIEW recovery_view; DROP VIEW recovery_mv; DROP TABLE recovery_probe"},
+		readCommand:  []string{"clickhouse-client", "--user", "dockyard", "--database", "app", "--query", "SELECT concat(value,'|',hex(payload),'|',if((SELECT count() FROM system.tables WHERE database='app' AND name IN ('recovery_probe','recovery_mv','recovery_view'))=3 AND (SELECT count() FROM recovery_mv)=1,'schema-ok','schema-bad')) FROM recovery_view WHERE id=1"},
+		want:         "dockyard-recovery-ok|0001FF|schema-ok",
 	}
 }
 
