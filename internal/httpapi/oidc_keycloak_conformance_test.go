@@ -52,23 +52,24 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 		t.Fatal("conformance database already contains conformance@example.test; use an isolated database")
 	}
 
-	organizationID, ownerID := uuid.New(), uuid.New()
+	organizationID, ownerID, localDeveloperID := uuid.New(), uuid.New(), uuid.New()
 	ownerToken := "keycloak-owner-" + uuid.NewString()
+	localDeveloperToken := "keycloak-local-developer-" + uuid.NewString()
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Keycloak conformance',$2)`, organizationID, "keycloak-"+organizationID.String()); err == nil {
-		_, err = db.Pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, ownerID, ownerID.String()+"@owner.example.test")
+		_, err = db.Pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test'),($3,$4,'!test')`, ownerID, ownerID.String()+"@owner.example.test", localDeveloperID, localDeveloperID.String()+"@developer.example.test")
 	}
 	if err == nil {
-		_, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, ownerID)
+		_, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'developer')`, organizationID, ownerID, localDeveloperID)
 	}
 	if err == nil {
-		_, err = db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')`, uuid.New(), ownerID, cryptox.Digest(ownerToken))
+		_, err = db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '10 minutes','local'),($4,$5,$6,now()+interval '10 minutes','local')`, uuid.New(), ownerID, cryptox.Digest(ownerToken), uuid.New(), localDeveloperID, cryptox.Digest(localDeveloperToken))
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
-		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1 OR email='conformance@example.test'`, ownerID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1 OR id=$2 OR email='conformance@example.test'`, ownerID, localDeveloperID)
 	})
 
 	api := &Server{Store: db, Box: box, SessionTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
@@ -142,6 +143,25 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 		t.Fatalf("unexpected JIT principal: %#v", me)
 	}
 
+	settingsBody, _ := json.Marshal(map[string]bool{"requireSso": true})
+	settingsRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/v1/sso/settings", bytes.NewReader(settingsBody))
+	settingsRequest.Header.Set("Authorization", "Bearer "+ownerToken)
+	settingsRequest.Header.Set("X-Organization-ID", organizationID.String())
+	settingsRequest.Header.Set("Content-Type", "application/json")
+	settingsResponse, err := http.DefaultClient.Do(settingsRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings store.OrganizationAuthSettings
+	decodeResponse(t, settingsResponse, http.StatusOK, &settings)
+	if !settings.RequireSSO {
+		t.Fatal("mandatory SSO was not enabled")
+	}
+
+	assertConformanceSession(t, server.URL, organizationID, ownerToken, http.StatusOK, "owner")
+	assertConformanceSession(t, server.URL, organizationID, localDeveloperToken, http.StatusUnauthorized, "")
+	assertConformanceSession(t, server.URL, organizationID, login.Token, http.StatusOK, "developer")
+
 	replayResponse, err := http.Get(callbackURL)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +169,30 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 	replayResponse.Body.Close()
 	if replayResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("replayed callback status=%d, want 400", replayResponse.StatusCode)
+	}
+}
+
+func assertConformanceSession(t *testing.T, baseURL string, organizationID uuid.UUID, token string, expectedStatus int, expectedRole string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, baseURL+"/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", organizationID.String())
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expectedStatus != http.StatusOK {
+		defer response.Body.Close()
+		if response.StatusCode != expectedStatus {
+			data, _ := io.ReadAll(response.Body)
+			t.Fatalf("session status=%d, want %d: %s", response.StatusCode, expectedStatus, data)
+		}
+		return
+	}
+	var principal store.Principal
+	decodeResponse(t, response, expectedStatus, &principal)
+	if principal.OrganizationID != organizationID || principal.Role != expectedRole {
+		t.Fatalf("session principal = %#v, want organization %s role %s", principal, organizationID, expectedRole)
 	}
 }
 

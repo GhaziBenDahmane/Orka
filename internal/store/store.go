@@ -383,7 +383,7 @@ func (s *Store) PasswordLogin(ctx context.Context, email string) (uuid.UUID, str
 
 func (s *Store) LocalLoginAllowed(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var allowed bool
-	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m LEFT JOIN organization_auth_settings a ON a.organization_id=m.organization_id WHERE m.user_id=$1 AND NOT COALESCE(a.require_sso,false))`, userID).Scan(&allowed)
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m LEFT JOIN organization_auth_settings a ON a.organization_id=m.organization_id WHERE m.user_id=$1 AND (m.role='owner' OR NOT COALESCE(a.require_sso,false)))`, userID).Scan(&allowed)
 	return allowed, err
 }
 
@@ -404,7 +404,7 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organizationID *uuid.UUID) (Principal, error) {
-	query := `SELECT u.id,s.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
+	query := `SELECT u.id,s.id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
 	args := []any{tokenHash}
 	if organizationID != nil {
 		query += ` AND o.id=$2`
