@@ -6,6 +6,13 @@ SSO discovery/callback, and deploy hooks, endpoints require
 organization when a user belongs to more than one. This includes `/metrics`;
 Prometheus should use a dedicated read-only service-account token.
 
+`GET /healthz` is the unauthenticated liveness probe and only reports whether
+the HTTP process can answer. `GET /readyz` is the unauthenticated readiness
+probe; it performs a database ping with a two-second upper bound and returns
+503 while PostgreSQL is unavailable. Dependency errors are logged server-side
+but are not included in the response. Container health checks and smoke tests
+use `/readyz` so traffic is sent only to a usable control plane.
+
 Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a
 Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,

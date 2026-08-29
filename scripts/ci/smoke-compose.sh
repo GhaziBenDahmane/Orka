@@ -48,12 +48,12 @@ else
   docker compose --project-name "$project" up --detach --build
 fi
 for _ in {1..90}; do
-  if curl --fail --silent "$base_url/healthz" >/dev/null; then
+  if curl --fail --silent "$base_url/readyz" >/dev/null; then
     break
   fi
   sleep 2
 done
-curl --fail --silent "$base_url/healthz" >/dev/null
+curl --fail --silent "$base_url/readyz" >/dev/null
 
 bootstrap_response="$(curl --fail --silent --show-error \
   --header 'Content-Type: application/json' \
@@ -106,7 +106,7 @@ jq --exit-status '.revision == 2 and (.composeYaml | contains("nginx:1.28-alpine
 
 docker compose --project-name "$project" restart dockyard
 for _ in {1..60}; do
-  if curl --fail --silent "$base_url/healthz" >/dev/null; then
+  if curl --fail --silent "$base_url/readyz" >/dev/null; then
     break
   fi
   sleep 2
@@ -195,7 +195,7 @@ DOCKYARD_STACK_NAME="$project" \
   scripts/restore-control-plane.sh "$recovery_root/control-plane"
 docker compose --project-name "$project" start dockyard
 for _ in {1..60}; do
-  if curl --fail --silent "$base_url/healthz" >/dev/null; then
+  if curl --fail --silent "$base_url/readyz" >/dev/null; then
     break
   fi
   sleep 2

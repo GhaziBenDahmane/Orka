@@ -35,6 +35,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /readyz:
+    get:
+      operationId: get_readyz
+      tags: [readyz]
+      security: []
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /scim/v2/Groups:
     get:
       operationId: get_scim_v2_Groups

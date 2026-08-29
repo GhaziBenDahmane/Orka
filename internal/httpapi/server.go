@@ -48,6 +48,7 @@ type Server struct {
 	AgentCACertificate  []byte
 	AgentCAKey          []byte
 	AgentCertificateTTL time.Duration
+	ReadinessCheck      func(context.Context) error
 }
 
 type contextKey string
@@ -65,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /readyz", s.ready)
 	mux.Handle("GET /metrics", s.requireAuth(http.HandlerFunc(s.metrics)))
 	mux.HandleFunc("POST /v1/auth/bootstrap", s.bootstrap)
 	mux.HandleFunc("POST /v1/auth/login", s.login)
@@ -374,13 +376,29 @@ func principal(r *http.Request) store.Principal {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
-	if err := s.Store.Pool.Ping(ctx); err != nil {
-		writeError(w, 503, "database_unavailable", err.Error())
+	check := s.ReadinessCheck
+	if check == nil {
+		check = func(ctx context.Context) error {
+			if s.Store == nil || s.Store.Pool == nil {
+				return errors.New("database is not configured")
+			}
+			return s.Store.Pool.Ping(ctx)
+		}
+	}
+	if err := check(ctx); err != nil {
+		s.logger().WarnContext(r.Context(), "readiness check failed", "dependency", "database", "error", err)
+		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "database is unavailable")
 		return
 	}
-	writeJSON(w, 200, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {

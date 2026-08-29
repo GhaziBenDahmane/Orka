@@ -113,7 +113,7 @@ paths:
 }
 
 func isAPIPath(path string) bool {
-	return path == "/healthz" || path == "/metrics" || strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/scim/")
+	return path == "/healthz" || path == "/readyz" || path == "/metrics" || strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/scim/")
 }
 
 func repositoryRoot() (string, error) {
@@ -148,7 +148,7 @@ func tag(path string) string {
 }
 
 func isPublic(path string) bool {
-	if path == "/healthz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/agent/enroll" {
+	if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/agent/enroll" {
 		return true
 	}
 	return strings.HasPrefix(path, "/v1/auth/sso/") || strings.HasPrefix(path, "/v1/auth/saml/") || strings.HasPrefix(path, "/v1/hooks/")

@@ -26,7 +26,7 @@ func Handler() http.Handler {
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 
 		clean := path.Clean("/" + r.URL.Path)
-		if strings.HasPrefix(clean, "/v1/") || strings.HasPrefix(clean, "/scim/") || clean == "/metrics" || clean == "/healthz" {
+		if strings.HasPrefix(clean, "/v1/") || strings.HasPrefix(clean, "/scim/") || clean == "/metrics" || clean == "/healthz" || clean == "/readyz" {
 			http.NotFound(w, r)
 			return
 		}

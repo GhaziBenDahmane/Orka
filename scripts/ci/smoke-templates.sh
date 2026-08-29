@@ -85,8 +85,8 @@ elif [[ -n "${DOCKYARD_BUILD_CA_CERT:-}" ]]; then
 else
   docker compose --project-name "$project" up --detach --build
 fi
-for _ in {1..90}; do curl --fail --silent "$base_url/healthz" >/dev/null && break; sleep 2; done
-curl --fail --silent "$base_url/healthz" >/dev/null
+for _ in {1..90}; do curl --fail --silent "$base_url/readyz" >/dev/null && break; sleep 2; done
+curl --fail --silent "$base_url/readyz" >/dev/null
 
 bootstrap="$(curl --fail --silent --show-error -H 'Content-Type: application/json' --data '{"email":"templates@example.test","password":"correct horse battery staple","organization":"Template Smoke"}' "$base_url/v1/auth/bootstrap")"
 token="$(jq -er '.token' <<<"$bootstrap")"

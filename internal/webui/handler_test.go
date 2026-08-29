@@ -21,9 +21,11 @@ func TestHandlerServesConsoleAndClientRoutes(t *testing.T) {
 }
 
 func TestHandlerDoesNotMaskAPIRoutes(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/does-not-exist", nil))
-	if recorder.Code != http.StatusNotFound || strings.Contains(recorder.Body.String(), `<div id="root"></div>`) {
-		t.Fatalf("expected API 404, got %d %q", recorder.Code, recorder.Body.String())
+	for _, route := range []string{"/v1/does-not-exist", "/healthz", "/readyz", "/metrics"} {
+		recorder := httptest.NewRecorder()
+		Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+		if recorder.Code != http.StatusNotFound || strings.Contains(recorder.Body.String(), `<div id="root"></div>`) {
+			t.Fatalf("%s: expected API 404, got %d %q", route, recorder.Code, recorder.Body.String())
+		}
 	}
 }

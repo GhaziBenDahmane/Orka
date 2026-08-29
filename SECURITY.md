@@ -75,7 +75,7 @@ Back up all of the following as one recovery set:
    image digest for the running release.
 
 Restore into an isolated environment first. Restore PostgreSQL, provide the
-original master key, start the same Dockyard version, verify `/healthz`, login,
+original master key, start the same Dockyard version, verify `/readyz`, login,
 decrypt a representative secret, inspect queued/running jobs, and run a managed
 database restore drill. Upgrade only after that baseline succeeds. Never roll
 back the binary across irreversible schema migrations; restore the pre-upgrade

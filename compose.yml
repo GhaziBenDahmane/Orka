@@ -23,7 +23,7 @@ services:
     ports:
       - "${DOCKYARD_HTTP_BIND:-8080}:8080"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/readyz"]
       interval: 10s
       timeout: 3s
       retries: 6
