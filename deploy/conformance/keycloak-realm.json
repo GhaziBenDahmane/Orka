@@ -14,7 +14,7 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "publicClient": false,
-      "redirectUris": ["http://127.0.0.1:*/*"],
+      "redirectUris": ["http://127.0.0.1:*"],
       "webOrigins": ["+"]
     }
   ],

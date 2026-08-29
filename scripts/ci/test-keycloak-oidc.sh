@@ -31,7 +31,7 @@ docker run -d --name "$keycloak_container" -p 127.0.0.1::8443 \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
   -v "$work_dir/keycloak.crt:/opt/keycloak/conf/server.crt:ro" \
   -v "$work_dir/keycloak.key:/opt/keycloak/conf/server.key:ro" \
-  -v "$root_dir/deploy/conformance/keycloak-realm.json:/opt/keycloak/data/import/dockyard-realm.json:ro" \
+  -v "$root_dir/deploy/conformance/keycloak-realm.json:/opt/keycloak/data/import/dockyard-conformance-realm.json:ro" \
   "${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak@sha256:98fab020a3a490aba0978f237e2a06cd0ea42bf149c6cf10f11c0aaf27728ff2}" start-dev --import-realm \
   --https-certificate-file=/opt/keycloak/conf/server.crt \
   --https-certificate-key-file=/opt/keycloak/conf/server.key \
@@ -47,6 +47,11 @@ for _ in $(seq 1 90); do
   if "$postgres_ready" && "$keycloak_ready"; then
     break
   fi
+	keycloak_status=$(docker inspect --format '{{.State.Status}}' "$keycloak_container" 2>/dev/null || true)
+	if [[ "$keycloak_status" == exited || "$keycloak_status" == dead ]]; then
+		docker logs "$keycloak_container" >&2
+		exit 1
+	fi
   sleep 2
 done
 if ! docker exec "$postgres_container" pg_isready -U dockyard -d dockyard_test >/dev/null 2>&1; then
