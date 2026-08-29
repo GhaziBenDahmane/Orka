@@ -80,9 +80,12 @@ links for every item below.
 - Push a protected `vMAJOR.MINOR.PATCH` tag, or explicitly dispatch the
   `Release image` workflow with that version. It publishes amd64/arm64 to
   `ghcr.io/<owner>/<repository>`, attaches SLSA provenance and an SPDX SBOM,
-  signs the resulting digest with GitHub's OIDC identity, verifies all three,
-  and uploads `promotion-manifest.json` plus `image-digest.txt`. Treat the
-  manifest's `image` value—not its discovery tag—as the deployment input.
+  signs the resulting digest with GitHub's OIDC identity, and verifies all
+  three. It also creates the matching immutable GitHub Release with
+  `promotion-manifest.json`, `image-digest.txt`, and a downloadable
+  `sbom.spdx.json`; the same files remain available as a workflow artifact.
+  A published version cannot be rerun or have its evidence overwritten. Treat
+  the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
   PostgreSQL backup before promotion.
 - Sign the image and catalog artifacts, publish their digests and SBOM, deploy

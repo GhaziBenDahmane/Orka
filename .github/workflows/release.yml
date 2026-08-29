@@ -30,20 +30,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write
       packages: write
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve immutable release coordinates
         id: release
         env:
+          GH_TOKEN: ${{ github.token }}
           REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$REQUESTED_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
             echo "release version must be a v-prefixed SemVer value" >&2
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/$REQUESTED_VERSION" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$REQUESTED_VERSION")"
+            if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
+              echo "release tag $REQUESTED_VERSION already points to $tagged_commit, not $GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
+          if gh release view "$REQUESTED_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $REQUESTED_VERSION is already published and cannot be overwritten" >&2
             exit 1
           fi
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
@@ -88,6 +102,14 @@ jobs:
           cosign verify-attestation --type slsaprovenance --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
           cosign verify-attestation --type spdxjson --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
 
+      - name: Export promoted image SPDX SBOM
+        uses: anchore/sbom-action@aa80c8c5bd439a416a62804f2151ab38c671a638 # v0.24.1
+        with:
+          image: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+
       - name: Write promotion manifest
         env:
           IMAGE: ${{ steps.release.outputs.image }}
@@ -117,4 +139,18 @@ jobs:
           path: |
             promotion-manifest.json
             image-digest.txt
+            sbom.spdx.json
           if-no-files-found: error
+
+      - name: Publish immutable release evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json)
+          gh release create "$VERSION" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Dockyard $VERSION" \
+            --generate-notes

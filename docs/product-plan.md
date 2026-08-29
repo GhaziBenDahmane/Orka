@@ -255,7 +255,9 @@ and a destructive control-plane backup/restore drill with dump, image, schema,
 and key-fingerprint verification. It also covers vulnerability/license checks,
 an SPDX SBOM, container scanning, and a tag/manual promotion workflow that
 publishes an amd64/arm64 digest with BuildKit provenance and SBOM attestations,
-then keylessly signs and verifies it through Sigstore. An actual signed
-promotion and its soak evidence, plus the staging-only conformance, load,
-real-provider, full Dokploy cutover, and measured disaster-recovery gates,
-remain open; see `docs/release-checklist.md`.
+then keylessly signs and verifies it through Sigstore. Each promotion creates
+a non-overwritable GitHub Release with the immutable digest, promotion
+manifest, and downloadable SPDX JSON evidence. An actual signed promotion and
+its soak evidence, plus the staging-only conformance, load, real-provider, full
+Dokploy cutover, and measured disaster-recovery gates, remain open; see
+`docs/release-checklist.md`.
