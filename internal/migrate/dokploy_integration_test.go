@@ -188,7 +188,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT d.encrypted_credentials,d.prefix,p.interval_seconds,p.retention_count FROM backup_policies p JOIN backup_destinations d ON d.id=p.destination_id WHERE p.database_instance_id=$1`, mappedID(options, "database:postgres", "pg1")).Scan(&destinationSecret, &destinationPrefix, &policyInterval, &policyRetention); err != nil {
 		t.Fatal(err)
 	}
-	destinationJSON, err := box.Decrypt(destinationSecret, "backup-destination")
+	destinationJSON, err := box.Decrypt(destinationSecret, cryptox.ResourceContext("backup-destination", mappedID(options, "backup-destination", "dst1\x00nightly").String()))
 	if err != nil || !bytes.Contains(destinationJSON, []byte(`"accessKey":"legacy-access"`)) || destinationPrefix != "nightly" || policyInterval != 86400 || policyRetention != 7 {
 		t.Fatalf("backup migration mismatch: credentials=%s prefix=%q interval=%d retention=%d err=%v", destinationJSON, destinationPrefix, policyInterval, policyRetention, err)
 	}
@@ -206,7 +206,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if err = destination.Pool.QueryRow(ctx, `SELECT a.repository_url,a.registry_image,a.git_credential_id,c.encrypted_secret,a.build_target,a.enable_submodules,a.encrypted_build_config FROM application_sources a JOIN source_credentials c ON c.id=a.registry_credential_id WHERE a.compose_service_id=$1`, mappedID(options, "application-service", "a2")).Scan(&repositoryURL, &registryImage, &gitCredentialID, &registryCredentialSecret, &buildTarget, &enableSubmodules, &encryptedBuildConfig); err != nil {
 		t.Fatal(err)
 	}
-	registrySecret, err := box.Decrypt(registryCredentialSecret, "source-credential")
+	registrySecret, err := box.Decrypt(registryCredentialSecret, cryptox.ResourceContext("source-credential", mappedID(options, "source-credential:registry", "reg1").String()))
 	if repositoryURL != "https://github.com/example/api.git" || !strings.HasPrefix(registryImage, "registry.example.test/imports/") || gitCredentialID != nil || string(registrySecret) != "registry-secret" || buildTarget != "runtime" || !enableSubmodules || err != nil {
 		t.Fatalf("Git source was not converted: repository=%q registry=%q", repositoryURL, registryImage)
 	}

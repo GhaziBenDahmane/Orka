@@ -1098,14 +1098,15 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "destination_unreachable", err.Error())
 		return
 	}
+	destinationID := uuid.New()
 	secretJSON, _ := json.Marshal(map[string]string{"accessKey": in.AccessKey, "secretKey": in.SecretKey, "sessionToken": in.SessionToken})
-	encrypted, err := s.Box.Encrypt(secretJSON, "backup-destination")
+	encrypted, err := s.Box.Encrypt(secretJSON, cryptox.ResourceContext("backup-destination", destinationID.String()))
 	if err != nil {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateBackupDestination(r.Context(), store.BackupDestination{OrganizationID: p.OrganizationID, Name: strings.TrimSpace(in.Name), Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	item, err := s.Store.CreateBackupDestination(r.Context(), store.BackupDestination{ID: destinationID, OrganizationID: p.OrganizationID, Name: strings.TrimSpace(in.Name), Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1690,13 +1691,14 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid_credential", "credential secret is required")
 		return
 	}
-	encrypted, err := s.Box.Encrypt([]byte(secret), "source-credential")
+	credentialID := uuid.New()
+	encrypted, err := s.Box.Encrypt([]byte(secret), cryptox.ResourceContext("source-credential", credentialID.String()))
 	if err != nil {
 		writeError(w, 500, "encryption_failed", err.Error())
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateSourceCredential(r.Context(), store.SourceCredential{OrganizationID: p.OrganizationID, Kind: in.Kind, Name: in.Name, Server: in.Server, Username: in.Username, EncryptedSecret: encrypted})
+	item, err := s.Store.CreateSourceCredential(r.Context(), store.SourceCredential{ID: credentialID, OrganizationID: p.OrganizationID, Kind: in.Kind, Name: in.Name, Server: in.Server, Username: in.Username, EncryptedSecret: encrypted})
 	if err != nil {
 		writeStoreError(w, err)
 		return

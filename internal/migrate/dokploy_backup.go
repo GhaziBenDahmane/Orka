@@ -45,13 +45,13 @@ func prepareDokployBackupDestination(box *cryptox.Box, options DokployOptions, i
 	if accessKey == "" || secretKey == "" {
 		return preparedBackupDestination{}, fmt.Errorf("access key and secret access key are required")
 	}
+	key := item.id + "\x00" + strings.Trim(prefix, "/")
+	id := mappedID(options, "backup-destination", key)
 	credentials, _ := json.Marshal(map[string]string{"accessKey": accessKey, "secretKey": secretKey, "sessionToken": ""})
-	encrypted, err := box.Encrypt(credentials, "backup-destination")
+	encrypted, err := box.Encrypt(credentials, cryptox.ResourceContext("backup-destination", id.String()))
 	if err != nil {
 		return preparedBackupDestination{}, err
 	}
-	key := item.id + "\x00" + strings.Trim(prefix, "/")
-	id := mappedID(options, "backup-destination", key)
 	name := strings.TrimSpace(item.name) + " (Dokploy " + strings.Split(id.String(), "-")[0] + ")"
 	return preparedBackupDestination{sourceID: item.id, key: key, name: name, endpoint: endpoint, region: item.region, bucket: item.bucket, prefix: strings.Trim(prefix, "/"), id: id, reportID: id, useTLS: useTLS, encryptedCredentials: encrypted}, nil
 }

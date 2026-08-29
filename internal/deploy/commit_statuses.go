@@ -31,7 +31,11 @@ func (w *Worker) deliverCommitStatus(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	token, err := w.Box.Decrypt(delivery.EncryptedCredential, "source-credential")
+	credentialID := ""
+	if delivery.CredentialID != nil {
+		credentialID = delivery.CredentialID.String()
+	}
+	token, err := w.Box.DecryptResource(delivery.EncryptedCredential, "source-credential", credentialID, "source-credential")
 	if err != nil {
 		return errors.Join(err, w.Store.FinishCommitStatusDeliveryForJob(ctx, j.ID, j.LeaseID, id, 0, err))
 	}

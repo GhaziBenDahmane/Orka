@@ -30,8 +30,9 @@ allowed to finish before deletion can begin.
 - Sensitive application values are encrypted with AES-256-GCM using the
   instance master key. New Compose environments use the service ID as
   authenticated context, preventing ciphertext from being transplanted between
-  services. Managed-database credentials are likewise bound to their database
-  ID. Workers retain read compatibility with legacy unbound ciphertext.
+  services. Managed-database, source, and backup-destination credentials are
+  likewise bound to their resource IDs. Workers retain read compatibility with
+  legacy unbound ciphertext.
 - Uploaded application ZIPs are size-bounded, fully validated, encrypted with
   service-bound authenticated data, and stored in PostgreSQL so any controller
   can execute the build. Extraction rejects traversal, links, devices, FIFOs,

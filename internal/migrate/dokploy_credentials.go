@@ -84,11 +84,12 @@ func prepareSourceCredential(box *cryptox.Box, options DokployOptions, item sour
 	if strings.TrimSpace(item.name) == "" || item.username == "" || secret == "" {
 		return preparedSourceCredential{}, fmt.Errorf("name, username, and secret are required")
 	}
-	encrypted, err := box.Encrypt([]byte(secret), "source-credential")
+	id := mappedID(options, "source-credential:"+item.sourceKind, item.sourceID)
+	encrypted, err := box.Encrypt([]byte(secret), cryptox.ResourceContext("source-credential", id.String()))
 	if err != nil {
 		return preparedSourceCredential{}, err
 	}
-	return preparedSourceCredential{source: item, id: mappedID(options, "source-credential:"+item.sourceKind, item.sourceID), server: server, secret: encrypted}, nil
+	return preparedSourceCredential{source: item, id: id, server: server, secret: encrypted}, nil
 }
 
 func credentialServer(value, kind string) (string, error) {

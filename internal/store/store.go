@@ -971,7 +971,9 @@ func (s *Store) ApplicationArtifactExists(ctx context.Context, organizationID, s
 }
 
 func (s *Store) CreateSourceCredential(ctx context.Context, item SourceCredential) (SourceCredential, error) {
-	item.ID = uuid.New()
+	if item.ID == uuid.Nil {
+		item.ID = uuid.New()
+	}
 	err := s.Pool.QueryRow(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Kind, item.Name, item.Server, item.Username, item.EncryptedSecret).Scan(&item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
@@ -1402,7 +1404,9 @@ func (s *Store) DeleteBackupPolicy(ctx context.Context, organizationID, database
 }
 
 func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestination) (BackupDestination, error) {
-	item.ID = uuid.New()
+	if item.ID == uuid.Nil {
+		item.ID = uuid.New()
+	}
 	err := s.Pool.QueryRow(ctx, `INSERT INTO backup_destinations(id,organization_id,name,endpoint,region,bucket,prefix,use_tls,encrypted_credentials) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Endpoint, item.Region, item.Bucket, item.Prefix, item.UseTLS, item.EncryptedCredentials).Scan(&item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }

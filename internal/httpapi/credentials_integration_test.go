@@ -99,9 +99,12 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 	if encrypted == "never-return-this" || encrypted == "" {
 		t.Fatalf("secret was not encrypted: %q", encrypted)
 	}
-	plain, err := box.Decrypt(encrypted, "source-credential")
+	plain, err := box.Decrypt(encrypted, cryptox.ResourceContext("source-credential", item.ID.String()))
 	if err != nil || string(plain) != "never-return-this" {
 		t.Fatalf("encrypted secret cannot be recovered: %v", err)
+	}
+	if _, err = box.DecryptResource(encrypted, "source-credential", uuid.NewString(), "source-credential"); err == nil {
+		t.Fatal("source credential ciphertext was accepted for another credential")
 	}
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)

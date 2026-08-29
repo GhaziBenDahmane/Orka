@@ -19,13 +19,14 @@ type CommitStatusDelivery struct {
 	Context             string
 	CredentialServer    string
 	CredentialUsername  string
+	CredentialID        *uuid.UUID
 	EncryptedCredential string
 }
 
 func queueCommitStatusTx(ctx context.Context, tx pgx.Tx, deploymentID uuid.UUID, state string) error {
 	deliveryID := uuid.New()
-	tag, err := tx.Exec(ctx, `INSERT INTO commit_status_deliveries(id,deployment_id,state,provider,repository_url,status_context,credential_server,credential_username,encrypted_credential)
-		SELECT $1,d.id,$3,a.status_provider,a.repository_url,a.status_context,c.server,c.username,c.encrypted_secret
+	tag, err := tx.Exec(ctx, `INSERT INTO commit_status_deliveries(id,deployment_id,state,provider,repository_url,status_context,credential_server,credential_username,credential_id,encrypted_credential)
+		SELECT $1,d.id,$3,a.status_provider,a.repository_url,a.status_context,c.server,c.username,c.id,c.encrypted_secret
 		FROM deployments d JOIN application_sources a ON a.compose_service_id=d.compose_service_id JOIN source_credentials c ON c.id=a.status_credential_id
 		WHERE d.id=$2 AND d.commit_sha<>'' AND a.status_provider<>''
 		ON CONFLICT(deployment_id,state) DO NOTHING`, deliveryID, deploymentID, state)
@@ -90,7 +91,7 @@ func (s *Store) GetCommitStatusDeliveryForJob(ctx context.Context, jobID, leaseI
 	err := s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `UPDATE commit_status_deliveries cs SET status='running',started_at=COALESCE(started_at,now())
 			FROM deployments d WHERE cs.id=$1 AND d.id=cs.deployment_id
-			RETURNING cs.id,cs.deployment_id,cs.state,cs.repository_url,d.commit_sha,cs.provider,cs.status_context,cs.credential_server,cs.credential_username,cs.encrypted_credential`, id).Scan(&item.ID, &item.DeploymentID, &item.State, &item.RepositoryURL, &item.CommitSHA, &item.Provider, &item.Context, &item.CredentialServer, &item.CredentialUsername, &item.EncryptedCredential)
+			RETURNING cs.id,cs.deployment_id,cs.state,cs.repository_url,d.commit_sha,cs.provider,cs.status_context,cs.credential_server,cs.credential_username,cs.credential_id,cs.encrypted_credential`, id).Scan(&item.ID, &item.DeploymentID, &item.State, &item.RepositoryURL, &item.CommitSHA, &item.Provider, &item.Context, &item.CredentialServer, &item.CredentialUsername, &item.CredentialID, &item.EncryptedCredential)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CommitStatusDelivery{}, ErrNotFound

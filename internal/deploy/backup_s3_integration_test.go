@@ -99,11 +99,12 @@ func TestWorkerBacksUpAndRestoresThroughS3(t *testing.T) {
 	})
 
 	s3Credentials, _ := json.Marshal(map[string]string{"accessKey": accessKey, "secretKey": secretKey, "sessionToken": ""})
-	encryptedS3Credentials, err := box.Encrypt(s3Credentials, "backup-destination")
+	destinationID := uuid.New()
+	encryptedS3Credentials, err := box.Encrypt(s3Credentials, cryptox.ResourceContext("backup-destination", destinationID.String()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	destination, err := db.CreateBackupDestination(ctx, store.BackupDestination{OrganizationID: orgID, Name: "minio", Endpoint: endpoint, Bucket: bucket, Prefix: "worker", UseTLS: parsedEndpoint.Scheme == "https", EncryptedCredentials: encryptedS3Credentials})
+	destination, err := db.CreateBackupDestination(ctx, store.BackupDestination{ID: destinationID, OrganizationID: orgID, Name: "minio", Endpoint: endpoint, Bucket: bucket, Prefix: "worker", UseTLS: parsedEndpoint.Scheme == "https", EncryptedCredentials: encryptedS3Credentials})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ func TestPrepareSourceCredentialEncryptsSecret(t *testing.T) {
 	if prepared.server != "gitlab.example.test" || prepared.secret == "source-token" {
 		t.Fatal("credential was not normalized and encrypted")
 	}
-	plain, err := box.Decrypt(prepared.secret, "source-credential")
+	plain, err := box.Decrypt(prepared.secret, cryptox.ResourceContext("source-credential", prepared.id.String()))
 	if err != nil || string(plain) != "source-token" {
 		t.Fatalf("credential cannot be decrypted: %q, %v", plain, err)
 	}

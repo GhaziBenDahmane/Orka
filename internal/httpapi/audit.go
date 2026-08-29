@@ -69,7 +69,7 @@ func (s *Server) createAuditArchive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_audit_archive", "audit archives require a TLS S3 destination")
 		return
 	}
-	credentialsJSON, err := s.Box.Decrypt(destination.EncryptedCredentials, "backup-destination")
+	credentialsJSON, err := s.Box.DecryptResource(destination.EncryptedCredentials, "backup-destination", destination.ID.String(), "backup-destination")
 	if err != nil {
 		writeError(w, 500, "decryption_failed", "backup destination cannot be decrypted")
 		return
