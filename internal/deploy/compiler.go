@@ -48,7 +48,10 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		services[name] = service
 	}
 	if len(routes) > 0 {
-		networks, _ := stringMap(doc["networks"])
+		networks, ok := stringMap(doc["networks"])
+		if doc["networks"] != nil && !ok {
+			return "", errors.New("compose networks must be an object")
+		}
 		if networks == nil {
 			networks = map[string]any{}
 		}
@@ -84,8 +87,11 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		}
 		deploy["labels"] = labels
 		service["deploy"] = deploy
-		var implicitDefault bool
-		service["networks"], implicitDefault = addServiceNetwork(service["networks"], c.PublicNetwork)
+		networksValue, implicitDefault, networkErr := addServiceNetwork(service["networks"], c.PublicNetwork)
+		if networkErr != nil {
+			return "", fmt.Errorf("service %q: %w", route.ServiceName, networkErr)
+		}
+		service["networks"] = networksValue
 		if implicitDefault {
 			networks, _ := stringMap(doc["networks"])
 			if networks == nil {
@@ -229,6 +235,8 @@ func networkNames(value any) []string {
 				out = append(out, s)
 			}
 		}
+	case []string:
+		out = append(out, v...)
 	case map[string]any:
 		for s := range v {
 			out = append(out, s)
@@ -237,20 +245,27 @@ func networkNames(value any) []string {
 	sort.Strings(out)
 	return out
 }
-func addServiceNetwork(value any, network string) (any, bool) {
+func addServiceNetwork(value any, network string) (any, bool, error) {
 	if value == nil {
-		return []string{"default", network}, true
+		return []string{"default", network}, true, nil
 	}
 	switch networks := value.(type) {
 	case []any:
-		return appendUnique(networkNames(networks), network), false
+		for _, item := range networks {
+			if _, ok := item.(string); !ok {
+				return nil, false, errors.New("networks list must contain only names")
+			}
+		}
+		return appendUnique(networkNames(networks), network), false, nil
+	case []string:
+		return appendUnique(networks, network), false, nil
 	case map[string]any:
 		if _, exists := networks[network]; !exists {
 			networks[network] = map[string]any{}
 		}
-		return networks, false
+		return networks, false, nil
 	default:
-		return []string{network}, false
+		return nil, false, errors.New("networks must be a list or object")
 	}
 }
 func appendUnique(items []string, item string) []string {

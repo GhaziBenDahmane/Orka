@@ -46,6 +46,33 @@ func TestCompilePreservesImplicitDefaultNetworkForRoutedService(t *testing.T) {
 	}
 }
 
+func TestCompilePreservesImplicitDefaultNetworkAcrossMultipleRoutes(t *testing.T) {
+	routes := []store.Route{
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80},
+		{ServiceName: "web", Host: "api.example.com", PathPrefix: "/api", TargetPort: 80},
+	}
+	out, err := (Compiler{PublicNetwork: "public"}).Compile("services:\n  web:\n    image: nginx:alpine\n", routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := compiledService(t, out, "web")
+	assertNetworkNames(t, service["networks"], "default", "public")
+	deploy, _ := stringMap(service["deploy"])
+	labels := normalizeLabels(deploy["labels"])
+	for _, host := range []string{"app.example.com", "api.example.com"} {
+		found := false
+		for key, value := range labels {
+			if strings.HasSuffix(key, ".rule") && strings.Contains(value.(string), host) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("compiled labels do not include route for %s: %#v", host, labels)
+		}
+	}
+}
+
 func TestCompilePreservesExplicitServiceNetworks(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -112,6 +139,19 @@ networks:
 			}
 			test.check(t, compiledService(t, out, "web")["networks"])
 		})
+	}
+}
+
+func TestCompileRejectsMalformedNetworksWhenAddingRoute(t *testing.T) {
+	tests := []string{
+		"services:\n  web:\n    image: nginx\n    networks: internal\n",
+		"services:\n  web:\n    image: nginx\n    networks: [internal, 7]\n",
+		"services:\n  web:\n    image: nginx\nnetworks: invalid\n",
+	}
+	for _, source := range tests {
+		if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, []store.Route{{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80}}); err == nil {
+			t.Fatalf("accepted malformed networks:\n%s", source)
+		}
 	}
 }
 
