@@ -108,9 +108,12 @@ device-session administration, expiring service accounts with atomic token
 rotation, SCIM users/groups, group-to-role mapping, owner protection, inherited
 project/environment grants, resumable audit export, and configurable audit
 retention implemented. Federated sessions are tenant-bound and legacy
-unscoped federated sessions are revoked on upgrade. Scheduled real-provider conformance exercises both OIDC
-and SAML against TLS-enabled Keycloak, including signed metadata-derived SAML
-configuration, SP- and IdP-initiated login, and replay rejection.
+unscoped federated sessions are revoked on upgrade. SCIM resources and
+deactivation state are tenant-bound, and shared global identities cannot be
+mutated across organizations. Scheduled real-provider conformance exercises
+both OIDC and SAML against TLS-enabled Keycloak, including signed
+metadata-derived SAML configuration, SP- and IdP-initiated login, and replay
+rejection.
 
 - External write-once audit archives use S3 Object Lock COMPLIANCE retention,
   hash-chained manifests, durable retries, delivery inspection, failure

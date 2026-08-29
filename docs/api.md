@@ -82,6 +82,13 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 
+SCIM user resources are bound to the organization that provisioned them.
+Deactivation removes access but retains that binding, so identity providers can
+query and reactivate an inactive user. A tenant cannot PATCH a global user ID
+that it does not own. Because email identities are shared across organizations,
+SCIM rejects `displayName` changes while the identity is visible in another
+organization; this prevents one tenant from rewriting another tenant's profile.
+
 Creating an environment accepts either an explicit `clusterId` or a
 `placementSelector` map plus `minimumNodes`, `minimumNanoCpus`, and
 `minimumMemoryBytes`. Automatic placement considers only

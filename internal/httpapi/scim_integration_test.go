@@ -65,6 +65,20 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	memberID := createdUser["id"].(string)
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, memberID) })
 
+	// User mutation endpoints are scoped to resources visible in the token's
+	// organization. A global user UUID from another tenant cannot be renamed or
+	// attached by PATCH.
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Compromised"}}}, http.StatusNotFound)
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": true}}}, http.StatusNotFound)
+	var otherName string
+	var attached bool
+	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, otherUserID).Scan(&otherName); err != nil || otherName != "" {
+		t.Fatalf("cross-tenant display name = %q, err = %v", otherName, err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)`, orgID, otherUserID).Scan(&attached); err != nil || attached {
+		t.Fatalf("cross-tenant user attached = %v, err = %v", attached, err)
+	}
+
 	// A token can never attach a user from another organization to its group.
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"displayName": "Cross tenant", "members": []map[string]string{{"value": otherUserID.String()}}}, http.StatusBadRequest)
 
@@ -85,6 +99,36 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodDelete, nil, http.StatusNoContent)
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, memberID).Scan(&role); err != nil || role != "viewer" {
 		t.Fatalf("fallback role = %q, err = %v", role, err)
+	}
+
+	// A global identity may be a member of several organizations, but one
+	// organization's SCIM token cannot rewrite profile data observed by another.
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'viewer')`, otherOrgID, memberID); err != nil {
+		t.Fatal(err)
+	}
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Cross-tenant rename"}}}, http.StatusConflict)
+	var memberName string
+	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, memberID).Scan(&memberName); err != nil || memberName != "" {
+		t.Fatalf("shared display name = %q, err = %v", memberName, err)
+	}
+
+	// Inactive SCIM resources retain their organization-scoped binding so the
+	// identity provider can query and reactivate them without a global lookup.
+	inactive := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "inactive-" + orgID.String() + "@example.test", "displayName": "Inactive", "active": false}, http.StatusCreated)
+	inactiveID := inactive["id"].(string)
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, inactiveID) })
+	loaded := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusOK)
+	if active, _ := loaded["active"].(bool); active {
+		t.Fatal("new inactive SCIM user is active")
+	}
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": true}}}, http.StatusNoContent)
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)`, orgID, inactiveID).Scan(&attached); err != nil || !attached {
+		t.Fatalf("inactive user reactivated = %v, err = %v", attached, err)
+	}
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": false}}}, http.StatusNoContent)
+	loaded = doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusOK)
+	if active, _ := loaded["active"].(bool); active {
+		t.Fatal("deprovisioned SCIM user is active")
 	}
 
 	// Organization owners remain outside SCIM deprovisioning authority.
