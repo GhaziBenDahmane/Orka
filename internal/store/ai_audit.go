@@ -522,8 +522,29 @@ func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID 
 	if err != nil {
 		return AIAuditRun{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE ai_audit_runs SET status='failed',summary='superseded by a newer run for the same auditor identity',completed_at=now() WHERE service_account_id=$1 AND agent_name=$2 AND status='running'`, accountID, agentName); err != nil {
+	const supersededSummary = "superseded by a newer run for the same auditor identity"
+	rows, err := tx.Query(ctx, `UPDATE ai_audit_runs SET status='failed',summary=$3,completed_at=now() WHERE service_account_id=$1 AND agent_name=$2 AND status='running' RETURNING id`, accountID, agentName, supersededSummary)
+	if err != nil {
 		return AIAuditRun{}, err
+	}
+	var supersededIDs []uuid.UUID
+	for rows.Next() {
+		var supersededID uuid.UUID
+		if err = rows.Scan(&supersededID); err != nil {
+			rows.Close()
+			return AIAuditRun{}, err
+		}
+		supersededIDs = append(supersededIDs, supersededID)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return AIAuditRun{}, err
+	}
+	rows.Close()
+	for _, supersededID := range supersededIDs {
+		if err = queueAIAuditFailureNotifications(ctx, tx, organizationID, supersededID, agentName, supersededSummary); err != nil {
+			return AIAuditRun{}, err
+		}
 	}
 	item := AIAuditRun{ID: uuid.New(), OrganizationID: organizationID, ServiceAccountID: accountID, AgentName: agentName, AgentVersion: agentVersion, Model: model, Status: "running", Scope: scope}
 	err = tx.QueryRow(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,agent_version,model,scope) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING started_at`, item.ID, accountOrganizationID, accountID, agentName, agentVersion, model, scope).Scan(&item.StartedAt)
@@ -564,11 +585,30 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 }
 
 func (s *Store) FinishAIAuditRun(ctx context.Context, organizationID, accountID, runID uuid.UUID, status, summary string) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE ai_audit_runs SET status=$4,summary=$5,completed_at=now() WHERE id=$1 AND organization_id=$2 AND service_account_id=$3 AND status='running'`, runID, organizationID, accountID, status, summary)
-	if err == nil && tag.RowsAffected() == 0 {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var agentName string
+	err = tx.QueryRow(ctx, `UPDATE ai_audit_runs SET status=$4,summary=$5,completed_at=now() WHERE id=$1 AND organization_id=$2 AND service_account_id=$3 AND status='running' RETURNING agent_name`, runID, organizationID, accountID, status, summary).Scan(&agentName)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if status == "failed" {
+		if err = queueAIAuditFailureNotifications(ctx, tx, organizationID, runID, agentName, summary); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func queueAIAuditFailureNotifications(ctx context.Context, tx pgx.Tx, organizationID, runID uuid.UUID, agentName, summary string) error {
+	payload, _ := json.Marshal(map[string]any{"event": "ai.audit.failed", "resourceType": "ai_audit_run", "resourceId": runID.String(), "agentName": agentName, "error": truncateStore(summary, 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard ai.audit.failed for AI audit run " + runID.String()})
+	return queueNotificationDeliveries(ctx, tx, organizationID, "ai.audit.failed", "ai_audit_run", runID.String(), payload)
 }
 
 func (s *Store) ListAIAuditRuns(ctx context.Context, organizationID uuid.UUID) ([]AIAuditRun, error) {

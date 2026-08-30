@@ -128,7 +128,19 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 		return err
 	}
 	payload, _ := json.Marshal(map[string]any{"event": eventType, "resourceType": resourceType, "resourceId": resourceID, "error": truncateStore(cause.Error(), 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard " + eventType + " for " + resourceType + " " + resourceID})
-	rows, err := s.Pool.Query(ctx, `SELECT id FROM notification_endpoints WHERE organization_id=$1 AND enabled AND $2=ANY(events)`, organizationID, eventType)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = queueNotificationDeliveries(ctx, tx, organizationID, eventType, resourceType, resourceID, payload); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, eventType, resourceType, resourceID string, payload json.RawMessage) error {
+	rows, err := tx.Query(ctx, `SELECT id FROM notification_endpoints WHERE organization_id=$1 AND enabled AND $2=ANY(events)`, organizationID, eventType)
 	if err != nil {
 		return err
 	}
@@ -141,12 +153,11 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 		}
 		endpointIDs = append(endpointIDs, id)
 	}
-	rows.Close()
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
+	if err = rows.Err(); err != nil {
+		rows.Close()
 		return err
 	}
-	defer tx.Rollback(ctx)
+	rows.Close()
 	for _, endpointID := range endpointIDs {
 		deliveryID := uuid.New()
 		tag, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, deliveryID, endpointID, eventType, resourceType, resourceID, payload)
@@ -158,7 +169,7 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload []byte) (string, string, string, uuid.UUID, error) {

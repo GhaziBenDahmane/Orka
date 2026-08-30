@@ -120,4 +120,6 @@ more than ten minutes, or an organization with an active auditor token has no
 completed audit within 48 hours. The overdue check also covers an auditor that
 has never completed a run; its window starts when the oldest currently active
 auditor token was created. The default Swarm schedule is 24 hours, so the
-48-hour threshold tolerates one missed execution before alerting.
+48-hour threshold tolerates one missed execution before alerting. Failed runs
+also enqueue the durable `ai.audit.failed` notification event in the same
+transaction as their terminal state, for any subscribed organization endpoint.
