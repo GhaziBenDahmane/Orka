@@ -145,7 +145,12 @@ func TestOIDCClientRefusesDiscoveryAndTokenRedirects(t *testing.T) {
 }
 
 func TestOIDCClientBoundsProviderResponses(t *testing.T) {
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/known-size" {
+			w.Header().Set("Content-Length", "4194305")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		_, _ = io.WriteString(w, strings.Repeat("x", maxOIDCResponseBytes+1))
 	}))
 	defer provider.Close()
@@ -157,6 +162,9 @@ func TestOIDCClientBoundsProviderResponses(t *testing.T) {
 	defer response.Body.Close()
 	if _, err = io.ReadAll(response.Body); !errors.Is(err, errOIDCResponseTooLarge) {
 		t.Fatalf("oversized response error=%v", err)
+	}
+	if _, err = server.oidcHTTPClient().Get(provider.URL + "/known-size"); !errors.Is(err, errOIDCResponseTooLarge) {
+		t.Fatalf("known oversized response error=%v", err)
 	}
 }
 

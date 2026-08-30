@@ -448,6 +448,10 @@ func (t oidcResponseLimitTransport) RoundTrip(request *http.Request) (*http.Resp
 	if err != nil {
 		return nil, err
 	}
+	if response.ContentLength > maxOIDCResponseBytes {
+		_ = response.Body.Close()
+		return nil, errOIDCResponseTooLarge
+	}
 	response.Body = &oidcBoundedBody{body: response.Body, remaining: maxOIDCResponseBytes}
 	return response, nil
 }
