@@ -53,6 +53,40 @@ if ! openssl pkey -in "$signing_key" -text_pub -noout 2>/dev/null | grep -q '^ED
 fi
 recovery_signing_key_sha256=$(openssl pkey -in "$signing_key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
 
+controller_service=${DOCKYARD_CONTROLLER_SERVICE:-${stack}_dockyard}
+case "$controller_service" in
+  ""|-*|*[!A-Za-z0-9_.-]*) echo "invalid controller service name" >&2; exit 1 ;;
+esac
+controller_inspection=$(docker service inspect --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' "$controller_service" 2>/dev/null || true)
+if [ -n "$controller_inspection" ]; then
+  deployed_image=${controller_inspection%%|*}
+  update_state=${controller_inspection#*|}
+  if [ "$deployed_image" != "$image" ]; then
+    echo "DOCKYARD_IMAGE does not match deployed controller service $controller_service" >&2
+    exit 1
+  fi
+  if [ -n "$update_state" ] && [ "$update_state" != "completed" ]; then
+    echo "controller service $controller_service update state is $update_state; wait for a stable rollout before backup" >&2
+    exit 1
+  fi
+elif [ -n "${DOCKYARD_CONTROLLER_CONTAINER:-}" ]; then
+  case "$DOCKYARD_CONTROLLER_CONTAINER" in
+    -*|*[!A-Za-z0-9_.-]*) echo "invalid controller container name or ID" >&2; exit 1 ;;
+  esac
+  deployed_image_id=$(docker inspect "$DOCKYARD_CONTROLLER_CONTAINER" --format '{{.Image}}' 2>/dev/null) || {
+    echo "could not inspect controller container $DOCKYARD_CONTROLLER_CONTAINER" >&2
+    exit 1
+  }
+  case "$image" in
+    *@"$deployed_image_id") ;;
+    *) echo "DOCKYARD_IMAGE does not match controller container $DOCKYARD_CONTROLLER_CONTAINER" >&2; exit 1 ;;
+  esac
+else
+  echo "cannot verify DOCKYARD_IMAGE; set DOCKYARD_CONTROLLER_SERVICE or DOCKYARD_CONTROLLER_CONTAINER" >&2
+  exit 1
+fi
+unset controller_inspection deployed_image deployed_image_id update_state
+
 postgres_container=${DOCKYARD_POSTGRES_CONTAINER:-}
 if [ -z "$postgres_container" ]; then
   postgres_container=$(docker ps --filter "label=com.docker.swarm.service.name=${stack}_postgres" --filter status=running --format '{{.ID}}')

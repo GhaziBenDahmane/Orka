@@ -393,6 +393,11 @@ storage. The new directory contains a custom-format PostgreSQL dump, a JSON
 manifest with the dump checksum and size, schema version, image digest, and
 trusted-key fingerprints, plus an Ed25519 manifest signature. It never contains
 the master key, agent CA, recovery signing key, or trusted verification key.
+Before dumping PostgreSQL, the script verifies that `DOCKYARD_IMAGE` exactly
+matches the deployed Swarm controller and refuses an in-progress, paused, or
+rolled-back controller update. For a Compose deployment, explicitly set
+`DOCKYARD_CONTROLLER_CONTAINER`; the requested digest must match its immutable
+image ID.
 Copy the bundle, master key, agent CA keypair, artifact storage, stack
 configuration, image digest, and recovery verification key to independently
 protected storage.

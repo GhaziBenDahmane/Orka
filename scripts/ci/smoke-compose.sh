@@ -146,8 +146,18 @@ docker service inspect "${stack_name}_web" --format '{{.Spec.TaskTemplate.Contai
 # the bundled production stack. The backup intentionally excludes the master
 # key and records only its fingerprint.
 controller_image_id="$(docker image inspect "$project-dockyard" --format '{{.Id}}')"
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE='example.invalid/dockyard@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+  scripts/backup-control-plane.sh "$recovery_root/wrong-controller-image" >/dev/null 2>&1; then
+  echo "control-plane backup accepted an image other than the deployed controller" >&2
+  exit 1
+fi
 DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
   DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
   DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
   scripts/backup-control-plane.sh "$recovery_root/control-plane"
