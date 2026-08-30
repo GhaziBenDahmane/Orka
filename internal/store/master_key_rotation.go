@@ -122,6 +122,14 @@ func VerifyOrInitializeMasterKey(ctx context.Context, pool *pgxpool.Pool, box *c
 }
 
 func verifyMasterKeyIfInitialized(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) error {
+	return verifyMasterKey(ctx, pool, box, false)
+}
+
+func verifyMasterKeyRequired(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) error {
+	return verifyMasterKey(ctx, pool, box, true)
+}
+
+func verifyMasterKey(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box, required bool) error {
 	if box == nil {
 		return errors.New("master-key verifier requires an encryption key")
 	}
@@ -138,10 +146,17 @@ func verifyMasterKeyIfInitialized(ctx context.Context, pool *pgxpool.Pool, box *
 		return fmt.Errorf("inspect master-key verifier schema: %w", err)
 	}
 	if !tableExists {
+		if required {
+			return errors.New("master-key verifier is not initialized; start the controller before running a dry run")
+		}
 		return tx.Commit(ctx)
 	}
-	if _, err = validateMasterKeyVerifier(ctx, tx, box); err != nil {
+	verifierExists, err := validateMasterKeyVerifier(ctx, tx, box)
+	if err != nil {
 		return err
+	}
+	if required && !verifierExists {
+		return errors.New("master-key verifier is not initialized; start the controller before running a dry run")
 	}
 	return tx.Commit(ctx)
 }

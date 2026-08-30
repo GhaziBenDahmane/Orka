@@ -16,6 +16,12 @@ dockyard migrate-dokploy \
   --dry-run=true
 ```
 
+Dry runs open the target PostgreSQL database with
+`default_transaction_read_only=on`; they cannot apply migrations or persist
+import state. The target must already be on the exact schema expected by the
+binary and have an initialized master-key verifier, so start the controller
+successfully once before running the first dry run.
+
 `--registry-prefix` is required only when the source contains convertible Git
 applications. Dockyard uses it as the destination repository prefix for images
 built from imported Dockerfiles.

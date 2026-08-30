@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -87,6 +88,59 @@ func TestMigrateFreshInstallIsCompleteAndIdempotent(t *testing.T) {
 	var name string
 	if err := pool.QueryRow(ctx, `SELECT name FROM organizations WHERE id=$1`, organizationID).Scan(&name); err != nil || name != "survivor" {
 		t.Fatalf("data did not survive idempotent run: name=%q err=%v", name, err)
+	}
+}
+
+func TestMigrateRejectsUnknownFutureMigration(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations(version,checksum) VALUES('999_future.sql',$1)`, strings.Repeat("a", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET checksum='' WHERE version='001_initial.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err == nil || !strings.Contains(err.Error(), "unknown migration 999_future.sql") {
+		t.Fatalf("future-schema error=%v", err)
+	}
+	var checksum string
+	if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version='001_initial.sql'`).Scan(&checksum); err != nil {
+		t.Fatal(err)
+	}
+	if checksum != "" {
+		t.Fatal("migration state changed before the unknown future migration was rejected")
+	}
+}
+
+func TestReadOnlyVerifiedStoreRejectsDatabaseWrites(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	box, err := cryptox.New([]byte(strings.Repeat("r", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyOrInitializeMasterKey(ctx, pool, box); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyPool, err := openReadOnlyConfiguredPool(ctx, pool.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(readOnlyPool.Close)
+	if err = verifyMasterKeyRequired(ctx, readOnlyPool, box); err != nil {
+		t.Fatal(err)
+	}
+	if err = ValidateMigrationState(ctx, readOnlyPool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readOnlyPool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'forbidden','forbidden')`, uuid.New()); err == nil {
+		t.Fatal("read-only migration pool accepted a write")
+	} else if pgErr, ok := err.(*pgconn.PgError); !ok || pgErr.Code != "25006" {
+		t.Fatalf("write error=%T %v", err, err)
 	}
 }
 

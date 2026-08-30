@@ -28,6 +28,16 @@ ALTER TABLE cluster_commands ADD CONSTRAINT cluster_commands_kind_check
 	},
 }
 
+type embeddedMigration struct {
+	name     string
+	sql      []byte
+	checksum string
+}
+
+type migrationRows interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return migrateThrough(ctx, pool, "")
 }
@@ -36,6 +46,10 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 // historical schema. Production always calls Migrate, which applies every
 // embedded migration.
 func migrateThrough(ctx context.Context, pool *pgxpool.Pool, lastVersion string) error {
+	entries, err := embeddedMigrations(lastVersion)
+	if err != nil {
+		return err
+	}
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire migration connection: %w", err)
@@ -45,60 +59,151 @@ func migrateThrough(ctx context.Context, pool *pgxpool.Pool, lastVersion string)
 		return fmt.Errorf("lock migrations: %w", err)
 	}
 	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock(721046140)`)
+	var migrationTableExists bool
+	if err = conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schema_migrations')`).Scan(&migrationTableExists); err != nil {
+		return fmt.Errorf("inspect migration schema: %w", err)
+	}
+	if migrationTableExists {
+		if err = rejectUnknownAppliedMigrations(ctx, conn, entries); err != nil {
+			return err
+		}
+	}
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, checksum text NOT NULL DEFAULT '', applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return fmt.Errorf("create migrations table: %w", err)
 	}
 	if _, err := conn.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("add migration checksums: %w", err)
 	}
+	for _, entry := range entries {
+		var recordedChecksum string
+		err = conn.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, entry.name).Scan(&recordedChecksum)
+		if err == nil {
+			if recordedChecksum == "" {
+				if _, err := conn.Exec(ctx, `UPDATE schema_migrations SET checksum=$2 WHERE version=$1 AND checksum=''`, entry.name, entry.checksum); err != nil {
+					return fmt.Errorf("backfill migration checksum %s: %w", entry.name, err)
+				}
+			} else if recordedChecksum != entry.checksum {
+				repaired, repairErr := repairKnownMigration(ctx, conn, entry.name, recordedChecksum, entry.checksum)
+				if repairErr != nil {
+					return repairErr
+				}
+				if !repaired {
+					return fmt.Errorf("migration %s checksum mismatch: applied migration was modified", entry.name)
+				}
+			}
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read migration state %s: %w", entry.name, err)
+		}
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, string(entry.sql)); err == nil {
+			_, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)`, entry.name, entry.checksum)
+		}
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("apply migration %s: %w", entry.name, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+	}
+	return validateAppliedMigrations(ctx, conn, entries)
+}
+
+func rejectUnknownAppliedMigrations(ctx context.Context, database migrationRows, expected []embeddedMigration) error {
+	wanted := make(map[string]bool, len(expected))
+	for _, entry := range expected {
+		wanted[entry.name] = true
+	}
+	rows, err := database.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("read applied migration versions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var version string
+		if err = rows.Scan(&version); err != nil {
+			return err
+		}
+		if !wanted[version] {
+			return fmt.Errorf("database contains unknown migration %s; refusing to run an older binary", version)
+		}
+	}
+	return rows.Err()
+}
+
+// ValidateMigrationState performs the same exact-version and checksum check as
+// startup without creating, repairing, or applying anything.
+func ValidateMigrationState(ctx context.Context, pool *pgxpool.Pool) error {
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schema_migrations')`).Scan(&exists); err != nil {
+		return fmt.Errorf("inspect migration schema: %w", err)
+	}
+	if !exists {
+		return errors.New("database schema is not initialized; start the controller before running a dry run")
+	}
+	entries, err := embeddedMigrations("")
+	if err != nil {
+		return err
+	}
+	return validateAppliedMigrations(ctx, pool, entries)
+}
+
+func embeddedMigrations(lastVersion string) ([]embeddedMigration, error) {
 	entries, err := migrations.ReadDir("migrations")
 	if err != nil {
-		return fmt.Errorf("read migrations: %w", err)
+		return nil, fmt.Errorf("read migrations: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	result := make([]embeddedMigration, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || (lastVersion != "" && entry.Name() > lastVersion) {
 			continue
 		}
 		sql, err := migrations.ReadFile("migrations/" + entry.Name())
 		if err != nil {
+			return nil, err
+		}
+		result = append(result, embeddedMigration{name: entry.Name(), sql: sql, checksum: fmt.Sprintf("%x", sha256.Sum256(sql))})
+	}
+	return result, nil
+}
+
+func validateAppliedMigrations(ctx context.Context, database migrationRows, expected []embeddedMigration) error {
+	wanted := make(map[string]string, len(expected))
+	for _, entry := range expected {
+		wanted[entry.name] = entry.checksum
+	}
+	rows, err := database.Query(ctx, `SELECT version,checksum FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("read applied migrations: %w", err)
+	}
+	defer rows.Close()
+	seen := make(map[string]bool, len(expected))
+	for rows.Next() {
+		var version, checksum string
+		if err = rows.Scan(&version, &checksum); err != nil {
 			return err
 		}
-		checksum := fmt.Sprintf("%x", sha256.Sum256(sql))
-		var recordedChecksum string
-		err = conn.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, entry.Name()).Scan(&recordedChecksum)
-		if err == nil {
-			if recordedChecksum == "" {
-				if _, err := conn.Exec(ctx, `UPDATE schema_migrations SET checksum=$2 WHERE version=$1 AND checksum=''`, entry.Name(), checksum); err != nil {
-					return fmt.Errorf("backfill migration checksum %s: %w", entry.Name(), err)
-				}
-			} else if recordedChecksum != checksum {
-				repaired, repairErr := repairKnownMigration(ctx, conn, entry.Name(), recordedChecksum, checksum)
-				if repairErr != nil {
-					return repairErr
-				}
-				if !repaired {
-					return fmt.Errorf("migration %s checksum mismatch: applied migration was modified", entry.Name())
-				}
-			}
-			continue
+		wantedChecksum, known := wanted[version]
+		if !known {
+			return fmt.Errorf("database contains unknown migration %s; refusing to run an older binary", version)
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("read migration state %s: %w", entry.Name(), err)
+		if checksum == "" || checksum != wantedChecksum {
+			return fmt.Errorf("migration %s checksum mismatch: applied migration was modified", version)
 		}
-		tx, err := conn.Begin(ctx)
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, string(sql)); err == nil {
-			_, err = tx.Exec(ctx, `INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)`, entry.Name(), checksum)
-		}
-		if err != nil {
-			_ = tx.Rollback(ctx)
-			return fmt.Errorf("apply migration %s: %w", entry.Name(), err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return err
+		seen[version] = true
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, entry := range expected {
+		if !seen[entry.name] {
+			return fmt.Errorf("database is missing migration %s; start the controller before running a dry run", entry.name)
 		}
 	}
 	return nil

@@ -335,7 +335,7 @@ func migrateDokploy(arguments []string) error {
 	}
 	var db *store.Store
 	if *dryRun {
-		db, err = store.Open(ctx, cfg.DatabaseURL)
+		db, err = store.OpenReadOnlyVerified(ctx, cfg.DatabaseURL, box)
 	} else {
 		db, err = store.OpenVerified(ctx, cfg.DatabaseURL, box)
 	}
@@ -401,7 +401,7 @@ func migrateDokployData(arguments []string) error {
 	}
 	var db *store.Store
 	if *dryRun {
-		db, err = store.Open(ctx, cfg.DatabaseURL)
+		db, err = store.OpenReadOnlyVerified(ctx, cfg.DatabaseURL, box)
 	} else {
 		db, err = store.OpenVerified(ctx, cfg.DatabaseURL, box)
 	}

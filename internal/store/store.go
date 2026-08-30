@@ -64,6 +64,34 @@ func OpenVerified(ctx context.Context, databaseURL string, box *cryptox.Box) (*S
 	return &Store{Pool: pool}, nil
 }
 
+// OpenReadOnlyVerified opens an existing, current schema with PostgreSQL-level
+// write protection. It is used by dry-run tooling so future code changes
+// cannot accidentally mutate the target database.
+func OpenReadOnlyVerified(ctx context.Context, databaseURL string, box *cryptox.Box) (*Store, error) {
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database URL: %w", err)
+	}
+	pool, err := openReadOnlyConfiguredPool(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if err = verifyMasterKeyRequired(ctx, pool, box); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("verify master key for read-only operation: %w", err)
+	}
+	if err = ValidateMigrationState(ctx, pool); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("validate database schema for read-only operation: %w", err)
+	}
+	return &Store{Pool: pool}, nil
+}
+
+func openReadOnlyConfiguredPool(ctx context.Context, config *pgxpool.Config) (*pgxpool.Pool, error) {
+	config.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
+	return openConfiguredPool(ctx, config)
+}
+
 func prepareVerifiedStore(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) error {
 	if err := verifyMasterKeyIfInitialized(ctx, pool, box); err != nil {
 		return fmt.Errorf("verify master key before migrations: %w", err)
@@ -78,7 +106,15 @@ func prepareVerifiedStore(ctx context.Context, pool *pgxpool.Pool, box *cryptox.
 }
 
 func openPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database URL: %w", err)
+	}
+	return openConfiguredPool(ctx, config)
+}
+
+func openConfiguredPool(ctx context.Context, config *pgxpool.Config) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

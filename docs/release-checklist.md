@@ -26,6 +26,10 @@ links for every item below.
   multiple workers, per-attempt fenced stale-worker takeover while the
   superseded worker is paused inside a scheduler call, Compose and Swarm
   parsing, and a clean-install workload converging to a live Swarm replica.
+- Startup validates the exact migration inventory and checks an established
+  master-key verifier before applying newer migrations. Dokploy migration dry
+  runs use a PostgreSQL-enforced read-only pool and reject stale, modified, or
+  future schemas instead of repairing or advancing them.
 - `govulncheck` reports no reachable known vulnerability.
 - License policy passes; the SPDX JSON SBOM is attached to the release.
 - Build and runtime base images are pinned by manifest digest, and the runtime
