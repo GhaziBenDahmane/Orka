@@ -146,7 +146,11 @@ durable provider build-status callbacks implemented.
   organization/project/environment resource quotas and a production
   Prometheus alert pack are also implemented. Durable signed webhook,
   Slack-compatible, TLS SMTP, PagerDuty, and Opsgenie failure notifications
-  are implemented.
+  are implemented. A release-blocking PostgreSQL-backed conformance test
+  exercises all providers through the durable worker, including signed
+  webhook retry, authenticated implicit-TLS SMTP, tenant isolation,
+  deduplication, and encrypted-at-rest provider material. Real provider
+  credentials remain a staging requirement.
 - Resumable asynchronous finalizers cover services, projects, environments,
   clusters, and opt-in stack-labelled volume cleanup. Parent deletion waits
   for all child stacks and active deployments block the cascade.

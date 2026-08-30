@@ -9,8 +9,9 @@ links for every item below.
 - Release publication is blocked on the complete reusable CI, ten-engine
   database recovery, real Keycloak SSO, disposable three-manager Swarm HA,
   joined deployment lifecycle, drift reconciliation, real-mTLS agent
-  certificate rotation, AI audit lifecycle, and previous-image upgrade
-  conformance workflows. Tag pushes do not run detached copies: the release
+  certificate rotation, AI audit lifecycle, durable notification-provider
+  delivery, and previous-image upgrade conformance workflows. Tag pushes do
+  not run detached copies: the release
   workflow invokes all gates directly and publishes only after every job
   succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
@@ -82,6 +83,13 @@ links for every item below.
   durable deterministic and model findings, audited completion, and denial of
   normal workload APIs to the auditor identity. The release attaches
   `ai-audit-conformance.json`.
+- `make test-notification-conformance` drives encrypted provider records and
+  durable jobs through signed webhook and Slack-compatible delivery,
+  PagerDuty, Opsgenie, and authenticated implicit-TLS SMTP. It proves retry
+  recovery, delivery/job completion, tenant isolation, event deduplication,
+  and encrypted-at-rest provider material. The release attaches
+  `notification-conformance.json`; real provider credentials remain a staging
+  requirement.
 
 ## Staging gates
 
@@ -157,7 +165,8 @@ links for every item below.
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
   `agent-certificate-conformance.json`, `ai-audit-conformance.json`,
-  `upgrade-conformance.json`, and `release-soak-evidence.json`; the same files
+  `notification-conformance.json`, `upgrade-conformance.json`, and
+  `release-soak-evidence.json`; the same files
   remain available as a workflow artifact. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence

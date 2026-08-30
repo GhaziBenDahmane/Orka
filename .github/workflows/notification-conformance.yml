@@ -1,0 +1,37 @@
+name: Notification provider conformance
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 4 * * 1"
+permissions:
+  contents: read
+jobs:
+  notifications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Exercise durable notification providers
+        run: make test-notification-conformance | tee notification-conformance.log
+      - name: Validate notification evidence
+        run: |
+          jq -e --arg sourceCommit "$GITHUB_SHA" '
+            .sourceCommit == $sourceCommit and .status == "passed" and
+            .durableWorkerPath and .signedWebhook and .slackCompatible and
+            .pagerDuty and .opsgenie and .authenticatedImplicitTLSSMTP and
+            .retryRecovered and .tenantIsolation and .deduplicated and
+            .secretsEncrypted and .deliveries == 5 and .jobAttempts == 6
+          ' notification-conformance.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: notification-conformance
+          path: |
+            notification-conformance.log
+            notification-conformance.json
+          if-no-files-found: error

@@ -1,4 +1,4 @@
-.PHONY: test test-agent-certificate-conformance test-ai-audit-conformance test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-lifecycle-conformance test-reconciliation-conformance test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
+.PHONY: test test-agent-certificate-conformance test-ai-audit-conformance test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-lifecycle-conformance test-notification-conformance test-reconciliation-conformance test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
 
 test:
 	go test ./...
@@ -24,6 +24,9 @@ test-agent-certificate-conformance:
 
 test-ai-audit-conformance:
 	./scripts/ci/test-ai-audit-conformance.sh
+
+test-notification-conformance:
+	./scripts/ci/test-notification-conformance.sh
 
 test-reconciliation-conformance:
 	./scripts/ci/test-reconciliation-conformance.sh
