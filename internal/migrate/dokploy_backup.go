@@ -10,8 +10,53 @@ import (
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func dokployVolumeService(options DokployOptions, policy sourceVolumeBackupPolicy, services []sourceCompose, applications []sourceApplication, validServices, validApplications map[string]bool) (uuid.UUID, string, bool) {
+	var foundID uuid.UUID
+	var foundCompose string
+	found := false
+	switch strings.ToLower(strings.TrimSpace(policy.serviceType)) {
+	case "compose":
+		for _, service := range services {
+			if service.appName == policy.appName && validServices[service.id] {
+				if found {
+					return uuid.Nil, "", false
+				}
+				foundID, foundCompose, found = mappedID(options, "compose", service.id), service.compose, true
+			}
+		}
+	case "application", "app":
+		for _, application := range applications {
+			if application.AppName == policy.appName && validApplications[application.ID] {
+				prepared, _, err := prepareApplication(application, options)
+				if err == nil {
+					if found {
+						return uuid.Nil, "", false
+					}
+					foundID, foundCompose, found = prepared.serviceID, prepared.composeYAML, true
+				}
+			}
+		}
+	}
+	return foundID, foundCompose, found
+}
+
+func dokployLogicalVolume(composeYAML, sourceName string) (string, bool) {
+	names, err := deploy.NamedVolumes(composeYAML)
+	if err != nil {
+		return "", false
+	}
+	for _, name := range names {
+		if name == sourceName {
+			return name, true
+		}
+	}
+	return "", false
+}
 
 type sourceBackupDestination struct {
 	id, name, provider, accessKey, secretAccessKey string

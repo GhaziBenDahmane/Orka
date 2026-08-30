@@ -74,6 +74,10 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.project VALUES('p1','Imported Project','description','source-org'); INSERT INTO `+quotedSchema+`.environment VALUES('e1','p1','Production'); INSERT INTO `+quotedSchema+`.compose VALUES('c1','e1','Web','web','services:
   web:
     image: nginx:alpine
+    volumes:
+      - uploads:/var/lib/uploads
+volumes:
+  uploads: {}
 ','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","buildArgs","buildSecrets","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime','GO_VERSION=1.26','',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain VALUES('d1','c1',NULL,'`+fixtureHost+`','/','web',80,true,true,'letsencrypt'),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt')`)
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `
@@ -95,7 +99,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.destination VALUES('dst1','Archive','s3',$1,$2,'migration-bucket','eu-west-1','https://s3.example.test',ARRAY[]::text[],'source-org')`, encryptDokployFixture(t, sourceKey, "legacy-access"), encryptDokployFixture(t, sourceKey, "legacy-secret-key"))
 	}
 	if err == nil {
-		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.volume_backup VALUES('volume1','Uploads','legacy-uploads','volumes','compose','web','web',true,'0 3 * * *',5,true,'dst1')`)
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.volume_backup VALUES('volume1','Uploads','uploads','volumes','compose','web','web',true,'0 3 * * *',5,true,'dst1')`)
 	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.backup VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres',NULL,'pg1',NULL,NULL,NULL,NULL)`)
@@ -144,15 +148,15 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		t.Fatal(err)
 	}
 	controlPlaneVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, nil)
-	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 17 || controlPlaneVerification.Blocked != 2 {
+	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 18 || controlPlaneVerification.Blocked != 1 {
 		t.Fatalf("control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	if _, err = VerifyDokployImport(ctx, destination, targetOrg, "not-imported", false, nil); err == nil || !strings.Contains(err.Error(), "no persisted") {
 		t.Fatalf("missing manifest verification error=%v", err)
 	}
-	acknowledgements := []string{"source_credential:github:gh1", "volume_backup:volume1"}
+	acknowledgements := []string{"source_credential:github:gh1"}
 	controlPlaneVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, acknowledgements)
-	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 17 || controlPlaneVerification.Acknowledged != 2 || controlPlaneVerification.Blocked != 0 {
+	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 18 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
 		t.Fatalf("acknowledged control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	operationalVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
@@ -162,14 +166,14 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
 	}
-	var projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials, notifications int
+	var projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications int
 	var encryptedCredentials, encryptedEnvironment string
 	var storedConfig []byte
-	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &sourceCredentials, &notifications); err != nil {
+	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &volumeBackupPolicies, &sourceCredentials, &notifications); err != nil {
 		t.Fatal(err)
 	}
-	if projects != 1 || services != 9 || routes != 2 || databases != 6 || applicationSources != 1 || backupDestinations != 2 || backupPolicies != 1 || sourceCredentials != 1 || notifications != 1 {
-		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, sourceCredentials, notifications)
+	if projects != 1 || services != 9 || routes != 2 || databases != 6 || applicationSources != 1 || backupDestinations != 3 || backupPolicies != 1 || volumeBackupPolicies != 1 || sourceCredentials != 1 || notifications != 1 {
+		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications)
 	}
 	rows, err := destination.Pool.Query(ctx, `SELECT engine FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1 ORDER BY engine`, targetOrg)
 	if err != nil {
@@ -223,6 +227,15 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	destinationJSON, err := box.Decrypt(destinationSecret, cryptox.ResourceContext("backup-destination", mappedID(options, "backup-destination", "dst1\x00nightly").String()))
 	if err != nil || !bytes.Contains(destinationJSON, []byte(`"accessKey":"legacy-access"`)) || destinationPrefix != "nightly" || policyInterval != 86400 || policyRetention != 7 {
 		t.Fatalf("backup migration mismatch: credentials=%s prefix=%q interval=%d retention=%d err=%v", destinationJSON, destinationPrefix, policyInterval, policyRetention, err)
+	}
+	var volumeName, volumeDestinationPrefix string
+	var volumeInterval, volumeRetention int
+	var volumeQuiesce, volumeEnabled bool
+	if err = destination.Pool.QueryRow(ctx, `SELECT policy.volume_name,destination.prefix,policy.interval_seconds,policy.retention_count,policy.quiesce,policy.enabled FROM volume_backup_policies policy JOIN backup_destinations destination ON destination.id=policy.destination_id WHERE policy.id=$1`, mappedID(options, "volume-backup-policy", "volume1")).Scan(&volumeName, &volumeDestinationPrefix, &volumeInterval, &volumeRetention, &volumeQuiesce, &volumeEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if volumeName != "uploads" || volumeDestinationPrefix != "volumes" || volumeInterval != 86400 || volumeRetention != 5 || !volumeQuiesce || !volumeEnabled {
+		t.Fatalf("volume backup migration mismatch: volume=%q prefix=%q interval=%d retention=%d quiesce=%v enabled=%v", volumeName, volumeDestinationPrefix, volumeInterval, volumeRetention, volumeQuiesce, volumeEnabled)
 	}
 	var applicationCompose, applicationEnvironment string
 	if err = destination.Pool.QueryRow(ctx, `SELECT s.compose_yaml,s.encrypted_env FROM compose_services s WHERE s.id=$1`, mappedID(options, "application-service", "a1")).Scan(&applicationCompose, &applicationEnvironment); err != nil {
@@ -321,7 +334,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 17 || operationalVerification.Acknowledged != 2 || operationalVerification.Blocked != 0 {
+	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 18 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
 		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
 	composeServiceID := mappedID(options, "compose", "c1")

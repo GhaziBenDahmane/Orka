@@ -69,3 +69,12 @@ func TestPrepareNotificationReportsUnmappedTriggers(t *testing.T) {
 		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
 	}
 }
+
+func TestPrepareNotificationMapsVolumeBackupFailure(t *testing.T) {
+	box, _ := cryptox.New(bytes.Repeat([]byte{5}, 32))
+	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
+	prepared, warnings, err := prepareNotification(box, options, sourceNotification{id: "n1", kind: "slack", webhookURL: "https://hooks.example.test/secret", volumeBackup: true})
+	if err != nil || len(warnings) != 0 || len(prepared.events) != 1 || prepared.events[0] != "backup.failed" {
+		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
+	}
+}

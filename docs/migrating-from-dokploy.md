@@ -68,6 +68,10 @@ Imported automatically:
   backup-capable database when its cron expression has a constant interval;
   per-policy object prefixes are preserved with deterministic destination
   variants;
+- named-volume backup policies for imported Compose services and applications
+  when the volume is declared in the generated Compose definition and the cron
+  expression has a constant interval; the first deployment binds and pins the
+  volume to its Swarm storage node;
 - Slack webhooks and SMTP email endpoints, with source secrets decrypted only
   in memory and re-encrypted under the Dockyard master key;
 - enabled Compose domains with service name and valid target port.
@@ -86,8 +90,6 @@ Reported for manual conversion:
   provider-specific private access;
 - application mounts, published host ports, custom Swarm health/restart/update/
   placement settings, redirects, and security rules;
-- volume-backup policies, which remain visible as acknowledgeable parity
-  records with their source schedule, volume, destination, and retention data;
 - Compose definitions stored only in a remote Git repository;
 - GitHub App credentials, SSH keys, certificates, unsupported or calendar-based
   backup schedules, additional policies for the same database, and Compose
@@ -95,8 +97,8 @@ Reported for manual conversion:
 - Telegram, Discord, Resend, Gotify, ntfy, Mattermost, Pushover, custom, Lark,
   and Teams notification providers.
 
-Dokploy `appBuildError` and `databaseBackup` notification triggers map to
-Dockyard `deployment.failed` and `backup.failed`. Dokploy success, volume,
+Dokploy `appBuildError`, `databaseBackup`, and `volumeBackup` notification
+triggers map to Dockyard `deployment.failed` and `backup.failed`. Dokploy success,
 restart, platform-backup, cleanup, and server-threshold triggers have no direct
 Dockyard equivalent and are called out in the migration report. A notification
 with only unmapped triggers is left for manual conversion.
@@ -195,7 +197,7 @@ dockyard verify-dokploy-import \
 ```
 
 The JSON result checks every persisted project, environment, service, route,
-database, backup destination/policy, source credential, and notification
+database, backup destination/policy, volume-backup policy, source credential, and notification
 mapping. With the default `--require-operational=true`, each imported service
 and managed-database stack must have a successful deployment of its current
 revision plus a healthy Swarm reconciliation observation from the previous

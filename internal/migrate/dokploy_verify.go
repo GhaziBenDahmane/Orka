@@ -140,6 +140,7 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		"application_route":  `SELECT EXISTS(SELECT 1 FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2)`,
 		"backup_destination": `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`,
 		"backup_policy":      `SELECT EXISTS(SELECT 1 FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2)`,
+		"volume_backup":      `SELECT EXISTS(SELECT 1 FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE policy.id=$1 AND p.organization_id=$2)`,
 		"source_credential":  `SELECT EXISTS(SELECT 1 FROM source_credentials WHERE id=$1 AND organization_id=$2)`,
 		"notification":       `SELECT EXISTS(SELECT 1 FROM notification_endpoints WHERE id=$1 AND organization_id=$2)`,
 	}

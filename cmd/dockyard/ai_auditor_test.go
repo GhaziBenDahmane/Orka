@@ -175,6 +175,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
 		BackupPosture:        []store.AIAuditBackupPosture{{DatabaseID: databaseID, Engine: "postgres"}},
+		VolumeBackupPosture:  []store.AIAuditVolumeBackupPosture{{ServiceID: serviceID, VolumeName: "uploads"}},
 		Clusters:             []store.Cluster{{ID: clusterID, State: "active", LastSeenAt: &staleHeartbeat, CertificateAuthorityFingerprint: "sha256:old", PendingCertificateAuthorityFingerprint: "sha256:new", CertificateNotAfter: &expiringCertificate}},
 		AgentCAPosture:       store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:new", PreviousFingerprint: "sha256:old", RolloverActive: true},
 		AgentUpgradePosture:  []store.AIAuditAgentUpgradePosture{{ClusterID: clusterID, Status: "verifying", VerificationOverdue: true, TargetImage: "registry.example/dockyard@sha256:test"}},
@@ -189,13 +190,13 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	for _, finding := range findings {
 		titles[finding.Title] = true
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Service account credentials expire soon", "Long-lived SCIM credential requires rotation", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Deployment queue is stalled", "Failure notifications have coverage gaps", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Service account credentials expire soon", "Long-lived SCIM credential requires rotation", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Volume backup policy is disabled", "Protected volume has no storage-node binding", "Volume lacks a successful backup", "Volume backups do not pause writers", "Volume restore has not been validated", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Deployment queue is stalled", "Failure notifications have coverage gaps", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
 		if !titles[title] {
 			t.Errorf("missing deterministic finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 19 {
-		t.Fatalf("findings=%d, want 19: %#v", len(findings), findings)
+	if len(findings) != 24 {
+		t.Fatalf("findings=%d, want 24: %#v", len(findings), findings)
 	}
 }
 

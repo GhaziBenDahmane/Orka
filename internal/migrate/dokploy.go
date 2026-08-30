@@ -85,6 +85,13 @@ type preparedBackupPolicy struct {
 	intervalSeconds               int
 }
 
+type preparedVolumeBackupPolicy struct {
+	source                       sourceVolumeBackupPolicy
+	id, serviceID, destinationID uuid.UUID
+	volumeName                   string
+	intervalSeconds              int
+}
+
 func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.Box, compiler deploy.Compiler, options DokployOptions) (DokployReport, error) {
 	report := DokployReport{DryRun: options.DryRun, Warnings: []string{}}
 	if options.SourceURL == "" || options.SourceOrganizationID == "" || options.TargetOrganizationID == uuid.Nil {
@@ -289,15 +296,64 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_destination", SourceID: item.id, TargetID: &prepared.reportID, Status: "imported", Metadata: backupDestinationMetadata(item, "")})
 	}
 	preparedPolicies := []preparedBackupPolicy{}
+	preparedVolumePolicies := []preparedVolumeBackupPolicy{}
 	for _, item := range volumeBackupPolicies {
-		reason := "volume backup policies require manual conversion"
-		report.Skipped++
-		report.Warnings = append(report.Warnings, fmt.Sprintf("volume backup policy %s was skipped: %s", item.id, reason))
-		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "volume_backup", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: map[string]any{
+		policyID := mappedID(options, "volume-backup-policy", item.id)
+		metadata := map[string]any{
 			"name": item.name, "volumeName": item.volumeName, "prefix": item.prefix, "serviceType": item.serviceType,
 			"appName": item.appName, "serviceName": item.serviceName, "turnOff": item.turnOff, "schedule": item.cronExpression,
 			"retentionCount": item.retentionCount, "enabled": item.enabled, "destinationId": item.destinationID,
-		}})
+		}
+		serviceID, composeYAML, found := dokployVolumeService(options, item, services, applications, validServices, validApplications)
+		volumeName, volumeFound := dokployLogicalVolume(composeYAML, item.volumeName)
+		interval, supportedSchedule := cronInterval(item.cronExpression)
+		reason := ""
+		if !found {
+			reason = "the referenced Compose service or application was not imported"
+		} else if !volumeFound {
+			reason = "the referenced named volume is not declared by the imported Compose service"
+		} else if !supportedSchedule || interval < 900 || interval > 2_678_400 {
+			reason = "cron schedule cannot be represented as a fixed 15-minute to 31-day interval"
+		} else if item.retentionCount < 1 || item.retentionCount > 100 {
+			reason = "retention count is outside Dockyard's 1..100 range"
+		}
+		destinationSource, destinationFound := destinationSources[item.destinationID]
+		if reason == "" && !destinationFound {
+			reason = "the referenced backup destination was not found"
+		}
+		var preparedDestination preparedBackupDestination
+		if reason == "" {
+			preparedDestination, err = prepareDokployBackupDestination(box, options, destinationSource, item.prefix)
+			if err != nil {
+				reason = err.Error()
+			}
+		}
+		if reason == "" {
+			for _, existing := range preparedVolumePolicies {
+				if existing.serviceID == serviceID && existing.volumeName == volumeName {
+					reason = "Dockyard supports one backup policy per service volume"
+					break
+				}
+			}
+		}
+		if reason == "" {
+			var existingID uuid.UUID
+			existingErr := destination.Pool.QueryRow(ctx, `SELECT policy.id FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE policy.compose_service_id=$1 AND policy.volume_name=$2 AND project.organization_id=$3`, serviceID, volumeName, options.TargetOrganizationID).Scan(&existingID)
+			if existingErr == nil {
+				policyID = existingID
+			} else if !errors.Is(existingErr, pgx.ErrNoRows) {
+				return report, existingErr
+			}
+		}
+		if reason != "" {
+			report.Skipped++
+			report.Warnings = append(report.Warnings, fmt.Sprintf("volume backup policy %s was skipped: %s", item.id, reason))
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "volume_backup", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: metadata})
+			continue
+		}
+		preparedDestinations[preparedDestination.key] = preparedDestination
+		preparedVolumePolicies = append(preparedVolumePolicies, preparedVolumeBackupPolicy{source: item, id: policyID, serviceID: serviceID, destinationID: preparedDestination.id, volumeName: volumeName, intervalSeconds: interval})
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "volume_backup", SourceID: item.id, TargetID: &policyID, Status: "imported", Metadata: metadata})
 	}
 	seenDatabasePolicy := map[uuid.UUID]bool{}
 	for _, item := range backupPolicies {
@@ -565,6 +621,13 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN excluded.next_run_at ELSE backup_policies.next_run_at END,updated_at=now()`, item.id, item.databaseID, item.intervalSeconds, item.source.retentionCount, item.source.enabled, item.destinationID)
 		if err != nil {
 			return report, fmt.Errorf("import backup policy %s: %w", item.source.id, err)
+		}
+	}
+	for _, item := range preparedVolumePolicies {
+		_, err = tx.Exec(ctx, `INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+($5::int * interval '1 second'))
+			ON CONFLICT(compose_service_id,volume_name) DO UPDATE SET destination_id=excluded.destination_id,interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,quiesce=excluded.quiesce,enabled=excluded.enabled,next_run_at=CASE WHEN volume_backup_policies.enabled=false AND excluded.enabled=true THEN excluded.next_run_at ELSE volume_backup_policies.next_run_at END,updated_at=now()`, item.id, item.serviceID, item.volumeName, item.destinationID, item.intervalSeconds, item.source.retentionCount, item.source.turnOff, item.source.enabled)
+		if err != nil {
+			return report, fmt.Errorf("import volume backup policy %s: %w", item.source.id, err)
 		}
 	}
 	for _, item := range preparedNotifications {

@@ -1,6 +1,10 @@
 package migrate
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+)
 
 func TestCronInterval(t *testing.T) {
 	tests := map[string]int{
@@ -32,5 +36,20 @@ func TestNormalizeS3Endpoint(t *testing.T) {
 	}
 	if _, _, err := normalizeS3Endpoint("https://example.test/path"); err == nil {
 		t.Fatal("expected endpoint path rejection")
+	}
+}
+
+func TestDokployVolumePolicyResolvesImportedComposeVolume(t *testing.T) {
+	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
+	services := []sourceCompose{{id: "compose-1", appName: "legacy-app", compose: "services:\n  web:\n    image: nginx\n    volumes: [uploads:/data]\nvolumes:\n  uploads: {}\n"}}
+	serviceID, compose, ok := dokployVolumeService(options, sourceVolumeBackupPolicy{serviceType: "compose", appName: "legacy-app"}, services, nil, map[string]bool{"compose-1": true}, nil)
+	if !ok || serviceID != mappedID(options, "compose", "compose-1") {
+		t.Fatalf("service=%s ok=%v", serviceID, ok)
+	}
+	if volume, found := dokployLogicalVolume(compose, "uploads"); !found || volume != "uploads" {
+		t.Fatalf("volume=%q found=%v", volume, found)
+	}
+	if _, found := dokployLogicalVolume(compose, "missing"); found {
+		t.Fatal("undeclared volume was accepted")
 	}
 }

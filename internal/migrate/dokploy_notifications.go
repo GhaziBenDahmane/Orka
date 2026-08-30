@@ -53,11 +53,11 @@ func prepareNotification(box *cryptox.Box, options DokployOptions, item sourceNo
 	if item.appBuildError {
 		events = append(events, "deployment.failed")
 	}
-	if item.databaseBackup {
+	if item.databaseBackup || item.volumeBackup {
 		events = append(events, "backup.failed")
 	}
 	warnings := []string{}
-	if item.appDeploy || item.volumeBackup || item.dokployRestart || item.dokployBackup || item.dockerCleanup || item.serverThreshold {
+	if item.appDeploy || item.dokployRestart || item.dokployBackup || item.dockerCleanup || item.serverThreshold {
 		warnings = append(warnings, fmt.Sprintf("notification %s has Dokploy event triggers without a Dockyard equivalent", item.id))
 	}
 	prepared := preparedNotification{source: item, id: id, events: events}

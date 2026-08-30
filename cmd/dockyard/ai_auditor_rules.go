@@ -88,6 +88,24 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database lacks a successful restore drill", Description: "Restore verification is enabled, but no latest successful drill is visible.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "lastRestoreDrillStatus": backup.LastRestoreDrillStatus}, Remediation: "Run an isolated restore drill and validate application-level data."})
 		}
 	}
+	for _, backup := range snapshot.VolumeBackupPosture {
+		resourceID := backup.ServiceID.String()
+		if !backup.PolicyEnabled {
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Volume backup policy is disabled", Description: "A named-volume backup policy exists but is not scheduling backups.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName, "intervalSeconds": backup.IntervalSeconds}, Remediation: "Enable the policy after confirming its destination and retention settings."})
+		}
+		if backup.StorageNodeID == "" {
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Protected volume has no storage-node binding", Description: "A named-volume backup policy exists, but its service has not been pinned to a Swarm storage node.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName}, Remediation: "Deploy the service so Orka can bind and pin its node-local volume before the first backup."})
+		}
+		if backup.LastBackupStatus != "succeeded" {
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Volume lacks a successful backup", Description: "No latest successful encrypted backup is visible for a protected named volume.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName, "lastBackupStatus": backup.LastBackupStatus}, Remediation: "Run a volume backup, resolve any failure, and verify the resulting artifact checksum."})
+		}
+		if !backup.Quiesce {
+			add(modelFinding{Severity: "medium", Category: "backup", Title: "Volume backups do not pause writers", Description: "The backup policy allows services to keep writing while the volume archive is created.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName}, Remediation: "Enable quiescence or document and validate the application's crash-consistent backup guarantees."})
+		}
+		if backup.LastRestoreStatus != "succeeded" {
+			add(modelFinding{Severity: "medium", Category: "backup", Title: "Volume restore has not been validated", Description: "No latest successful restore is visible for a protected named volume.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName, "lastRestoreStatus": backup.LastRestoreStatus}, Remediation: "Perform a controlled restore rehearsal and validate application-level data before relying on the backup."})
+		}
+	}
 	for _, cluster := range snapshot.Clusters {
 		if cluster.State != "active" && cluster.State != "draining" {
 			continue

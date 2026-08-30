@@ -65,6 +65,10 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("put policy status=%d body=%s", status, body)
 	}
+	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil || len(snapshot.VolumeBackupPosture) != 1 || snapshot.VolumeBackupPosture[0].VolumeName != "uploads" || snapshot.VolumeBackupPosture[0].StorageNodeID != "nodeabc123" {
+		t.Fatalf("volume backup audit posture=%#v err=%v", snapshot.VolumeBackupPosture, err)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+serviceID.String()+"/volumes", token, organizationID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(body, []byte(`"dockerName":"volume-api-`)) || !bytes.Contains(body, []byte(`"storageNodeId":"nodeabc123"`)) {
 		t.Fatalf("volumes status=%d body=%s", status, body)
