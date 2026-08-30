@@ -67,6 +67,30 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "high", Category: "migration", Title: "Dokploy database transfers are incomplete", Description: "Not every imported managed database has a successful native data transfer newer than its parity record.", ResourceType: "dokploy_migration", ResourceID: migration.SourceOrganizationID, Evidence: map[string]any{"databases": migration.Databases, "successfulTransfers": migration.SuccessfulDatabaseTransfers}, Remediation: "Quiesce source writes, queue the missing native transfers, and rerun operational migration verification."})
 		}
 	}
+	for _, policy := range snapshot.ResourcePolicies {
+		if policy.Maintenance {
+			add(modelFinding{Severity: "low", Category: "policy", Title: "Maintenance mode is active", Description: "A resource scope is intentionally blocking deployment and mutation operations.", ResourceType: policy.ScopeType, ResourceID: policy.ScopeID.String(), Evidence: map[string]any{"scopeType": policy.ScopeType, "updatedAt": policy.UpdatedAt.UTC().Format(time.RFC3339)}, Remediation: "Confirm the maintenance window is still required and disable it when the planned work is complete."})
+		}
+		for _, quota := range []struct {
+			name    string
+			current int
+			limit   *int
+		}{
+			{name: "projects", current: policy.CurrentProjects, limit: policy.MaxProjects},
+			{name: "environments", current: policy.CurrentEnvironments, limit: policy.MaxEnvironments},
+			{name: "services", current: policy.CurrentServices, limit: policy.MaxServices},
+			{name: "databases", current: policy.CurrentDatabases, limit: policy.MaxDatabases},
+		} {
+			if quota.limit == nil || quota.current*10 < *quota.limit*9 {
+				continue
+			}
+			severity, title := "medium", "Resource quota is nearly exhausted"
+			if quota.current >= *quota.limit {
+				severity, title = "high", "Resource quota is exhausted"
+			}
+			add(modelFinding{Severity: severity, Category: "capacity", Title: title, Description: "A configured resource quota has little or no remaining capacity.", ResourceType: policy.ScopeType, ResourceID: policy.ScopeID.String(), Evidence: map[string]any{"scopeType": policy.ScopeType, "resource": quota.name, "used": quota.current, "limit": *quota.limit}, Remediation: "Review inactive resources and expected growth, then remove unused capacity or adjust the policy deliberately."})
+		}
+	}
 	for _, backup := range snapshot.BackupPosture {
 		resourceID := backup.DatabaseID.String()
 		if len(databaseEngines) > 0 && unusableDatabaseDrivers[backup.DatabaseID] {

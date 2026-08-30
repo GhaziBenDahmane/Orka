@@ -270,6 +270,28 @@ func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsMaintenanceAndQuotaPressure(t *testing.T) {
+	now := time.Now().UTC()
+	nine, ten, two := 9, 10, 2
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		ResourcePolicies: []store.AIAuditResourcePolicyPosture{
+			{ScopeType: "organization", ScopeID: uuid.New(), Maintenance: true, MaxProjects: &ten, CurrentProjects: nine, UpdatedAt: now.Add(-time.Hour)},
+			{ScopeType: "environment", ScopeID: uuid.New(), MaxServices: &two, CurrentServices: two, UpdatedAt: now},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]int{}
+	for _, finding := range findings {
+		titles[finding.Title]++
+	}
+	if len(findings) != 3 || titles["Maintenance mode is active"] != 1 || titles["Resource quota is nearly exhausted"] != 1 || titles["Resource quota is exhausted"] != 1 {
+		t.Fatalf("policy findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

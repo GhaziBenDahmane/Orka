@@ -184,6 +184,10 @@ renewal/completion is fenced by a per-attempt UUID.
 | GET | `/v1/ai/audit-runs/{id}/findings` | Review findings as an organization administrator |
 | PATCH | `/v1/ai/audit-findings/{id}` | Acknowledge, resolve, or reopen a finding with an operator note |
 
+The snapshot includes tenant-scoped maintenance and quota posture with current
+resource counts. Operator-authored maintenance reasons are intentionally
+excluded from the model boundary.
+
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a
 fingerprint recurring in a later run by the same auditor identity and agent is

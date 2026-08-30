@@ -28,6 +28,7 @@ type AIAuditSnapshot struct {
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
 	VolumeBackupPosture  []AIAuditVolumeBackupPosture    `json:"volumeBackupPosture"`
+	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
@@ -101,6 +102,21 @@ type AIAuditVolumeBackupPosture struct {
 	LastBackupAt      *time.Time `json:"lastBackupAt,omitempty"`
 	LastRestoreStatus string     `json:"lastRestoreStatus,omitempty"`
 	LastRestoreAt     *time.Time `json:"lastRestoreAt,omitempty"`
+}
+
+type AIAuditResourcePolicyPosture struct {
+	ScopeType           string    `json:"scopeType"`
+	ScopeID             uuid.UUID `json:"scopeId"`
+	Maintenance         bool      `json:"maintenance"`
+	MaxProjects         *int      `json:"maxProjects"`
+	MaxEnvironments     *int      `json:"maxEnvironments"`
+	MaxServices         *int      `json:"maxServices"`
+	MaxDatabases        *int      `json:"maxDatabases"`
+	CurrentProjects     int       `json:"currentProjects"`
+	CurrentEnvironments int       `json:"currentEnvironments"`
+	CurrentServices     int       `json:"currentServices"`
+	CurrentDatabases    int       `json:"currentDatabases"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 type AIAuditDatabaseEngineInfo struct {
@@ -193,7 +209,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -280,6 +296,27 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 
 func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
 	rows, err := s.Pool.Query(ctx, `
+		SELECT scope_type,scope_id,maintenance_enabled,max_projects,max_environments,max_services,max_databases,updated_at
+		FROM resource_policies WHERE organization_id=$1 ORDER BY scope_type,scope_id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditResourcePolicyPosture
+		if err = rows.Scan(&item.ScopeType, &item.ScopeID, &item.Maintenance, &item.MaxProjects, &item.MaxEnvironments, &item.MaxServices, &item.MaxDatabases, &item.UpdatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.ResourcePolicies = append(snapshot.ResourcePolicies, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	populateAIAuditPolicyUsage(snapshot)
+
+	rows, err = s.Pool.Query(ctx, `
 		SELECT c.id,c.name,latest.id,latest.status,latest.target_image,latest.attempts,latest.last_error,
 			latest.status='verifying' AND latest.run_after<=now(),
 			CASE WHEN latest.status='verifying' THEN latest.run_after END,latest.created_at,latest.finished_at
@@ -544,6 +581,44 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	rows.Close()
 	return nil
+}
+
+func populateAIAuditPolicyUsage(snapshot *AIAuditSnapshot) {
+	environmentProjects := make(map[uuid.UUID]uuid.UUID, len(snapshot.Environments))
+	projectEnvironments := make(map[uuid.UUID]int)
+	environmentServices := make(map[uuid.UUID]int)
+	projectServices := make(map[uuid.UUID]int)
+	environmentDatabases := make(map[uuid.UUID]int)
+	projectDatabases := make(map[uuid.UUID]int)
+	for _, environment := range snapshot.Environments {
+		environmentProjects[environment.ID] = environment.ProjectID
+		projectEnvironments[environment.ProjectID]++
+	}
+	for _, service := range snapshot.Services {
+		environmentServices[service.EnvironmentID]++
+		projectServices[environmentProjects[service.EnvironmentID]]++
+	}
+	for _, database := range snapshot.Databases {
+		environmentDatabases[database.EnvironmentID]++
+		projectDatabases[environmentProjects[database.EnvironmentID]]++
+	}
+	for index := range snapshot.ResourcePolicies {
+		policy := &snapshot.ResourcePolicies[index]
+		switch policy.ScopeType {
+		case "organization":
+			policy.CurrentProjects = len(snapshot.Projects)
+			policy.CurrentEnvironments = len(snapshot.Environments)
+			policy.CurrentServices = len(snapshot.Services)
+			policy.CurrentDatabases = len(snapshot.Databases)
+		case "project":
+			policy.CurrentEnvironments = projectEnvironments[policy.ScopeID]
+			policy.CurrentServices = projectServices[policy.ScopeID]
+			policy.CurrentDatabases = projectDatabases[policy.ScopeID]
+		case "environment":
+			policy.CurrentServices = environmentServices[policy.ScopeID]
+			policy.CurrentDatabases = environmentDatabases[policy.ScopeID]
+		}
+	}
 }
 
 type AIAuditRun struct {

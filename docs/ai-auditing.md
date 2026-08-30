@@ -36,7 +36,9 @@ keys make it a privileged service.
   notification coverage, and template repository
   signing/synchronization posture so findings can identify concrete gaps. It
   also reports each service's desired and latest deployed revision plus
-  pending/running service and database jobs. The latest agent upgrade for each
+  pending/running service and database jobs. Resource-policy posture includes
+  active maintenance scopes, configured quota limits, and current usage while
+  excluding operator-supplied maintenance reasons. The latest agent upgrade for each
   cluster includes its immutable target, state, attempt count, deadline, and
   overdue flag, but never its encrypted command or result. Queue counts cover
   only jobs with a resource key that resolves through the requesting
@@ -82,13 +84,14 @@ keys make it a privileged service.
   third-party agents cannot bypass the bound, while they may update an existing
   fingerprint without consuming another slot.
 - Before calling the model, the built-in runner records a bounded deterministic
-  safety baseline for missing, disabled, or overdue backups and restore drills, missing owners, disabled
+  safety baseline for missing, disabled, or overdue backups and restore drills,
+  active maintenance scopes, near-capacity quotas, missing owners, disabled
   mandatory SSO, stale cluster heartbeats, expiring agent certificates,
   expiring service-account and stale SCIM credentials, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
   notification coverage gaps, unavailable, unbound, mismatched, or
-  recovery-incapable database drivers, unhealthy reconciliation, unsigned, failed,
-  never-synchronized, or stale catalogs, undeployed desired revisions, and
+  recovery-incapable database drivers, unhealthy reconciliation, unsigned,
+  failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
   incomplete Dokploy migrations. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
