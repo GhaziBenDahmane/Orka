@@ -67,9 +67,9 @@ type sourceDatabase struct {
 	dockerImage, env                                           string
 }
 type sourceRoute struct {
-	id, composeID, host, path, serviceName, resolver string
-	port                                             int
-	tls, enabled                                     bool
+	id, composeID, host, path, internalPath, serviceName, resolver string
+	port                                                           int
+	tls, enabled, stripPath                                        bool
 }
 
 type preparedBackupDestination struct {
@@ -173,9 +173,9 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	seenRoute := map[string]bool{}
 	for _, route := range routes {
 		metadata := map[string]any{"host": route.host, "path": route.path, "composeId": route.composeID}
-		if !route.enabled || !validServices[route.composeID] || route.serviceName == "" || route.port < 1 || route.port > 65535 {
+		if !validServices[route.composeID] || route.serviceName == "" || route.port < 1 || route.port > 65535 {
 			report.Skipped++
-			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_route", SourceID: route.id, Status: "skipped", Reason: "disabled, invalid, or parent service was not imported", Metadata: metadata})
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_route", SourceID: route.id, Status: "skipped", Reason: "invalid or parent service was not imported", Metadata: metadata})
 			continue
 		}
 		key := strings.ToLower(route.host) + "\x00" + route.path
@@ -213,9 +213,9 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	filteredApplicationRoutes := make([]sourceApplicationRoute, 0, len(applicationRoutes))
 	for _, route := range applicationRoutes {
 		metadata := map[string]any{"host": route.host, "path": route.path, "applicationId": route.applicationID}
-		if !route.enabled || !validApplications[route.applicationID] || route.port < 1 || route.port > 65535 {
+		if !validApplications[route.applicationID] || route.port < 1 || route.port > 65535 {
 			report.Skipped++
-			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "application_route", SourceID: route.id, Status: "skipped", Reason: "disabled, invalid, or parent application was not imported", Metadata: metadata})
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "application_route", SourceID: route.id, Status: "skipped", Reason: "invalid or parent application was not imported", Metadata: metadata})
 			continue
 		}
 		key := strings.ToLower(route.host) + "\x00" + route.path
@@ -646,7 +646,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if resolver == "" {
 			resolver = "letsencrypt"
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,$3,lower($4),$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET service_name=excluded.service_name,host=excluded.host,path_prefix=excluded.path_prefix,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver`, id, mappedID(options, "compose", item.composeID), item.serviceName, item.host, path, item.port, item.tls, resolver)
+		internalPath := item.internalPath
+		if internalPath == "" {
+			internalPath = "/"
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,enabled,target_port,tls,certificate_resolver) VALUES($1,$2,$3,lower($4),$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET service_name=excluded.service_name,host=excluded.host,path_prefix=excluded.path_prefix,internal_path=excluded.internal_path,strip_path=excluded.strip_path,enabled=excluded.enabled,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver,updated_at=now()`, id, mappedID(options, "compose", item.composeID), item.serviceName, item.host, path, internalPath, item.stripPath, item.enabled, item.port, item.tls, resolver)
 		if err != nil {
 			return report, fmt.Errorf("import route %s: %w", item.id, err)
 		}
@@ -660,7 +664,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if resolver == "" {
 			resolver = "letsencrypt"
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'app',lower($3),$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET service_name='app',host=excluded.host,path_prefix=excluded.path_prefix,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver`, mappedID(options, "application-route", item.id), mappedID(options, "application-service", item.applicationID), item.host, path, item.port, item.tls, resolver)
+		internalPath := item.internalPath
+		if internalPath == "" {
+			internalPath = "/"
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,enabled,target_port,tls,certificate_resolver) VALUES($1,$2,'app',lower($3),$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(id) DO UPDATE SET service_name='app',host=excluded.host,path_prefix=excluded.path_prefix,internal_path=excluded.internal_path,strip_path=excluded.strip_path,enabled=excluded.enabled,target_port=excluded.target_port,tls=excluded.tls,certificate_resolver=excluded.certificate_resolver,updated_at=now()`, mappedID(options, "application-route", item.id), mappedID(options, "application-service", item.applicationID), item.host, path, internalPath, item.stripPath, item.enabled, item.port, item.tls, resolver)
 		if err != nil {
 			return report, fmt.Errorf("import application route %s: %w", item.id, err)
 		}
@@ -792,7 +800,7 @@ func readCompose(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceCom
 	return items, rows.Err()
 }
 func readRoutes(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceRoute, error) {
-	rows, err := db.Query(ctx, `SELECT d."domainId",d."composeId",d.host,COALESCE(d.path,'/'),COALESCE(d."serviceName",''),COALESCE(d.port,3000),d.https,d.enabled,COALESCE(d."customCertResolver",'') FROM domain d JOIN compose c ON c."composeId"=d."composeId" JOIN environment e ON e."environmentId"=c."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 AND d."composeId" IS NOT NULL ORDER BY d."domainId"`, org)
+	rows, err := db.Query(ctx, `SELECT d."domainId",d."composeId",d.host,COALESCE(d.path,'/'),COALESCE(to_jsonb(d)->>'internalPath','/'),COALESCE((to_jsonb(d)->>'stripPath')::boolean,false),COALESCE(d."serviceName",''),COALESCE(d.port,3000),d.https,d.enabled,COALESCE(d."customCertResolver",'') FROM domain d JOIN compose c ON c."composeId"=d."composeId" JOIN environment e ON e."environmentId"=c."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 AND d."composeId" IS NOT NULL ORDER BY d."domainId"`, org)
 	if err != nil {
 		return nil, fmt.Errorf("read Dokploy routes: %w", err)
 	}
@@ -800,7 +808,7 @@ func readRoutes(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceRout
 	items := []sourceRoute{}
 	for rows.Next() {
 		var v sourceRoute
-		if err = rows.Scan(&v.id, &v.composeID, &v.host, &v.path, &v.serviceName, &v.port, &v.tls, &v.enabled, &v.resolver); err != nil {
+		if err = rows.Scan(&v.id, &v.composeID, &v.host, &v.path, &v.internalPath, &v.stripPath, &v.serviceName, &v.port, &v.tls, &v.enabled, &v.resolver); err != nil {
 			return nil, err
 		}
 		items = append(items, v)

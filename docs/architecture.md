@@ -93,7 +93,13 @@ allowed to finish before deletion can begin.
   The configured public overlay network is reserved: safe Compose input cannot
   declare or attach it, and the compiler attaches it only to services with
   approved routes. Routing labels are generated only from tenant-scoped route
-  records after canonical hostname and injection-safe path validation.
+  records after canonical hostname and injection-safe path validation. Route
+  records can be disabled without deletion and can compile ordered strip-path,
+  internal-prefix, and bounded RE2 redirect middleware. Redirect replacement
+  interpolation is escaped before Docker Compose processing.
+  Optional service-wide HTTP basic-auth identities are stored only as bcrypt
+  hashes, compiled into each enabled route, and remove the authorization
+  header before forwarding to the workload.
 - Safe stacks use replicated scheduling and are capped at 100 aggregate tasks;
   node-wide global services and jobs require explicit unsafe-workload mode.
 - Safe workloads may use only Docker's local, JSON-file, or disabled logging

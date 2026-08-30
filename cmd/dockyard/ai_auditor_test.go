@@ -896,6 +896,7 @@ func TestDeterministicAuditDetectsPlaintextPublicRoutes(t *testing.T) {
 		NotificationPosture: fullyCoveredNotifications(),
 		Routes: []store.AIAuditRouteInfo{
 			{ID: insecureID, ComposeServiceID: uuid.New(), Host: "legacy.example.test", PathPrefix: "/", TargetPort: 8080},
+			{ID: uuid.New(), ComposeServiceID: uuid.New(), Host: "retired.example.test", PathPrefix: "/", TargetPort: 8080, Disabled: true},
 			{ID: uuid.New(), ComposeServiceID: uuid.New(), Host: "secure.example.test", PathPrefix: "/", TargetPort: 8443, TLS: true, CertificateResolver: "letsencrypt"},
 		},
 	}

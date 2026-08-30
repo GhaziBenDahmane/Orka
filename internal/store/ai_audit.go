@@ -105,6 +105,13 @@ type AIAuditRouteInfo struct {
 	ServiceName         string    `json:"serviceName"`
 	Host                string    `json:"host"`
 	PathPrefix          string    `json:"pathPrefix"`
+	InternalPath        string    `json:"internalPath"`
+	StripPath           bool      `json:"stripPath"`
+	Enabled             bool      `json:"enabled"`
+	Disabled            bool      `json:"-"`
+	RedirectConfigured  bool      `json:"redirectConfigured"`
+	RedirectPermanent   bool      `json:"redirectPermanent"`
+	BasicAuthEnabled    bool      `json:"basicAuthEnabled"`
 	TargetPort          int       `json:"targetPort"`
 	TLS                 bool      `json:"tls"`
 	CertificateResolver string    `json:"certificateResolver"`
@@ -639,7 +646,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	}
 	rows.Close()
 
-	rows, err = s.Pool.Query(ctx, `SELECT route.id,route.compose_service_id,route.service_name,route.host,route.path_prefix,route.target_port,route.tls,route.certificate_resolver
+	rows, err = s.Pool.Query(ctx, `SELECT route.id,route.compose_service_id,route.service_name,route.host,route.path_prefix,route.internal_path,route.strip_path,NOT route.enabled,route.redirect_regex<>'',route.redirect_permanent,EXISTS(SELECT 1 FROM route_basic_auth_users auth WHERE auth.compose_service_id=route.compose_service_id),route.target_port,route.tls,route.certificate_resolver
 		FROM routes route
 		JOIN compose_services service ON service.id=route.compose_service_id
 		JOIN environments environment ON environment.id=service.environment_id
@@ -651,10 +658,11 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	}
 	for rows.Next() {
 		var item AIAuditRouteInfo
-		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.TargetPort, &item.TLS, &item.CertificateResolver); err != nil {
+		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.InternalPath, &item.StripPath, &item.Disabled, &item.RedirectConfigured, &item.RedirectPermanent, &item.BasicAuthEnabled, &item.TargetPort, &item.TLS, &item.CertificateResolver); err != nil {
 			rows.Close()
 			return err
 		}
+		item.Enabled = !item.Disabled
 		snapshot.Routes = append(snapshot.Routes, item)
 	}
 	if err = rows.Err(); err != nil {

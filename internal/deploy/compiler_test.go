@@ -21,6 +21,45 @@ func TestCompileInjectsTraefikAndNetwork(t *testing.T) {
 	}
 }
 
+func TestCompileRoutePathRewriteAndRedirect(t *testing.T) {
+	route := store.Route{ServiceName: "web", Host: "app.example.com", PathPrefix: "/public", InternalPath: "/internal", StripPath: true, RedirectRegex: `^https://app\.example\.com/old/(.*)`, RedirectReplacement: `https://app.example.com/new/${1}`, RedirectPermanent: true, BasicAuthUsers: []string{`operator:$2a$12$C6UzMDM.H6dfI/f/IKxGhuVvZ4GuGNmi1wT7dSx.QcpQo.eN8wxQe`}, TargetPort: 80, TLS: true, CertificateResolver: "letsencrypt"}
+	out, err := (Compiler{PublicNetwork: "public"}).Compile("services:\n  web:\n    image: nginx:alpine\n", []store.Route{route})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := compiledService(t, out, "web")
+	deployment, ok := stringMap(service["deploy"])
+	if !ok {
+		t.Fatalf("compiled service has no deploy object: %s", out)
+	}
+	labels := normalizeLabels(deployment["labels"])
+	wants := map[string]string{
+		"traefik.http.middlewares.dockyard-0-app-example-com-strip-path.stripprefix.prefixes":    "/public",
+		"traefik.http.middlewares.dockyard-0-app-example-com-internal-path.addprefix.prefix":     "/internal",
+		"traefik.http.middlewares.dockyard-0-app-example-com-redirect.redirectregex.regex":       `^https://app\.example\.com/old/(.*)`,
+		"traefik.http.middlewares.dockyard-0-app-example-com-redirect.redirectregex.replacement": `https://app.example.com/new/$${1}`,
+		"traefik.http.middlewares.dockyard-0-app-example-com-redirect.redirectregex.permanent":   "true",
+		"traefik.http.middlewares.dockyard-0-app-example-com-basic-auth.basicauth.users":         `operator:$$2a$$12$$C6UzMDM.H6dfI/f/IKxGhuVvZ4GuGNmi1wT7dSx.QcpQo.eN8wxQe`,
+		"traefik.http.middlewares.dockyard-0-app-example-com-basic-auth.basicauth.removeheader":  "true",
+		"traefik.http.routers.dockyard-0-app-example-com.middlewares":                            "dockyard-0-app-example-com-strip-path,dockyard-0-app-example-com-internal-path,dockyard-0-app-example-com-redirect,dockyard-0-app-example-com-basic-auth",
+	}
+	for key, want := range wants {
+		if got := labels[key]; got != want {
+			t.Errorf("label %s=%v, want %q", key, got, want)
+		}
+	}
+}
+
+func TestCompileIgnoresDisabledRoutes(t *testing.T) {
+	out, err := (Compiler{PublicNetwork: "public"}).Compile("services:\n  web:\n    image: nginx:alpine\n", []store.Route{{ServiceName: "web", Host: "disabled.example.com", PathPrefix: "/", TargetPort: 80, Disabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "traefik") || strings.Contains(out, "disabled.example.com") {
+		t.Fatalf("disabled route was compiled: %s", out)
+	}
+}
+
 func TestCompilePreservesImplicitDefaultNetworkForRoutedService(t *testing.T) {
 	source := `services:
   web:
@@ -483,6 +522,10 @@ func TestCompileRejectsTraefikRuleInjection(t *testing.T) {
 		{ServiceName: "web", Host: "app.example.com`) || Host(`evil.example.com", PathPrefix: "/", TargetPort: 80, TLS: true, CertificateResolver: "letsencrypt"},
 		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/`) || PathPrefix(`/admin", TargetPort: 80, TLS: true, CertificateResolver: "letsencrypt"},
 		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80, TLS: true, CertificateResolver: "bad resolver"},
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", InternalPath: "relative", TargetPort: 80},
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", RedirectRegex: "(", RedirectReplacement: "https://example.com", TargetPort: 80},
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", RedirectRegex: "^https://example.com", TargetPort: 80},
+		{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", StripPath: true, TargetPort: 80},
 	} {
 		if _, err := c.Compile("services:\n  web:\n    image: nginx:alpine\n", []store.Route{route}); err == nil {
 			t.Fatalf("accepted unsafe route: %#v", route)

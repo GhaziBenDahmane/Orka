@@ -255,7 +255,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /v1/services/{serviceID}/artifact-source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertArtifactSource)))
 	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.addRoute)))
 	mux.Handle("GET /v1/routes/{routeID}", s.requireResourceRole("viewer", "route", "routeID", http.HandlerFunc(s.getRoute)))
+	mux.Handle("PUT /v1/routes/{routeID}", s.requireResourceRole("developer", "route", "routeID", http.HandlerFunc(s.updateRoute)))
 	mux.Handle("DELETE /v1/routes/{routeID}", s.requireResourceRole("developer", "route", "routeID", http.HandlerFunc(s.deleteRoute)))
+	mux.Handle("GET /v1/services/{serviceID}/basic-auth-users", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listRouteBasicAuthUsers)))
+	mux.Handle("POST /v1/services/{serviceID}/basic-auth-users", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createRouteBasicAuthUser)))
+	mux.Handle("PUT /v1/services/{serviceID}/basic-auth-users/{userID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateRouteBasicAuthUser)))
+	mux.Handle("DELETE /v1/services/{serviceID}/basic-auth-users/{userID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deleteRouteBasicAuthUser)))
 	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deployService)))
 	mux.Handle("POST /v1/services/{serviceID}/stop", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.stopService)))
 	mux.Handle("POST /v1/services/{serviceID}/start", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.startService)))
@@ -2595,35 +2600,54 @@ func (s *Server) deleteSourceCredential(w http.ResponseWriter, r *http.Request) 
 	s.Store.Audit(r.Context(), &p, "source_credential.delete", "source_credential", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
+
+type routeInput struct {
+	ServiceName         string `json:"serviceName"`
+	Host                string `json:"host"`
+	PathPrefix          string `json:"pathPrefix"`
+	InternalPath        string `json:"internalPath"`
+	StripPath           bool   `json:"stripPath"`
+	Enabled             *bool  `json:"enabled"`
+	RedirectRegex       string `json:"redirectRegex"`
+	RedirectReplacement string `json:"redirectReplacement"`
+	RedirectPermanent   bool   `json:"redirectPermanent"`
+	TargetPort          int    `json:"targetPort"`
+	TLS                 *bool  `json:"tls"`
+	CertificateResolver string `json:"certificateResolver"`
+}
+
+func (in routeInput) route(serviceID uuid.UUID) store.Route {
+	in.Host = strings.ToLower(strings.TrimSpace(in.Host))
+	if in.PathPrefix == "" {
+		in.PathPrefix = "/"
+	}
+	if in.InternalPath == "" {
+		in.InternalPath = "/"
+	}
+	if in.CertificateResolver == "" {
+		in.CertificateResolver = "letsencrypt"
+	}
+	tls, enabled := true, true
+	if in.TLS != nil {
+		tls = *in.TLS
+	}
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	return store.Route{ComposeServiceID: serviceID, ServiceName: in.ServiceName, Host: in.Host, PathPrefix: in.PathPrefix, InternalPath: in.InternalPath, StripPath: in.StripPath, Enabled: enabled, Disabled: !enabled, RedirectRegex: in.RedirectRegex, RedirectReplacement: in.RedirectReplacement, RedirectPermanent: in.RedirectPermanent, TargetPort: in.TargetPort, TLS: tls, CertificateResolver: in.CertificateResolver}
+}
+
 func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
 	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
 	if err != nil {
 		writeError(w, 400, "invalid_id", "invalid service id")
 		return
 	}
-	var in struct {
-		ServiceName         string `json:"serviceName"`
-		Host                string `json:"host"`
-		PathPrefix          string `json:"pathPrefix"`
-		TargetPort          int    `json:"targetPort"`
-		TLS                 *bool  `json:"tls"`
-		CertificateResolver string `json:"certificateResolver"`
-	}
+	var in routeInput
 	if !decode(w, r, &in) {
 		return
 	}
-	in.Host = strings.ToLower(strings.TrimSpace(in.Host))
-	if in.PathPrefix == "" {
-		in.PathPrefix = "/"
-	}
-	if in.CertificateResolver == "" {
-		in.CertificateResolver = "letsencrypt"
-	}
-	tls := true
-	if in.TLS != nil {
-		tls = *in.TLS
-	}
-	item := store.Route{ComposeServiceID: serviceID, ServiceName: in.ServiceName, Host: in.Host, PathPrefix: in.PathPrefix, TargetPort: in.TargetPort, TLS: tls, CertificateResolver: in.CertificateResolver}
+	item := in.route(serviceID)
 	if err = deploy.ValidateRoute(item); err != nil {
 		writeError(w, 400, "invalid_route", "invalid route")
 		return
@@ -2636,6 +2660,32 @@ func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "route.create", "route", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
+}
+
+func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("routeID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid route id")
+		return
+	}
+	var in routeInput
+	if !decode(w, r, &in) {
+		return
+	}
+	item := in.route(uuid.Nil)
+	item.ID = id
+	if err = deploy.ValidateRoute(item); err != nil {
+		writeError(w, 400, "invalid_route", "invalid route")
+		return
+	}
+	p := principal(r)
+	item, err = s.Store.UpdateRoute(r.Context(), p.OrganizationID, item)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "route.update", "route", item.ID.String(), r.RemoteAddr, nil)
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) getRoute(w http.ResponseWriter, r *http.Request) {
@@ -3073,6 +3123,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrInvalidSchedule) {
 		writeError(w, http.StatusBadRequest, "invalid_schedule", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrInvalidRouteBasicAuth) {
+		writeError(w, http.StatusBadRequest, "invalid_route_basic_auth", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrNotCancellable) {

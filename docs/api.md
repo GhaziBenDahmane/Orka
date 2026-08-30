@@ -380,8 +380,10 @@ until an administrator retries them.
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup); revisions cannot remove a named volume while its backup policy exists, and deletion rejects active deployment, migration, backup, or restore work |
 | PUT | `/v1/services/{id}/source` | Configure a Git or uploaded-ZIP application build, registry target, build mode, credentials, arguments, secrets, and submodules |
 | PUT | `/v1/services/{id}/artifact-source` | Upload or replace an encrypted ZIP source (25 MiB compressed / 250 MiB expanded limits) |
-| POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
-| GET/DELETE | `/v1/routes/{id}` | Inspect or remove a route |
+| POST | `/v1/services/{id}/routes` | Add a Traefik route with optional path rewriting and regex redirect |
+| GET/PUT/DELETE | `/v1/routes/{id}` | Inspect, replace, enable/disable, or remove a route; changes apply on the next deployment |
+| GET/POST | `/v1/services/{id}/basic-auth-users` | List or add HTTP basic-auth identities protecting every enabled service route |
+| PUT/DELETE | `/v1/services/{id}/basic-auth-users/{userId}` | Rotate/rename or remove a route basic-auth identity |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |
 | GET | `/v1/services/{id}/deployments` | Read deployment history |
 | POST | `/v1/services/{id}/stop` | Persist stopped intent and asynchronously remove the Swarm stack while preserving named volumes; repeated requests are idempotent |
@@ -422,6 +424,12 @@ key. Each invocation has a 1–86400 second timeout, 1 MiB output cap, durable
 history, cancellation, and failure notification support. Non-idempotent
 commands are never automatically retried after a worker lease expires. A
 stopped or maintenance-blocked service keeps its due cursor unchanged.
+
+Route basic-auth passwords are 1–72 UTF-8 bytes, accepted only on create or
+explicit rotation, bcrypt-hashed at cost 12, and never returned. Compiled Traefik labels remove
+the inbound `Authorization` header before proxying. Route and credential
+mutations are fenced while a deployment is active, and take effect only after
+the next deployment.
 
 Organization owners and administrators manage scoped grants. A project grant
 is inherited by all of its environments, while a more privileged environment

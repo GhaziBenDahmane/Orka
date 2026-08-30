@@ -110,7 +110,7 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 	}
 	for _, route := range snapshot.Routes {
-		if !route.TLS {
+		if !route.Disabled && !route.TLS {
 			add(modelFinding{Severity: "medium", Category: "network", Title: "Public route permits plaintext HTTP", Description: "A Traefik ingress route accepts traffic without transport encryption.", ResourceType: "route", ResourceID: route.ID.String(), Evidence: map[string]any{"serviceId": route.ComposeServiceID.String(), "host": route.Host, "pathPrefix": route.PathPrefix, "targetPort": route.TargetPort}, Remediation: "Enable TLS with a configured certificate resolver, redeploy the service, and redirect or retire the plaintext endpoint."})
 		}
 	}

@@ -764,20 +764,45 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	rows, err := w.Store.Pool.Query(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.target_port,r.tls,r.certificate_resolver FROM routes r JOIN deployments d ON d.compose_service_id=r.compose_service_id WHERE d.id=$1`, id)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.internal_path,r.strip_path,NOT r.enabled,r.redirect_regex,r.redirect_replacement,r.redirect_permanent,r.target_port,r.tls,r.certificate_resolver,r.created_at,r.updated_at FROM routes r JOIN deployments d ON d.compose_service_id=r.compose_service_id WHERE d.id=$1`, id)
 	if err != nil {
 		return err
 	}
 	routes := []store.Route{}
 	for rows.Next() {
 		var r store.Route
-		if err := rows.Scan(&r.ID, &r.ComposeServiceID, &r.ServiceName, &r.Host, &r.PathPrefix, &r.TargetPort, &r.TLS, &r.CertificateResolver); err != nil {
+		if err := rows.Scan(&r.ID, &r.ComposeServiceID, &r.ServiceName, &r.Host, &r.PathPrefix, &r.InternalPath, &r.StripPath, &r.Disabled, &r.RedirectRegex, &r.RedirectReplacement, &r.RedirectPermanent, &r.TargetPort, &r.TLS, &r.CertificateResolver, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			rows.Close()
 			return err
 		}
 		routes = append(routes, r)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	rows.Close()
+	authRows, err := w.Store.Pool.Query(ctx, `SELECT username,password_hash FROM route_basic_auth_users WHERE compose_service_id=$1 ORDER BY username,id`, serviceID)
+	if err != nil {
+		return err
+	}
+	authUsers := []string{}
+	for authRows.Next() {
+		var username, passwordHash string
+		if err = authRows.Scan(&username, &passwordHash); err != nil {
+			authRows.Close()
+			return err
+		}
+		authUsers = append(authUsers, username+":"+passwordHash)
+	}
+	if err = authRows.Err(); err != nil {
+		authRows.Close()
+		return err
+	}
+	authRows.Close()
+	for index := range routes {
+		routes[index].BasicAuthUsers = authUsers
+	}
 	compiled := compose
 	immutableReplay := trigger == "reconcile" || trigger == "rollback"
 	if !immutableReplay {

@@ -176,6 +176,14 @@ durable provider build-status callbacks implemented.
   IANA timezones, manual runs, cancellation, bounded output, immutable history,
   local/remote agent execution, stopped-service fencing, AI posture, and
   failure notifications without retrying ambiguous non-idempotent commands.
+- Routes are manageable from the API, CLI, Terraform provider, and console;
+  disabled routes remain in desired state, while path stripping, internal-path
+  rewriting, and temporary or permanent regex redirects compile to isolated
+  Traefik middleware labels. The Dokploy importer preserves domain enablement
+  and path-rewrite behavior.
+  Service-wide HTTP basic-auth rules are managed through the same surfaces;
+  only bcrypt hashes reach PostgreSQL and deployment snapshots, and Traefik
+  strips the credential header before proxying upstream.
 
 Exit gate: end-to-end push-to-deploy, cancellation, rollback, alert, and
 disaster-recovery scenarios pass under load.

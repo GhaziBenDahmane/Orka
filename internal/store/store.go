@@ -47,6 +47,7 @@ var ErrRollbackUnavailable = errors.New("no successful immutable deployment is a
 var ErrProtectedVolumeRemoved = errors.New("a protected named volume cannot be removed while its backup policy exists")
 var ErrVolumeNotDeclared = errors.New("named volume is not mounted by the service")
 var ErrInvalidSchedule = errors.New("invalid service schedule")
+var ErrInvalidRouteBasicAuth = errors.New("invalid route basic-auth user")
 
 type Store struct {
 	Pool                 *pgxpool.Pool
@@ -211,9 +212,19 @@ type Route struct {
 	ServiceName         string    `json:"serviceName"`
 	Host                string    `json:"host"`
 	PathPrefix          string    `json:"pathPrefix"`
+	InternalPath        string    `json:"internalPath"`
+	StripPath           bool      `json:"stripPath"`
+	Enabled             bool      `json:"enabled"`
+	Disabled            bool      `json:"-"`
+	RedirectRegex       string    `json:"redirectRegex"`
+	RedirectReplacement string    `json:"redirectReplacement"`
+	RedirectPermanent   bool      `json:"redirectPermanent"`
 	TargetPort          int       `json:"targetPort"`
 	TLS                 bool      `json:"tls"`
 	CertificateResolver string    `json:"certificateResolver"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+	BasicAuthUsers      []string  `json:"-"`
 }
 
 type Deployment struct {
@@ -1356,7 +1367,7 @@ func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.U
 	if err != nil {
 		return ComposeService{}, nil, err
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver FROM routes WHERE compose_service_id=$1 ORDER BY host,path_prefix`, id)
+	rows, err := s.Pool.Query(ctx, `SELECT id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,NOT enabled,redirect_regex,redirect_replacement,redirect_permanent,target_port,tls,certificate_resolver,created_at,updated_at FROM routes WHERE compose_service_id=$1 ORDER BY host,path_prefix`, id)
 	if err != nil {
 		return ComposeService{}, nil, err
 	}
@@ -1364,9 +1375,10 @@ func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.U
 	routes := []Route{}
 	for rows.Next() {
 		var r Route
-		if err := rows.Scan(&r.ID, &r.ComposeServiceID, &r.ServiceName, &r.Host, &r.PathPrefix, &r.TargetPort, &r.TLS, &r.CertificateResolver); err != nil {
+		if err := rows.Scan(&r.ID, &r.ComposeServiceID, &r.ServiceName, &r.Host, &r.PathPrefix, &r.InternalPath, &r.StripPath, &r.Disabled, &r.RedirectRegex, &r.RedirectReplacement, &r.RedirectPermanent, &r.TargetPort, &r.TLS, &r.CertificateResolver, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return ComposeService{}, nil, err
 		}
+		r.Enabled = !r.Disabled
 		routes = append(routes, r)
 	}
 	return v, routes, rows.Err()
@@ -1390,6 +1402,10 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 }
 
 func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route) (Route, error) {
+	if r.InternalPath == "" {
+		r.InternalPath = "/"
+	}
+	r.Enabled = !r.Disabled
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Route{}, err
@@ -1406,7 +1422,7 @@ func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route)
 		return Route{}, err
 	}
 	r.ID = uuid.New()
-	err = tx.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND p.organization_id=$9 RETURNING id`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.ID)
+	err = tx.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,enabled,redirect_regex,redirect_replacement,redirect_permanent,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,NOT $8,$9,$10,$11,$12,$13,$14 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND p.organization_id=$15 RETURNING created_at,updated_at`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.InternalPath, r.StripPath, r.Disabled, r.RedirectRegex, r.RedirectReplacement, r.RedirectPermanent, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.CreatedAt, &r.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Route{}, ErrNotFound
 	}
@@ -1418,11 +1434,51 @@ func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route)
 
 func (s *Store) GetRoute(ctx context.Context, organizationID, id uuid.UUID) (Route, error) {
 	var item Route
-	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.target_port,r.tls,r.certificate_resolver FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.TargetPort, &item.TLS, &item.CertificateResolver)
+	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.internal_path,r.strip_path,NOT r.enabled,r.redirect_regex,r.redirect_replacement,r.redirect_permanent,r.target_port,r.tls,r.certificate_resolver,r.created_at,r.updated_at FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.InternalPath, &item.StripPath, &item.Disabled, &item.RedirectRegex, &item.RedirectReplacement, &item.RedirectPermanent, &item.TargetPort, &item.TLS, &item.CertificateResolver, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Route{}, ErrNotFound
 	}
+	item.Enabled = !item.Disabled
 	return item, err
+}
+
+func (s *Store) UpdateRoute(ctx context.Context, organizationID uuid.UUID, item Route) (Route, error) {
+	if item.InternalPath == "" {
+		item.InternalPath = "/"
+	}
+	item.Enabled = !item.Disabled
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Route{}, err
+	}
+	defer tx.Rollback(ctx)
+	var serviceID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT r.compose_service_id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, item.ID, organizationID).Scan(&serviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Route{}, ErrNotFound
+	}
+	if err != nil {
+		return Route{}, err
+	}
+	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID)
+	if err != nil {
+		return Route{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return Route{}, err
+	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
+		return Route{}, err
+	}
+	item.ComposeServiceID = serviceID
+	err = tx.QueryRow(ctx, `UPDATE routes SET service_name=$3,host=$4,path_prefix=$5,internal_path=$6,strip_path=$7,enabled=NOT $8,redirect_regex=$9,redirect_replacement=$10,redirect_permanent=$11,target_port=$12,tls=$13,certificate_resolver=$14,updated_at=now() WHERE id=$1 AND compose_service_id=$2 RETURNING created_at,updated_at`, item.ID, serviceID, item.ServiceName, item.Host, item.PathPrefix, item.InternalPath, item.StripPath, item.Disabled, item.RedirectRegex, item.RedirectReplacement, item.RedirectPermanent, item.TargetPort, item.TLS, item.CertificateResolver).Scan(&item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Route{}, ErrNotFound
+	}
+	if err != nil {
+		return Route{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) error {
@@ -2635,9 +2691,13 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 		return ComposeService{}, nil, err
 	}
 	for index := range routes {
+		if routes[index].InternalPath == "" {
+			routes[index].InternalPath = "/"
+		}
+		routes[index].Enabled = !routes[index].Disabled
 		routes[index].ID = uuid.New()
 		routes[index].ComposeServiceID = service.ID
-		if _, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, routes[index].ID, service.ID, routes[index].ServiceName, routes[index].Host, routes[index].PathPrefix, routes[index].TargetPort, routes[index].TLS, routes[index].CertificateResolver); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,enabled,redirect_regex,redirect_replacement,redirect_permanent,target_port,tls,certificate_resolver) VALUES($1,$2,$3,$4,$5,$6,$7,NOT $8,$9,$10,$11,$12,$13,$14)`, routes[index].ID, service.ID, routes[index].ServiceName, routes[index].Host, routes[index].PathPrefix, routes[index].InternalPath, routes[index].StripPath, routes[index].Disabled, routes[index].RedirectRegex, routes[index].RedirectReplacement, routes[index].RedirectPermanent, routes[index].TargetPort, routes[index].TLS, routes[index].CertificateResolver); err != nil {
 			return ComposeService{}, nil, err
 		}
 	}
@@ -2695,9 +2755,13 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 		return ComposeService{}, nil, err
 	}
 	for index := range routes {
+		if routes[index].InternalPath == "" {
+			routes[index].InternalPath = "/"
+		}
+		routes[index].Enabled = !routes[index].Disabled
 		routes[index].ID = uuid.New()
 		routes[index].ComposeServiceID = service.ID
-		if _, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, routes[index].ID, service.ID, routes[index].ServiceName, routes[index].Host, routes[index].PathPrefix, routes[index].TargetPort, routes[index].TLS, routes[index].CertificateResolver); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,enabled,redirect_regex,redirect_replacement,redirect_permanent,target_port,tls,certificate_resolver) VALUES($1,$2,$3,$4,$5,$6,$7,NOT $8,$9,$10,$11,$12,$13,$14)`, routes[index].ID, service.ID, routes[index].ServiceName, routes[index].Host, routes[index].PathPrefix, routes[index].InternalPath, routes[index].StripPath, routes[index].Disabled, routes[index].RedirectRegex, routes[index].RedirectReplacement, routes[index].RedirectPermanent, routes[index].TargetPort, routes[index].TLS, routes[index].CertificateResolver); err != nil {
 			return ComposeService{}, nil, err
 		}
 	}

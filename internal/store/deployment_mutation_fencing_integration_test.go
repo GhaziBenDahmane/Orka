@@ -14,7 +14,7 @@ func TestActiveDeploymentFencesMutableExecutionInputs(t *testing.T) {
 	}
 	db := &Store{Pool: pool}
 	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	credentialID, routeID := uuid.New(), uuid.New()
+	credentialID, routeID, routeAuthID := uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -27,6 +27,7 @@ func TestActiveDeploymentFencesMutableExecutionInputs(t *testing.T) {
 		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,git_credential_id) VALUES($1,'https://github.com/acme/app','web','registry.example.test/acme/app',$2)`, []any{serviceID, credentialID}},
 		{`INSERT INTO application_artifacts(compose_service_id,encrypted_archive,filename,sha256,compressed_size) VALUES($1,'archive','source.zip',$2,7)`, []any{serviceID, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,target_port) VALUES($1,$2,'web','app.example.test',8080)`, []any{routeID, serviceID}},
+		{`INSERT INTO route_basic_auth_users(id,compose_service_id,username,password_hash) VALUES($1,$2,'operator','$2a$12$C6UzMDM.H6dfI/f/IKxGhuVvZ4GuGNmi1wT7dSx.QcpQo.eN8wxQe')`, []any{routeAuthID, serviceID}},
 	} {
 		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)
@@ -48,6 +49,11 @@ func TestActiveDeploymentFencesMutableExecutionInputs(t *testing.T) {
 	assertActive("artifact update", err)
 	_, err = db.AddRoute(ctx, organizationID, Route{ComposeServiceID: serviceID, ServiceName: "web", Host: "new.example.test", PathPrefix: "/", TargetPort: 8080, TLS: true})
 	assertActive("route addition", err)
+	_, err = db.UpdateRoute(ctx, organizationID, Route{ID: routeID, ServiceName: "web", Host: "app.example.test", PathPrefix: "/", InternalPath: "/internal", TargetPort: 8080, TLS: true})
+	assertActive("route update", err)
+	_, err = db.UpdateRouteBasicAuthUser(ctx, organizationID, serviceID, routeAuthID, "operator", "")
+	assertActive("route basic-auth update", err)
+	assertActive("route basic-auth deletion", db.DeleteRouteBasicAuthUser(ctx, organizationID, serviceID, routeAuthID))
 	assertActive("route deletion", db.DeleteRoute(ctx, organizationID, routeID))
 	assertActive("credential deletion", db.DeleteSourceCredential(ctx, organizationID, credentialID))
 

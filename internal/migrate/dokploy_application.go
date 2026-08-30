@@ -76,9 +76,9 @@ type sourceApplication struct {
 }
 
 type sourceApplicationRoute struct {
-	id, applicationID, host, path, resolver string
-	port                                    int
-	tls, enabled                            bool
+	id, applicationID, host, path, internalPath, resolver string
+	port                                                  int
+	tls, enabled, stripPath                               bool
 }
 
 type preparedApplication struct {
@@ -149,7 +149,7 @@ func readApplications(ctx context.Context, db *pgxpool.Pool, org string) ([]sour
 }
 
 func readApplicationRoutes(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceApplicationRoute, error) {
-	rows, err := db.Query(ctx, `SELECT d."domainId",d."applicationId",d.host,COALESCE(d.path,'/'),COALESCE(d.port,3000),d.https,d.enabled,COALESCE(d."customCertResolver",'') FROM domain d JOIN application a ON a."applicationId"=d."applicationId" JOIN environment e ON e."environmentId"=a."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 AND d."applicationId" IS NOT NULL ORDER BY d."domainId"`, org)
+	rows, err := db.Query(ctx, `SELECT d."domainId",d."applicationId",d.host,COALESCE(d.path,'/'),COALESCE(to_jsonb(d)->>'internalPath','/'),COALESCE((to_jsonb(d)->>'stripPath')::boolean,false),COALESCE(d.port,3000),d.https,d.enabled,COALESCE(d."customCertResolver",'') FROM domain d JOIN application a ON a."applicationId"=d."applicationId" JOIN environment e ON e."environmentId"=a."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 AND d."applicationId" IS NOT NULL ORDER BY d."domainId"`, org)
 	if err != nil {
 		return nil, fmt.Errorf("read Dokploy application routes: %w", err)
 	}
@@ -157,7 +157,7 @@ func readApplicationRoutes(ctx context.Context, db *pgxpool.Pool, org string) ([
 	items := []sourceApplicationRoute{}
 	for rows.Next() {
 		var item sourceApplicationRoute
-		if err = rows.Scan(&item.id, &item.applicationID, &item.host, &item.path, &item.port, &item.tls, &item.enabled, &item.resolver); err != nil {
+		if err = rows.Scan(&item.id, &item.applicationID, &item.host, &item.path, &item.internalPath, &item.stripPath, &item.port, &item.tls, &item.enabled, &item.resolver); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

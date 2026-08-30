@@ -41,6 +41,14 @@ children remain. Terraform's dependency graph destroys managed services first.
 Service deletion waits for Dockyard's asynchronous Swarm finalizer, so state is
 not removed until the stack and owned backup artifacts are gone.
 
+`dockyard_route` updates in place and supports `enabled`, `strip_path`,
+`internal_path`, `redirect_regex`, `redirect_replacement`, and
+`redirect_permanent`. Route changes become active with the service's next
+deployment; redirect expressions use Go/Traefik RE2 syntax.
+HTTP basic-auth identities deliberately remain outside Terraform state because
+their write-only passwords require explicit rotation through the console, API,
+or `dockyardctl`.
+
 An environment may set `cluster_id` directly, or use `placement_selector`,
 `minimum_nodes`, `minimum_nano_cpus`, and `minimum_memory_bytes` for
 capacity-aware placement. Placement inputs are immutable;

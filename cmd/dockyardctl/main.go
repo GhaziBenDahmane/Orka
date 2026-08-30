@@ -303,6 +303,55 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodGet, "/v1/environments/" + args[1] + "/services", nil, nil
+	case "service":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1], nil, nil
+	case "route":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/routes/" + args[1], nil, nil
+	case "create-route":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPost, "/v1/services/" + args[1] + "/routes", input, err
+	case "update-route":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/routes/" + args[1], input, err
+	case "delete-route":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/routes/" + args[1], nil, nil
+	case "route-basic-auth-users":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/basic-auth-users", nil, nil
+	case "create-route-basic-auth-user":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPost, "/v1/services/" + args[1] + "/basic-auth-users", input, err
+	case "update-route-basic-auth-user":
+		if err := require(4); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[3], stdin)
+		return http.MethodPut, "/v1/services/" + args[1] + "/basic-auth-users/" + args[2], input, err
+	case "delete-route-basic-auth-user":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/services/" + args[1] + "/basic-auth-users/" + args[2], nil, nil
 	case "deployments":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -814,5 +863,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
 }

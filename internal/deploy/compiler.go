@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/store"
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -90,7 +91,13 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		}
 		services[name] = service
 	}
-	if len(routes) > 0 {
+	activeRoutes := 0
+	for _, route := range routes {
+		if !route.Disabled {
+			activeRoutes++
+		}
+	}
+	if activeRoutes > 0 {
 		networks, ok := stringMap(doc["networks"])
 		if doc["networks"] != nil && !ok {
 			return "", errors.New("compose networks must be an object")
@@ -102,7 +109,13 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		doc["networks"] = networks
 	}
 	for i, route := range routes {
+		if route.Disabled {
+			continue
+		}
 		route.Host = strings.ToLower(strings.TrimSpace(route.Host))
+		if route.InternalPath == "" {
+			route.InternalPath = "/"
+		}
 		if err := ValidateRoute(route); err != nil {
 			return "", err
 		}
@@ -125,6 +138,48 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		labels["traefik.http.routers."+key+".entrypoints"] = map[bool]string{true: "websecure", false: "web"}[route.TLS]
 		labels["traefik.http.services."+key+".loadbalancer.server.port"] = fmt.Sprint(route.TargetPort)
 		labels["traefik.docker.network"] = c.PublicNetwork
+		middlewares := []string{}
+		if route.StripPath && route.PathPrefix != "/" {
+			middleware := key + "-strip-path"
+			labels["traefik.http.middlewares."+middleware+".stripprefix.prefixes"] = route.PathPrefix
+			middlewares = append(middlewares, middleware)
+		}
+		if route.InternalPath != "/" && route.InternalPath != route.PathPrefix {
+			middleware := key + "-internal-path"
+			labels["traefik.http.middlewares."+middleware+".addprefix.prefix"] = route.InternalPath
+			middlewares = append(middlewares, middleware)
+		}
+		if route.RedirectRegex != "" {
+			middleware := key + "-redirect"
+			labels["traefik.http.middlewares."+middleware+".redirectregex.regex"] = escapeComposeInterpolation(route.RedirectRegex)
+			labels["traefik.http.middlewares."+middleware+".redirectregex.replacement"] = escapeComposeInterpolation(route.RedirectReplacement)
+			labels["traefik.http.middlewares."+middleware+".redirectregex.permanent"] = strconv.FormatBool(route.RedirectPermanent)
+			middlewares = append(middlewares, middleware)
+		}
+		if len(route.BasicAuthUsers) > 0 {
+			middleware := key + "-basic-auth"
+			users := make([]string, len(route.BasicAuthUsers))
+			for index, user := range route.BasicAuthUsers {
+				separator := strings.IndexByte(user, ':')
+				if separator < 1 || separator > 128 {
+					return "", errors.New("invalid route basic-auth credential")
+				}
+				if strings.ContainsAny(user[:separator], ",\r\n\x00") {
+					return "", errors.New("invalid route basic-auth credential")
+				}
+				cost, hashErr := bcrypt.Cost([]byte(user[separator+1:]))
+				if hashErr != nil || cost < bcrypt.MinCost {
+					return "", errors.New("invalid route basic-auth credential")
+				}
+				users[index] = escapeComposeInterpolation(user)
+			}
+			labels["traefik.http.middlewares."+middleware+".basicauth.users"] = strings.Join(users, ",")
+			labels["traefik.http.middlewares."+middleware+".basicauth.removeheader"] = "true"
+			middlewares = append(middlewares, middleware)
+		}
+		if len(middlewares) > 0 {
+			labels["traefik.http.routers."+key+".middlewares"] = strings.Join(middlewares, ",")
+		}
 		if route.TLS {
 			labels["traefik.http.routers."+key+".tls"] = "true"
 			labels["traefik.http.routers."+key+".tls.certresolver"] = route.CertificateResolver
@@ -450,10 +505,29 @@ func ValidateRoute(route store.Route) error {
 	if route.PathPrefix == "" || !strings.HasPrefix(route.PathPrefix, "/") || len(route.PathPrefix) > 2048 || strings.ContainsAny(route.PathPrefix, "`\r\n") {
 		return errors.New("invalid route")
 	}
+	internalPath := route.InternalPath
+	if internalPath == "" {
+		internalPath = "/"
+	}
+	if !strings.HasPrefix(internalPath, "/") || len(internalPath) > 2048 || strings.ContainsAny(internalPath, "`\r\n\x00") || route.StripPath && route.PathPrefix == "/" {
+		return errors.New("invalid route")
+	}
+	if (route.RedirectRegex == "") != (route.RedirectReplacement == "") || len(route.RedirectRegex) > 4096 || len(route.RedirectReplacement) > 4096 || strings.ContainsAny(route.RedirectRegex+route.RedirectReplacement, "\r\n\x00") {
+		return errors.New("invalid route")
+	}
+	if route.RedirectRegex != "" {
+		if _, err := regexp.Compile(route.RedirectRegex); err != nil {
+			return errors.New("invalid route")
+		}
+	}
 	if route.TLS && !safeCertificateResolver.MatchString(route.CertificateResolver) {
 		return errors.New("invalid route")
 	}
 	return nil
+}
+
+func escapeComposeInterpolation(value string) string {
+	return strings.ReplaceAll(value, "$", "$$")
 }
 
 func validateSafeService(name string, service map[string]any, publicNetwork string, inlineConfigs map[string]struct{}) error {

@@ -255,6 +255,9 @@ resource "dockyard_route" "whoami" {
   service_name         = "web"
   host                 = "whoami.example.com"
   path_prefix          = "/"
+  internal_path        = "/"
+  strip_path           = false
+  enabled              = true
   target_port          = 80
   tls                  = true
   certificate_resolver = "letsencrypt"

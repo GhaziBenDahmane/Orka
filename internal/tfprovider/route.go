@@ -8,8 +8,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -23,6 +21,12 @@ type routeModel struct {
 	ServiceName         types.String `tfsdk:"service_name"`
 	Host                types.String `tfsdk:"host"`
 	PathPrefix          types.String `tfsdk:"path_prefix"`
+	InternalPath        types.String `tfsdk:"internal_path"`
+	StripPath           types.Bool   `tfsdk:"strip_path"`
+	Enabled             types.Bool   `tfsdk:"enabled"`
+	RedirectRegex       types.String `tfsdk:"redirect_regex"`
+	RedirectReplacement types.String `tfsdk:"redirect_replacement"`
+	RedirectPermanent   types.Bool   `tfsdk:"redirect_permanent"`
 	TargetPort          types.Int64  `tfsdk:"target_port"`
 	TLS                 types.Bool   `tfsdk:"tls"`
 	CertificateResolver types.String `tfsdk:"certificate_resolver"`
@@ -34,6 +38,12 @@ type routeResponse struct {
 	ServiceName         string `json:"serviceName"`
 	Host                string `json:"host"`
 	PathPrefix          string `json:"pathPrefix"`
+	InternalPath        string `json:"internalPath"`
+	StripPath           bool   `json:"stripPath"`
+	Enabled             bool   `json:"enabled"`
+	RedirectRegex       string `json:"redirectRegex"`
+	RedirectReplacement string `json:"redirectReplacement"`
+	RedirectPermanent   bool   `json:"redirectPermanent"`
 	TargetPort          int64  `json:"targetPort"`
 	TLS                 bool   `json:"tls"`
 	CertificateResolver string `json:"certificateResolver"`
@@ -50,12 +60,18 @@ func (r *routeResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 	response.Schema = schema.Schema{Description: "A Traefik HTTP(S) route for a Compose service.", Attributes: map[string]schema.Attribute{
 		"id":                   schema.StringAttribute{Computed: true},
 		"service_id":           schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
-		"service_name":         schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
-		"host":                 schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
-		"path_prefix":          schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
-		"target_port":          schema.Int64Attribute{Required: true, PlanModifiers: []planmodifier.Int64{int64planmodifier.RequiresReplace()}},
-		"tls":                  schema.BoolAttribute{Required: true, PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()}},
-		"certificate_resolver": schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
+		"service_name":         schema.StringAttribute{Required: true},
+		"host":                 schema.StringAttribute{Required: true},
+		"path_prefix":          schema.StringAttribute{Required: true},
+		"internal_path":        schema.StringAttribute{Optional: true, Computed: true},
+		"strip_path":           schema.BoolAttribute{Optional: true, Computed: true},
+		"enabled":              schema.BoolAttribute{Optional: true, Computed: true},
+		"redirect_regex":       schema.StringAttribute{Optional: true, Computed: true},
+		"redirect_replacement": schema.StringAttribute{Optional: true, Computed: true},
+		"redirect_permanent":   schema.BoolAttribute{Optional: true, Computed: true},
+		"target_port":          schema.Int64Attribute{Required: true},
+		"tls":                  schema.BoolAttribute{Required: true},
+		"certificate_resolver": schema.StringAttribute{Required: true},
 	}}
 }
 
@@ -69,9 +85,7 @@ func (r *routeResource) Create(ctx context.Context, request resource.CreateReque
 	if response.Diagnostics.HasError() {
 		return
 	}
-	item, err := call[routeResponse](ctx, r.client, http.MethodPost, "/v1/services/"+plan.ServiceID.ValueString()+"/routes", map[string]any{
-		"serviceName": plan.ServiceName.ValueString(), "host": plan.Host.ValueString(), "pathPrefix": plan.PathPrefix.ValueString(), "targetPort": plan.TargetPort.ValueInt64(), "tls": plan.TLS.ValueBool(), "certificateResolver": plan.CertificateResolver.ValueString(),
-	})
+	item, err := call[routeResponse](ctx, r.client, http.MethodPost, "/v1/services/"+plan.ServiceID.ValueString()+"/routes", routeRequest(plan))
 	if err != nil {
 		response.Diagnostics.AddError("Unable to create route", err.Error())
 		return
@@ -99,7 +113,20 @@ func (r *routeResource) Read(ctx context.Context, request resource.ReadRequest, 
 	response.Diagnostics.Append(response.State.Set(ctx, &state)...)
 }
 
-func (r *routeResource) Update(context.Context, resource.UpdateRequest, *resource.UpdateResponse) {}
+func (r *routeResource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
+	var plan routeModel
+	response.Diagnostics.Append(request.Plan.Get(ctx, &plan)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+	item, err := call[routeResponse](ctx, r.client, http.MethodPut, "/v1/routes/"+plan.ID.ValueString(), routeRequest(plan))
+	if err != nil {
+		response.Diagnostics.AddError("Unable to update route", err.Error())
+		return
+	}
+	setRoute(&plan, item)
+	response.Diagnostics.Append(response.State.Set(ctx, &plan)...)
+}
 
 func (r *routeResource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {
 	var state routeModel
@@ -123,9 +150,32 @@ func setRoute(model *routeModel, item routeResponse) {
 	model.ServiceName = types.StringValue(item.ServiceName)
 	model.Host = types.StringValue(item.Host)
 	model.PathPrefix = types.StringValue(item.PathPrefix)
+	model.InternalPath = types.StringValue(item.InternalPath)
+	model.StripPath = types.BoolValue(item.StripPath)
+	model.Enabled = types.BoolValue(item.Enabled)
+	model.RedirectRegex = types.StringValue(item.RedirectRegex)
+	model.RedirectReplacement = types.StringValue(item.RedirectReplacement)
+	model.RedirectPermanent = types.BoolValue(item.RedirectPermanent)
 	model.TargetPort = types.Int64Value(item.TargetPort)
 	model.TLS = types.BoolValue(item.TLS)
 	model.CertificateResolver = types.StringValue(item.CertificateResolver)
+}
+
+func routeRequest(model routeModel) map[string]any {
+	internalPath := "/"
+	if !model.InternalPath.IsNull() && !model.InternalPath.IsUnknown() {
+		internalPath = model.InternalPath.ValueString()
+	}
+	enabled := true
+	if !model.Enabled.IsNull() && !model.Enabled.IsUnknown() {
+		enabled = model.Enabled.ValueBool()
+	}
+	return map[string]any{
+		"serviceName": model.ServiceName.ValueString(), "host": model.Host.ValueString(), "pathPrefix": model.PathPrefix.ValueString(),
+		"internalPath": internalPath, "stripPath": model.StripPath.ValueBool(), "enabled": enabled,
+		"redirectRegex": model.RedirectRegex.ValueString(), "redirectReplacement": model.RedirectReplacement.ValueString(), "redirectPermanent": model.RedirectPermanent.ValueBool(),
+		"targetPort": model.TargetPort.ValueInt64(), "tls": model.TLS.ValueBool(), "certificateResolver": model.CertificateResolver.ValueString(),
+	}
 }
 
 var _ resource.ResourceWithConfigure = (*routeResource)(nil)
