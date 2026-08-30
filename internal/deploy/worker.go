@@ -28,6 +28,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -175,6 +176,16 @@ func (w *Worker) scheduleAuditArchives(ctx context.Context) {
 					break
 				}
 			}
+			for ctx.Err() == nil {
+				err := w.enqueueDueVolumeBackup(ctx)
+				if errors.Is(err, store.ErrNotFound) {
+					break
+				}
+				if err != nil {
+					w.Logger.Error("schedule volume backup", "error", err)
+					break
+				}
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -182,6 +193,37 @@ func (w *Worker) scheduleAuditArchives(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (w *Worker) enqueueDueVolumeBackup(ctx context.Context) error {
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var policyID, serviceID, destinationID uuid.UUID
+	var volumeName, nodeID string
+	var intervalSeconds, retentionCount int
+	var quiesce bool
+	err = tx.QueryRow(ctx, `SELECT policy.id,policy.compose_service_id,policy.volume_name,policy.destination_id,policy.interval_seconds,policy.retention_count,service.storage_node_id,policy.quiesce FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id WHERE policy.enabled AND policy.next_run_at<=now() AND service.storage_node_id<>'' ORDER BY policy.next_run_at FOR UPDATE OF policy SKIP LOCKED LIMIT 1`).Scan(&policyID, &serviceID, &volumeName, &destinationID, &intervalSeconds, &retentionCount, &nodeID, &quiesce)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	backupID := uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued')`, backupID, policyID, serviceID, volumeName, nodeID, destinationID, quiesce); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{"backupId": backupID.String(), "retentionCount": retentionCount})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'backup.volume',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE volume_backup_policies SET last_run_at=now(),next_run_at=now()+($2::int * interval '1 second'),updated_at=now() WHERE id=$1`, policyID, intervalSeconds); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (w *Worker) pruneAuditEvents(ctx context.Context) {
@@ -382,6 +424,10 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 		key = "backupId"
 	case "restore.database":
 		key = "restoreId"
+	case "backup.volume":
+		key = "backupId"
+	case "restore.volume":
+		key = "restoreId"
 	case "migrate.database":
 		key = "migrationId"
 	default:
@@ -399,6 +445,10 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 		query = `UPDATE database_backups SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
 	case "restore.database":
 		query = `UPDATE database_restores SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	case "backup.volume":
+		query = `UPDATE volume_backups SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	case "restore.volume":
+		query = `UPDATE volume_restores SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
 	case "migrate.database":
 		query = `UPDATE database_migrations SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
 	}
@@ -501,6 +551,12 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if j.Kind == "restore.database" {
 		return w.restoreDatabase(ctx, j)
+	}
+	if j.Kind == "backup.volume" {
+		return w.backupVolume(ctx, j)
+	}
+	if j.Kind == "restore.volume" {
+		return w.restoreVolume(ctx, j)
 	}
 	if j.Kind == "migrate.database" {
 		return w.migrateDatabase(ctx, j)
@@ -648,7 +704,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		}
 	}
 	if err == nil {
-		compiled, err = w.pinManagedDatabaseStorage(ctx, serviceID, stack, compiled, clusterID)
+		compiled, err = w.pinPersistentStorage(ctx, serviceID, stack, compiled, clusterID)
 	}
 	if err == nil {
 		if snapshotErr := w.Store.SetDeploymentEffectiveComposeForJob(ctx, j.ID, j.LeaseID, id, compiled); snapshotErr != nil {
@@ -665,15 +721,16 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	return err
 }
 
-func (w *Worker) pinManagedDatabaseStorage(ctx context.Context, serviceID uuid.UUID, stack, compose string, clusterID *uuid.UUID) (string, error) {
-	var databaseID uuid.UUID
-	var storageNodeID string
-	err := w.Store.Pool.QueryRow(ctx, `SELECT id,storage_node_id FROM database_instances WHERE compose_service_id=$1`, serviceID).Scan(&databaseID, &storageNodeID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return compose, nil
-	}
+func (w *Worker) pinPersistentStorage(ctx context.Context, serviceID uuid.UUID, stack, compose string, clusterID *uuid.UUID) (string, error) {
+	var databaseID *uuid.UUID
+	var serviceNodeID, databaseNodeID string
+	var protected bool
+	err := w.Store.Pool.QueryRow(ctx, `SELECT s.storage_node_id,d.id,COALESCE(d.storage_node_id,''),d.id IS NOT NULL OR EXISTS(SELECT 1 FROM volume_backup_policies policy WHERE policy.compose_service_id=s.id) FROM compose_services s LEFT JOIN database_instances d ON d.compose_service_id=s.id WHERE s.id=$1`, serviceID).Scan(&serviceNodeID, &databaseID, &databaseNodeID, &protected)
 	if err != nil {
 		return "", err
+	}
+	if !protected {
+		return compose, nil
 	}
 	hasVolumes, err := HasNamedVolumes(compose)
 	if err != nil {
@@ -681,6 +738,13 @@ func (w *Worker) pinManagedDatabaseStorage(ctx context.Context, serviceID uuid.U
 	}
 	if !hasVolumes {
 		return compose, nil
+	}
+	if serviceNodeID != "" && databaseNodeID != "" && serviceNodeID != databaseNodeID {
+		return "", store.ErrStorageNodeMismatch
+	}
+	storageNodeID := serviceNodeID
+	if storageNodeID == "" {
+		storageNodeID = databaseNodeID
 	}
 	if storageNodeID == "" {
 		resolver, ok := w.scheduler(clusterID).(StorageNodeResolver)
@@ -692,8 +756,8 @@ func (w *Worker) pinManagedDatabaseStorage(ctx context.Context, serviceID uuid.U
 		if err != nil {
 			return "", fmt.Errorf("resolve database storage node: %w", err)
 		}
-		if err = w.Store.BindDatabaseStorageNode(ctx, databaseID, storageNodeID); err != nil {
-			return "", fmt.Errorf("bind database storage node: %w", err)
+		if err = w.Store.BindPersistentStorageNode(ctx, serviceID, databaseID, storageNodeID); err != nil {
+			return "", fmt.Errorf("bind persistent storage node: %w", err)
 		}
 	}
 	pinned, _, err := PinNamedVolumes(compose, storageNodeID)
@@ -894,6 +958,195 @@ func (w *Worker) ensureDatabaseDriver(ctx context.Context, databaseID uuid.UUID,
 		return fmt.Errorf("database engine %q driver identity does not match this worker", engine)
 	}
 	return nil
+}
+
+func (w *Worker) backupVolume(ctx context.Context, j job) error {
+	var payload struct {
+		BackupID       string `json:"backupId"`
+		RetentionCount int    `json:"retentionCount"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	backupID, err := uuid.Parse(payload.BackupID)
+	if err != nil {
+		return err
+	}
+	var serviceID, destinationID uuid.UUID
+	var stackName, compose, volumeName, serviceNodeID, backupNodeID string
+	var clusterID *uuid.UUID
+	var quiesce bool
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE volume_backups backup SET status='running',started_at=now() FROM compose_services service,environments environment WHERE backup.id=$1 AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING service.id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.destination_id,backup.volume_name,backup.storage_node_id,backup.quiesce,environment.cluster_id`, backupID).Scan(&serviceID, &stackName, &compose, &serviceNodeID, &destinationID, &volumeName, &backupNodeID, &quiesce, &clusterID)
+	})
+	if err != nil {
+		return err
+	}
+	if serviceNodeID == "" || serviceNodeID != backupNodeID {
+		return w.failVolumeBackup(ctx, j, backupID, store.ErrStorageNodeMismatch)
+	}
+	logicalVolumes, err := NamedVolumes(compose)
+	if err != nil || !containsString(logicalVolumes, volumeName) {
+		if err == nil {
+			err = fmt.Errorf("volume %q is no longer declared by the service", volumeName)
+		}
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	actualVolume, err := StackVolumeName(stackName, volumeName)
+	if err != nil {
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	storage, err := w.s3(ctx, destinationID)
+	if err != nil {
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	objectKey := storage.ObjectKey("volumes/" + serviceID.String() + "/" + volumeName + "/" + backupID.String() + ".tar.gz.enc")
+	putURL, err := storage.PresignedPut(ctx, objectKey, time.Hour)
+	if err != nil {
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	dataKey := make([]byte, 32)
+	if _, err = rand.Read(dataKey); err != nil {
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	wrapped, err := w.Box.Encrypt(dataKey, "volume-backup-data-key:"+backupID.String())
+	if err != nil {
+		clear(dataKey)
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	runner, ok := w.scheduler(clusterID).(VolumeArtifactRunner)
+	if !ok {
+		clear(dataKey)
+		return w.failVolumeBackup(ctx, j, backupID, errors.New("scheduler does not support volume artifact jobs"))
+	}
+	result, err := runner.RunVolumeArtifact(ctx, VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: putURL, EncryptionKey: base64.RawStdEncoding.EncodeToString(dataKey), EncryptionAAD: "volume-backup:" + backupID.String()}, VolumeName: actualVolume, NodeID: backupNodeID, StackName: stackName, Quiesce: quiesce})
+	clear(dataKey)
+	if err != nil {
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
+	if err = w.updateResourceForJob(ctx, j, `UPDATE volume_backups SET status='succeeded',object_key=$2,size_bytes=$3,sha256=$4,plaintext_sha256=$5,encrypted_data_key=$6,finished_at=now() WHERE id=$1`, backupID, objectKey, result.SizeBytes, result.SHA256, result.PlaintextSHA256, wrapped); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = storage.Delete(cleanupCtx, objectKey)
+		return err
+	}
+	if payload.RetentionCount > 0 {
+		w.pruneVolumeBackups(ctx, backupID, payload.RetentionCount)
+	}
+	return nil
+}
+
+func (w *Worker) restoreVolume(ctx context.Context, j job) error {
+	var payload struct {
+		RestoreID string `json:"restoreId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	restoreID, err := uuid.Parse(payload.RestoreID)
+	if err != nil {
+		return err
+	}
+	var backupID, destinationID uuid.UUID
+	var stackName, compose, serviceNodeID, volumeName, backupNodeID, objectKey, expectedHash, plaintextHash, encryptedKey string
+	var expectedSize int64
+	var clusterID *uuid.UUID
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE volume_restores restore SET status='running',started_at=now() FROM volume_backups backup,compose_services service,environments environment WHERE restore.id=$1 AND backup.id=restore.volume_backup_id AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING backup.id,backup.destination_id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.volume_name,backup.storage_node_id,backup.object_key,backup.sha256,backup.plaintext_sha256,backup.encrypted_data_key,backup.size_bytes,environment.cluster_id`, restoreID).Scan(&backupID, &destinationID, &stackName, &compose, &serviceNodeID, &volumeName, &backupNodeID, &objectKey, &expectedHash, &plaintextHash, &encryptedKey, &expectedSize, &clusterID)
+	})
+	if err != nil {
+		return err
+	}
+	fail := func(cause error) error { return w.failVolumeRestore(ctx, j, restoreID, cause) }
+	if serviceNodeID == "" || serviceNodeID != backupNodeID {
+		return fail(store.ErrStorageNodeMismatch)
+	}
+	logicalVolumes, err := NamedVolumes(compose)
+	if err != nil || !containsString(logicalVolumes, volumeName) {
+		if err == nil {
+			err = fmt.Errorf("volume %q is no longer declared by the service", volumeName)
+		}
+		return fail(err)
+	}
+	actualVolume, err := StackVolumeName(stackName, volumeName)
+	if err != nil {
+		return fail(err)
+	}
+	storage, err := w.s3(ctx, destinationID)
+	if err != nil {
+		return fail(err)
+	}
+	getURL, err := storage.PresignedGet(ctx, objectKey, time.Hour)
+	if err != nil {
+		return fail(err)
+	}
+	dataKey, err := w.Box.Decrypt(encryptedKey, "volume-backup-data-key:"+backupID.String())
+	if err != nil {
+		return fail(err)
+	}
+	defer clear(dataKey)
+	runner, ok := w.scheduler(clusterID).(VolumeArtifactRunner)
+	if !ok {
+		return fail(errors.New("scheduler does not support volume artifact jobs"))
+	}
+	_, err = runner.RunVolumeArtifact(ctx, VolumeArtifactJob{Job: volumeartifact.Job{Mode: "restore", TransferURL: getURL, EncryptionKey: base64.RawStdEncoding.EncodeToString(dataKey), EncryptionAAD: "volume-backup:" + backupID.String(), SHA256: expectedHash, PlaintextSHA256: plaintextHash, SizeBytes: expectedSize}, VolumeName: actualVolume, NodeID: backupNodeID, StackName: stackName, Quiesce: true})
+	if err != nil {
+		return fail(err)
+	}
+	return w.updateResourceForJob(ctx, j, `UPDATE volume_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
+}
+
+func (w *Worker) failVolumeBackup(ctx context.Context, j job, id uuid.UUID, cause error) error {
+	query := `UPDATE volume_backups SET status='failed',error=$2,finished_at=now() WHERE id=$1`
+	if j.Attempts+1 < j.MaxAttempts && !errors.Is(ctx.Err(), context.Canceled) {
+		query = `UPDATE volume_backups SET status='running',error=$2,finished_at=NULL WHERE id=$1`
+	}
+	return errors.Join(cause, w.updateResourceForJob(ctx, j, query, id, truncate(cause.Error(), 8192)))
+}
+
+func (w *Worker) failVolumeRestore(ctx context.Context, j job, id uuid.UUID, cause error) error {
+	query := `UPDATE volume_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`
+	if j.Attempts+1 < j.MaxAttempts && !errors.Is(ctx.Err(), context.Canceled) {
+		query = `UPDATE volume_restores SET status='running',error=$2,finished_at=NULL WHERE id=$1`
+	}
+	return errors.Join(cause, w.updateResourceForJob(ctx, j, query, id, truncate(cause.Error(), 8192)))
+}
+
+func (w *Worker) pruneVolumeBackups(ctx context.Context, newestID uuid.UUID, keep int) {
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	if err != nil {
+		w.Logger.Error("list expired volume backups", "error", err)
+		return
+	}
+	type expired struct {
+		id, destinationID uuid.UUID
+		objectKey         string
+	}
+	var items []expired
+	for rows.Next() {
+		var item expired
+		if err = rows.Scan(&item.id, &item.destinationID, &item.objectKey); err != nil {
+			break
+		}
+		items = append(items, item)
+	}
+	rows.Close()
+	for _, item := range items {
+		storage, storageErr := w.s3(ctx, item.destinationID)
+		if storageErr != nil || storage.Delete(ctx, item.objectKey) != nil {
+			continue
+		}
+		_, _ = w.Store.Pool.Exec(ctx, `DELETE FROM volume_backups WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM volume_restores WHERE volume_backup_id=$1)`, item.id)
+	}
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Worker) backupDatabase(ctx context.Context, j job) error {

@@ -40,6 +40,7 @@ type fakeScheduler struct {
 	status             deploy.StackStatus
 	containerCalls     int
 	storageNode        string
+	volumeNode         string
 	volumeArtifact     *deploy.VolumeArtifactJob
 }
 
@@ -53,6 +54,13 @@ func (f *fakeScheduler) ResolveStorageNode(context.Context, string) (string, err
 		return "node-a", nil
 	}
 	return f.storageNode, nil
+}
+
+func (f *fakeScheduler) ResolveVolumeNode(context.Context, string, string) (string, error) {
+	if f.volumeNode == "" {
+		return "node-volume", nil
+	}
+	return f.volumeNode, nil
 }
 
 func TestValidateAgentEndpointsRequireHTTPSOrigins(t *testing.T) {
@@ -480,10 +488,18 @@ func TestExecuteStorageNodeCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteVolumeNodeCommand(t *testing.T) {
+	client := &Client{swarm: &fakeScheduler{volumeNode: "node-persisted"}}
+	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.volume-node", Payload: []byte(`{"stackName":"application","volumeName":"application_data"}`)})
+	if err != nil || output != "node-persisted" {
+		t.Fatalf("output=%q err=%v", output, err)
+	}
+}
+
 func TestExecuteVolumeArtifactCommand(t *testing.T) {
 	scheduler := &fakeScheduler{}
 	client := &Client{swarm: scheduler}
-	payload, _ := json.Marshal(deploy.VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123"})
+	payload, _ := json.Marshal(deploy.VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123", StackName: "application"})
 	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.volume-artifact", Payload: payload})
 	if err != nil || scheduler.volumeArtifact == nil || scheduler.volumeArtifact.VolumeName != "stack_data" {
 		t.Fatalf("job=%#v output=%q err=%v", scheduler.volumeArtifact, output, err)

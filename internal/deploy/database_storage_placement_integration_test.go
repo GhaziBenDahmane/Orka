@@ -67,7 +67,7 @@ func TestManagedDatabaseStoragePlacementIsPersistedAndReused(t *testing.T) {
 	compose := "services:\n  database:\n    image: postgres:17\n    volumes: [data:/var/lib/postgresql/data]\nvolumes:\n  data: {}\n"
 	first := &storagePlacementScheduler{node: "nodeabc123"}
 	worker := Worker{Store: db, Swarm: first}
-	pinned, err := worker.pinManagedDatabaseStorage(ctx, serviceID, "database-stack", compose, nil)
+	pinned, err := worker.pinPersistentStorage(ctx, serviceID, "database-stack", compose, nil)
 	if err != nil || !strings.Contains(pinned, "node.id == nodeabc123") || first.calls != 1 {
 		t.Fatalf("first placement calls=%d err=%v compose=%s", first.calls, err, pinned)
 	}
@@ -78,7 +78,7 @@ func TestManagedDatabaseStoragePlacementIsPersistedAndReused(t *testing.T) {
 
 	second := &storagePlacementScheduler{node: "differentnode"}
 	worker.Swarm = second
-	pinned, err = worker.pinManagedDatabaseStorage(ctx, serviceID, "database-stack", compose, nil)
+	pinned, err = worker.pinPersistentStorage(ctx, serviceID, "database-stack", compose, nil)
 	if err != nil || !strings.Contains(pinned, "node.id == nodeabc123") || strings.Contains(pinned, "differentnode") || second.calls != 0 {
 		t.Fatalf("reused placement calls=%d err=%v compose=%s", second.calls, err, pinned)
 	}

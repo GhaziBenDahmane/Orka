@@ -62,6 +62,10 @@ func (s RemoteSwarm) ResolveStorageNode(ctx context.Context, stackName string) (
 	return s.run(ctx, "swarm.storage-node", map[string]string{"stackName": stackName})
 }
 
+func (s RemoteSwarm) ResolveVolumeNode(ctx context.Context, stackName, volumeName string) (string, error) {
+	return s.run(ctx, "swarm.volume-node", map[string]string{"stackName": stackName, "volumeName": volumeName})
+}
+
 func (s RemoteSwarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {
 	if mountSource != "" {
 		return "", errors.New("remote container jobs cannot mount controller paths")
@@ -269,3 +273,4 @@ func (s RemoteSwarm) result(command store.ClusterCommand) (commandResult, error)
 
 var _ Scheduler = RemoteSwarm{}
 var _ VolumeArtifactRunner = RemoteSwarm{}
+var _ VolumeNodeResolver = RemoteSwarm{}

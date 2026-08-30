@@ -367,6 +367,31 @@ volumes:
 	}
 }
 
+func TestNamedVolumesReturnsMountedDeclarations(t *testing.T) {
+	source := `services:
+  app:
+    image: example/app
+    volumes:
+      - uploads:/uploads
+      - type: volume
+        source: cache
+        target: /cache
+      - type: tmpfs
+        target: /tmp
+volumes:
+  unused: {}
+  uploads: {}
+  cache: {}
+`
+	names, err := NamedVolumes(source)
+	if err != nil || strings.Join(names, ",") != "cache,uploads" {
+		t.Fatalf("names=%v err=%v", names, err)
+	}
+	if actual, err := StackVolumeName("my-stack", "uploads"); err != nil || actual != "my-stack_uploads" {
+		t.Fatalf("actual=%q err=%v", actual, err)
+	}
+}
+
 func TestPinNamedVolumesIsIdempotentForPersistedStorageNode(t *testing.T) {
 	source := "services:\n  database:\n    image: postgres:17\n    volumes: [data:/data]\n    deploy:\n      placement:\n        constraints: ['node.id == abc123']\nvolumes:\n  data: {}\n"
 	pinned, found, err := PinNamedVolumes(source, "abc123")

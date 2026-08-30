@@ -515,6 +515,7 @@ func (c *Client) execute(parent context.Context, cmd command) {
 func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error) {
 	var payload struct {
 		StackName          string             `json:"stackName"`
+		VolumeName         string             `json:"volumeName"`
 		Compose            string             `json:"compose"`
 		Environment        map[string]string  `json:"environment"`
 		Tail               int                `json:"tail"`
@@ -553,6 +554,12 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 			return "", errors.New("scheduler does not support storage-node resolution")
 		}
 		return resolver.ResolveStorageNode(ctx, payload.StackName)
+	case "swarm.volume-node":
+		resolver, ok := c.swarm.(deploy.VolumeNodeResolver)
+		if !ok {
+			return "", errors.New("scheduler does not support volume-node resolution")
+		}
+		return resolver.ResolveVolumeNode(ctx, payload.StackName, payload.VolumeName)
 	case "swarm.volume-artifact":
 		var job deploy.VolumeArtifactJob
 		if err := json.Unmarshal(cmd.Payload, &job); err != nil {

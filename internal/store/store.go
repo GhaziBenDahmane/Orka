@@ -107,6 +107,7 @@ type ComposeService struct {
 	Name          string    `json:"name"`
 	Slug          string    `json:"slug"`
 	StackName     string    `json:"stackName"`
+	StorageNodeID string    `json:"storageNodeId,omitempty"`
 	ComposeYAML   string    `json:"composeYaml,omitempty"`
 	EncryptedEnv  string    `json:"-"`
 	Revision      int64     `json:"revision"`
@@ -932,7 +933,7 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 		return ComposeService{}, err
 	}
 	var service ComposeService
-	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}
@@ -1064,7 +1065,7 @@ func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id u
 
 func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.UUID) (ComposeService, []Route, error) {
 	var v ComposeService
-	err := s.Pool.QueryRow(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&v.ID, &v.EnvironmentID, &v.Name, &v.Slug, &v.StackName, &v.ComposeYAML, &v.EncryptedEnv, &v.Revision, &v.CreatedAt, &v.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&v.ID, &v.EnvironmentID, &v.Name, &v.Slug, &v.StackName, &v.StorageNodeID, &v.ComposeYAML, &v.EncryptedEnv, &v.Revision, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrNotFound
 	}
@@ -1088,7 +1089,7 @@ func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.U
 }
 
 func (s *Store) ListComposeServices(ctx context.Context, organizationID, environmentID uuid.UUID) ([]ComposeService, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.environment_id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ORDER BY s.name`, environmentID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.environment_id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ORDER BY s.name`, environmentID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1096,7 +1097,7 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 	items := []ComposeService{}
 	for rows.Next() {
 		var item ComposeService
-		if err := rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.Revision, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -1728,8 +1729,34 @@ func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (
 var (
 	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
 	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
-	ErrDatabaseStorageNodeMismatch    = errors.New("database storage node does not match the managed database")
+	ErrStorageNodeMismatch            = errors.New("storage node does not match the persisted assignment")
+	ErrDatabaseStorageNodeMismatch    = ErrStorageNodeMismatch
 )
+
+func (s *Store) BindPersistentStorageNode(ctx context.Context, serviceID uuid.UUID, databaseID *uuid.UUID, nodeID string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE compose_services SET storage_node_id=$2,updated_at=now() WHERE id=$1 AND (storage_node_id='' OR storage_node_id=$2)`, serviceID, nodeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrStorageNodeMismatch
+	}
+	if databaseID != nil {
+		tag, err = tx.Exec(ctx, `UPDATE database_instances SET storage_node_id=$2,updated_at=now() WHERE id=$1 AND compose_service_id=$3 AND (storage_node_id='' OR storage_node_id=$2)`, *databaseID, nodeID, serviceID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrStorageNodeMismatch
+		}
+	}
+	return tx.Commit(ctx)
+}
 
 // BindDatabaseStorageNode makes the first successful placement durable and
 // verifies subsequent workers selected the same node. A database is never
@@ -1941,7 +1968,7 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ComposeService{}, nil, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 RETURNING id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrBusy
 	}

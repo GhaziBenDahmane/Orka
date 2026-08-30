@@ -34,7 +34,7 @@ exit 1
 		t.Fatal(err)
 	}
 	key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
-	result, err := (Swarm{DockerBin: docker, ServiceName: "dockyard_dockyard", Timeout: time.Second}).RunVolumeArtifact(context.Background(), VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/signed?token=secret", EncryptionKey: key, EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123", Network: "dockyard-public"})
+	result, err := (Swarm{DockerBin: docker, ServiceName: "dockyard_dockyard", Timeout: time.Second}).RunVolumeArtifact(context.Background(), VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/signed?token=secret", EncryptionKey: key, EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123", Network: "dockyard-public", StackName: "application"})
 	if err != nil || result.SizeBytes != 42 {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
@@ -58,7 +58,7 @@ exit 1
 }
 
 func TestValidateVolumeArtifactJobRejectsUnsafePlacement(t *testing.T) {
-	base := VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123"}
+	base := VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123", StackName: "application"}
 	for name, mutate := range map[string]func(*VolumeArtifactJob){
 		"volume":  func(job *VolumeArtifactJob) { job.VolumeName = "../host" },
 		"node":    func(job *VolumeArtifactJob) { job.NodeID = "node;bad" },
@@ -203,6 +203,38 @@ exit 1
 	t.Setenv("STACK_EMPTY", "true")
 	if node, err := swarm.ResolveStorageNode(context.Background(), "database"); err != nil || node != "nodea" {
 		t.Fatalf("selected node=%q err=%v", node, err)
+	}
+}
+
+func TestResolveVolumeNodeOnlyConsidersServicesMountingVolume(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+if [ "$1" = service ] && [ "$2" = ls ]; then printf '%s\n' 'app_web' 'app_database'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = inspect ]; then
+  case "$5" in
+    app_web) echo '[{"Type":"volume","Source":"app_uploads"}]' ;;
+    app_database) echo '[{"Type":"volume","Source":"app_database"}]' ;;
+  esac
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = ps ]; then
+  case "$7" in app_web) echo worker-b ;; app_database) echo worker-a ;; esac
+  exit 0
+fi
+if [ "$1" = node ] && [ "$2" = ls ]; then
+  printf '%s\n' '{"ID":"nodeb","Hostname":"worker-b","Status":"Ready","Availability":"Active"}' '{"ID":"nodea","Hostname":"worker-a","Status":"Ready","Availability":"Active"}'
+  exit 0
+fi
+if [ "$1" = node ] && [ "$2" = inspect ]; then echo '{"NanoCPUs":1,"MemoryBytes":1}'; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	node, err := (Swarm{DockerBin: docker}).ResolveVolumeNode(context.Background(), "app", "app_uploads")
+	if err != nil || node != "nodeb" {
+		t.Fatalf("node=%q err=%v", node, err)
 	}
 }
 

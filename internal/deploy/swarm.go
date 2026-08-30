@@ -57,8 +57,13 @@ type StorageNodeResolver interface {
 	ResolveStorageNode(context.Context, string) (string, error)
 }
 
+type VolumeNodeResolver interface {
+	ResolveVolumeNode(context.Context, string, string) (string, error)
+}
+
 var _ Scheduler = Swarm{}
 var _ VolumeArtifactRunner = Swarm{}
+var _ VolumeNodeResolver = Swarm{}
 
 var safeRuntimeServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -373,6 +378,66 @@ func (s Swarm) ResolveStorageNode(ctx context.Context, stackName string) (string
 	}
 	sort.Strings(candidates)
 	return candidates[0], nil
+}
+
+func (s Swarm) ResolveVolumeNode(ctx context.Context, stackName, volumeName string) (string, error) {
+	if !safeName.MatchString(stackName) || !safeVolumeSource.MatchString(volumeName) {
+		return "", errors.New("invalid stack or volume name")
+	}
+	servicesOutput, err := s.run(ctx, "service", "ls", "--filter", "label=com.docker.stack.namespace="+stackName, "--format", "{{.Name}}")
+	if err != nil {
+		return "", err
+	}
+	nodes, err := s.Nodes(ctx)
+	if err != nil {
+		return "", err
+	}
+	byHostname := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		byHostname[node.Hostname] = node.ID
+	}
+	assigned, mounted := map[string]bool{}, false
+	for _, service := range strings.Fields(servicesOutput) {
+		if !safeRuntimeServiceName.MatchString(service) {
+			return "", fmt.Errorf("invalid service name returned for stack %q", stackName)
+		}
+		mountsJSON, inspectErr := s.run(ctx, "service", "inspect", "--format", "{{json .Spec.TaskTemplate.ContainerSpec.Mounts}}", service)
+		if inspectErr != nil {
+			return "", inspectErr
+		}
+		var mounts []struct{ Type, Source string }
+		if err = json.Unmarshal([]byte(strings.TrimSpace(mountsJSON)), &mounts); err != nil {
+			return "", fmt.Errorf("decode mounts for service %q: %w", service, err)
+		}
+		usesVolume := false
+		for _, mount := range mounts {
+			if strings.EqualFold(mount.Type, "volume") && mount.Source == volumeName {
+				usesVolume, mounted = true, true
+				break
+			}
+		}
+		if !usesVolume {
+			continue
+		}
+		output, inspectErr := s.run(ctx, "service", "ps", "--filter", "desired-state=running", "--format", "{{.Node}}", service)
+		if inspectErr != nil {
+			return "", inspectErr
+		}
+		for _, hostname := range strings.Fields(output) {
+			nodeID := byHostname[hostname]
+			if nodeID == "" {
+				return "", fmt.Errorf("volume %q is mounted on unknown node %q", volumeName, hostname)
+			}
+			assigned[nodeID] = true
+		}
+	}
+	if !mounted || len(assigned) != 1 {
+		return "", fmt.Errorf("volume %q must have running tasks on exactly one storage node", volumeName)
+	}
+	for nodeID := range assigned {
+		return nodeID, nil
+	}
+	return "", errors.New("volume storage node could not be resolved")
 }
 
 func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {
