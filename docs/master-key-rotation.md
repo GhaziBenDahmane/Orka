@@ -7,7 +7,9 @@ in a maintenance window with `dockyard rotate-master-key`; changing only the
 runtime secret makes the stored data unreadable. The controller authenticates
 a database-held key verifier before starting workers or HTTP listeners, so a
 missing or stale runtime secret fails startup instead of surfacing later during
-a deployment, login, backup, or restore.
+a deployment, login, backup, or restore. Once established, the verifier is
+checked before applying later schema migrations, preventing a wrong-key
+controller from changing the database during startup.
 
 The command defaults to a dry run. It discovers every database column whose
 name contains `encrypted_` and refuses a schema newer or older than its audited

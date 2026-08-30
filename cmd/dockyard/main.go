@@ -329,21 +329,21 @@ func migrateDokploy(arguments []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	db, err := store.Open(ctx, cfg.DatabaseURL)
+	box, err := cryptox.New(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	var db *store.Store
+	if *dryRun {
+		db, err = store.Open(ctx, cfg.DatabaseURL)
+	} else {
+		db, err = store.OpenVerified(ctx, cfg.DatabaseURL, box)
+	}
 	if err != nil {
 		return err
 	}
 	defer db.Pool.Close()
 	db.RequireRemoteBackups = cfg.RequireRemoteBackups
-	box, err := cryptox.New(cfg.MasterKey)
-	if err != nil {
-		return err
-	}
-	if !*dryRun {
-		if err = store.VerifyOrInitializeMasterKey(ctx, db.Pool, box); err != nil {
-			return fmt.Errorf("verify master key: %w", err)
-		}
-	}
 	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, RegistryPrefix: *registryPrefix, DryRun: *dryRun, EncryptionKeys: keys})
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
@@ -395,20 +395,20 @@ func migrateDokployData(arguments []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	db, err := store.Open(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return err
-	}
-	defer db.Pool.Close()
 	box, err := cryptox.New(cfg.MasterKey)
 	if err != nil {
 		return err
 	}
-	if !*dryRun {
-		if err = store.VerifyOrInitializeMasterKey(ctx, db.Pool, box); err != nil {
-			return fmt.Errorf("verify master key: %w", err)
-		}
+	var db *store.Store
+	if *dryRun {
+		db, err = store.Open(ctx, cfg.DatabaseURL)
+	} else {
+		db, err = store.OpenVerified(ctx, cfg.DatabaseURL, box)
 	}
+	if err != nil {
+		return err
+	}
+	defer db.Pool.Close()
 	report, err := dockyardmigrate.QueueDokployDatabaseTransfers(ctx, db, box, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, DryRun: *dryRun}, manifest)
 	if err == nil && !*dryRun {
 		for _, item := range report.Items {
@@ -536,19 +536,16 @@ func serve() error {
 			logger.Error("shutdown OpenTelemetry", "error", err)
 		}
 	}()
-	db, err := store.Open(ctx, cfg.DatabaseURL)
+	box, err := cryptox.New(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	db, err := store.OpenVerified(ctx, cfg.DatabaseURL, box)
 	if err != nil {
 		return err
 	}
 	defer db.Pool.Close()
 	db.RequireRemoteBackups = cfg.RequireRemoteBackups
-	box, err := cryptox.New(cfg.MasterKey)
-	if err != nil {
-		return err
-	}
-	if err = store.VerifyOrInitializeMasterKey(ctx, db.Pool, box); err != nil {
-		return fmt.Errorf("verify master key: %w", err)
-	}
 	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
 	if report, seedErr := templates.SeedBuiltinCatalog(ctx, db, compiler); seedErr != nil {
 		return fmt.Errorf("seed built-in template catalog: %w", seedErr)

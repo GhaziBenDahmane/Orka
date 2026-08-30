@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -38,6 +39,45 @@ type Store struct {
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
+	pool, err := openPool(ctx, databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{Pool: pool}, nil
+}
+
+// OpenVerified authenticates an existing master-key verifier before applying
+// migrations, then creates or rechecks it after the schema is current.
+func OpenVerified(ctx context.Context, databaseURL string, box *cryptox.Box) (*Store, error) {
+	pool, err := openPool(ctx, databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if err = prepareVerifiedStore(ctx, pool, box); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{Pool: pool}, nil
+}
+
+func prepareVerifiedStore(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) error {
+	if err := verifyMasterKeyIfInitialized(ctx, pool, box); err != nil {
+		return fmt.Errorf("verify master key before migrations: %w", err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		return err
+	}
+	if err := VerifyOrInitializeMasterKey(ctx, pool, box); err != nil {
+		return fmt.Errorf("verify master key after migrations: %w", err)
+	}
+	return nil
+}
+
+func openPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -46,11 +86,7 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
-	if err := Migrate(ctx, pool); err != nil {
-		pool.Close()
-		return nil, err
-	}
-	return &Store{Pool: pool}, nil
+	return pool, nil
 }
 
 type Principal struct {

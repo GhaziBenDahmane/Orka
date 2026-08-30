@@ -128,6 +128,22 @@ func TestVerifyOrInitializeMasterKeyIsSafeAcrossHAStartup(t *testing.T) {
 	}
 }
 
+func TestVerifiedStoreRejectsWrongKeyBeforeMigrationChecks(t *testing.T) {
+	pool, ctx := masterKeyRotationTestPool(t)
+	correctBox, _ := cryptox.New(bytesOf(14))
+	if err := VerifyOrInitializeMasterKey(ctx, pool, correctBox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET checksum='tampered' WHERE version='095_master_key_verifier.sql'`); err != nil {
+		t.Fatal(err)
+	}
+	wrongBox, _ := cryptox.New(bytesOf(15))
+	err := prepareVerifiedStore(ctx, pool, wrongBox)
+	if err == nil || !strings.Contains(err.Error(), "verify master key before migrations: master key does not match") {
+		t.Fatalf("pre-migration verification error=%v", err)
+	}
+}
+
 func TestRotateMasterKeyRollsBackWhenAnyCiphertextIsCorrupt(t *testing.T) {
 	pool, ctx := masterKeyRotationTestPool(t)
 	oldKey, newKey := bytesOf(3), bytesOf(4)

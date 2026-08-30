@@ -121,6 +121,31 @@ func VerifyOrInitializeMasterKey(ctx context.Context, pool *pgxpool.Pool, box *c
 	return nil
 }
 
+func verifyMasterKeyIfInitialized(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) error {
+	if box == nil {
+		return errors.New("master-key verifier requires an encryption key")
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin master-key preflight: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, masterKeyRotationLock); err != nil {
+		return fmt.Errorf("acquire master-key preflight lock: %w", err)
+	}
+	var tableExists bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='master_key_verifier')`).Scan(&tableExists); err != nil {
+		return fmt.Errorf("inspect master-key verifier schema: %w", err)
+	}
+	if !tableExists {
+		return tx.Commit(ctx)
+	}
+	if _, err = validateMasterKeyVerifier(ctx, tx, box); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // RotateMasterKey validates every ciphertext before changing any row, then
 // re-encrypts and verifies each value in one transaction. Controllers and
 // workers must be stopped before calling it.

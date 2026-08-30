@@ -65,7 +65,8 @@ migration secrets use AES-256-GCM with resource-bound authenticated context.
 Master-key rotation authenticates every ciphertext before transactional writes.
 Controller startup authenticates a database-held verifier before starting any
 worker or listener; legacy databases initialize it only after validating all
-existing ciphertext, and rotation replaces it in the same transaction.
+existing ciphertext, rotation replaces it in the same transaction, and an
+established verifier is checked before later schema migrations are applied.
 Logs, API projections, AI snapshots, migration reports, driver failures, and
 command results omit plaintext credentials. Operational 5xx responses use
 stable public messages while correlated logs retain only the error type rather
