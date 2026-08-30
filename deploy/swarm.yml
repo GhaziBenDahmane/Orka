@@ -176,8 +176,12 @@ volumes:
   postgres-data: {}
   traefik-data: {}
 secrets:
-  dockyard_db_password: {external: true}
-  dockyard_database_url: {external: true}
+  dockyard_db_password:
+    external: true
+    name: ${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}
+  dockyard_database_url:
+    external: true
+    name: ${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}
   dockyard_master_key:
     external: true
     name: ${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}

@@ -105,6 +105,17 @@ convergence check. If pre-deployment setup fails, resources created by that
 attempt are removed; once stack deployment begins, failed resources are left
 intact for Docker diagnostics and an explicit retry.
 
+Docker secrets are cluster-global rather than stack-scoped. When installing a
+second stack or preparing a coordinated database-credential rotation, set
+`DOCKYARD_DB_PASSWORD_SECRET`, `DOCKYARD_DATABASE_URL_SECRET`, and
+`DOCKYARD_MASTER_KEY_SECRET` to distinct, versioned secret names. The
+installer validates and creates those exact names, and the stack resolves its
+logical secret mounts to them. Do not use `DOCKYARD_REUSE_EXISTING_SECRETS`
+across independent stacks merely to bypass a name collision. Changing the
+password secret alone does not update an initialized PostgreSQL role: change
+the role password and database URL together during a maintenance window, keep
+the old secrets until the health-gated rollout succeeds, and then remove them.
+
 The stack provisions `backup-artifacts` as a stack-scoped Docker volume and
 mounts it at `/var/lib/dockyard/backups`; a clean manager therefore does not
 need a pre-created host directory. Local managed-database backups stored there

@@ -41,6 +41,10 @@ type deploymentManifest struct {
 		} `yaml:"deploy"`
 	} `yaml:"services"`
 	Volumes map[string]any `yaml:"volumes"`
+	Secrets map[string]struct {
+		External bool   `yaml:"external"`
+		Name     string `yaml:"name"`
+	} `yaml:"secrets"`
 }
 
 type manifestResourceSpec struct {
@@ -149,6 +153,19 @@ func TestControllerBackupStorageIsProvisionedBySwarm(t *testing.T) {
 	for _, volume := range controller.Volumes {
 		if strings.HasPrefix(volume, "/var/lib/dockyard/backups:") {
 			t.Fatalf("controller requires a pre-existing host backup directory: %q", volume)
+		}
+	}
+}
+
+func TestControllerDatabaseSecretsCanBeVersioned(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/swarm.yml")
+	for logicalName, expectedName := range map[string]string{
+		"dockyard_db_password":  "${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}",
+		"dockyard_database_url": "${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}",
+	} {
+		secret, ok := manifest.Secrets[logicalName]
+		if !ok || !secret.External || secret.Name != expectedName {
+			t.Errorf("secret %s is not configurable and external: %#v", logicalName, secret)
 		}
 	}
 }

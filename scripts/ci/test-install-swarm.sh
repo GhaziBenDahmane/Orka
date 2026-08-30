@@ -182,6 +182,19 @@ if grep -q '^secret create dockyard_master_key ' "$DOCKYARD_INSTALL_TEST_LOG"; t
   exit 1
 fi
 
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_DB_PASSWORD_SECRET='dockyard_blue_db_password_v2' \
+  DOCKYARD_DATABASE_URL_SECRET='dockyard_blue_database_url_v2' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q "^secret inspect dockyard_blue_db_password_v2$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret create dockyard_blue_db_password_v2 $DOCKYARD_DB_PASSWORD_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret inspect dockyard_blue_database_url_v2$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret create dockyard_blue_database_url_v2 $DOCKYARD_DATABASE_URL_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -Eq '^secret create dockyard_(db_password|database_url) ' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'installer created default database secrets when versioned names were requested' >&2
+  exit 1
+fi
+
 for unsafe_secret in '-leading' 'bad/name' 'bad secret' 'bad:secret'; do
   : >"$DOCKYARD_INSTALL_TEST_LOG"
   if DOCKYARD_MASTER_KEY_SECRET="$unsafe_secret" \
@@ -195,6 +208,33 @@ for unsafe_secret in '-leading' 'bad/name' 'bad secret' 'bad:secret'; do
     exit 1
   fi
 done
+
+for variable in DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if env "$variable=bad/secret" \
+    "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe database secret name in $variable" >&2
+    exit 1
+  fi
+  grep -q "invalid $variable" "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe database secret name mutated Docker state: $variable" >&2
+    exit 1
+  fi
+done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_DB_PASSWORD_SECRET='shared_database_secret' \
+  DOCKYARD_DATABASE_URL_SECRET='shared_database_secret' \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted colliding Docker secret names' >&2
+  exit 1
+fi
+grep -q 'Docker secret names must be distinct' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'colliding Docker secret names mutated Docker state' >&2
+  exit 1
+fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_FAIL_SECRET='dockyard_database_url' \

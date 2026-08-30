@@ -7,6 +7,8 @@ stack=${DOCKYARD_STACK_NAME:-dockyard}
 DOCKYARD_SWARM_SERVICE_NAME=${stack}_dockyard
 export DOCKYARD_SWARM_SERVICE_NAME
 network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+db_password_secret=${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}
+database_url_secret=${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}
 master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
 agent_ca_cert_secret=${DOCKYARD_AGENT_CA_CERT_SECRET:-dockyard_agent_ca_cert}
 agent_ca_key_secret=${DOCKYARD_AGENT_CA_KEY_SECRET:-dockyard_agent_ca_key}
@@ -54,10 +56,18 @@ case "$mode" in single|ha) ;; *) fail "DOCKYARD_INSTALL_MODE must be single or h
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_STACK_NAME" ;; esac
 case "$network" in ""|[!a-z0-9]*|*[!a-z0-9_.-]*) fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters" ;; esac
 [ "${#network}" -le 63 ] || fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters"
+case "$db_password_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_DB_PASSWORD_SECRET" ;; esac
+case "$database_url_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_DATABASE_URL_SECRET" ;; esac
 case "$master_key_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_MASTER_KEY_SECRET" ;; esac
 for secret_name in "$agent_ca_cert_secret" "$agent_ca_key_secret" "$agent_server_cert_secret" "$agent_server_key_secret" "$agent_previous_ca_cert_secret"; do
   case "$secret_name" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid agent TLS Docker secret name" ;; esac
 done
+seen_secret_names=" "
+for secret_name in "$db_password_secret" "$database_url_secret" "$master_key_secret" "$agent_ca_cert_secret" "$agent_ca_key_secret" "$agent_server_cert_secret" "$agent_server_key_secret" "$agent_previous_ca_cert_secret"; do
+  case "$seen_secret_names" in *" $secret_name "*) fail "Docker secret names must be distinct" ;; esac
+  seen_secret_names="${seen_secret_names}${secret_name} "
+done
+unset seen_secret_names secret_name
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
 case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
@@ -77,7 +87,7 @@ validate_email "$ACME_EMAIL"
 DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
 POSTGRES_IMAGE=${POSTGRES_IMAGE:-}
 TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
-export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_MASTER_KEY_SECRET
+export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_MASTER_KEY_SECRET
 DOCKYARD_TRAEFIK_NETWORK=$network
 export DOCKYARD_TRAEFIK_NETWORK
 export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT_SERVER_CERT_SECRET DOCKYARD_AGENT_SERVER_KEY_SECRET DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET
@@ -150,8 +160,8 @@ if [ "$mode" = ha ]; then
 fi
 unset database_url
 
-secret_specs="dockyard_db_password:${DOCKYARD_DB_PASSWORD_FILE}
-dockyard_database_url:${DOCKYARD_DATABASE_URL_FILE}
+secret_specs="${db_password_secret}:${DOCKYARD_DB_PASSWORD_FILE}
+${database_url_secret}:${DOCKYARD_DATABASE_URL_FILE}
 ${master_key_secret}:${DOCKYARD_MASTER_KEY_FILE}"
 if [ "$mode" = ha ]; then
   command -v openssl >/dev/null 2>&1 || fail "openssl is required for HA installation"
