@@ -140,6 +140,14 @@ cluster operations have short commands. `dockyardctl request METHOD /v1/path
 release. Environment variables `DOCKYARD_URL`, `DOCKYARD_TOKEN`, and
 `DOCKYARD_ORGANIZATION_ID` override saved configuration.
 
+Database recovery has dedicated commands: `database-engines`, `databases
+ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
+`put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,
+`backup-database DATABASE_ID`, `database-backups DATABASE_ID`, and
+`restore-database BACKUP_ID DATABASE_SLUG`. Backup and restore inspection and
+cancellation use `database-backup`, `database-restore`,
+`cancel-database-backup`, and `cancel-database-restore`.
+
 Named-volume recovery also has dedicated commands: `volumes SERVICE_ID`,
 `volume-policies SERVICE_ID`, `put-volume-policy SERVICE_ID VOLUME_NAME JSON`,
 `backup-volume SERVICE_ID VOLUME_NAME`, `volume-backups SERVICE_ID`, and

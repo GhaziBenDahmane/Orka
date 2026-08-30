@@ -208,7 +208,10 @@ service's Swarm storage node and have a successful encrypted backup created
 after the final import. Every enabled imported database-backup policy likewise
 needs a successful encrypted remote backup created after that import. Trigger
 those backups explicitly if their next scheduled run falls outside the cutover
-window. Missing targets, stale or unhealthy stacks, incomplete backup evidence,
+window with `dockyardctl backup-database DATABASE_ID` and `dockyardctl
+backup-volume SERVICE_ID VOLUME_NAME`, then inspect the returned job IDs with
+`dockyardctl database-backup BACKUP_ID` and `dockyardctl volume-backup
+BACKUP_ID`. Missing targets, stale or unhealthy stacks, incomplete backup evidence,
 and unconverted resources make the command exit non-zero. Allow the controller's
 one-minute reconciler to observe newly deployed stacks before running the final
 verification.

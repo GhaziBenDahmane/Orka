@@ -95,6 +95,74 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodGet, "/v1/services/" + args[1] + "/logs", nil, nil
+	case "database-engines":
+		return http.MethodGet, "/v1/database-engines", nil, require(1)
+	case "databases":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/environments/" + args[1] + "/databases", nil, nil
+	case "database":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/databases/" + args[1], nil, nil
+	case "backup-policy":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/databases/" + args[1] + "/backup-policy", nil, nil
+	case "put-backup-policy":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/databases/" + args[1] + "/backup-policy", input, err
+	case "delete-backup-policy":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/databases/" + args[1] + "/backup-policy", nil, nil
+	case "database-backups":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/databases/" + args[1] + "/backups", nil, nil
+	case "backup-database":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/databases/" + args[1] + "/backups", map[string]any{}, nil
+	case "database-restores":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/databases/" + args[1] + "/restores", nil, nil
+	case "database-backup":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/database-backups/" + args[1], nil, nil
+	case "cancel-database-backup":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/database-backups/" + args[1] + "/cancel", map[string]any{}, nil
+	case "restore-database":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/database-backups/" + args[1] + "/restore", map[string]string{"confirm": args[2]}, nil
+	case "database-restore":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/database-restores/" + args[1], nil, nil
+	case "cancel-database-restore":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/database-restores/" + args[1] + "/cancel", map[string]any{}, nil
 	case "volumes":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -364,5 +432,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|database-engines|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }
