@@ -469,70 +469,10 @@ jobs:
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .productCount == 5 and ([.products[].template] | sort == ["9router","barktrace-postgres","barktrace-sqlite","postgres","redis"]) and all(.products[]; .deploymentVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and (.barktraceVersion as $version | all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:")))' template-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and (.status == "passed" or (.status == "not_applicable" and .firstRelease == true))' upgrade-conformance.json >/dev/null
 
-      - name: Write release checksums and promotion manifest
-        env:
-          IMAGE: ${{ steps.release.outputs.image }}
-          VERSION: ${{ steps.release.outputs.version }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          schema_version="$(find internal/store/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1 | cut -d_ -f1)"
-          test -n "$schema_version"
-          printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
-          evidence_assets=(
-            image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json
-            sbom.spdx.json database-recovery-evidence.json
-            volume-recovery-conformance.json volume-recovery-conformance.log
-            template-conformance.json template-conformance.log
-            sso-keycloak-evidence.json swarm-ha-conformance.json
-            lifecycle-conformance.json reconciliation-conformance.json
-            agent-certificate-conformance.json ai-audit-conformance.json
-            notification-conformance.json migration-conformance.json
-            upgrade-conformance.json release-soak-evidence.json
-          )
-          sha256sum "${evidence_assets[@]}" > release-evidence.sha256
-          sha256sum --check --strict release-evidence.sha256
-          evidence_checksums_sha256="$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)"
-          jq -n \
-            --arg version "$VERSION" \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg image "$IMAGE@$DIGEST" \
-            --arg sourceCommit "$GITHUB_SHA" \
-            --arg schemaVersion "$schema_version" \
-            --arg operator "$GITHUB_ACTOR" \
-            --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --arg createdAt "$created_at" \
-            --arg evidenceChecksumsSHA256 "$evidence_checksums_sha256" \
-            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,productionCertification:"production-certification.json",productionCertificationSignatureBundle:"production-certification.sigstore.json",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
-            > promotion-manifest.json
-          cat promotion-manifest.json
-
-      - name: Sign and verify promotion manifest
-        run: |
-          set -euo pipefail
-          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
-          issuer="https://token.actions.githubusercontent.com"
-          cosign sign-blob --yes \
-            --bundle promotion-manifest.sigstore.json \
-            promotion-manifest.json
-          cosign verify-blob \
-            --bundle promotion-manifest.sigstore.json \
-            --certificate-identity-regexp "$identity" \
-            --certificate-oidc-issuer "$issuer" \
-            promotion-manifest.json
-          expected_checksums_sha256="$(jq -er '.evidenceChecksumsSHA256 | select(test("^[a-f0-9]{64}$"))' promotion-manifest.json)"
-          test "$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)" = "$expected_checksums_sha256"
-          sha256sum --check --strict release-evidence.sha256
-
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: candidate-evidence-${{ steps.release.outputs.version }}
           path: |
-            promotion-manifest.json
-            promotion-manifest.sigstore.json
-            release-evidence.sha256
-            image-digest.txt
             image-platforms.json
             trivy-amd64.json
             trivy-arm64.json
@@ -578,6 +518,7 @@ jobs:
     permissions:
       actions: read
       contents: write
+      id-token: write
       packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -642,24 +583,65 @@ jobs:
             --certificate-identity-regexp "$release_identity" \
             --certificate-oidc-issuer "$issuer" \
             "$IMAGE@$DIGEST"
-          manifest_identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
-          cosign verify-blob \
-            --bundle promotion-manifest.sigstore.json \
-            --certificate-identity-regexp "$manifest_identity" \
-            --certificate-oidc-issuer "$issuer" \
-            promotion-manifest.json
-          jq -e \
+          cp "$certification" production-certification.json
+          cp "$bundle" production-certification.sigstore.json
+
+      - name: Write final release checksums and promotion manifest
+        env:
+          IMAGE: ${{ needs.candidate.outputs.image }}
+          VERSION: ${{ needs.candidate.outputs.version }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          schema_version="$(find internal/store/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1 | cut -d_ -f1)"
+          test -n "$schema_version"
+          printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
+          evidence_assets=(
+            image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json
+            sbom.spdx.json database-recovery-evidence.json
+            volume-recovery-conformance.json volume-recovery-conformance.log
+            template-conformance.json template-conformance.log
+            sso-keycloak-evidence.json swarm-ha-conformance.json
+            lifecycle-conformance.json reconciliation-conformance.json
+            agent-certificate-conformance.json ai-audit-conformance.json
+            notification-conformance.json migration-conformance.json
+            upgrade-conformance.json release-soak-evidence.json
+            production-certification.json production-certification.sigstore.json
+          )
+          sha256sum "${evidence_assets[@]}" > release-evidence.sha256
+          sha256sum --check --strict release-evidence.sha256
+          evidence_checksums_sha256="$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)"
+          jq -n \
             --arg version "$VERSION" \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg image "$IMAGE@$DIGEST" \
             --arg sourceCommit "$GITHUB_SHA" \
-            'select(.version == $version and .repository == $repository and .image == $image and .sourceCommit == $sourceCommit and .productionCertification == "production-certification.json" and .productionCertificationSignatureBundle == "production-certification.sigstore.json")' \
-            promotion-manifest.json >/dev/null
+            --arg schemaVersion "$schema_version" \
+            --arg operator "$GITHUB_ACTOR" \
+            --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg createdAt "$created_at" \
+            --arg evidenceChecksumsSHA256 "$evidence_checksums_sha256" \
+            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,productionCertification:"production-certification.json",productionCertificationSignatureBundle:"production-certification.sigstore.json",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            > promotion-manifest.json
+          cat promotion-manifest.json
+
+      - name: Sign and verify promotion manifest
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign sign-blob --yes \
+            --bundle promotion-manifest.sigstore.json \
+            promotion-manifest.json
+          cosign verify-blob \
+            --bundle promotion-manifest.sigstore.json \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            promotion-manifest.json
           expected_checksums_sha256="$(jq -er '.evidenceChecksumsSHA256 | select(test("^[a-f0-9]{64}$"))' promotion-manifest.json)"
           test "$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)" = "$expected_checksums_sha256"
           sha256sum --check --strict release-evidence.sha256
-          cp "$certification" production-certification.json
-          cp "$bundle" production-certification.sigstore.json
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

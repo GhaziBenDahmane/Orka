@@ -48,6 +48,7 @@ func TestProductionCertificationValidation(t *testing.T) {
 		{"mutable image", func(c *ProductionCertification) { c.CandidateImage = "ghcr.io/acme/orka:latest" }, "candidateImage"},
 		{"expired", func(c *ProductionCertification) { c.ExpiresAt = now.Add(-time.Minute) }, "expiresAt"},
 		{"stale", func(c *ProductionCertification) { c.CreatedAt = now.Add(-31 * 24 * time.Hour) }, "createdAt"},
+		{"future", func(c *ProductionCertification) { c.CreatedAt = now.Add(time.Second) }, "createdAt"},
 		{"missing gate", func(c *ProductionCertification) { delete(c.Gates, requiredProductionGates[0]) }, "exactly"},
 		{"unknown gate", func(c *ProductionCertification) { c.Gates["invented"] = c.Gates[requiredProductionGates[0]] }, "exactly"},
 		{"no evidence", func(c *ProductionCertification) {

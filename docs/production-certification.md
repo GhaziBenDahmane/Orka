@@ -27,8 +27,9 @@ was available, create the certification and rerun only the failed promotion
 job; the candidate is not rebuilt or retagged.
 
 Submit a JSON object using schema version 1. The workflow overwrites
-`sourceCommit` and `candidateImage` with its selected Git ref and input digest,
-validates the document with the Go release-evidence validator, verifies the
+`sourceCommit`, `candidateImage`, `createdAt`, and `expiresAt` with its selected
+Git ref, input digest, signing time, and chosen lifetime, validates the document
+with the Go release-evidence validator, verifies the
 candidate image's release-workflow signature, and signs the canonical result
 with GitHub OIDC. Evidence URLs must be stable, credential-free HTTPS URLs with
 no query string or fragment. Every referenced artifact includes its lowercase
@@ -39,8 +40,6 @@ SHA-256 so later reviewers can detect replacement.
   "schemaVersion": 1,
   "environment": "production-eu",
   "owner": "release-manager@example.com",
-  "createdAt": "2026-08-30T12:00:00Z",
-  "expiresAt": "2026-09-06T12:00:00Z",
   "gates": {
     "external-integrations": {
       "owner": "identity-and-delivery-team",

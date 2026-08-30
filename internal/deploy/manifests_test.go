@@ -156,7 +156,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		"- name: Sign and verify immutable digest",
 		"- name: Validate release soak evidence",
 		"- name: Aggregate database recovery evidence",
-		"- name: Write release checksums and promotion manifest",
+		"- name: Write final release checksums and promotion manifest",
 		"- name: Sign and verify promotion manifest",
 		"- name: Authenticate production certification and candidate evidence",
 	} {
@@ -176,6 +176,15 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	}
 	if !strings.Contains(workflow, "environment: production-release") || !strings.Contains(workflow, "production-certification-$GITHUB_SHA") || !strings.Contains(workflow, "validate-production-certification") {
 		t.Fatal("stable release promotion is not gated by exact-candidate production certification")
+	}
+	certify := strings.Index(workflow, "- name: Authenticate production certification and candidate evidence")
+	manifest := strings.Index(workflow, "- name: Write final release checksums and promotion manifest")
+	manifestSignature := strings.Index(workflow, "- name: Sign and verify promotion manifest")
+	if certify < 0 || manifest <= certify || manifestSignature <= manifest || promote <= manifestSignature {
+		t.Fatal("final checksums and promotion manifest must be created and signed after production certification but before stable tagging")
+	}
+	if !strings.Contains(workflow, "production-certification.json production-certification.sigstore.json") {
+		t.Fatal("production certification and its signature bundle are missing from the final checksum inventory")
 	}
 	for _, releaseChainGuard := range []string{
 		"highest stable release",

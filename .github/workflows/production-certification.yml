@@ -11,6 +11,12 @@ on:
         description: Production certification JSON matching docs/production-certification.md
         required: true
         type: string
+      valid_days:
+        description: Certification lifetime
+        required: true
+        default: "7"
+        type: choice
+        options: ["1", "7", "14", "30"]
 
 permissions:
   contents: read
@@ -50,6 +56,7 @@ jobs:
         env:
           CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
           EVIDENCE_JSON: ${{ inputs.evidence_json }}
+          VALID_DAYS: ${{ inputs.valid_days }}
         run: |
           set -euo pipefail
           expected_repository="ghcr.io/${GITHUB_REPOSITORY,,}@sha256:"
@@ -62,11 +69,16 @@ jobs:
             --certificate-identity-regexp "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$CANDIDATE_IMAGE"
+          case "$VALID_DAYS" in 1|7|14|30) ;; *) echo "invalid certification lifetime" >&2; exit 1 ;; esac
+          created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          expires_at="$(date -u -d "+$VALID_DAYS days" +%Y-%m-%dT%H:%M:%SZ)"
           jq -e 'type == "object"' <<<"$EVIDENCE_JSON" >submitted-production-certification.json
           jq \
             --arg sourceCommit "$GITHUB_SHA" \
             --arg candidateImage "$CANDIDATE_IMAGE" \
-            '.sourceCommit=$sourceCommit | .candidateImage=$candidateImage' \
+            --arg createdAt "$created_at" \
+            --arg expiresAt "$expires_at" \
+            '.sourceCommit=$sourceCommit | .candidateImage=$candidateImage | .createdAt=$createdAt | .expiresAt=$expiresAt' \
             submitted-production-certification.json >production-certification.input.json
           go run ./cmd/dockyard validate-production-certification \
             --file production-certification.input.json \

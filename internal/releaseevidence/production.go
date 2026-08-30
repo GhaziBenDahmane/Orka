@@ -98,7 +98,7 @@ func (c ProductionCertification) Validate(expectedCommit, expectedImage string, 
 		return err
 	}
 	now = now.UTC()
-	if c.CreatedAt.IsZero() || c.CreatedAt.After(now.Add(5*time.Minute)) || c.CreatedAt.Before(now.Add(-30*24*time.Hour)) {
+	if c.CreatedAt.IsZero() || c.CreatedAt.After(now) || c.CreatedAt.Before(now.Add(-30*24*time.Hour)) {
 		return errors.New("createdAt must be within the last 30 days and not in the future")
 	}
 	if !c.ExpiresAt.After(now) || !c.ExpiresAt.After(c.CreatedAt) || c.ExpiresAt.After(c.CreatedAt.Add(31*24*time.Hour)) {
