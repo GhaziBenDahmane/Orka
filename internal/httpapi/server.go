@@ -788,16 +788,14 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "service accounts do not have interactive sessions")
 		return
 	}
-	token, ok := bearerToken(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized", "bearer token required")
-		return
-	}
-	if err := s.Store.DeleteSession(r.Context(), cryptox.Digest(token)); err != nil {
+	if err := s.Store.LogoutSessionWithAudit(r.Context(), p, r.RemoteAddr); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "session is no longer active")
+			return
+		}
 		s.writeInternalError(w, r, http.StatusInternalServerError, "logout_failed", "session could not be revoked", err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "auth.logout", "session", p.SessionID.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
 
@@ -889,11 +887,10 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.RevokeSession(r.Context(), p.UserID, id, p.SessionOrganizationID); err != nil {
+	if err = s.Store.RevokeSessionWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "session.revoke", "session", id.String(), r.RemoteAddr, map[string]any{"current": id == p.SessionID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -903,12 +900,11 @@ func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "forbidden", "service accounts do not have interactive sessions")
 		return
 	}
-	count, err := s.Store.RevokeOtherSessions(r.Context(), p.UserID, p.SessionID, p.SessionOrganizationID)
+	count, err := s.Store.RevokeOtherSessionsWithAudit(r.Context(), p, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "session.revoke_others", "user", p.UserID.String(), r.RemoteAddr, map[string]any{"revoked": count})
 	writeJSON(w, 200, map[string]int64{"revoked": count})
 }
 

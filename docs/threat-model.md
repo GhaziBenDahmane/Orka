@@ -49,6 +49,8 @@ a critical lockout finding if legacy or manually altered state violates that
 invariant. Each local, OIDC, or SAML session is issued atomically with its tenant
 audit event; unscoped local logins append evidence to every organization the
 identity can enter, while federated sessions remain bound to one tenant.
+Logout and both individual and bulk session revocation use the same atomic
+mutation-and-audit boundary.
 
 The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,

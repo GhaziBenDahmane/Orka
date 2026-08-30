@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // CreateSessionWithAudit makes authentication success and session issuance one
@@ -70,4 +71,98 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 		return uuid.Nil, err
 	}
 	return id, nil
+}
+
+func (s *Store) LogoutSessionWithAudit(ctx context.Context, principal Principal, remoteAddr string) error {
+	return s.revokeSessionWithAudit(ctx, principal, principal.SessionID, "auth.logout", remoteAddr, nil)
+}
+
+func (s *Store) RevokeSessionWithAudit(ctx context.Context, principal Principal, sessionID uuid.UUID, remoteAddr string) error {
+	return s.revokeSessionWithAudit(ctx, principal, sessionID, "session.revoke", remoteAddr, map[string]any{"current": sessionID == principal.SessionID})
+}
+
+func (s *Store) revokeSessionWithAudit(ctx context.Context, principal Principal, sessionID uuid.UUID, action, remoteAddr string, metadata any) error {
+	if principal.ServiceAccountID != nil || principal.UserID == uuid.Nil || principal.SessionID == uuid.Nil {
+		return ErrLocalSessionRequired
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockPrincipalSession(ctx, tx, principal); err != nil {
+		return err
+	}
+	query := `DELETE FROM sessions WHERE id=$1 AND user_id=$2`
+	args := []any{sessionID, principal.UserID}
+	if principal.SessionOrganizationID != nil {
+		query += ` AND organization_id=$3`
+		args = append(args, *principal.SessionOrganizationID)
+	}
+	tag, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, action, "session", sessionID.String(), remoteAddr, metadata); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RevokeOtherSessionsWithAudit(ctx context.Context, principal Principal, remoteAddr string) (int64, error) {
+	if principal.ServiceAccountID != nil || principal.UserID == uuid.Nil || principal.SessionID == uuid.Nil {
+		return 0, ErrLocalSessionRequired
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockPrincipalSession(ctx, tx, principal); err != nil {
+		return 0, err
+	}
+	query := `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`
+	args := []any{principal.UserID, principal.SessionID}
+	if principal.SessionOrganizationID != nil {
+		query += ` AND organization_id=$3`
+		args = append(args, *principal.SessionOrganizationID)
+	}
+	tag, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	revoked := tag.RowsAffected()
+	if err = appendPrincipalAudit(ctx, tx, principal, "session.revoke_others", "user", principal.UserID.String(), remoteAddr, map[string]int64{"revoked": revoked}); err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return revoked, nil
+}
+
+func lockPrincipalSession(ctx context.Context, tx pgx.Tx, principal Principal) error {
+	var exists bool
+	err := tx.QueryRow(ctx, `SELECT true
+		FROM sessions session
+		JOIN memberships membership ON membership.user_id=session.user_id AND membership.organization_id=$3
+		WHERE session.id=$1 AND session.user_id=$2 AND session.expires_at>now()
+		  AND (session.organization_id IS NULL OR session.organization_id=$3)
+		FOR UPDATE OF session,membership`, principal.SessionID, principal.UserID, principal.OrganizationID).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+func appendPrincipalAudit(ctx context.Context, tx pgx.Tx, principal Principal, action, resourceType, resourceID, remoteAddr string, metadata any) error {
+	auditMetadata, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)`, principal.OrganizationID, principal.UserID, action, resourceType, resourceID, remoteAddr, auditMetadata)
+	return err
 }
