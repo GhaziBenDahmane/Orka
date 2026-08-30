@@ -103,6 +103,10 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	if err = json.Unmarshal(body, &cancelledBackup); status != http.StatusAccepted || err != nil {
 		t.Fatalf("queue backup status=%d body=%s err=%v", status, body, err)
 	}
+	status, body = scopedAPIRequest(t, policyURL, token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"volume_backup_policy_busy"`)) {
+		t.Fatalf("delete policy during queued backup status=%d body=%s", status, body)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+cancelledBackup.ID.String()+"/cancel", token, organizationID, http.MethodPost, map[string]any{})
 	if status != http.StatusAccepted {
 		t.Fatalf("cancel backup status=%d body=%s", status, body)
@@ -114,6 +118,9 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 		t.Fatalf("queue restorable backup status=%d body=%s err=%v", status, body, err)
 	}
 	if _, err = db.Pool.Exec(ctx, `UPDATE volume_backups SET status='succeeded',object_key='private/object',size_bytes=42,sha256=$2,plaintext_sha256=$3,encrypted_data_key='wrapped-secret',finished_at=now() WHERE id=$1`, backup.ID, strings.Repeat("a", 64), strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now() WHERE kind='backup.volume' AND payload->>'backupId'=$1::text`, backup.ID); err != nil {
 		t.Fatal(err)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String(), token, organizationID, http.MethodGet, nil)
@@ -129,6 +136,10 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	if err = json.Unmarshal(body, &restore); status != http.StatusAccepted || err != nil {
 		t.Fatalf("restore status=%d body=%s err=%v", status, body, err)
 	}
+	status, body = scopedAPIRequest(t, policyURL, token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"volume_backup_policy_busy"`)) {
+		t.Fatalf("delete policy during queued restore status=%d body=%s", status, body)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-restores/"+restore.ID.String()+"/cancel", token, organizationID, http.MethodPost, map[string]any{})
 	if status != http.StatusAccepted {
 		t.Fatalf("cancel restore status=%d body=%s", status, body)
@@ -143,5 +154,19 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String(), token, otherOrganizationID, http.MethodGet, nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("cross-tenant backup status=%d body=%s", status, body)
+	}
+	status, body = scopedAPIRequest(t, policyURL, token, organizationID, http.MethodDelete, nil)
+	if status != http.StatusNoContent {
+		t.Fatalf("delete idle policy status=%d body=%s", status, body)
+	}
+	var historicalPolicyID *uuid.UUID
+	if err = db.Pool.QueryRow(ctx, `SELECT volume_backup_policy_id FROM volume_backups WHERE id=$1`, backup.ID).Scan(&historicalPolicyID); err != nil || historicalPolicyID != nil {
+		t.Fatalf("historical backup policy id=%v err=%v, want nil", historicalPolicyID, err)
+	}
+	if _, err = db.GetVolumeBackup(ctx, organizationID, backup.ID, false); err != nil {
+		t.Fatalf("historical backup unavailable after policy deletion: %v", err)
+	}
+	if _, err = db.GetVolumeRestore(ctx, organizationID, restore.ID); err != nil {
+		t.Fatalf("historical restore unavailable after policy deletion: %v", err)
 	}
 }

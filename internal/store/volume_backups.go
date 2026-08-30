@@ -119,14 +119,48 @@ func (s *Store) ListVolumeBackupPolicies(ctx context.Context, organizationID, se
 }
 
 func (s *Store) DeleteVolumeBackupPolicy(ctx context.Context, organizationID, serviceID uuid.UUID, volumeName string) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM volume_backup_policies policy USING compose_services service,environments e,projects p WHERE policy.compose_service_id=$1 AND policy.volume_name=$2 AND service.id=policy.compose_service_id AND e.id=service.environment_id AND p.id=e.project_id AND p.organization_id=$3`, serviceID, volumeName, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var policyID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT policy.id FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE policy.compose_service_id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var busy bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(
+		SELECT 1
+		FROM volume_backups backup
+		LEFT JOIN jobs job ON job.kind='backup.volume' AND job.payload->>'backupId'=backup.id::text
+		WHERE backup.compose_service_id=$1 AND backup.volume_name=$2
+			AND (backup.status IN ('queued','running') OR job.status IN ('pending','running'))
+		UNION ALL
+		SELECT 1
+		FROM volume_restores restore
+		JOIN volume_backups backup ON backup.id=restore.volume_backup_id
+		LEFT JOIN jobs job ON job.kind='restore.volume' AND job.payload->>'restoreId'=restore.id::text
+		WHERE backup.compose_service_id=$1 AND backup.volume_name=$2
+			AND (restore.status IN ('queued','running') OR job.status IN ('pending','running'))
+	)`, serviceID, volumeName).Scan(&busy)
+	if err != nil {
+		return err
+	}
+	if busy {
+		return ErrBusy
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM volume_backup_policies WHERE id=$1`, policyID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID uuid.UUID, volumeName string, actorID uuid.UUID) (VolumeBackup, error) {

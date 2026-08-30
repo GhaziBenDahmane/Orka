@@ -99,6 +99,10 @@ func (s *Server) deleteVolumeBackupPolicy(w http.ResponseWriter, r *http.Request
 	volumeName := r.PathValue("volumeName")
 	p := principal(r)
 	if err = s.Store.DeleteVolumeBackupPolicy(r.Context(), p.OrganizationID, serviceID, volumeName); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "volume_backup_policy_busy", "wait for active backups and restores to finish before deleting the policy")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}

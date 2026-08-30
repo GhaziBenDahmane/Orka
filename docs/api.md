@@ -361,7 +361,7 @@ until an administrator retries them.
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful digest-resolved snapshot; returns `409 rollback_unavailable` when no immutable snapshot exists |
 | GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |
 | GET | `/v1/services/{id}/volumes` | List mounted declared named volumes and their resolved Swarm names |
-| GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume |
+| GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume; deletion returns `409 volume_backup_policy_busy` while a backup or restore is active and preserves completed history |
 | GET/POST | `/v1/services/{id}/volume-backups…` | List or queue named-volume backups |
 | GET/POST | `/v1/services/{id}/volume-restores…` | List restore history or queue a confirmed restore |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
