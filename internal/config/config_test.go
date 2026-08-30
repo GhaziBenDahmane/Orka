@@ -64,6 +64,7 @@ func TestLoadValidatesPublicOrigin(t *testing.T) {
 	for _, value := range []string{
 		"localhost:8080", "ftp://example.test", "https://user@example.test",
 		"https://example.test/path", "https://example.test?debug=true", "https://example.test/#fragment",
+		"http://example.test", "http://10.20.30.40:8080",
 	} {
 		t.Run(value, func(t *testing.T) {
 			setRequiredConfig(t)
@@ -78,6 +79,32 @@ func TestLoadValidatesPublicOrigin(t *testing.T) {
 	cfg, err := Load()
 	if err != nil || cfg.PublicURL != "https://dockyard.example.test" {
 		t.Fatalf("public URL=%q error=%v", cfg.PublicURL, err)
+	}
+	for _, value := range []string{"http://localhost:8080", "http://dev.localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"} {
+		t.Run("loopback_"+value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_PUBLIC_URL", value)
+			if _, err := Load(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestLoadValidatesTraefikNetwork(t *testing.T) {
+	for _, value := range []string{"Public", "-public", "public/network", strings.Repeat("a", 64)} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_TRAEFIK_NETWORK", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_TRAEFIK_NETWORK") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_TRAEFIK_NETWORK", "tenant_public.network")
+	if cfg, err := Load(); err != nil || cfg.TraefikNetwork != "tenant_public.network" {
+		t.Fatalf("network=%q error=%v", cfg.TraefikNetwork, err)
 	}
 }
 

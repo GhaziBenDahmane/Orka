@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +45,8 @@ type Config struct {
 	AgentServerKeyFile         string
 	DatabaseDriverDirectory    string
 }
+
+var swarmNetworkName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
 
 func Load() (Config, error) {
 	ttl, err := time.ParseDuration(env("DOCKYARD_SESSION_TTL", "24h"))
@@ -106,6 +110,13 @@ func Load() (Config, error) {
 	parsedPublicURL, err := url.Parse(publicURL)
 	if err != nil || (parsedPublicURL.Scheme != "http" && parsedPublicURL.Scheme != "https") || parsedPublicURL.Hostname() == "" || parsedPublicURL.User != nil || parsedPublicURL.RawQuery != "" || parsedPublicURL.Fragment != "" || (parsedPublicURL.Path != "" && parsedPublicURL.Path != "/") {
 		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must be an HTTP(S) origin without credentials, path, query, or fragment")
+	}
+	if parsedPublicURL.Scheme != "https" && !loopbackHostname(parsedPublicURL.Hostname()) {
+		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must use HTTPS except for loopback development")
+	}
+	traefikNetwork := strings.TrimSpace(env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"))
+	if !swarmNetworkName.MatchString(traefikNetwork) {
+		return Config{}, errors.New("DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters")
 	}
 	agentCACertificate, err := secretEnv("DOCKYARD_AGENT_CA_CERT")
 	if err != nil {
@@ -183,7 +194,7 @@ func Load() (Config, error) {
 		DockerBin:                  env("DOCKYARD_DOCKER_BIN", "docker"),
 		WorkerConcurrency:          concurrency,
 		SessionTTL:                 ttl,
-		TraefikNetwork:             env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		TraefikNetwork:             traefikNetwork,
 		UnsafeWorkloads:            unsafeWorkloads,
 		PublicURL:                  publicURL,
 		BackupDirectory:            filepath.Clean(backupDirectory),
@@ -204,6 +215,15 @@ func Load() (Config, error) {
 		AgentServerKeyFile:         agentServerKeyFile,
 		DatabaseDriverDirectory:    driverDirectory,
 	}, nil
+}
+
+func loopbackHostname(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }
 
 func secretEnv(key string) (string, error) {
