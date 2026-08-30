@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"time"
 
@@ -14,6 +15,8 @@ const maxDeterministicAuditFindings = 100
 const auditArchiveSchedulerGrace = 5 * time.Minute
 const minimumOperationalSignalSample = 4
 const finalizerStallThreshold = 15 * time.Minute
+
+var immutableAuditImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -261,6 +264,9 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	for _, cluster := range snapshot.Clusters {
 		if cluster.State != "active" && cluster.State != "draining" {
 			continue
+		}
+		if !immutableAuditImage.MatchString(cluster.AgentImage) {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Remote agent image is not immutable", Description: "An active or draining remote agent does not report a digest-pinned runtime image.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"state": cluster.State, "agentImageRecorded": cluster.AgentImage != ""}, Remediation: "Upgrade the remote agent to a reviewed repository@sha256:digest image and verify the replacement heartbeat before scheduling workloads."})
 		}
 		if cluster.LastSeenAt == nil || now.Sub(*cluster.LastSeenAt) > 2*time.Minute {
 			lastSeen := ""

@@ -252,6 +252,8 @@ returned. The baseline reports malformed desired definitions, missing or
 malformed runtime snapshots, mutable deployed images, and services missing
 both an image and a build source. Mutable desired template tags alone are not
 reported as deployed-image vulnerabilities.
+Active and draining remote clusters whose reported agent runtime image is
+missing or not digest-pinned produce a high-severity supply-chain finding.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
 Repository URLs and refs, output image names, credential identifiers, artifact

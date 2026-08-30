@@ -188,7 +188,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -289,6 +289,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"deterministicFindingsPersisted": true,
 		"deployedImageProvenanceAudited": true,
 		"agentCAMismatchDetected":        true,
+		"agentImageProvenanceAudited":    true,
 		"modelFindingsPersisted":         true,
 		"durableRunCompleted":            true,
 		"lifecycleAudited":               true,

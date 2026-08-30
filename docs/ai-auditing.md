@@ -58,9 +58,10 @@ keys make it a privileged service.
   also reports each service's desired and latest deployed revision plus
   pending/running service and database jobs. Resource-policy posture includes
   active maintenance scopes, configured quota limits, and current usage while
-  excluding operator-supplied maintenance reasons. The latest agent upgrade for each
-  cluster includes its immutable target, state, attempt count, deadline, and
-  overdue flag, but never its encrypted command, result, or raw failure text.
+  excluding operator-supplied maintenance reasons. Each cluster exposes its
+  reported agent runtime image, and the latest agent upgrade includes its
+  immutable target, state, attempt count, deadline, and overdue flag, but never
+  its encrypted command, result, or raw failure text.
   Reconciliation posture includes only state, failure count, and timestamps;
   raw Docker and agent detail stays outside the model boundary. Queue counts cover
   only jobs with a resource key that resolves through the requesting
@@ -154,7 +155,7 @@ keys make it a privileged service.
   safety baseline for missing, disabled, or overdue backups and restore drills,
   active maintenance scopes, near-capacity quotas, missing owners, disabled
   mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,
-  expiring agent certificates,
+  missing or mutable active-agent images, expiring agent certificates,
   expiring service-account and deployment-hook credentials, stale SCIM credentials,
   unrevoked expired deployment hooks, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,

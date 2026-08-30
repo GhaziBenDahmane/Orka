@@ -63,7 +63,7 @@ jq -e '
   .openAICompatibleGateway and .snapshotSecretsRedacted and
   .promptInjectionBoundaryPresent and .deterministicFindingsPersisted and
   .deployedImageProvenanceAudited and
-  .agentCAMismatchDetected and
+  .agentCAMismatchDetected and .agentImageProvenanceAudited and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and
   .findingTriageAudited and .findingTriageAtomic and .criticalFindingNotified and .auditorTriageDenied and
