@@ -73,6 +73,7 @@ func TestRestoreDrillUsesIsolatedStackAndEncryptedArtifact(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s ' "$@" >> ` + strconv.Quote(logPath) + `; printf '\n' >> ` + strconv.Quote(logPath) + `
 if [ "$1" = info ]; then echo active; exit 0; fi
+if [ "$1" = network ] && [ "$2" = inspect ]; then echo 'overlay|swarm|true|{"encrypted":""}'; exit 0; fi
 if [ "$1" = network ]; then exit 0; fi
 if [ "$1" = stack ]; then exit 0; fi
 if [ "$1" = service ] && [ "$2" = ls ]; then echo 'drill_verify 1/1'; exit 0; fi

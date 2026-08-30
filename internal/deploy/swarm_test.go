@@ -20,7 +20,7 @@ func TestDeployForwardsRegistryAuthentication(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "` + logPath + `"
 if [ "$1" = info ]; then echo active; exit 0; fi
-if [ "$1" = network ] && [ "$2" = inspect ]; then exit 0; fi
+if [ "$1" = network ] && [ "$2" = inspect ]; then echo 'overlay|swarm|true|{"encrypted":""}'; exit 0; fi
 if [ "$1" = stack ] && [ "$2" = deploy ]; then cp "$DOCKER_CONFIG/config.json" "` + directory + `/registry.json"; exit 0; fi
 if [ "$1" = service ] && [ "$2" = ls ]; then echo 'test_web 1/1'; exit 0; fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'null'; exit 0; fi
@@ -53,7 +53,7 @@ func TestDeployRejectsAutomaticRollbackAsSuccess(t *testing.T) {
 	docker := filepath.Join(directory, "docker")
 	script := `#!/bin/sh
 if [ "$1" = info ]; then echo active; exit 0; fi
-if [ "$1" = network ] && [ "$2" = inspect ]; then exit 0; fi
+if [ "$1" = network ] && [ "$2" = inspect ]; then echo 'overlay|swarm|true|{"encrypted":""}'; exit 0; fi
 if [ "$1" = stack ] && [ "$2" = deploy ]; then exit 0; fi
 if [ "$1" = service ] && [ "$2" = ls ]; then echo 'test_web 1/1'; exit 0; fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then echo '{"State":"rollback_completed","Message":"task failed health check"}'; exit 0; fi
@@ -65,6 +65,54 @@ exit 1
 	output, err := (Swarm{DockerBin: docker, Network: "dockyard-public", Timeout: time.Second}).Deploy(context.Background(), "test", "services:\n  web:\n    image: example/web:2\n", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "rollback_completed") {
 		t.Fatalf("automatic rollback was not reported as a failed deployment: output=%q err=%v", output, err)
+	}
+}
+
+func TestEnsureReadyCreatesEncryptedOverlay(t *testing.T) {
+	directory := t.TempDir()
+	docker, logPath := filepath.Join(directory, "docker"), filepath.Join(directory, "calls")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + logPath + `"
+if [ "$1" = info ]; then echo active; exit 0; fi
+if [ "$1" = network ] && [ "$2" = inspect ]; then exit 1; fi
+if [ "$1" = network ] && [ "$2" = create ]; then exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Swarm{DockerBin: docker, Network: "dockyard-public"}).EnsureReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "network create --driver overlay --opt encrypted --attachable dockyard-public") {
+		t.Fatalf("encrypted overlay was not created: %s", calls)
+	}
+}
+
+func TestEnsureReadyRejectsUnsafeExistingNetwork(t *testing.T) {
+	for _, properties := range []string{
+		`bridge|local|true|{"encrypted":""}`,
+		`overlay|swarm|false|{"encrypted":""}`,
+		`overlay|swarm|true|{}`,
+		`overlay|swarm|true|not-json`,
+	} {
+		t.Run(properties, func(t *testing.T) {
+			directory := t.TempDir()
+			docker := filepath.Join(directory, "docker")
+			script := "#!/bin/sh\nif [ \"$1\" = info ]; then echo active; exit 0; fi\n" +
+				"if [ \"$1\" = network ] && [ \"$2\" = inspect ]; then echo '" + properties + "'; exit 0; fi\n" +
+				"exit 1\n"
+			if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := (Swarm{DockerBin: docker, Network: "dockyard-public"}).EnsureReady(context.Background()); err == nil {
+				t.Fatalf("accepted unsafe network properties %q", properties)
+			}
+		})
 	}
 }
 

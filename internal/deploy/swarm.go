@@ -70,10 +70,22 @@ func (s Swarm) EnsureReady(ctx context.Context) error {
 	if strings.TrimSpace(state) != "active" {
 		return errors.New("docker swarm is not active")
 	}
-	if _, err = s.run(ctx, "network", "inspect", s.Network); err == nil {
+	properties, inspectErr := s.run(ctx, "network", "inspect", "--format", `{{.Driver}}|{{.Scope}}|{{.Attachable}}|{{json .Options}}`, s.Network)
+	if inspectErr == nil {
+		parts := strings.SplitN(strings.TrimSpace(properties), "|", 4)
+		if len(parts) != 4 || parts[0] != "overlay" || parts[1] != "swarm" || parts[2] != "true" {
+			return fmt.Errorf("Docker network %s must be an attachable Swarm overlay", s.Network)
+		}
+		var options map[string]string
+		if json.Unmarshal([]byte(parts[3]), &options) != nil {
+			return fmt.Errorf("inspect Docker network %s options", s.Network)
+		}
+		if _, encrypted := options["encrypted"]; !encrypted {
+			return fmt.Errorf("Docker network %s must enable encrypted overlay traffic", s.Network)
+		}
 		return nil
 	}
-	_, err = s.run(ctx, "network", "create", "--driver", "overlay", "--attachable", s.Network)
+	_, err = s.run(ctx, "network", "create", "--driver", "overlay", "--opt", "encrypted", "--attachable", s.Network)
 	return err
 }
 
