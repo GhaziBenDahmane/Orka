@@ -594,6 +594,7 @@ func (s *Server) samlSigningMaterial(providerID uuid.UUID, certificatePEM, encry
 	if err != nil {
 		return nil, nil, err
 	}
+	defer clear(privateKeyPEM)
 	privateKeyBlock, _ := pem.Decode(privateKeyPEM)
 	if privateKeyBlock == nil || privateKeyBlock.Type != "PRIVATE KEY" {
 		return nil, nil, errors.New("invalid SAML private key")

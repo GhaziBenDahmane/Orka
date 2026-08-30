@@ -285,6 +285,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		s.writeInternalError(w, r, 500, "decryption_failed", "OIDC provider configuration could not be decrypted", err)
 		return
 	}
+	defer clear(secret)
 	providerContext, cancel := context.WithTimeout(r.Context(), oidcRequestTimeout)
 	defer cancel()
 	providerContext = oidc.ClientContext(providerContext, s.oidcHTTPClient())
@@ -549,7 +550,12 @@ func (s *Server) consumeLoginStateCookie(w http.ResponseWriter, r *http.Request,
 		return false
 	}
 	plain, err := s.Box.Decrypt(cookie.Value, "login-state:"+name)
-	return err == nil && subtle.ConstantTimeCompare(plain, []byte(state)) == 1
+	if err != nil {
+		return false
+	}
+	valid := subtle.ConstantTimeCompare(plain, []byte(state)) == 1
+	clear(plain)
+	return valid
 }
 
 func (s *Server) setExpiredLoginStateCookie(w http.ResponseWriter, name string, sameSite http.SameSite) {
