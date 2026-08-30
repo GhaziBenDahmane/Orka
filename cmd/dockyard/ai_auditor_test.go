@@ -346,7 +346,7 @@ func TestPerformAIAuditFinalizesRunAfterContextDeadline(t *testing.T) {
 
 func fullyCoveredNotifications() []store.AIAuditNotificationPosture {
 	return []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{
-		"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed",
+		"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical",
 	}}}
 }
 

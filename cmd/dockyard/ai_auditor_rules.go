@@ -133,6 +133,7 @@ func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) [
 		"database.migration.failed": false,
 		"audit.archive.failed":      false,
 		"ai.audit.failed":           false,
+		"ai.finding.critical":       false,
 	}
 	for _, endpoint := range endpoints {
 		if !endpoint.Enabled {
