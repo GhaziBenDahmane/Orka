@@ -80,7 +80,9 @@ Status: substantially implemented.
   hostname-checked on route attachment, and reconciled through versioned Swarm
   secrets/configs locally or through encrypted remote-agent commands. The
   console, CLI, Terraform provider, AI snapshot, metrics, and alerts expose
-  metadata and convergence posture without exposing key material.
+  metadata and convergence posture without exposing key material. The built-in
+  lightweight auditor deterministically flags certificate validity risks and
+  missing, failed, stalled, or generation-inconsistent edge reconciliation.
 
 Exit gate: upgrade and rollback work during controller restart; no cross-tenant
 access; worker-kill and Docker-daemon-loss tests pass.

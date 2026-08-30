@@ -906,6 +906,107 @@ func TestDeterministicAuditDetectsPlaintextPublicRoutes(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsCustomTLSCertificateValidityRisks(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	expiredID, futureID, activeExpiringID, unusedExpiringID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		CustomTLSPosture: []store.AIAuditCustomTLSPosture{
+			{ID: expiredID, NotBefore: now.Add(-90 * 24 * time.Hour), NotAfter: now.Add(-time.Minute), Revision: 2, AttachedRoutes: 1, EnabledRoutes: 1},
+			{ID: futureID, NotBefore: now.Add(time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), Revision: 1, AttachedRoutes: 1, EnabledRoutes: 1},
+			{ID: activeExpiringID, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(29 * 24 * time.Hour), Revision: 3, AttachedRoutes: 2, EnabledRoutes: 2},
+			{ID: unusedExpiringID, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(29 * 24 * time.Hour), Revision: 1},
+			{ID: uuid.New(), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(31 * 24 * time.Hour), Revision: 1},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	want := []struct {
+		title    string
+		severity string
+		id       uuid.UUID
+	}{
+		{title: "Custom TLS certificate has expired", severity: "critical", id: expiredID},
+		{title: "Custom TLS certificate is not yet valid", severity: "high", id: futureID},
+		{title: "Custom TLS certificate expires soon", severity: "high", id: activeExpiringID},
+		{title: "Custom TLS certificate expires soon", severity: "medium", id: unusedExpiringID},
+	}
+	if len(findings) != len(want) {
+		t.Fatalf("custom TLS validity findings=%#v", findings)
+	}
+	for index := range want {
+		if findings[index].Title != want[index].title || findings[index].Severity != want[index].severity || findings[index].ResourceID != want[index].id.String() {
+			t.Fatalf("custom TLS validity finding %d=%#v, want %#v", index, findings[index], want[index])
+		}
+		if _, exposed := findings[index].Evidence["certificatePem"]; exposed {
+			t.Fatalf("custom TLS finding exposed certificate material: %#v", findings[index])
+		}
+	}
+}
+
+func TestDeterministicAuditDetectsCustomTLSEdgeReconciliationRisks(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	errorClusterID, stalledClusterID, freshClusterID, inconsistentClusterID, healthyClusterID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		EdgeTLSPosture: []store.AIAuditEdgeTLSPosture{
+			{TargetKey: errorClusterID.String(), ClusterID: &errorClusterID, Generation: 3, AppliedGeneration: 2, Status: "error", UpdatedAt: now.Add(-time.Minute)},
+			{TargetKey: stalledClusterID.String(), ClusterID: &stalledClusterID, Generation: 4, AppliedGeneration: 3, Status: "pending", UpdatedAt: now.Add(-6 * time.Minute)},
+			{TargetKey: freshClusterID.String(), ClusterID: &freshClusterID, Generation: 2, AppliedGeneration: 1, Status: "pending", UpdatedAt: now.Add(-time.Minute)},
+			{TargetKey: inconsistentClusterID.String(), ClusterID: &inconsistentClusterID, Generation: 8, AppliedGeneration: 7, Status: "ready", UpdatedAt: now},
+			{TargetKey: healthyClusterID.String(), ClusterID: &healthyClusterID, Generation: 5, AppliedGeneration: 5, Status: "ready", UpdatedAt: now},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	want := []struct {
+		title    string
+		severity string
+		id       uuid.UUID
+	}{
+		{title: "Custom TLS edge reconciliation failed", severity: "critical", id: errorClusterID},
+		{title: "Custom TLS edge reconciliation is stalled", severity: "high", id: stalledClusterID},
+		{title: "Custom TLS edge reconciliation state is inconsistent", severity: "high", id: inconsistentClusterID},
+	}
+	if len(findings) != len(want) {
+		t.Fatalf("custom TLS edge findings=%#v", findings)
+	}
+	for index := range want {
+		if findings[index].Title != want[index].title || findings[index].Severity != want[index].severity || findings[index].ResourceID != want[index].id.String() {
+			t.Fatalf("custom TLS edge finding %d=%#v, want %#v", index, findings[index], want[index])
+		}
+		if _, exposed := findings[index].Evidence["lastError"]; exposed {
+			t.Fatalf("custom TLS edge finding exposed reconciliation error: %#v", findings[index])
+		}
+	}
+}
+
+func TestDeterministicAuditDetectsMissingCustomTLSEdgeTarget(t *testing.T) {
+	environmentID, serviceID, certificateID := uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		Environments:        []store.AIAuditEnvironmentInfo{{ID: environmentID}},
+		Services:            []store.AIAuditServiceInfo{{ID: serviceID, EnvironmentID: environmentID}},
+		Routes: []store.AIAuditRouteInfo{
+			{ID: uuid.New(), ComposeServiceID: serviceID, Host: "app.example.test", TLS: true, CustomCertificateID: &certificateID},
+			{ID: uuid.New(), ComposeServiceID: serviceID, Host: "api.example.test", TLS: true, CustomCertificateID: &certificateID},
+			{ID: uuid.New(), ComposeServiceID: serviceID, Host: "disabled.example.test", TLS: true, CustomCertificateID: &certificateID, Disabled: true},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 1 || findings[0].Title != "Custom TLS edge target is missing" || findings[0].Severity != "critical" || findings[0].ResourceID != "local" {
+		t.Fatalf("missing custom TLS edge target findings=%#v", findings)
+	}
+	snapshot.EdgeTLSPosture = []store.AIAuditEdgeTLSPosture{{TargetKey: "local", Generation: 1, AppliedGeneration: 1, Status: "ready", UpdatedAt: time.Now().UTC()}}
+	if findings = deterministicAuditFindings(snapshot, time.Now().UTC()); len(findings) != 0 {
+		t.Fatalf("ready custom TLS edge target produced findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsWorkloadImageProvenanceGaps(t *testing.T) {
 	invalidID, missingSnapshotID, invalidRuntimeID, mutableID, incompleteID, healthyID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	snapshot := store.AIAuditSnapshot{

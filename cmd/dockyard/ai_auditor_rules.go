@@ -17,6 +17,7 @@ const minimumOperationalSignalSample = 4
 const finalizerStallThreshold = 15 * time.Minute
 const jobHeartbeatStallThreshold = 2 * time.Minute
 const agentCommandStallThreshold = 2 * time.Minute
+const edgeTLSReconciliationStallThreshold = 5 * time.Minute
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -113,6 +114,71 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		if !route.Disabled && !route.TLS {
 			add(modelFinding{Severity: "medium", Category: "network", Title: "Public route permits plaintext HTTP", Description: "A Traefik ingress route accepts traffic without transport encryption.", ResourceType: "route", ResourceID: route.ID.String(), Evidence: map[string]any{"serviceId": route.ComposeServiceID.String(), "host": route.Host, "pathPrefix": route.PathPrefix, "targetPort": route.TargetPort}, Remediation: "Enable TLS with a configured certificate resolver, redeploy the service, and redirect or retire the plaintext endpoint."})
 		}
+	}
+	for _, certificate := range snapshot.CustomTLSPosture {
+		evidence := map[string]any{"notBefore": certificate.NotBefore.UTC().Format(time.RFC3339), "notAfter": certificate.NotAfter.UTC().Format(time.RFC3339), "revision": certificate.Revision, "attachedRoutes": certificate.AttachedRoutes, "enabledRoutes": certificate.EnabledRoutes}
+		switch {
+		case !certificate.NotAfter.After(now):
+			add(modelFinding{Severity: "critical", Category: "network", Title: "Custom TLS certificate has expired", Description: "A managed custom certificate is past its validity window and can no longer provide a valid HTTPS identity.", ResourceType: "custom_tls_certificate", ResourceID: certificate.ID.String(), Evidence: evidence, Remediation: "Rotate the certificate and verify edge reconciliation reaches the new generation before redeploying attached routes."})
+		case certificate.NotBefore.After(now):
+			add(modelFinding{Severity: "high", Category: "network", Title: "Custom TLS certificate is not yet valid", Description: "A managed custom certificate has a validity window that begins in the future.", ResourceType: "custom_tls_certificate", ResourceID: certificate.ID.String(), Evidence: evidence, Remediation: "Install a currently valid certificate, verify controller time synchronization, and reconcile every attached edge target."})
+		case certificate.NotAfter.Before(now.Add(30 * 24 * time.Hour)):
+			severity := "medium"
+			if certificate.EnabledRoutes > 0 {
+				severity = "high"
+			}
+			add(modelFinding{Severity: severity, Category: "network", Title: "Custom TLS certificate expires soon", Description: "A managed custom certificate expires in less than thirty days.", ResourceType: "custom_tls_certificate", ResourceID: certificate.ID.String(), Evidence: evidence, Remediation: "Rotate the certificate before expiry and verify the replacement generation is ready on every attached edge target."})
+		}
+	}
+	edgeTargets := make(map[string]bool, len(snapshot.EdgeTLSPosture))
+	for _, target := range snapshot.EdgeTLSPosture {
+		edgeTargets[target.TargetKey] = true
+		evidence := map[string]any{"targetKey": target.TargetKey, "generation": target.Generation, "appliedGeneration": target.AppliedGeneration, "status": target.Status, "updatedAt": target.UpdatedAt.UTC().Format(time.RFC3339)}
+		if target.ClusterID != nil {
+			evidence["clusterId"] = target.ClusterID.String()
+		}
+		switch {
+		case target.Status == "error":
+			add(modelFinding{Severity: "critical", Category: "network", Title: "Custom TLS edge reconciliation failed", Description: "An edge target exhausted certificate reconciliation retries and cannot prove that its desired certificate generation is active.", ResourceType: "edge_tls_target", ResourceID: target.TargetKey, Evidence: evidence, Remediation: "Inspect the worker or remote edge capability, repair Traefik certificate delivery, and retry reconciliation before deploying attached workloads."})
+		case target.Status == "pending" && now.Sub(target.UpdatedAt) > edgeTLSReconciliationStallThreshold:
+			evidence["ageSeconds"] = int64(now.Sub(target.UpdatedAt) / time.Second)
+			evidence["maximumPendingSeconds"] = int64(edgeTLSReconciliationStallThreshold / time.Second)
+			add(modelFinding{Severity: "high", Category: "network", Title: "Custom TLS edge reconciliation is stalled", Description: "An edge target has remained pending beyond the certificate reconciliation grace period.", ResourceType: "edge_tls_target", ResourceID: target.TargetKey, Evidence: evidence, Remediation: "Restore worker or remote-agent connectivity and confirm the desired generation becomes ready before deploying attached workloads."})
+		case target.Status == "ready" && target.AppliedGeneration != target.Generation:
+			add(modelFinding{Severity: "high", Category: "network", Title: "Custom TLS edge reconciliation state is inconsistent", Description: "An edge target reports ready while its applied certificate generation differs from the desired generation.", ResourceType: "edge_tls_target", ResourceID: target.TargetKey, Evidence: evidence, Remediation: "Queue a fresh reconciliation and verify the target reports ready only after applying the desired generation."})
+		}
+	}
+	serviceEnvironments := make(map[uuid.UUID]uuid.UUID, len(snapshot.Services))
+	for _, service := range snapshot.Services {
+		serviceEnvironments[service.ID] = service.EnvironmentID
+	}
+	environmentClusters := make(map[uuid.UUID]*uuid.UUID, len(snapshot.Environments))
+	for _, environment := range snapshot.Environments {
+		environmentClusters[environment.ID] = environment.ClusterID
+	}
+	missingTargets := map[string]bool{}
+	for _, route := range snapshot.Routes {
+		if route.Disabled || route.CustomCertificateID == nil {
+			continue
+		}
+		environmentID, serviceKnown := serviceEnvironments[route.ComposeServiceID]
+		clusterID, environmentKnown := environmentClusters[environmentID]
+		if !serviceKnown || !environmentKnown {
+			continue
+		}
+		targetKey := "local"
+		if clusterID != nil {
+			targetKey = clusterID.String()
+		}
+		if edgeTargets[targetKey] || missingTargets[targetKey] {
+			continue
+		}
+		missingTargets[targetKey] = true
+		evidence := map[string]any{"targetKey": targetKey, "routeId": route.ID.String(), "serviceId": route.ComposeServiceID.String(), "customCertificateId": route.CustomCertificateID.String()}
+		if clusterID != nil {
+			evidence["clusterId"] = clusterID.String()
+		}
+		add(modelFinding{Severity: "critical", Category: "network", Title: "Custom TLS edge target is missing", Description: "An enabled custom-certificate route has no edge reconciliation target, so certificate readiness cannot be established.", ResourceType: "edge_tls_target", ResourceID: targetKey, Evidence: evidence, Remediation: "Re-save the route or rotate its certificate to recreate the target, then verify reconciliation is ready before deploying the service."})
 	}
 	for _, destination := range snapshot.BackupDestinations {
 		if !destination.UseTLS {

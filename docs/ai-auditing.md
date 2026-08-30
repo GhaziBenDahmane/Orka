@@ -100,9 +100,14 @@ keys make it a privileged service.
   can enable certificate-backed TLS or explicitly retire the exposure.
   Custom-certificate references, certificate validity windows/revisions and
   attachment counts, plus relevant edge-reconciliation generations and states
-  are included. Certificate names, SAN inventories, PEM chains, private keys,
-  ciphertext, and reconciliation error strings remain outside the model
-  boundary.
+  are included. The deterministic baseline reports expired, not-yet-valid, and
+  soon-expiring certificates; active-route expiry is raised above unused
+  inventory. It also reports failed reconciliation immediately, pending state
+  older than five minutes, a ready target with mismatched desired/applied
+  generations, and an enabled custom-certificate route whose local or remote
+  edge target is missing. Certificate names, SAN inventories, PEM chains,
+  private keys, ciphertext, and reconciliation error strings remain outside
+  the model boundary.
 - Delivery and storage integration posture exposes only opaque webhook and
   service IDs, webhook provider/enabled state, opaque backup-destination IDs,
   TLS state, and database/volume/audit-archive reference counts. Webhook names,
@@ -186,14 +191,16 @@ keys make it a privileged service.
   incomplete Dokploy migrations. It also reports a missing immutable audit
   archive, a failed latest archive delivery, or tenant events left unarchived
   for more than five minutes, backup destinations that permit plaintext
-  object-store traffic, and public routes that permit plaintext HTTP, along
-  with malformed workload definitions, successful deployments without
-  immutable runtime snapshots, mutable deployed images, and services without
-  an image or build source. Invalid source transports, SSH sources
-  without pinned-host credentials, missing uploaded artifacts, undeployed
-  source changes, and successful Git builds lacking commit provenance are also
-  deterministic. Elevated 30-day failure rates across deployments, database
-  and volume recovery operations, migrations, audit archives, remote agent
+  object-store traffic, public routes that permit plaintext HTTP, custom TLS
+  validity risks, and missing, failed, stalled, or generation-inconsistent
+  edge certificate reconciliation, along with malformed workload definitions,
+  successful deployments without immutable runtime snapshots, mutable deployed
+  images, and services without an image or build source. Invalid source
+  transports, SSH sources without pinned-host credentials, missing uploaded
+  artifacts, undeployed source changes, and successful Git builds lacking
+  commit provenance are also deterministic. Elevated 30-day failure rates
+  across deployments, database and volume recovery operations, migrations,
+  audit archives, remote agent
   commands, commit-status callbacks, notification delivery, and prior AI
   audits are surfaced even when a resource's latest individual state has
   recovered. Failed, missing, and stalled deletion finalizers are also surfaced
