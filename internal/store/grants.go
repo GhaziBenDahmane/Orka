@@ -115,7 +115,7 @@ func (s *Store) EffectiveResourceRole(ctx context.Context, principal Principal, 
 			return "", err
 		}
 		projectID, environmentID = &project, &environment
-	case "service", "database", "deployment", "backup", "restore", "migration", "webhook", "route":
+	case "service", "database", "deployment", "backup", "restore", "migration", "webhook", "route", "volume_backup", "volume_restore":
 		project, environment, err := s.resourceParents(ctx, principal.OrganizationID, scopeType, scopeID)
 		if err != nil {
 			return "", err
@@ -149,15 +149,17 @@ func (s *Store) EffectiveResourceRole(ctx context.Context, principal Principal, 
 
 func (s *Store) resourceParents(ctx context.Context, organizationID uuid.UUID, resourceType string, id uuid.UUID) (uuid.UUID, uuid.UUID, error) {
 	queries := map[string]string{
-		"environment": `SELECT p.id,e.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`,
-		"service":     `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`,
-		"database":    `SELECT p.id,e.id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`,
-		"deployment":  `SELECT p.id,e.id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`,
-		"backup":      `SELECT p.id,e.id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`,
-		"restore":     `SELECT p.id,e.id FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`,
-		"migration":   `SELECT p.id,e.id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.id=$1 AND p.organization_id=$2`,
-		"webhook":     `SELECT p.id,e.id FROM webhook_integrations w JOIN compose_services s ON s.id=w.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE w.id=$1 AND p.organization_id=$2`,
-		"route":       `SELECT p.id,e.id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`,
+		"environment":    `SELECT p.id,e.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`,
+		"service":        `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`,
+		"database":       `SELECT p.id,e.id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`,
+		"deployment":     `SELECT p.id,e.id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`,
+		"backup":         `SELECT p.id,e.id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`,
+		"restore":        `SELECT p.id,e.id FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`,
+		"migration":      `SELECT p.id,e.id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.id=$1 AND p.organization_id=$2`,
+		"webhook":        `SELECT p.id,e.id FROM webhook_integrations w JOIN compose_services s ON s.id=w.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE w.id=$1 AND p.organization_id=$2`,
+		"route":          `SELECT p.id,e.id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`,
+		"volume_backup":  `SELECT p.id,e.id FROM volume_backups b JOIN compose_services s ON s.id=b.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`,
+		"volume_restore": `SELECT p.id,e.id FROM volume_restores r JOIN volume_backups b ON b.id=r.volume_backup_id JOIN compose_services s ON s.id=b.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`,
 	}
 	query := queries[resourceType]
 	if query == "" {

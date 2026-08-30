@@ -185,6 +185,9 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 	case "backup.database":
 		resourceID, resourceType, eventType = payload["backupId"], "database_backup", "backup.failed"
 		query = `SELECT p.organization_id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1`
+	case "backup.volume":
+		resourceID, resourceType, eventType = payload["backupId"], "volume_backup", "backup.failed"
+		query = `SELECT p.organization_id FROM volume_backups b JOIN compose_services s ON s.id=b.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1`
 	case "restore.database":
 		resourceID, resourceType = payload["restoreId"], "database_restore"
 		id, err := uuid.Parse(resourceID)
@@ -209,6 +212,9 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 	case "migrate.database":
 		resourceID, resourceType, eventType = payload["migrationId"], "database_migration", "database.migration.failed"
 		query = `SELECT p.organization_id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.id=$1`
+	case "restore.volume":
+		resourceID, resourceType, eventType = payload["restoreId"], "volume_restore", "restore.failed"
+		query = `SELECT p.organization_id FROM volume_restores r JOIN volume_backups b ON b.id=r.volume_backup_id JOIN compose_services s ON s.id=b.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1`
 	case "audit.archive":
 		resourceID, resourceType, eventType = payload["batchId"], "audit_archive_batch", "audit.archive.failed"
 		query = `SELECT a.organization_id FROM audit_archive_batches b JOIN audit_archive_destinations a ON a.id=b.destination_id WHERE b.id=$1`

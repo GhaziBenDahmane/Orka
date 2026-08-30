@@ -122,7 +122,8 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 	var policyID, destinationID uuid.UUID
 	var nodeID string
 	var quiesce bool
-	err = tx.QueryRow(ctx, `SELECT policy.id,policy.destination_id,service.storage_node_id,policy.quiesce FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID, &destinationID, &nodeID, &quiesce)
+	var retentionCount int
+	err = tx.QueryRow(ctx, `SELECT policy.id,policy.destination_id,service.storage_node_id,policy.quiesce,policy.retention_count FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID, &destinationID, &nodeID, &quiesce, &retentionCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackup{}, ErrNotFound
 	}
@@ -136,7 +137,7 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 	if err = tx.QueryRow(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,actor_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8) RETURNING created_at`, item.ID, policyID, serviceID, volumeName, nodeID, destinationID, quiesce, nullableUUID(actorID)).Scan(&item.CreatedAt); err != nil {
 		return VolumeBackup{}, err
 	}
-	payload, _ := json.Marshal(map[string]string{"backupId": item.ID.String()})
+	payload, _ := json.Marshal(map[string]any{"backupId": item.ID.String(), "retentionCount": retentionCount})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'backup.volume',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return VolumeBackup{}, err
 	}
@@ -208,4 +209,50 @@ func (s *Store) GetVolumeRestore(ctx context.Context, organizationID, id uuid.UU
 		return VolumeRestore{}, ErrNotFound
 	}
 	return item, err
+}
+
+func (s *Store) CancelVolumeBackup(ctx context.Context, organizationID, id uuid.UUID) error {
+	return s.cancelVolumeJob(ctx, organizationID, id, "backup.volume", "volume_backups", "backupId", `JOIN compose_services service ON service.id=resource.compose_service_id`)
+}
+
+func (s *Store) CancelVolumeRestore(ctx context.Context, organizationID, id uuid.UUID) error {
+	return s.cancelVolumeJob(ctx, organizationID, id, "restore.volume", "volume_restores", "restoreId", `JOIN volume_backups backup ON backup.id=resource.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id`)
+}
+
+func (s *Store) cancelVolumeJob(ctx context.Context, organizationID, id uuid.UUID, kind, table, payloadKey, resourceJoin string) error {
+	if table != "volume_backups" && table != "volume_restores" {
+		return errors.New("invalid volume job resource")
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	query := `SELECT resource.status,job.status,job.id FROM ` + table + ` resource ` + resourceJoin + ` JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id JOIN jobs job ON job.kind=$3 AND job.payload->>$4=resource.id::text WHERE resource.id=$1 AND project.organization_id=$2 FOR UPDATE OF resource,job`
+	var resourceStatus, jobStatus string
+	var jobID uuid.UUID
+	if err = tx.QueryRow(ctx, query, id, organizationID, kind, payloadKey).Scan(&resourceStatus, &jobStatus, &jobID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	switch jobStatus {
+	case "pending":
+		if _, err = tx.Exec(ctx, `UPDATE `+table+` SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE jobs SET status='cancelled',cancel_requested_at=now(),finished_at=now() WHERE id=$1`, jobID); err != nil {
+			return err
+		}
+	case "running":
+		if resourceStatus != "running" {
+			return ErrNotCancellable
+		}
+		if _, err = tx.Exec(ctx, `UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()) WHERE id=$1`, jobID); err != nil {
+			return err
+		}
+	default:
+		return ErrNotCancellable
+	}
+	return tx.Commit(ctx)
 }

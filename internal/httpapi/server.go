@@ -236,6 +236,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deployService)))
 	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listDeployments)))
 	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.serviceLogs)))
+	mux.Handle("GET /v1/services/{serviceID}/volumes", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listServiceVolumes)))
+	mux.Handle("GET /v1/services/{serviceID}/volume-backup-policies", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listVolumeBackupPolicies)))
+	mux.Handle("PUT /v1/services/{serviceID}/volume-backup-policies/{volumeName}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.putVolumeBackupPolicy)))
+	mux.Handle("DELETE /v1/services/{serviceID}/volume-backup-policies/{volumeName}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteVolumeBackupPolicy)))
+	mux.Handle("GET /v1/services/{serviceID}/volume-backups", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listVolumeBackups)))
+	mux.Handle("POST /v1/services/{serviceID}/volume-backups/{volumeName}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createVolumeBackup)))
 	mux.Handle("POST /v1/services/{serviceID}/rollback", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.rollbackService)))
 	mux.Handle("POST /v1/services/{serviceID}/deploy-tokens", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createDeployToken)))
 	mux.Handle("GET /v1/services/{serviceID}/webhooks", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.listWebhookIntegrations)))
@@ -243,6 +249,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/webhooks/{integrationID}", s.requireResourceRole("developer", "webhook", "integrationID", http.HandlerFunc(s.deleteWebhookIntegration)))
 	mux.Handle("GET /v1/deployments/{deploymentID}", s.requireResourceRole("viewer", "deployment", "deploymentID", http.HandlerFunc(s.getDeployment)))
 	mux.Handle("POST /v1/deployments/{deploymentID}/cancel", s.requireResourceRole("developer", "deployment", "deploymentID", http.HandlerFunc(s.cancelDeployment)))
+	mux.Handle("GET /v1/volume-backups/{backupID}", s.requireResourceRole("viewer", "volume_backup", "backupID", http.HandlerFunc(s.getVolumeBackup)))
+	mux.Handle("POST /v1/volume-backups/{backupID}/cancel", s.requireResourceRole("developer", "volume_backup", "backupID", http.HandlerFunc(s.cancelVolumeBackup)))
+	mux.Handle("POST /v1/volume-backups/{backupID}/restore", s.requireResourceRole("admin", "volume_backup", "backupID", http.HandlerFunc(s.restoreVolumeBackup)))
+	mux.Handle("GET /v1/volume-restores/{restoreID}", s.requireResourceRole("viewer", "volume_restore", "restoreID", http.HandlerFunc(s.getVolumeRestore)))
+	mux.Handle("POST /v1/volume-restores/{restoreID}/cancel", s.requireResourceRole("admin", "volume_restore", "restoreID", http.HandlerFunc(s.cancelVolumeRestore)))
 	mux.Handle("GET /", webui.Handler())
 	instrumented := otelhttp.NewHandler(s.middleware(mux), "dockyard.http")
 	return s.requestIDMiddleware(s.trustedProxyMiddleware(instrumented))
@@ -728,7 +739,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, 
 
 func (s *Server) getEffectiveRole(w http.ResponseWriter, r *http.Request) {
 	resourceType := strings.TrimSpace(r.URL.Query().Get("resourceType"))
-	validResourceTypes := map[string]bool{"project": true, "environment": true, "service": true, "database": true, "deployment": true, "backup": true, "restore": true, "migration": true, "webhook": true, "route": true}
+	validResourceTypes := map[string]bool{"project": true, "environment": true, "service": true, "database": true, "deployment": true, "backup": true, "restore": true, "migration": true, "webhook": true, "route": true, "volume_backup": true, "volume_restore": true}
 	if !validResourceTypes[resourceType] {
 		writeError(w, http.StatusBadRequest, "invalid_resource_type", "invalid resource type")
 		return

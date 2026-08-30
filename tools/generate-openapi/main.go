@@ -68,7 +68,7 @@ paths:
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
-					if parameter[1] != "token" {
+					if strings.HasSuffix(parameter[1], "ID") || strings.HasSuffix(parameter[1], "Id") {
 						format = "\n            format: uuid"
 					}
 					fmt.Fprintf(&output, "        - name: %s\n          in: path\n          required: true\n          schema:\n            type: string%s\n", parameter[1], format)
