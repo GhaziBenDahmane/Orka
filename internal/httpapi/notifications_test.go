@@ -30,3 +30,65 @@ func TestNotificationEndpointMaterial(t *testing.T) {
 		t.Fatalf("insecure webhook error = %v", err)
 	}
 }
+
+func TestNotificationEndpointMaterialRejectsUnsafeWebhookURLs(t *testing.T) {
+	for _, endpoint := range []string{
+		" https://hooks.example.test/notify",
+		"https://user@hooks.example.test/notify",
+		"https://bad_label.example.test/notify",
+		"https://-bad.example.test/notify",
+		"https://hooks.example.test:/notify",
+		"https://hooks.example.test:0/notify",
+		"https://hooks.example.test:65536/notify",
+		"https://[not-an-ip]/notify",
+		"https://hooks.example.test/notify#secret",
+		strings.Repeat("https://hooks.example.test/", 700),
+	} {
+		if _, _, _, err := notificationEndpointMaterial("webhook", endpoint, "", "", "", "", 0, "", "", "", "", nil); err == nil {
+			t.Errorf("unsafe webhook URL %q was accepted", endpoint)
+		}
+	}
+	for _, endpoint := range []string{
+		"https://hooks.example.test/notify?tenant=one",
+		"https://hooks.example.test:9443/notify",
+		"https://127.0.0.1/notify",
+		"https://[2001:db8::1]:9443/notify",
+	} {
+		if _, _, _, err := notificationEndpointMaterial("webhook", endpoint, "", "", "", "", 0, "", "", "", "", nil); err != nil {
+			t.Errorf("valid webhook URL %q was rejected: %v", endpoint, err)
+		}
+	}
+}
+
+func TestNotificationEndpointMaterialBoundsSMTPFields(t *testing.T) {
+	tests := []struct {
+		host, username, password, from string
+		to                             []string
+	}{
+		{host: "bad_label.example.test", from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: "smtp.example.test.", from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: strings.Repeat("a", 64) + ".example.test", from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: "smtp.example.test", username: strings.Repeat("u", maxSMTPUsernameBytes+1), password: "secret", from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: "smtp.example.test", username: "mailer", password: strings.Repeat("p", maxSMTPPasswordBytes+1), from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: "smtp.example.test", username: "mailer\nadmin", password: "secret", from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: "smtp.example.test", username: "mailer", password: "secret\nvalue", from: "dockyard@example.test", to: []string{"ops@example.test"}},
+		{host: "smtp.example.test", from: strings.Repeat("a", maxSMTPAddressBytes+1), to: []string{"ops@example.test"}},
+		{host: "smtp.example.test", from: "dockyard@example.test", to: []string{strings.Repeat("a", maxSMTPRecipientAddressBytes+1)}},
+	}
+	for i, test := range tests {
+		if _, _, _, err := notificationEndpointMaterial("smtp", "", "", "", "", test.host, 587, "starttls", test.username, test.password, test.from, test.to); err == nil {
+			t.Errorf("unsafe SMTP configuration %d was accepted", i)
+		}
+	}
+}
+
+func TestNotificationEndpointNameIsBoundedAndSingleLine(t *testing.T) {
+	for _, name := range []string{"", "line\nbreak", "nul\x00byte", strings.Repeat("n", maxNotificationNameBytes+1)} {
+		if validNotificationEndpointName(name) {
+			t.Errorf("invalid notification endpoint name %q was accepted", name)
+		}
+	}
+	if !validNotificationEndpointName(strings.Repeat("n", maxNotificationNameBytes)) {
+		t.Fatal("maximum-length notification endpoint name was rejected")
+	}
+}
