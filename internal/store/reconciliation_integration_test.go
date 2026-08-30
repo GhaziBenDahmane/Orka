@@ -155,6 +155,15 @@ func TestReconciliationHonorsMaintenanceAndNeedsEffectiveSourceSnapshot(t *testi
 	if err := pool.QueryRow(ctx, `SELECT detail FROM service_reconciliations WHERE compose_service_id=$1`, serviceID).Scan(&detail); err != nil || detail == "" {
 		t.Fatalf("detail=%q err=%v", detail, err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE deployments SET effective_compose='services: {api: {image: registry.example/app@sha256:known}}' WHERE compose_service_id=$1`, serviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueDeployment(ctx, organizationID, serviceID, uuid.Nil, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	if repair, err := db.RecordReconciliation(ctx, candidate, "missing", "deployment active"); err != nil || repair != nil {
+		t.Fatalf("active deployment repair=%#v err=%v", repair, err)
+	}
 	var deployments int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM deployments WHERE compose_service_id=$1 AND trigger='reconcile'`, serviceID).Scan(&deployments); err != nil || deployments != 0 {
 		t.Fatalf("unsafe repairs=%d err=%v", deployments, err)

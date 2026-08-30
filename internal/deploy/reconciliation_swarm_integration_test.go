@@ -25,7 +25,7 @@ func TestReconciliationRepairsMissingLiveSwarmStack(t *testing.T) {
 		defer cancel()
 		_, _ = swarm.Remove(cleanupCtx, stackName)
 	})
-	effective, err := (Compiler{PublicNetwork: "dockyard-public"}).Compile("services:\n  sleeper:\n    image: node:24-alpine\n    command: [node, -e, 'setInterval(() => {}, 60000)']\n", nil)
+	effective, err := (Compiler{PublicNetwork: "dockyard-public"}).Compile("services:\n  sleeper:\n    image: node@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf\n    command: [node, -e, 'setInterval(() => {}, 60000)']\n", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

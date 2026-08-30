@@ -62,12 +62,17 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	upgradeID := uuid.New()
 	auditorA := uuid.New()
 	auditorB := uuid.New()
+	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
 	statements := []struct {
 		query string
 		args  []any
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics A',$2)`, []any{organizationA, "metrics-a-" + organizationA.String()}},
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics B',$2)`, []any{organizationB, "metrics-b-" + organizationB.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Metrics project','metrics-project')`, []any{projectID, organizationA}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Metrics environment','metrics-environment')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Metrics service','metrics-service',$3,'services: {}')`, []any{serviceID, environmentID, "metrics-" + serviceID.String()}},
+		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'replica shortfall',now()-interval '30 seconds')`, []any{serviceID}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,created_at) VALUES($1,$2,'metrics-a-auditor','auditor',now()-interval '3 days')`, []any{auditorA, organizationA}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,created_at) VALUES($1,$2,'metrics-b-auditor','auditor',now()-interval '3 days')`, []any{auditorB, organizationB}},
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorA, []byte("metrics-token-a-" + auditorA.String())}},
@@ -107,6 +112,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_agent_upgrade_active_age_seconds{organization="` + organizationA.String() + `",cluster="shared",status="verifying"}`,
 		`dockyard_cluster_certificate_expiry_seconds{organization="` + organizationA.String() + `",cluster="shared"}`,
 		`dockyard_cluster_certificate_rotation_pending_age_seconds{organization="` + organizationA.String() + `",cluster="shared"}`,
+		`dockyard_service_reconciliation{state="degraded"} 1`,
+		`dockyard_service_reconciliation_age_seconds{service="` + serviceID.String() + `"}`,
 		`dockyard_ai_audit_runs{status="running"}`,
 		`dockyard_ai_audit_runs{status="completed"}`,
 		`dockyard_ai_audit_runs{status="failed"}`,

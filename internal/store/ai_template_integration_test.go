@@ -184,6 +184,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audit project','audit-project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
+		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'replica shortfall',now()-interval '30 seconds')`, []any{serviceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','deployment-secret','succeeded','manual',$3::timestamptz - interval '1 minute',$3::timestamptz - interval '30 seconds')`, []any{uuid.New(), serviceID, latestDeploymentAt}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','queued-secret','queued','manual',$3)`, []any{uuid.New(), serviceID, latestDeploymentAt}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Primary','primary','postgres','17','encrypted','ready')`, []any{databaseID, environmentID}},
@@ -252,6 +253,9 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	if len(snapshot.ServiceDeployments) != 1 || snapshot.ServiceDeployments[0].ServiceID != serviceID || snapshot.ServiceDeployments[0].DesiredRevision != 3 || snapshot.ServiceDeployments[0].LatestDeploymentStatus != "queued" || snapshot.ServiceDeployments[0].LatestDeploymentRevision != 3 || snapshot.ServiceDeployments[0].LatestDeploymentAt == nil || !snapshot.ServiceDeployments[0].LatestDeploymentAt.Equal(latestDeploymentAt) || !snapshot.ServiceDeployments[0].CurrentRevisionDeployed {
 		t.Fatalf("service deployment posture=%#v", snapshot.ServiceDeployments)
+	}
+	if len(snapshot.Reconciliation) != 1 || snapshot.Reconciliation[0].ComposeServiceID != serviceID || snapshot.Reconciliation[0].State != "degraded" || snapshot.Reconciliation[0].ConsecutiveFailures != 2 || snapshot.Reconciliation[0].Detail != "replica shortfall" {
+		t.Fatalf("reconciliation posture=%#v", snapshot.Reconciliation)
 	}
 	if snapshot.QueuePosture.Coverage != "resource-keyed-service-and-database-jobs" || snapshot.QueuePosture.PendingServiceJobs != 1 || snapshot.QueuePosture.RunningServiceJobs != 1 || snapshot.QueuePosture.PendingDatabaseJobs != 1 || snapshot.QueuePosture.RunningDatabaseJobs != 1 || snapshot.QueuePosture.OldestPendingAt == nil || !snapshot.QueuePosture.OldestPendingAt.Equal(oldestPendingAt) {
 		t.Fatalf("queue posture=%#v", snapshot.QueuePosture)
