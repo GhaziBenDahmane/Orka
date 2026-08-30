@@ -53,6 +53,10 @@ probe_product() {
   container_id="$(service_container "$service_name")"
   test -n "$container_id"
   case "$template_key" in
+    9router)
+      # Replica convergence is the product-level assertion for 9Router. Provider
+      # setup is intentionally out of scope for this deployment smoke test.
+      ;;
     postgres)
       docker exec --env PGPASSWORD=template-smoke-postgres "$container_id" \
         psql --username smoke --dbname smoke --set ON_ERROR_STOP=1 \
@@ -110,10 +114,13 @@ project_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"name":
 environment_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"name":"Test","slug":"test"}' "$base_url/v1/projects/$project_id/environments" | jq -er '.id')"
 catalog="$(curl --fail --silent --show-error "${headers[@]}" "$base_url/v1/templates")"
 
-for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
+for template_key in 9router postgres redis barktrace-sqlite barktrace-postgres; do
   template_id="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .id' <<<"$catalog")"
   template_version="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .version' <<<"$catalog")"
   case "$template_key" in
+    9router)
+      variables='{"domain":"9router.example.test"}'
+      ;;
     postgres)
       variables='{"postgres_user":"smoke","postgres_password":"template-smoke-postgres","postgres_database":"smoke"}'
       ;;
@@ -134,7 +141,12 @@ for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
   deployment_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{}' "$base_url/v1/services/$service_id/deployments" | jq -er '.id')"
   wait_for_deployment "$deployment_id"
   service_name="${stack}_${template_key}"
-  if [[ "$template_key" == barktrace-sqlite ]]; then service_name="${stack}_barktrace"; fi
+  if [[ "$template_key" == 9router ]]; then
+    service_name="${stack}_router"
+    wait_for_service "${stack}_headroom"
+  elif [[ "$template_key" == barktrace-sqlite ]]; then
+    service_name="${stack}_barktrace"
+  fi
   wait_for_service "$service_name"
   probe_product "$template_key" "$service_name" "$stack"
 
@@ -146,10 +158,22 @@ for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
   if [[ "$template_key" == barktrace-* ]]; then
     [[ "$resolved_image" == "ghcr.io/barktrace/bark:$barktrace_version@sha256:"* ]]
   fi
+  dependency_images='[]'
+  data_verified=true
+  data_verification_applicable=true
+  if [[ "$template_key" == 9router ]]; then
+    headroom_image="$(docker service inspect "${stack}_headroom" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+    [[ "$headroom_image" == *@sha256:* ]]
+    dependency_images="$(jq -cn --arg image "$headroom_image" '[{service:"headroom",image:$image}]')"
+    data_verified=false
+    data_verification_applicable=false
+  fi
   products="$(jq -c \
     --arg template "$template_key" --arg templateVersion "$template_version" \
     --arg deploymentId "$deployment_id" --arg service "$service_name" --arg image "$resolved_image" \
-    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dataVerified:true,restartVerified:true}]' \
+    --argjson dependencyImages "$dependency_images" --argjson dataVerified "$data_verified" \
+    --argjson dataVerificationApplicable "$data_verification_applicable" \
+    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dependencyImages:$dependencyImages,deploymentVerified:true,dataVerified:$dataVerified,dataVerificationApplicable:$dataVerificationApplicable,restartVerified:true}]' \
     <<<"$products")"
 done
 
@@ -159,11 +183,13 @@ jq -n \
   '{status:$status,sourceCommit:$sourceCommit,createdAt:$createdAt,barktraceVersion:$barktraceVersion,productCount:($products|length),products:$products}' \
   >"$evidence_file"
 jq -e '
-  .status == "passed" and .productCount == 4 and
-  ([.products[].template] | sort == ["barktrace-postgres","barktrace-sqlite","postgres","redis"]) and
-  all(.products[]; .dataVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and
+  .status == "passed" and .productCount == 5 and
+  ([.products[].template] | sort == ["9router","barktrace-postgres","barktrace-sqlite","postgres","redis"]) and
+  all(.products[]; .deploymentVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and
+  all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and
+  all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
   all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
 ' --arg version "$barktrace_version" "$evidence_file" >/dev/null
 printf 'TEMPLATE_EVIDENCE '
 cat "$evidence_file"
-printf 'Built-in PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL templates deployed and retained state across Swarm task replacement.\n'
+printf 'Built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL templates deployed and survived Swarm task replacement; stateful products retained application data.\n'

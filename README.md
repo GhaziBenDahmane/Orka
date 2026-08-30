@@ -79,11 +79,13 @@ DOCKYARD_GOPROXY=https://proxy.example.com \
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Run `make web` after changing files under `web/`.
 
-Run `make test-templates` to start an isolated controller, instantiate the
-built-in PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL products
-through the API, deploy them to Docker Swarm, and verify readiness plus state
-retention across task replacement. 9Router is catalog-validated but is
-intentionally excluded from this product smoke test.
+Run `make test-templates` to start an isolated controller and instantiate the
+built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL
+products through the API. The test deploys them to Docker Swarm, verifies
+replica convergence and immutable image resolution, then forces task
+replacement. Stateful products additionally prove application data survives;
+9Router only has its deployment lifecycle tested and requires no provider
+credentials.
 
 Import the complete upstream Dokploy template checkout with:
 
