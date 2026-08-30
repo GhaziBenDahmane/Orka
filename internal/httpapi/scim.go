@@ -97,8 +97,8 @@ func (s *Server) revokeSCIMToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) scimPrincipal(r *http.Request) (uuid.UUID, string, error) {
-	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if token == "" {
+	token, ok := bearerToken(r)
+	if !ok {
 		return uuid.Nil, "", store.ErrNotFound
 	}
 	return s.Store.AuthenticateSCIM(r.Context(), cryptox.Digest(token))

@@ -142,6 +142,31 @@ func TestMetricsAuthenticationFailsClosedWithoutConfiguredHash(t *testing.T) {
 	}
 }
 
+func TestBearerTokenParsingRejectsAmbiguousCredentials(t *testing.T) {
+	for name, values := range map[string][]string{
+		"missing":           nil,
+		"wrong_scheme":      {"Basic credential"},
+		"scheme_only":       {"Bearer"},
+		"extra_fields":      {"Bearer token trailing"},
+		"duplicate_headers": {"Bearer first", "Bearer second"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			for _, value := range values {
+				request.Header.Add("Authorization", value)
+			}
+			if token, ok := bearerToken(request); ok || token != "" {
+				t.Fatalf("token=%q ok=%v", token, ok)
+			}
+		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "bEaReR valid-token")
+	if token, ok := bearerToken(request); !ok || token != "valid-token" {
+		t.Fatalf("token=%q ok=%v", token, ok)
+	}
+}
+
 func TestInternalErrorsDoNotLeakDetails(t *testing.T) {
 	var logs bytes.Buffer
 	server := &Server{Logger: slog.New(slog.NewJSONHandler(&logs, nil))}

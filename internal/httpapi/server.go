@@ -414,8 +414,8 @@ func (s *Server) logger() *slog.Logger {
 
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-		if token == "" {
+		token, ok := bearerToken(r)
+		if !ok {
 			writeError(w, 401, "unauthorized", "bearer token required")
 			return
 		}
