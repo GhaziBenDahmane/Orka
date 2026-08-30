@@ -97,6 +97,23 @@ output "workforce_scim" {
   }
 }
 
+resource "dockyard_service_account" "deployment_automation" {
+  name              = "Deployment automation"
+  role              = "developer"
+  expires_in_days   = 90
+  renew_before_days = 7
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+output "deployment_automation_token" {
+  description = "Store this one-time bearer token in the deployment system's secret manager."
+  sensitive   = true
+  value       = dockyard_service_account.deployment_automation.token
+}
+
 resource "dockyard_auth_settings" "organization" {
   require_sso = true
   depends_on  = [dockyard_oidc_provider.workforce, dockyard_saml_provider.partners]

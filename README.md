@@ -188,6 +188,11 @@ Failure notification endpoints can be listed, created, and disabled with
 the same lifecycle in Terraform/OpenTofu while retaining write-only provider
 credentials and generated signing secrets only in sensitive state.
 
+Expiring service-account credentials can be managed with
+`dockyard_service_account`. Terraform/OpenTofu retains the one-time bearer
+token only in sensitive state and plans a replacement before expiry, while
+destroy disables the old automation identity.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

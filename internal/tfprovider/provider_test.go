@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 18 {
+	if len(instance.Resources(context.Background())) != 19 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -49,6 +49,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_scim_token") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_service_account") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_access_grant") {
@@ -181,6 +184,46 @@ func TestSCIMTokenSecretRetentionAndExpiry(t *testing.T) {
 	}
 	if _, err := validateSCIMTokenWindow(90, 7); err != nil {
 		t.Fatalf("valid SCIM token window rejected: %v", err)
+	}
+}
+
+func TestServiceAccountSecretRetentionAndExpiry(t *testing.T) {
+	var schemaResponse resource.SchemaResponse
+	newServiceAccountResource().Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+	token, ok := schemaResponse.Schema.Attributes["token"].(resourceschema.StringAttribute)
+	if !ok || !token.Sensitive || !token.Computed {
+		t.Fatalf("token schema = %#v", schemaResponse.Schema.Attributes["token"])
+	}
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	lastUsedAt := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	model := serviceAccountModel{Token: types.StringValue("one-time-secret"), ExpiresInDays: types.Int64Value(30), RenewBeforeDays: types.Int64Value(7)}
+	setServiceAccount(&model, serviceAccountResponse{ID: "account-id", Name: "automation", Role: "admin", Enabled: true, TokenExpiresAt: &expiresAt, LastUsedAt: &lastUsedAt})
+	if model.Token.ValueString() != "one-time-secret" || model.TokenExpiresAt.ValueString() != expiresAt || model.LastUsedAt.ValueString() != lastUsedAt {
+		t.Fatalf("service account state did not retain its token or posture: %#v", model)
+	}
+	if renew, err := serviceAccountRequiresRenewal(model.TokenExpiresAt, now, 7); err != nil || renew {
+		t.Fatalf("fresh service account renewal=%v err=%v", renew, err)
+	}
+	if renew, err := serviceAccountRequiresRenewal(types.StringValue(now.Add(7*24*time.Hour).Format(time.RFC3339Nano)), now, 7); err != nil || !renew {
+		t.Fatalf("service account at renewal boundary renewal=%v err=%v", renew, err)
+	}
+	if renew, err := serviceAccountRequiresRenewal(types.StringNull(), now, 7); err != nil || !renew {
+		t.Fatalf("service account without token expiry renewal=%v err=%v", renew, err)
+	}
+	if _, err := serviceAccountRequiresRenewal(types.StringValue("invalid"), now, 7); err == nil {
+		t.Fatal("invalid service account expiry was accepted")
+	}
+	for _, values := range [][2]int64{{0, 0}, {366, 0}, {90, -1}, {90, 90}} {
+		if _, err := validateServiceAccountWindow(values[0], values[1]); err == nil {
+			t.Errorf("service account window %v accepted", values)
+		}
+	}
+	if _, err := validateServiceAccountWindow(90, 7); err != nil {
+		t.Fatalf("valid service account window rejected: %v", err)
+	}
+	if !validServiceAccountRole("auditor") || validServiceAccountRole("owner") {
+		t.Fatal("service account role validation mismatch")
 	}
 }
 

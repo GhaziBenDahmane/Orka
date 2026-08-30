@@ -16,6 +16,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_oidc_provider`
 - `dockyard_saml_provider`
 - `dockyard_scim_token`
+- `dockyard_service_account`
 - `dockyard_access_grant`
 - `dockyard_resource_policy`
 - `dockyard_cluster`
@@ -97,6 +98,15 @@ Protect state, pass the token to the identity provider through a sensitive
 output or secret manager, and use `create_before_destroy` to overlap planned
 configuration replacements. SCIM tokens cannot be imported because the API
 never returns their bearer value.
+
+`dockyard_service_account` creates a time-limited organization automation
+identity with a `viewer`, `developer`, `admin`, or least-privilege `auditor`
+role. Its bearer token is returned once and retained only in sensitive state.
+When the token enters `renew_before_days`, the next plan replaces the identity
+so apply creates a fresh credential and disables the previous account. Use
+`create_before_destroy` to avoid a credential gap and deliver the new token to
+the consuming secret store before removing the old value. Service accounts
+cannot be imported because their bearer tokens are never returned by the API.
 
 `dockyard_access_grant` manages an explicit `viewer`, `developer`, or `admin`
 role for one organization member at project or environment scope. Organization
