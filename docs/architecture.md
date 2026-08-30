@@ -183,6 +183,11 @@ queue creation is independently serialized on the service row and constrained
 to one active reconciliation deployment, so a lease handoff cannot enqueue
 duplicate repairs.
 
+The audit-pruner lease also protects credential cleanup. Terminal sessions,
+API tokens, invitations, and cluster enrollment tokens are retained for 30
+days for operational investigation; expired OIDC/SAML login state and SAML
+replay assertions are removed on the next hourly pass.
+
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a
 partial unique index permits only one running operation per database, including
