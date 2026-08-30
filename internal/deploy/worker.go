@@ -536,6 +536,7 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 // context cancellation, which also terminates Docker and Git child processes.
 func (w *Worker) runClaimed(parent context.Context, j job) error {
 	ctx, cancel := context.WithCancel(parent)
+	ctx = withRemoteCommandOwner(ctx, j.ID, j.LeaseID)
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)

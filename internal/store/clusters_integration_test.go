@@ -201,6 +201,66 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	}
 }
 
+func TestClusterCommandsFollowOwningJobLease(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID, clusterID := uuid.New(), uuid.New()
+	jobID, jobLeaseID := uuid.New(), uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Owned commands',$2)`, organizationID, "owned-commands-"+organizationID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, clusterID, organizationID)
+	}
+	if err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,status,locked_at,locked_by,lease_id) VALUES($1,'test.remote-owner','{}','running',now(),'worker-a',$2)`, jobID, jobLeaseID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE id=$1`, jobID)
+	})
+	commandID := uuid.New()
+	if _, err = db.EnqueueOwnedClusterCommand(ctx, clusterID, commandID, "swarm.nodes", "encrypted", jobID, jobLeaseID); err != nil {
+		t.Fatal(err)
+	}
+	var storedJobID, storedLeaseID uuid.UUID
+	if err = db.Pool.QueryRow(ctx, `SELECT owner_job_id,owner_job_lease_id FROM cluster_commands WHERE id=$1`, commandID).Scan(&storedJobID, &storedLeaseID); err != nil || storedJobID != jobID || storedLeaseID != jobLeaseID {
+		t.Fatalf("command owner job=%s lease=%s err=%v", storedJobID, storedLeaseID, err)
+	}
+	claimed, err := db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != commandID || claimed.LeaseID == nil {
+		t.Fatalf("claimed owned command=%#v err=%v", claimed, err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET status='pending',locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.RenewClusterCommand(ctx, clusterID, commandID, *claimed.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("renew after parent lease loss error=%v, want lease lost", err)
+	}
+	if err = db.CompleteClusterCommand(ctx, clusterID, commandID, *claimed.LeaseID, "stale-result", false); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("complete after parent lease loss error=%v, want lease lost", err)
+	}
+	if _, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("orphan command claim error=%v, want not found", err)
+	}
+	var status, lastError string
+	if err = db.Pool.QueryRow(ctx, `SELECT status,last_error FROM cluster_commands WHERE id=$1`, commandID).Scan(&status, &lastError); err != nil || status != "cancelled" || lastError != "originating worker lease lost" {
+		t.Fatalf("orphan command status=%q error=%q queryErr=%v", status, lastError, err)
+	}
+	if _, err = db.EnqueueOwnedClusterCommand(ctx, clusterID, uuid.New(), "swarm.nodes", "encrypted", jobID, jobLeaseID); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("enqueue after parent lease loss error=%v, want lease lost", err)
+	}
+}
+
 func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {

@@ -183,7 +183,9 @@ profile uses external HA PostgreSQL, exposes the mTLS agent API, and enforces
 S3-compatible managed-database backups instead of node-local artifacts.
 Controller singleton loops use expiring database leader leases, while durable
 jobs and agent commands use independent per-attempt UUID fencing so stateless
-replicas can share the same PostgreSQL control plane. Integration tests force
+replicas can share the same PostgreSQL control plane. Worker-originated agent
+commands additionally bind to the exact parent job lease; claim, renewal, and
+completion fail closed after recovery fences that worker attempt. Integration tests force
 lease expiry and prove that a stale worker cannot heartbeat or commit terminal
 job state after takeover, including when both processes use the same worker
 name. User-visible resource start and completion transitions are transactionally

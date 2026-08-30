@@ -174,8 +174,12 @@ transitions for deployments, backups, restores, database migrations,
 notifications, commit statuses, and audit archives lock the owning job and update the resource in one database
 transaction. A paused worker therefore cannot restart or finish a resource
 after another replica recovers the expired attempt—even when the replacement
-uses the same configured worker name. External Swarm, provider, and object-store
-operations remain at-least-once and must be idempotent. Singleton maintenance
+uses the same configured worker name. Outbound agent commands created by a
+worker also persist the parent job ID and lease ID. Command claim, renewal, and
+completion validate that exact live parent attempt under a database lock, so
+an agent cancels stale execution when recovery fences its originating worker.
+External Swarm, provider, and object-store operations remain at-least-once and
+must be idempotent. Singleton maintenance
 loops additionally use expiring, database-backed leader leases; only the
 current holder schedules backup policy runs, reconciles stack state, archives
 or prunes audit history, and another replica takes over after expiry. Repair

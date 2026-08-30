@@ -31,22 +31,29 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	orgID, clusterID := uuid.New(), uuid.New()
+	orgID, clusterID, jobID, jobLeaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Remote',$2)`, orgID, "remote-"+orgID.String()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID) })
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE id=$1`, jobID)
+	})
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, clusterID, orgID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,status,locked_at,locked_by,lease_id) VALUES($1,'test.remote','{}','running',now(),'worker-a',$2)`, jobID, jobLeaseID); err != nil {
+		t.Fatal(err)
+	}
 	remote := RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 5 * time.Second}
+	ownedContext := withRemoteCommandOwner(ctx, jobID, jobLeaseID)
 	type result struct {
 		output DeploymentResult
 		err    error
 	}
 	resultChannel := make(chan result, 1)
 	go func() {
-		output, runErr := remote.Deploy(ctx, "test-stack", "services: {}", map[string]string{"SECRET": "value"}, &Credential{Kind: "registry", Server: "registry.example.test", Username: "robot", Secret: "registry-secret"})
+		output, runErr := remote.Deploy(ownedContext, "test-stack", "services: {}", map[string]string{"SECRET": "value"}, &Credential{Kind: "registry", Server: "registry.example.test", Username: "robot", Secret: "registry-secret"})
 		resultChannel <- result{output, runErr}
 	}()
 	var command store.ClusterCommand
@@ -63,6 +70,10 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 	}
 	if strings.Contains(command.EncryptedPayload, "registry-secret") {
 		t.Fatal("cluster command persisted a plaintext registry credential")
+	}
+	var commandJobID, commandJobLeaseID uuid.UUID
+	if err = db.Pool.QueryRow(ctx, `SELECT owner_job_id,owner_job_lease_id FROM cluster_commands WHERE id=$1`, command.ID).Scan(&commandJobID, &commandJobLeaseID); err != nil || commandJobID != jobID || commandJobLeaseID != jobLeaseID {
+		t.Fatalf("remote command owner job=%s lease=%s err=%v", commandJobID, commandJobLeaseID, err)
 	}
 	plain, err := box.Decrypt(command.EncryptedPayload, "cluster-command:"+command.ID.String())
 	if err != nil {
@@ -95,7 +106,7 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 		err    error
 	}, 1)
 	go func() {
-		transferResult, transferErr := remote.RunDatabaseTransfer(ctx, DatabaseTransferJob{Network: "db_default", ArtifactName: "transfer.dump", Backup: database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore"}}})
+		transferResult, transferErr := remote.RunDatabaseTransfer(ownedContext, DatabaseTransferJob{Network: "db_default", ArtifactName: "transfer.dump", Backup: database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore"}}})
 		transferChannel <- struct {
 			result DatabaseTransferResult
 			err    error

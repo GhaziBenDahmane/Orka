@@ -223,12 +223,45 @@ func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 }
 
 func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string) (ClusterCommand, error) {
-	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: kind, Status: "pending"}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload) SELECT $1,c.id,$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','container.run','database.utility','database.transfer') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload).Scan(&item.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ClusterCommand{}, clusterCommandUnavailableError(ctx, s.Pool, clusterID, kind)
+	return s.enqueueClusterCommand(ctx, clusterID, commandID, kind, encryptedPayload, uuid.Nil, uuid.Nil)
+}
+
+// EnqueueOwnedClusterCommand binds an outbound command to the exact worker-job
+// attempt that requested it. Agent leases become invalid when that parent
+// attempt loses ownership, preventing a recovered job from overlapping a stale
+// remote command.
+func (s *Store) EnqueueOwnedClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string, jobID, jobLeaseID uuid.UUID) (ClusterCommand, error) {
+	if jobID == uuid.Nil || jobLeaseID == uuid.Nil {
+		return ClusterCommand{}, ErrLeaseLost
 	}
-	return item, err
+	return s.enqueueClusterCommand(ctx, clusterID, commandID, kind, encryptedPayload, jobID, jobLeaseID)
+}
+
+func (s *Store) enqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string, jobID, jobLeaseID uuid.UUID) (ClusterCommand, error) {
+	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: kind, Status: "pending"}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	defer tx.Rollback(ctx)
+	if jobID != uuid.Nil {
+		var owned bool
+		err = tx.QueryRow(ctx, `SELECT true FROM jobs WHERE id=$1 AND status='running' AND lease_id=$2 AND locked_at>=now()-interval '1 minute' FOR UPDATE`, jobID, jobLeaseID).Scan(&owned)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClusterCommand{}, ErrLeaseLost
+		}
+		if err != nil {
+			return ClusterCommand{}, err
+		}
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,owner_job_id,owner_job_lease_id) SELECT $1,c.id,$3,$4,$5,$6 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','container.run','database.utility','database.transfer') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload, nullableUUID(jobID), nullableUUID(jobLeaseID)).Scan(&item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ClusterCommand{}, clusterCommandUnavailableError(ctx, tx, clusterID, kind)
+	}
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) EnqueueAgentUpgrade(ctx context.Context, clusterID, commandID uuid.UUID, encryptedPayload, targetImage string) (ClusterCommand, error) {
@@ -374,13 +407,20 @@ func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, le
 	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
 		return ClusterCommand{}, err
 	}
+	if _, err = tx.Exec(ctx, `UPDATE cluster_commands command SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='originating worker lease lost',finished_at=now()
+		WHERE command.cluster_id=$1 AND command.owner_job_id IS NOT NULL AND command.status IN ('pending','leased','verifying')
+		AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.id=command.owner_job_id AND job.status='running' AND job.lease_id=command.owner_job_lease_id AND job.locked_at>=now()-interval '1 minute')`, clusterID); err != nil {
+		return ClusterCommand{}, err
+	}
 	_, err = tx.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'pending' END,lease_id=NULL,lease_expires_at=NULL,run_after=now()+interval '5 seconds',last_error='agent lease expired',finished_at=CASE WHEN attempts>=max_attempts THEN now() ELSE NULL END WHERE cluster_id=$1 AND status='leased' AND lease_expires_at<now()`, clusterID)
 	if err != nil {
 		return ClusterCommand{}, err
 	}
 	var item ClusterCommand
 	leaseID := uuid.New()
-	err = tx.QueryRow(ctx, `SELECT id,cluster_id,kind,encrypted_payload,target_image,status,attempts,created_at FROM cluster_commands WHERE cluster_id=$1 AND status='pending' AND run_after<=now() ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.EncryptedPayload, &item.TargetImage, &item.Status, &item.Attempts, &item.CreatedAt)
+	err = tx.QueryRow(ctx, `SELECT command.id,command.cluster_id,command.kind,command.encrypted_payload,command.target_image,command.status,command.attempts,command.created_at FROM cluster_commands command WHERE command.cluster_id=$1 AND command.status='pending' AND command.run_after<=now()
+		AND (command.owner_job_id IS NULL OR EXISTS(SELECT 1 FROM jobs job WHERE job.id=command.owner_job_id AND job.status='running' AND job.lease_id=command.owner_job_lease_id AND job.locked_at>=now()-interval '1 minute'))
+		ORDER BY command.created_at FOR UPDATE OF command SKIP LOCKED LIMIT 1`, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.EncryptedPayload, &item.TargetImage, &item.Status, &item.Attempts, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return ClusterCommand{}, commitErr
@@ -399,14 +439,22 @@ func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, le
 }
 
 func (s *Store) RenewClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, leaseDuration time.Duration) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET lease_expires_at=now()+($4::bigint * interval '1 millisecond') WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, leaseDuration.Milliseconds())
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockClusterCommandOwner(ctx, tx, clusterID, commandID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE cluster_commands SET lease_expires_at=now()+($4::bigint * interval '1 millisecond') WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, leaseDuration.Milliseconds())
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrLeaseLost
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CompleteClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, encryptedResult string, failed bool) error {
@@ -414,14 +462,42 @@ func (s *Store) CompleteClusterCommand(ctx context.Context, clusterID, commandID
 	if failed {
 		status, message = "failed", "agent reported command failure"
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN 'verifying' ELSE $4 END,encrypted_result=$5,last_error=$6,finished_at=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN NULL ELSE now() END,run_after=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN now()+interval '15 minutes' ELSE run_after END,lease_id=NULL,lease_expires_at=NULL WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, status, encryptedResult, message)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockClusterCommandOwner(ctx, tx, clusterID, commandID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN 'verifying' ELSE $4 END,encrypted_result=$5,last_error=$6,finished_at=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN NULL ELSE now() END,run_after=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN now()+interval '15 minutes' ELSE run_after END,lease_id=NULL,lease_expires_at=NULL WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, status, encryptedResult, message)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrLeaseLost
 	}
-	return nil
+	return tx.Commit(ctx)
+}
+
+func lockClusterCommandOwner(ctx context.Context, tx pgx.Tx, clusterID, commandID uuid.UUID) error {
+	var ownerJobID, ownerJobLeaseID *uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT owner_job_id,owner_job_lease_id FROM cluster_commands WHERE id=$1 AND cluster_id=$2`, commandID, clusterID).Scan(&ownerJobID, &ownerJobLeaseID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrLeaseLost
+	}
+	if err != nil {
+		return err
+	}
+	if ownerJobID == nil {
+		return nil
+	}
+	var owned bool
+	err = tx.QueryRow(ctx, `SELECT true FROM jobs WHERE id=$1 AND status='running' AND lease_id=$2 AND locked_at>=now()-interval '1 minute' FOR UPDATE`, *ownerJobID, *ownerJobLeaseID).Scan(&owned)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrLeaseLost
+	}
+	return err
 }
 
 func (s *Store) CreateClusterEnrollmentToken(ctx context.Context, organizationID, clusterID, creatorID uuid.UUID, tokenHash []byte, expiresAt time.Time) error {

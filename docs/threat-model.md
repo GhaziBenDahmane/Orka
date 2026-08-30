@@ -132,6 +132,10 @@ is retryable only for the exact CSR bound to the consumed token, preventing a
 dropped response from requiring an unsafe reusable credential. Durable jobs and remote
 commands use expiring per-attempt fencing identifiers. Resource transitions
 lock the owning job, preventing a stale worker from overwriting a replacement.
+Worker-originated remote commands are additionally bound to the exact parent
+job lease; the agent can no longer renew or complete them after worker recovery
+invalidates that lease. Unowned interactive and reconciliation commands retain
+their independent command lease.
 Singleton schedulers use database leases, while Swarm remains the desired-state
 scheduler.
 

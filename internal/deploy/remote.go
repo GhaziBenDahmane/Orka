@@ -24,6 +24,22 @@ type RemoteSwarm struct {
 	Timeout   time.Duration
 }
 
+type remoteCommandOwner struct {
+	jobID   uuid.UUID
+	leaseID uuid.UUID
+}
+
+type remoteCommandOwnerContextKey struct{}
+
+func withRemoteCommandOwner(ctx context.Context, jobID, leaseID uuid.UUID) context.Context {
+	return context.WithValue(ctx, remoteCommandOwnerContextKey{}, remoteCommandOwner{jobID: jobID, leaseID: leaseID})
+}
+
+func remoteCommandOwnerFromContext(ctx context.Context) (remoteCommandOwner, bool) {
+	owner, ok := ctx.Value(remoteCommandOwnerContextKey{}).(remoteCommandOwner)
+	return owner, ok && owner.jobID != uuid.Nil && owner.leaseID != uuid.Nil
+}
+
 func (s RemoteSwarm) Deploy(ctx context.Context, stackName, compose string, environment map[string]string, registryCredential *Credential) (DeploymentResult, error) {
 	output, err := s.run(ctx, "swarm.deploy", map[string]any{"stackName": stackName, "compose": compose, "environment": environment, "registryCredential": registryCredential})
 	if err != nil {
@@ -240,7 +256,12 @@ func (s RemoteSwarm) run(ctx context.Context, kind string, payload any) (string,
 	if err != nil {
 		return "", err
 	}
-	if _, err = s.Store.EnqueueClusterCommand(ctx, s.ClusterID, commandID, kind, encrypted); err != nil {
+	if owner, owned := remoteCommandOwnerFromContext(ctx); owned {
+		_, err = s.Store.EnqueueOwnedClusterCommand(ctx, s.ClusterID, commandID, kind, encrypted, owner.jobID, owner.leaseID)
+	} else {
+		_, err = s.Store.EnqueueClusterCommand(ctx, s.ClusterID, commandID, kind, encrypted)
+	}
+	if err != nil {
 		return "", err
 	}
 	timeout := s.Timeout
