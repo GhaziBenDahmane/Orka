@@ -73,6 +73,34 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil || loaded.NextSyncAt == nil || !loaded.NextSyncAt.After(time.Now()) || loaded.LastSyncStatus != "succeeded" {
 		t.Fatalf("completed repository schedule=%#v err=%v", loaded, err)
 	}
+	manualRequestedAt, err := db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID)
+	if err != nil || manualRequestedAt.IsZero() {
+		t.Fatalf("queue manual sync requestedAt=%v err=%v", manualRequestedAt, err)
+	}
+	coalescedAt, err := db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID)
+	if err != nil || !coalescedAt.Equal(manualRequestedAt) {
+		t.Fatalf("manual sync was not coalesced: first=%v second=%v err=%v", manualRequestedAt, coalescedAt, err)
+	}
+	if _, err = db.QueueTemplateRepositorySync(ctx, otherOrganizationID, repository.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-organization manual sync accepted: %v", err)
+	}
+	claimed, err = db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID || claimed.SyncRequestedAt != nil {
+		t.Fatalf("manual-requested repository=%#v err=%v", claimed, err)
+	}
+	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID {
+		t.Fatalf("follow-up manual repository=%#v err=%v", claimed, err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.SetTemplateRepositoryWebhookSecret(ctx, organizationID, repository.ID, "encrypted-webhook-secret"); err != nil {
 		t.Fatal(err)
 	}

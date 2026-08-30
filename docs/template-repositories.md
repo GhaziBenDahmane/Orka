@@ -34,12 +34,16 @@ leaves the previously imported versions intact. Valid snapshots are reconciled
 in one database transaction, including removal of catalog versions no longer
 published by the repository; existing services retain their copied provenance.
 Each repository can be synchronized manually or on a controller-managed
-schedule between five minutes and seven days. Scheduled work is claimed
-atomically, protected by the controller singleton lease, and retried at the
-next interval after either success or failure. Existing repositories remain
-manual-only after upgrading; new repositories default to hourly refresh in the
-console. Private repositories reuse an organization-scoped HTTPS Git source
-credential whose server is `github.com`; its token is decrypted only for the
+schedule between five minutes and seven days. Manual requests are durably
+coalesced and return `202 Accepted`; the same HA-safe scheduler performs all
+downloads and imports, so an API disconnect or controller replacement cannot
+lose the request. A request received during an active sync schedules one
+follow-up refresh. Scheduled work is claimed atomically, protected by the
+controller singleton lease, and retried at the next interval after either
+success or failure. Existing repositories remain manual-only after upgrading;
+new repositories default to hourly refresh in the console. Private repositories
+reuse an organization-scoped HTTPS Git source credential whose server is
+`github.com`; its token is decrypted only for the
 bounded archive request and is never copied into the repository record,
 response, audit event, or sync error. Deleting the credential safely returns
 the repository to unauthenticated access. Repository URLs remain restricted to

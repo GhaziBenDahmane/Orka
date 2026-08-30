@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestTemplateRepositoryWebhookQueuesReplaySafeSync(t *testing.T) {
+func TestTemplateRepositorySyncTriggersAreDurableAndReplaySafe(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
@@ -61,7 +61,25 @@ func TestTemplateRepositoryWebhookQueuesReplaySafeSync(t *testing.T) {
 	}
 	server := httptest.NewServer((&Server{Store: db, Box: box, PublicURL: "https://dockyard.example.test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	t.Cleanup(server.Close)
-	status, body := scopedAPIRequest(t, server.URL+"/v1/template-repositories/"+repository.ID.String()+"/webhook-secret", token, organizationID, http.MethodPost, map[string]any{})
+	status, body := scopedAPIRequest(t, server.URL+"/v1/template-repositories/"+repository.ID.String()+"/sync", token, organizationID, http.MethodPost, map[string]any{})
+	if status != http.StatusAccepted {
+		t.Fatalf("manual sync status=%d body=%s", status, body)
+	}
+	var queued struct {
+		Status      string    `json:"status"`
+		RequestedAt time.Time `json:"requestedAt"`
+	}
+	if err = json.Unmarshal(body, &queued); err != nil || queued.Status != "queued" || queued.RequestedAt.IsZero() {
+		t.Fatalf("manual sync response=%s err=%v", body, err)
+	}
+	claimed, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID {
+		t.Fatalf("manual sync was not durably claimable: repository=%#v err=%v", claimed, err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/template-repositories/"+repository.ID.String()+"/webhook-secret", token, organizationID, http.MethodPost, map[string]any{})
 	if status != http.StatusCreated {
 		t.Fatalf("rotate webhook secret status=%d body=%s", status, body)
 	}

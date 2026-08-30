@@ -265,31 +265,13 @@ func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := principal(r)
-	repository, err := s.Store.GetTemplateRepository(r.Context(), p.OrganizationID, id)
+	requestedAt, err := s.Store.QueueTemplateRepositorySync(r.Context(), p.OrganizationID, id)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	if !repository.Enabled {
-		writeError(w, 409, "repository_disabled", "template repository is disabled")
-		return
-	}
-	repository, err = s.Store.BeginTemplateRepositorySync(r.Context(), p.OrganizationID, id)
-	if errors.Is(err, store.ErrBusy) {
-		writeError(w, 409, "repository_sync_running", "template repository sync is already running")
-		return
-	}
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	report, err := templates.SyncClaimedRepository(r.Context(), s.Store, s.Box, nil, repository)
-	if err != nil {
-		writeError(w, 422, "template_repository_sync_failed", err.Error())
-		return
-	}
-	s.Store.Audit(r.Context(), &p, "template_repository.sync", "template_repository", id.String(), r.RemoteAddr, map[string]any{"imported": report.Imported, "failed": len(report.Failed), "scheduled": false})
-	writeJSON(w, 200, report)
+	s.Store.Audit(r.Context(), &p, "template_repository.sync.queued", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requestedAt": requestedAt})
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "queued", "requestedAt": requestedAt})
 }
 
 func (s *Server) deleteTemplateRepository(w http.ResponseWriter, r *http.Request) {

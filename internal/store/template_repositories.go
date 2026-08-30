@@ -128,6 +128,22 @@ func (s *Store) RequestTemplateRepositorySync(ctx context.Context, id uuid.UUID,
 	return tx.Commit(ctx)
 }
 
+// QueueTemplateRepositorySync durably coalesces operator refresh requests.
+// If a sync is already running, sync_requested_at remains set so the scheduler
+// performs one more refresh after the in-flight attempt finishes.
+func (s *Store) QueueTemplateRepositorySync(ctx context.Context, organizationID, id uuid.UUID) (time.Time, error) {
+	var requestedAt time.Time
+	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories
+		SET sync_requested_at=COALESCE(sync_requested_at,now()),
+			updated_at=CASE WHEN last_sync_status='running' THEN updated_at ELSE now() END
+		WHERE id=$1 AND organization_id=$2 AND enabled
+		RETURNING sync_requested_at`, id, organizationID).Scan(&requestedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, ErrNotFound
+	}
+	return requestedAt, err
+}
+
 func (s *Store) BeginTemplateRepositorySync(ctx context.Context, organizationID, id uuid.UUID) (TemplateRepository, error) {
 	var item TemplateRepository
 	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories SET last_sync_status='running',last_sync_error='',sync_requested_at=NULL,updated_at=now()

@@ -365,7 +365,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
 | GET/POST | `/v1/template-repositories` | List or register organization GitHub catalogs, optionally using an encrypted GitHub token credential |
 | PATCH | `/v1/template-repositories/{id}` | Pin or rotate a repository signing key, private-access credential, signature policy, and automatic sync interval |
-| POST | `/v1/template-repositories/{id}/sync` | Fetch and import a bounded Dokploy-compatible catalog archive |
+| POST | `/v1/template-repositories/{id}/sync` | Durably queue a bounded Dokploy-compatible catalog refresh |
 | POST/DELETE | `/v1/template-repositories/{id}/webhook-secret` | Create or rotate the one-time GitHub webhook secret, or disable webhook refresh |
 | POST | `/v1/hooks/template-repositories/{id}` | Authenticate a GitHub push delivery and queue replay-safe catalog refresh |
 | DELETE | `/v1/template-repositories/{id}` | Remove a catalog and its template entries |
