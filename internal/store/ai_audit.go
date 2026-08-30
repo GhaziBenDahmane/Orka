@@ -282,37 +282,8 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	snapshot.Projects = projects
-	for _, project := range projects {
-		environments, listErr := s.ListEnvironments(ctx, organizationID, project.ID)
-		if listErr != nil {
-			return snapshot, listErr
-		}
-		snapshot.Environments = append(snapshot.Environments, environments...)
-		for _, environment := range environments {
-			services, serviceErr := s.ListComposeServices(ctx, organizationID, environment.ID)
-			if serviceErr != nil {
-				return snapshot, serviceErr
-			}
-			snapshot.Services = append(snapshot.Services, services...)
-			for _, service := range services {
-				detailed, routes, routeErr := s.GetComposeService(ctx, organizationID, service.ID)
-				if routeErr != nil {
-					return snapshot, routeErr
-				}
-				snapshot.WorkloadPosture = append(snapshot.WorkloadPosture, analyzeAIAuditWorkload(detailed.ID, detailed.ComposeYAML))
-				snapshot.Routes = append(snapshot.Routes, routes...)
-			}
-			databases, databaseErr := s.ListDatabases(ctx, organizationID, environment.ID)
-			if databaseErr != nil {
-				return snapshot, databaseErr
-			}
-			for index := range databases {
-				// Drivers may accept credentials in their input config even though
-				// built-ins normally store only non-secret settings here.
-				databases[index].Config = nil
-			}
-			snapshot.Databases = append(snapshot.Databases, databases...)
-		}
+	if err = s.loadAIAuditInventory(ctx, organizationID, &snapshot); err != nil {
+		return snapshot, err
 	}
 	clusters, err := s.ListClusters(ctx, organizationID)
 	if err != nil {
@@ -365,6 +336,105 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+// loadAIAuditInventory uses a fixed number of tenant-scoped queries. In
+// particular, it never loads each service and its routes independently, which
+// keeps audit latency bounded by result size rather than workload count.
+func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
+	rows, err := s.Pool.Query(ctx, `SELECT environment.id,environment.project_id,environment.cluster_id,environment.placement_selector,
+		environment.minimum_nodes,environment.minimum_nano_cpus,environment.minimum_memory_bytes,environment.name,environment.slug,environment.created_at
+		FROM environments environment JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1
+		ORDER BY project.name,project.id,environment.name,environment.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item Environment
+		if err = rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.Environments = append(snapshot.Environments, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `SELECT service.id,service.environment_id,service.name,service.slug,service.stack_name,service.storage_node_id,
+		service.revision,service.created_at,service.updated_at,service.compose_yaml
+		FROM compose_services service
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
+		ORDER BY project.name,project.id,environment.name,environment.id,service.name,service.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item ComposeService
+		var composeYAML string
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.CreatedAt, &item.UpdatedAt, &composeYAML); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.Services = append(snapshot.Services, item)
+		snapshot.WorkloadPosture = append(snapshot.WorkloadPosture, analyzeAIAuditWorkload(item.ID, composeYAML))
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `SELECT route.id,route.compose_service_id,route.service_name,route.host,route.path_prefix,route.target_port,route.tls,route.certificate_resolver
+		FROM routes route
+		JOIN compose_services service ON service.id=route.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
+		ORDER BY project.name,project.id,environment.name,environment.id,service.name,service.id,route.host,route.path_prefix,route.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item Route
+		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.TargetPort, &item.TLS, &item.CertificateResolver); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.Routes = append(snapshot.Routes, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `SELECT database.id,database.environment_id,database.name,database.slug,database.engine,database.version,
+		database.driver_source,database.driver_artifact_digest,database.storage_node_id,database.compose_service_id,database.status,database.created_at
+		FROM database_instances database
+		JOIN environments environment ON environment.id=database.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1
+		ORDER BY project.name,project.id,environment.name,environment.id,database.name,database.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item DatabaseInstance
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Status, &item.CreatedAt); err != nil {
+			return err
+		}
+		// Driver config is intentionally omitted because external drivers may
+		// accept credentials even though built-ins store only non-secret values.
+		snapshot.Databases = append(snapshot.Databases, item)
+	}
+	return rows.Err()
 }
 
 func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWorkloadPosture {

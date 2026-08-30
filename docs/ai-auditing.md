@@ -29,6 +29,9 @@ keys make it a privileged service.
   viewer/developer/admin rank and therefore cannot invoke normal resource APIs.
 - `GET /v1/ai/audit-snapshot` excludes Compose content, environment values,
   database config, credentials, backup payloads, and secret material.
+- Core inventory, route, and workload-provenance projections use a fixed
+  number of tenant-scoped queries rather than querying once per project,
+  environment, or service, so audit database load scales with returned rows.
 - Compose image provenance is reduced to per-workload counts: total
   containers, digest-pinned images, mutable image references, build-only
   services, and services missing both image and build input. Image names,
