@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 dind_image="${DOCKYARD_TEST_DIND_IMAGE:-docker:29-dind@sha256:12e683a161823b2a839aeea999b9d960e6e1f9a97b1679ad6b441982e2d9cf07}"
 probe_image="${DOCKYARD_TEST_SWARM_PROBE_IMAGE:-docker:29-cli@sha256:000bb62ff495f986c9f5578eb67cc2cb98b91138eda81d7762d5371eb8a497fe}"
 evidence_file="${1:-swarm-ha-conformance.json}"
@@ -21,9 +22,15 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-for command in docker jq timeout; do
+for command in docker git jq timeout; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "$command is required for Swarm HA conformance" >&2
+    exit 1
+  fi
+done
+for image in "$dind_image" "$probe_image"; do
+  if [[ ! "$image" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
+    echo "Swarm HA conformance images must be pinned by sha256 digest: $image" >&2
     exit 1
   fi
 done
@@ -147,15 +154,26 @@ wait_for_replicas "$manager2" 3
 quorum_recovery_seconds="$(( $(date +%s) - quorum_started ))"
 
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+source_commit="${GITHUB_SHA:-$(git -C "$root_dir" rev-parse HEAD)}"
 jq -n \
+  --arg status passed \
   --arg createdAt "$created_at" \
+	--arg sourceCommit "$source_commit" \
   --arg dindImage "$dind_image" \
   --arg probeImage "$probe_image" \
   --arg initialLeader "$leader" \
   --arg replacementLeader "$replacement_leader" \
   --argjson failoverSeconds "$failover_seconds" \
   --argjson quorumRecoverySeconds "$quorum_recovery_seconds" \
-  '{createdAt:$createdAt,dindImage:$dindImage,probeImage:$probeImage,managers:3,replicas:3,initialLeader:$initialLeader,replacementLeader:$replacementLeader,leaderFailoverSeconds:$failoverSeconds,minorityMutationRejected:true,quorumRecoverySeconds:$quorumRecoverySeconds,replicasConverged:true}' \
+  '{status:$status,sourceCommit:$sourceCommit,createdAt:$createdAt,dindImage:$dindImage,probeImage:$probeImage,managers:3,replicas:3,initialLeader:$initialLeader,replacementLeader:$replacementLeader,leaderFailoverSeconds:$failoverSeconds,minorityMutationRejected:true,quorumRecoverySeconds:$quorumRecoverySeconds,replicasConverged:true}' \
   > "$evidence_file"
+jq -e --arg sourceCommit "$source_commit" '
+  .status == "passed" and .sourceCommit == $sourceCommit and
+  (.dindImage | test("@sha256:[a-f0-9]{64}$")) and
+  (.probeImage | test("@sha256:[a-f0-9]{64}$")) and
+  .managers == 3 and .replicas == 3 and .minorityMutationRejected and
+  .replicasConverged and .leaderFailoverSeconds >= 0 and
+  .quorumRecoverySeconds >= 0
+' "$evidence_file" >/dev/null
 printf 'HA_EVIDENCE '
 cat "$evidence_file"

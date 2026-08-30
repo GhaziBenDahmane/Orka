@@ -25,7 +25,7 @@ jobs:
             --arg sourceCommit "$GITHUB_SHA" \
             '{createdAt:$createdAt,sourceCommit:$sourceCommit,provider:"keycloak",oidc:true,samlSpInitiated:true,samlIdpInitiated:true,tenantIsolation:true,replayRejected:true}' \
             > sso-keycloak-evidence.json
-          jq -e '.provider == "keycloak" and .oidc and .samlSpInitiated and .samlIdpInitiated and .tenantIsolation and .replayRejected' sso-keycloak-evidence.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .provider == "keycloak" and .oidc and .samlSpInitiated and .samlIdpInitiated and .tenantIsolation and .replayRejected' sso-keycloak-evidence.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

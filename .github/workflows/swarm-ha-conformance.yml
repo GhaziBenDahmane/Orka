@@ -19,7 +19,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts/ci/test-swarm-ha.sh swarm-ha-conformance.json | tee swarm-ha-conformance.log
-          jq -e '.managers == 3 and .replicas == 3 and .minorityMutationRejected == true and .replicasConverged == true and .leaderFailoverSeconds >= 0 and .quorumRecoverySeconds >= 0' swarm-ha-conformance.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" '.status == "passed" and .sourceCommit == $sourceCommit and (.dindImage | test("@sha256:[a-f0-9]{64}$")) and (.probeImage | test("@sha256:[a-f0-9]{64}$")) and .managers == 3 and .replicas == 3 and .minorityMutationRejected == true and .replicasConverged == true and .leaderFailoverSeconds >= 0 and .quorumRecoverySeconds >= 0' swarm-ha-conformance.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

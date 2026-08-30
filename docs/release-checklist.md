@@ -17,6 +17,9 @@ links for every item below.
   workflows. Tag pushes do not run detached copies: the release
   workflow invokes all gates directly and publishes only after every job
   succeeds.
+- Automated evidence is bound to the exact release source commit. Final
+  promotion revalidates the complete producer assertions and rejects missing,
+  stale, duplicated, mutable-image, or commit-mismatched evidence.
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
   checkpoint-upgrade tests, high-contention exactly-once queue claiming across
