@@ -495,7 +495,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := check(ctx); err != nil {
-		s.logger().WarnContext(r.Context(), "readiness check failed", "dependency", "database", "error", err)
+		s.logger().WarnContext(r.Context(), "readiness check failed", "dependency", "database", "error_type", fmt.Sprintf("%T", err))
 		writeError(w, http.StatusServiceUnavailable, "database_unavailable", "database is unavailable")
 		return
 	}
@@ -649,7 +649,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.Store.Bootstrap(r.Context(), in.Email, hash, in.Organization, slug)
 	if err != nil {
-		writeError(w, 409, "bootstrap_failed", err.Error())
+		writeStoreError(w, err)
 		return
 	}
 	token, err := s.newSession(r, p.UserID, nil, "local")
@@ -2628,6 +2628,10 @@ func (s *Server) writeInternalError(w http.ResponseWriter, r *http.Request, stat
 	writeError(w, status, code, message)
 }
 func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrAlreadyBootstrapped) {
+		writeError(w, http.StatusConflict, "already_bootstrapped", store.ErrAlreadyBootstrapped.Error())
+		return
+	}
 	if errors.Is(err, store.ErrOwnerRequired) {
 		writeError(w, http.StatusForbidden, "owner_required", err.Error())
 		return

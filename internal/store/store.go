@@ -15,6 +15,7 @@ import (
 )
 
 var ErrNotFound = errors.New("not found")
+var ErrAlreadyBootstrapped = errors.New("instance is already bootstrapped")
 var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
@@ -384,7 +385,7 @@ func (s *Store) Bootstrap(ctx context.Context, email, passwordHash, orgName, slu
 		return Principal{}, err
 	}
 	if count != 0 {
-		return Principal{}, errors.New("instance is already bootstrapped")
+		return Principal{}, ErrAlreadyBootstrapped
 	}
 	userID, orgID := uuid.New(), uuid.New()
 	if _, err := tx.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)`, userID, strings.ToLower(email), passwordHash); err != nil {

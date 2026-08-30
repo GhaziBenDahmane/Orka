@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/observability"
+	"github.com/bendahma/dokploy-go/internal/store"
 )
 
 func TestRequestIDMiddleware(t *testing.T) {
@@ -87,6 +88,20 @@ func TestInternalErrorsDoNotLeakDetails(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "private.internal") || !strings.Contains(logs.String(), `"operation":"dependency_failed"`) || !strings.Contains(logs.String(), `"error_type":"*errors.errorString"`) {
 		t.Fatalf("unsafe or incomplete internal error log: %s", logs.String())
+	}
+}
+
+func TestStoreErrorsExposeOnlyTypedPublicFailures(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeStoreError(response, errors.New("password=secret-value host=private.internal"))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), `"code":"internal_error"`) || strings.Contains(response.Body.String(), "secret-value") || strings.Contains(response.Body.String(), "private.internal") {
+		t.Fatalf("unsafe unexpected store error: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	writeStoreError(response, store.ErrAlreadyBootstrapped)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"already_bootstrapped"`) || !strings.Contains(response.Body.String(), "instance is already bootstrapped") {
+		t.Fatalf("unexpected bootstrap conflict: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

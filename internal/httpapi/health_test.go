@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,8 +36,9 @@ func TestHealthIsIndependentOfDependencies(t *testing.T) {
 }
 
 func TestReadyChecksDatabaseWithoutLeakingError(t *testing.T) {
-	server := (&Server{ReadinessCheck: func(context.Context) error {
-		return errors.New("password=secret-value")
+	var logs bytes.Buffer
+	server := (&Server{Logger: slog.New(slog.NewJSONHandler(&logs, nil)), ReadinessCheck: func(context.Context) error {
+		return errors.New("password=secret-value host=private.internal")
 	}}).Handler()
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -48,6 +51,9 @@ func TestReadyChecksDatabaseWithoutLeakingError(t *testing.T) {
 	}
 	if body := recorder.Body.String(); !strings.Contains(body, `"code":"database_unavailable"`) || strings.Contains(body, "secret-value") {
 		t.Fatalf("unexpected readiness response: %q", body)
+	}
+	if strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "private.internal") || !strings.Contains(logs.String(), `"error_type":"*errors.errorString"`) {
+		t.Fatalf("unsafe or incomplete readiness log: %s", logs.String())
 	}
 }
 
