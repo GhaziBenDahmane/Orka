@@ -209,3 +209,20 @@ groups:
         annotations:
           summary: A Dockyard service-account token expired
           description: Service account {{ $labels.account }} ({{ $labels.role }}) can no longer authenticate; rotate its token or disable the identity.
+
+      - alert: DockyardSCIMTokenExpiring
+        expr: dockyard_scim_token_expiry_seconds > 0 and dockyard_scim_token_expiry_seconds < 604800
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard SCIM token is approaching expiry
+          description: SCIM token {{ $labels.token }} expires in less than seven days; replace it in the identity provider and revoke the old token.
+
+      - alert: DockyardSCIMTokenExpired
+        expr: dockyard_scim_token_expiry_seconds <= 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard SCIM token expired
+          description: SCIM token {{ $labels.token }} can no longer provision identities; issue a replacement and update the identity provider.

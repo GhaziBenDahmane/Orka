@@ -172,7 +172,8 @@ the configured agent CA and server certificate; warning alerts begin seven days
 before expiry. Enabled service-account credentials expose their current token
 expiry by immutable account ID and role; warning alerts begin seven days before
 expiry and become critical once automation or an AI auditor can no longer
-authenticate.
+authenticate. Non-revoked SCIM tokens have equivalent expiry gauges and alerts
+so directory provisioning does not stop silently.
 Route those alerts through Alertmanager to the team's email, Slack, PagerDuty,
 or other incident receiver.
 
