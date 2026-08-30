@@ -58,7 +58,7 @@ services:
     secrets: [dockyard_database_url, dockyard_master_key]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/dockyard/backups:/var/lib/dockyard/backups
+      - backup-artifacts:/var/lib/dockyard/backups
     networks: [control, edge-control]
     logging:
       driver: local
@@ -172,6 +172,7 @@ networks:
     external: true
     name: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
 volumes:
+  backup-artifacts: {}
   postgres-data: {}
   traefik-data: {}
 secrets:

@@ -105,6 +105,19 @@ convergence check. If pre-deployment setup fails, resources created by that
 attempt are removed; once stack deployment begins, failed resources are left
 intact for Docker diagnostics and an explicit retry.
 
+The stack provisions `backup-artifacts` as a stack-scoped Docker volume and
+mounts it at `/var/lib/dockyard/backups`; a clean manager therefore does not
+need a pre-created host directory. Local managed-database backups stored there
+are encrypted but node-local and are not a substitute for an off-host backup.
+Before draining or replacing the manager that runs the controller, either
+retain that node and its volume or migrate every required backup to a tested
+S3-compatible destination. The HA profile requires remote destinations and
+uses the named volume only for temporary encrypted upload and restore staging,
+so controllers can be scheduled on any manager without a missing bind source.
+Docker does not include this artifact volume in the control-plane PostgreSQL
+backup bundle; preserve object storage and local artifacts separately as part
+of the documented recovery set.
+
 Controller startup also rejects ambiguous secret configuration: do not set a
 `DOCKYARD_*` secret value and its matching `DOCKYARD_*_FILE` variable at the
 same time. `DOCKYARD_PUBLIC_URL` must be an HTTPS origin without a path, query,

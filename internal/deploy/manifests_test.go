@@ -16,6 +16,7 @@ type deploymentManifest struct {
 		Networks    []string          `yaml:"networks"`
 		Secrets     []any             `yaml:"secrets"`
 		Ports       []any             `yaml:"ports"`
+		Volumes     []string          `yaml:"volumes"`
 		Logging     struct {
 			Driver  string            `yaml:"driver"`
 			Options map[string]string `yaml:"options"`
@@ -39,6 +40,7 @@ type deploymentManifest struct {
 			} `yaml:"rollback_config"`
 		} `yaml:"deploy"`
 	} `yaml:"services"`
+	Volumes map[string]any `yaml:"volumes"`
 }
 
 type manifestResourceSpec struct {
@@ -132,6 +134,22 @@ func TestDevelopmentComposeChecksControllerReadiness(t *testing.T) {
 	service := readDeploymentManifest(t, "../../compose.yml").Services["dockyard"]
 	if len(service.Healthcheck.Test) == 0 {
 		t.Fatal("development controller has no health check")
+	}
+}
+
+func TestControllerBackupStorageIsProvisionedBySwarm(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/swarm.yml")
+	if _, ok := manifest.Volumes["backup-artifacts"]; !ok {
+		t.Fatal("controller backup volume is not declared")
+	}
+	controller := manifest.Services["dockyard"]
+	if !slices.Contains(controller.Volumes, "backup-artifacts:/var/lib/dockyard/backups") {
+		t.Fatalf("controller backup directory is not backed by its managed volume: %v", controller.Volumes)
+	}
+	for _, volume := range controller.Volumes {
+		if strings.HasPrefix(volume, "/var/lib/dockyard/backups:") {
+			t.Fatalf("controller requires a pre-existing host backup directory: %q", volume)
+		}
 	}
 }
 
