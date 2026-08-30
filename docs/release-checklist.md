@@ -43,7 +43,10 @@ links for every item below.
   templates deploy through the public API and remain healthy across a forced
   Swarm task replacement. The data services also accept authenticated
   application-level writes and reads; the BarkTrace checks verify its SQLite
-  file or PostgreSQL migration state survives replacement.
+  file or PostgreSQL migration state survives replacement. CI publishes
+  `template-conformance.json` with template versions and Swarm-resolved image
+  digests; both BarkTrace variants must resolve from the released
+  `ghcr.io/barktrace/bark:0.31.0` tag.
 - Every release after the first boots the previous published image digest,
   creates authenticated and encrypted tenant state, deploys a live stack, and
   stops the old controller against its persistent PostgreSQL volume. The
@@ -194,6 +197,7 @@ links for every item below.
   `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
   `database-recovery-evidence.json`,
   `volume-recovery-conformance.json`,
+  `template-conformance.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
   `agent-certificate-conformance.json`, `ai-audit-conformance.json`,

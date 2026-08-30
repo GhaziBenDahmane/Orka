@@ -3,6 +3,8 @@ set -euo pipefail
 
 project="dockyard-template-smoke"
 port="${DOCKYARD_TEMPLATE_SMOKE_PORT:-18081}"
+evidence_file="${DOCKYARD_TEMPLATE_EVIDENCE:-template-conformance.json}"
+barktrace_version="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}"
 export DOCKYARD_HTTP_BIND="127.0.0.1:$port"
 export DOCKYARD_POSTGRES_BIND="${DOCKYARD_POSTGRES_BIND:-127.0.0.1:54339}"
 base_url="http://127.0.0.1:$port"
@@ -10,6 +12,7 @@ network="dockyard-public"
 initialized_swarm=false
 created_network=false
 stacks=()
+products='[]'
 
 wait_for_deployment() {
   local deployment_id="$1"
@@ -109,6 +112,7 @@ catalog="$(curl --fail --silent --show-error "${headers[@]}" "$base_url/v1/templ
 
 for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
   template_id="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .id' <<<"$catalog")"
+  template_version="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .version' <<<"$catalog")"
   case "$template_key" in
     postgres)
       variables='{"postgres_user":"smoke","postgres_password":"template-smoke-postgres","postgres_database":"smoke"}'
@@ -117,10 +121,10 @@ for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
       variables='{"redis_password":"template-smoke-redis"}'
       ;;
     barktrace-sqlite)
-      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"$barktrace_version\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
       ;;
     barktrace-postgres)
-      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"$barktrace_version\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
       ;;
   esac
   service="$(curl --fail --silent --show-error "${headers[@]}" --data "{\"environmentId\":\"$environment_id\",\"name\":\"$template_key\",\"variables\":$variables}" "$base_url/v1/templates/$template_id/instantiate")"
@@ -137,6 +141,29 @@ for template_key in postgres redis barktrace-sqlite barktrace-postgres; do
   docker service update --force --detach=false "$service_name" >/dev/null
   wait_for_service "$service_name"
   probe_product "$template_key" "$service_name" "$stack"
+  resolved_image="$(docker service inspect "$service_name" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+  [[ "$resolved_image" == *@sha256:* ]]
+  if [[ "$template_key" == barktrace-* ]]; then
+    [[ "$resolved_image" == "ghcr.io/barktrace/bark:$barktrace_version@sha256:"* ]]
+  fi
+  products="$(jq -c \
+    --arg template "$template_key" --arg templateVersion "$template_version" \
+    --arg deploymentId "$deployment_id" --arg service "$service_name" --arg image "$resolved_image" \
+    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dataVerified:true,restartVerified:true}]' \
+    <<<"$products")"
 done
 
+jq -n \
+  --arg status passed --arg sourceCommit "${GITHUB_SHA:-local}" --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg barktraceVersion "$barktrace_version" --argjson products "$products" \
+  '{status:$status,sourceCommit:$sourceCommit,createdAt:$createdAt,barktraceVersion:$barktraceVersion,productCount:($products|length),products:$products}' \
+  >"$evidence_file"
+jq -e '
+  .status == "passed" and .productCount == 4 and
+  ([.products[].template] | sort == ["barktrace-postgres","barktrace-sqlite","postgres","redis"]) and
+  all(.products[]; .dataVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and
+  all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
+' --arg version "$barktrace_version" "$evidence_file" >/dev/null
+printf 'TEMPLATE_EVIDENCE '
+cat "$evidence_file"
 printf 'Built-in PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL templates deployed and retained state across Swarm task replacement.\n'

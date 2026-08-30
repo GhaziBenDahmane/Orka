@@ -107,7 +107,19 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Deploy and exercise built-in PostgreSQL, Redis, and BarkTrace products
-        run: scripts/ci/smoke-templates.sh
+        env:
+          DOCKYARD_TEMPLATE_EVIDENCE: template-conformance.json
+        run: |
+          set -euo pipefail
+          scripts/ci/smoke-templates.sh | tee template-conformance.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: template-conformance
+          path: |
+            template-conformance.json
+            template-conformance.log
+          if-no-files-found: error
 
   supply-chain:
     runs-on: ubuntu-latest
