@@ -3,6 +3,14 @@ package observability
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,6 +71,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	auditorA := uuid.New()
 	auditorB := uuid.New()
 	scimToken := uuid.New()
+	samlProvider := uuid.New()
+	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
 	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
 	statements := []struct {
 		query string
@@ -79,6 +89,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorA, []byte("metrics-token-a-" + auditorA.String())}},
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorB, []byte("metrics-token-b-" + auditorB.String())}},
 		{`INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,expires_at) VALUES($1,$2,'metrics-directory',$3,'developer',now()+interval '7 days')`, []any{scimToken, organizationA, []byte("metrics-scim-" + scimToken.String())}},
+		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains) VALUES($1,$2,'metrics-saml',$3,$4,'encrypted','{example.test}')`, []any{samlProvider, organizationA, samlMetadata, samlCertificate}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','completed',now()-interval '65 minutes',now()-interval '1 hour')`, []any{uuid.New(), organizationA, auditorA}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','failed',now()-interval '10 minutes',now()-interval '5 minutes')`, []any{uuid.New(), organizationA, auditorA}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at) VALUES($1,$2,$3,'metrics-agent','running',now()-interval '20 minutes')`, []any{uuid.New(), organizationA, auditorA}},
@@ -97,7 +108,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -117,6 +128,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_service_account_token_expiry_seconds{organization="` + organizationA.String() + `",account="` + auditorA.String() + `",role="auditor"}`,
 		`dockyard_service_account_token_expiry_seconds{organization="` + organizationB.String() + `",account="` + auditorB.String() + `",role="auditor"}`,
 		`dockyard_scim_token_expiry_seconds{organization="` + organizationA.String() + `",token="` + scimToken.String() + `",role="developer"}`,
+		`dockyard_saml_certificate_valid{organization="` + organizationA.String() + `",provider="` + samlProvider.String() + `",kind="service_provider"} 1`,
+		`dockyard_saml_certificate_valid{organization="` + organizationA.String() + `",provider="` + samlProvider.String() + `",kind="identity_provider"} 1`,
+		`dockyard_saml_certificate_expiry_seconds{organization="` + organizationA.String() + `",provider="` + samlProvider.String() + `",kind="identity_provider"}`,
 		`dockyard_service_reconciliation{state="degraded"} 1`,
 		`dockyard_service_reconciliation_age_seconds{service="` + serviceID.String() + `"}`,
 		`dockyard_ai_audit_runs{status="running"}`,
@@ -190,6 +204,26 @@ func TestPrometheusAlertsCoverSCIMTokenExpiry(t *testing.T) {
 	}
 }
 
+func TestPrometheusAlertsCoverSAMLCertificateHealth(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardSAMLCertificateExpiring",
+		"expr: dockyard_saml_certificate_expiry_seconds > 0 and dockyard_saml_certificate_expiry_seconds < 2592000",
+		"alert: DockyardSAMLCertificateExpired",
+		"expr: dockyard_saml_certificate_expiry_seconds <= 0",
+		"alert: DockyardSAMLCertificateInvalid",
+		"expr: dockyard_saml_certificate_valid == 0 unless on (organization, provider, kind) dockyard_saml_certificate_expiry_seconds <= 0",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
 func TestPrometheusAlertsCoverRemoteClusterUpgradeHealth(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
 	if err != nil {
@@ -226,4 +260,21 @@ func TestPrometheusEscape(t *testing.T) {
 	if got := prometheusEscape("a\\b\n\"c"); got != `a\\b\n\"c` {
 		t.Fatalf("unexpected escaped label %q", got)
 	}
+}
+
+func testSAMLMetricMaterial(t *testing.T, notAfter time.Time) (string, string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(notAfter.UnixNano()), Subject: pkix.Name{CommonName: "metrics-saml"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(der)
+	metadata := fmt.Sprintf(`<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.test"><IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>%s</ds:X509Certificate></ds:X509Data></ds:KeyInfo></KeyDescriptor><SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.test/sso"/></IDPSSODescriptor></EntityDescriptor>`, encoded)
+	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	return metadata, certificate
 }

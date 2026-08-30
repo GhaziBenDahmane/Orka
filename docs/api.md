@@ -198,6 +198,11 @@ binds SP-initiated responses to one-time RelayState and an encrypted
 `SameSite=None; Secure` browser cookie, and rejects assertion replays.
 Explicitly enabled IdP-initiated login remains cookie-independent. Register the
 provider metadata URL with the IdP.
+Provider responses include the platform signing-certificate and effective IdP
+trust expiry. Metadata updates reject expired, malformed, or not-yet-valid
+signing material while accepting normal rollover metadata with multiple signing
+certificates. Prometheus alerts thirty days before either trust boundary
+expires.
 Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
 Once enabled, local-password sessions cannot access that organization except
 for its owner break-glass account.

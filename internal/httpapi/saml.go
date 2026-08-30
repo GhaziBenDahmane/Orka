@@ -67,6 +67,10 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_metadata", "identity-provider metadata must advertise HTTP-Redirect SSO")
 		return
 	}
+	if _, err = auth.SAMLIdentityProviderCertificateExpiry(metadata, time.Now()); err != nil {
+		writeError(w, 400, "invalid_metadata", err.Error())
+		return
+	}
 	for i, domain := range in.Domains {
 		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
 		if !strings.Contains(in.Domains[i], ".") {
@@ -91,6 +95,7 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	setSAMLCertificateStatus(&provider, metadata, time.Now())
 	s.Store.Audit(r.Context(), &p, "sso.saml.create", "saml_provider", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, provider)
 }
@@ -100,6 +105,13 @@ func (s *Server) listSAMLProviders(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, err)
 		return
+	}
+	now := time.Now()
+	for index := range items {
+		metadata, parseErr := samlsp.ParseMetadata([]byte(items[index].IDPMetadata))
+		if parseErr == nil {
+			setSAMLCertificateStatus(&items[index], metadata, now)
+		}
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
@@ -138,6 +150,10 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_metadata", "identity-provider metadata must advertise HTTP-Redirect SSO")
 		return
 	}
+	if _, err = auth.SAMLIdentityProviderCertificateExpiry(metadata, time.Now()); err != nil {
+		writeError(w, 400, "invalid_metadata", err.Error())
+		return
+	}
 	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
 		return
@@ -155,6 +171,7 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	setSAMLCertificateStatus(&provider, metadata, time.Now())
 	s.Store.Audit(r.Context(), &p, "sso.saml.update", "saml_provider", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 200, provider)
 }
@@ -181,6 +198,16 @@ func (s *Server) enableSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
+	provider, err := s.Store.GetOrganizationSAMLProvider(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	metadata, err := samlsp.ParseMetadata([]byte(provider.IDPMetadata))
+	if err != nil || setSAMLCertificateStatus(&provider, metadata, time.Now()) != nil {
+		writeError(w, http.StatusConflict, "invalid_saml_certificates", "refresh the SAML metadata or certificate configuration before enabling this provider")
+		return
+	}
 	if err = s.Store.SetSAMLProviderEnabled(r.Context(), p.OrganizationID, id, true); err != nil {
 		writeStoreError(w, err)
 		return
@@ -375,6 +402,9 @@ func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.S
 	if err != nil {
 		return store.SAMLProvider{}, nil, err
 	}
+	if err = setSAMLCertificateStatus(&provider, idpMetadata, time.Now()); err != nil {
+		return store.SAMLProvider{}, nil, err
+	}
 	certificateBlock, _ := pem.Decode([]byte(provider.CertificatePEM))
 	if certificateBlock == nil || certificateBlock.Type != "CERTIFICATE" {
 		return store.SAMLProvider{}, nil, errors.New("invalid SAML certificate")
@@ -441,4 +471,17 @@ func newSAMLCertificate(name string) (*rsa.PrivateKey, []byte, []byte, error) {
 		return nil, nil, nil, err
 	}
 	return key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encodedKey}), nil
+}
+
+func setSAMLCertificateStatus(provider *store.SAMLProvider, metadata *saml.EntityDescriptor, now time.Time) error {
+	spExpiry, spErr := auth.SAMLServiceProviderCertificateExpiry(provider.CertificatePEM, now)
+	if !spExpiry.IsZero() {
+		provider.SPCertificateNotAfter = &spExpiry
+	}
+	idpExpiry, idpErr := auth.SAMLIdentityProviderCertificateExpiry(metadata, now)
+	if !idpExpiry.IsZero() {
+		provider.IDPCertificateNotAfter = &idpExpiry
+	}
+	provider.CertificateConfigurationOK = spErr == nil && idpErr == nil
+	return errors.Join(spErr, idpErr)
 }

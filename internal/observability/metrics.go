@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/crewjam/saml/samlsp"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -164,6 +166,9 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 		}
 		rows.Close()
 	}
+	if err := renderSAMLCertificateMetrics(ctx, w, db); err != nil {
+		return err
+	}
 	var stale float64
 	if err := db.QueryRow(ctx, `SELECT count(*)::float8 FROM jobs WHERE status='running' AND locked_at<now()-interval '30 seconds'`).Scan(&stale); err != nil {
 		return err
@@ -172,6 +177,54 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 	fmt.Fprintln(w, "# TYPE dockyard_job_stale_leases gauge")
 	fmt.Fprintf(w, "dockyard_job_stale_leases %g\n", stale)
 	return nil
+}
+
+func renderSAMLCertificateMetrics(ctx context.Context, w io.Writer, db Queryer) error {
+	fmt.Fprintln(w, "# HELP dockyard_saml_certificate_expiry_seconds Seconds until an enabled SAML provider certificate or metadata trust boundary expires.")
+	fmt.Fprintln(w, "# TYPE dockyard_saml_certificate_expiry_seconds gauge")
+	fmt.Fprintln(w, "# HELP dockyard_saml_certificate_valid Whether an enabled SAML provider certificate is currently valid and parseable.")
+	fmt.Fprintln(w, "# TYPE dockyard_saml_certificate_valid gauge")
+	rows, err := db.Query(ctx, `SELECT organization_id::text,id::text,idp_metadata,certificate_pem FROM saml_providers WHERE enabled ORDER BY organization_id,id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	now := time.Now()
+	for rows.Next() {
+		var organizationID, providerID, metadataXML, certificatePEM string
+		if err = rows.Scan(&organizationID, &providerID, &metadataXML, &certificatePEM); err != nil {
+			return err
+		}
+		labelNames := []string{"organization", "provider", "kind"}
+		spExpiry, spErr := auth.SAMLServiceProviderCertificateExpiry(certificatePEM, now)
+		spLabels := labels(labelNames, []string{organizationID, providerID, "service_provider"})
+		if !spExpiry.IsZero() {
+			fmt.Fprintf(w, "dockyard_saml_certificate_expiry_seconds%s %g\n", spLabels, spExpiry.Sub(now).Seconds())
+		}
+		fmt.Fprintf(w, "dockyard_saml_certificate_valid%s %d\n", spLabels, boolMetric(spErr == nil))
+
+		idpLabels := labels(labelNames, []string{organizationID, providerID, "identity_provider"})
+		metadata, parseErr := samlsp.ParseMetadata([]byte(metadataXML))
+		var idpExpiry time.Time
+		var idpErr error
+		if parseErr != nil {
+			idpErr = parseErr
+		} else {
+			idpExpiry, idpErr = auth.SAMLIdentityProviderCertificateExpiry(metadata, now)
+		}
+		if !idpExpiry.IsZero() {
+			fmt.Fprintf(w, "dockyard_saml_certificate_expiry_seconds%s %g\n", idpLabels, idpExpiry.Sub(now).Seconds())
+		}
+		fmt.Fprintf(w, "dockyard_saml_certificate_valid%s %d\n", idpLabels, boolMetric(idpErr == nil))
+	}
+	return rows.Err()
+}
+
+func boolMetric(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (m *Metrics) renderRuntime(w io.Writer) {

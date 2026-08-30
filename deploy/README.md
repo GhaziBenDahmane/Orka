@@ -173,7 +173,10 @@ before expiry. Enabled service-account credentials expose their current token
 expiry by immutable account ID and role; warning alerts begin seven days before
 expiry and become critical once automation or an AI auditor can no longer
 authenticate. Non-revoked SCIM tokens have equivalent expiry gauges and alerts
-so directory provisioning does not stop silently.
+so directory provisioning does not stop silently. Enabled SAML providers expose
+separate service-provider and identity-provider trust expiries; alerts begin
+thirty days before expiry and also detect malformed or not-yet-valid rollover
+material.
 Route those alerts through Alertmanager to the team's email, Slack, PagerDuty,
 or other incident receiver.
 

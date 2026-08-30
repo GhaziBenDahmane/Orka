@@ -111,6 +111,9 @@ func TestSAMLProviderCreationMetadataAndStart(t *testing.T) {
 	if err = json.Unmarshal(data, &provider); err != nil {
 		t.Fatal(err)
 	}
+	if !provider.CertificateConfigurationOK || provider.SPCertificateNotAfter == nil || provider.IDPCertificateNotAfter == nil {
+		t.Fatalf("SAML certificate posture missing from provider: %#v", provider)
+	}
 	var encryptedKey string
 	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_private_key FROM saml_providers WHERE id=$1`, provider.ID).Scan(&encryptedKey); err != nil {
 		t.Fatal(err)

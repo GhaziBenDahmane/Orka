@@ -196,18 +196,21 @@ type OIDCProvider struct {
 }
 
 type SAMLProvider struct {
-	ID                  uuid.UUID `json:"id"`
-	OrganizationID      uuid.UUID `json:"organizationId"`
-	Name                string    `json:"name"`
-	IDPMetadata         string    `json:"-"`
-	CertificatePEM      string    `json:"-"`
-	EncryptedPrivateKey string    `json:"-"`
-	Domains             []string  `json:"domains"`
-	EmailAttribute      string    `json:"emailAttribute"`
-	NameAttribute       string    `json:"nameAttribute"`
-	DefaultRole         string    `json:"defaultRole"`
-	AllowIDPInitiated   bool      `json:"allowIdpInitiated"`
-	Enabled             bool      `json:"enabled"`
+	ID                         uuid.UUID  `json:"id"`
+	OrganizationID             uuid.UUID  `json:"organizationId"`
+	Name                       string     `json:"name"`
+	IDPMetadata                string     `json:"-"`
+	CertificatePEM             string     `json:"-"`
+	EncryptedPrivateKey        string     `json:"-"`
+	Domains                    []string   `json:"domains"`
+	EmailAttribute             string     `json:"emailAttribute"`
+	NameAttribute              string     `json:"nameAttribute"`
+	DefaultRole                string     `json:"defaultRole"`
+	AllowIDPInitiated          bool       `json:"allowIdpInitiated"`
+	Enabled                    bool       `json:"enabled"`
+	SPCertificateNotAfter      *time.Time `json:"spCertificateNotAfter,omitempty"`
+	IDPCertificateNotAfter     *time.Time `json:"idpCertificateNotAfter,omitempty"`
+	CertificateConfigurationOK bool       `json:"certificateConfigurationOk"`
 }
 
 type DatabaseBackup struct {
@@ -2041,7 +2044,7 @@ func (s *Store) UpdateSAMLProvider(ctx context.Context, organizationID uuid.UUID
 		return SAMLProvider{}, err
 	}
 	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err = tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -2063,8 +2066,17 @@ func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider
 	return p, err
 }
 
+func (s *Store) GetOrganizationSAMLProvider(ctx context.Context, organizationID, id uuid.UUID) (SAMLProvider, error) {
+	var p SAMLProvider
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SAMLProvider{}, ErrNotFound
+	}
+	return p, err
+}
+
 func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID) ([]SAMLProvider, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -2072,7 +2084,7 @@ func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID)
 	items := []SAMLProvider{}
 	for rows.Next() {
 		var p SAMLProvider
-		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
+		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
 			return nil, err
 		}
 		items = append(items, p)

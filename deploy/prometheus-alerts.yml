@@ -226,3 +226,29 @@ groups:
         annotations:
           summary: A Dockyard SCIM token expired
           description: SCIM token {{ $labels.token }} can no longer provision identities; issue a replacement and update the identity provider.
+
+      - alert: DockyardSAMLCertificateExpiring
+        expr: dockyard_saml_certificate_expiry_seconds > 0 and dockyard_saml_certificate_expiry_seconds < 2592000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard SAML certificate is approaching expiry
+          description: SAML provider {{ $labels.provider }} {{ $labels.kind }} trust expires in less than thirty days; complete the provider rollover before login is interrupted.
+
+      - alert: DockyardSAMLCertificateExpired
+        expr: dockyard_saml_certificate_expiry_seconds <= 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard SAML certificate expired
+          description: SAML provider {{ $labels.provider }} {{ $labels.kind }} trust has expired and federated login is impaired.
+
+      - alert: DockyardSAMLCertificateInvalid
+        expr: dockyard_saml_certificate_valid == 0 unless on (organization, provider, kind) dockyard_saml_certificate_expiry_seconds <= 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard SAML certificate configuration is unusable
+          description: SAML provider {{ $labels.provider }} {{ $labels.kind }} certificate material is malformed or not currently valid.
