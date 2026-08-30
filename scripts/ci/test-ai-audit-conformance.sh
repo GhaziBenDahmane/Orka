@@ -65,6 +65,8 @@ jq -e '
   .agentCAMismatchDetected and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and
+  .findingTriageAudited and .auditorTriageDenied and
+  .triageTenantIsolated and
   (.sourceCommit | test("^[a-f0-9]{40}$"))
 ' "$evidence_file" >/dev/null
 

@@ -37,8 +37,11 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	t.Cleanup(db.Pool.Close)
 
 	organizationID, accountID, clusterID := uuid.New(), uuid.New(), uuid.New()
+	ownerID, ownerSessionID := uuid.New(), uuid.New()
+	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
+	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
 	secretMarker := "DO_NOT_EXPOSE_AI_CONFORMANCE_SECRET_" + uuid.NewString()
 	activeAgentCA, _, err := agentpki.NewCA(time.Now(), 48*time.Hour)
 	if err != nil {
@@ -57,8 +60,14 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		args  []any
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'AI conformance',$2)`, []any{organizationID, "ai-conformance-" + organizationID.String()}},
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Other AI conformance',$2)`, []any{otherOrganizationID, "other-ai-conformance-" + otherOrganizationID.String()}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!conformance')`, []any{ownerID, ownerID.String() + "@example.test"}},
+		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 day','local')`, []any{ownerSessionID, ownerID, cryptox.Digest(ownerToken)}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'conformance-auditor','auditor',true)`, []any{accountID, organizationID}},
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 day')`, []any{uuid.New(), accountID, cryptox.Digest(auditorToken)}},
+		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'other-conformance-auditor','auditor',true)`, []any{otherAccountID, otherOrganizationID}},
+		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status) VALUES($1,$2,$3,'other-auditor','completed')`, []any{otherRunID, otherOrganizationID, otherAccountID}},
+		{`INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,evidence,fingerprint) VALUES($1,$2,'low','isolation','Other tenant finding','Must remain unchanged','{}','other-tenant')`, []any{otherFindingID, otherRunID}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audited project','audited-project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Sensitive service','sensitive-service',$3,$4,$5,2)`, []any{serviceID, environmentID, "ai-conformance-" + serviceID.String(), "services: {app: {image: example.invalid/private, environment: [" + secretMarker + "]}}", "encrypted:" + secretMarker}},
@@ -71,6 +80,8 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrganizationID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, ownerID)
 	})
 
 	platform := httptest.NewServer((&httpapi.Server{Store: db, AgentCACertificate: activeAgentCA, AgentPreviousCACertificate: previousAgentCA}).Handler())
@@ -174,6 +185,54 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if auditEvents != 2 {
 		t.Fatalf("AI audit lifecycle events=%d, want 2", auditEvents)
 	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, ownerID); err != nil {
+		t.Fatal(err)
+	}
+
+	var findingID uuid.UUID
+	if err = db.Pool.QueryRow(ctx, `SELECT id FROM ai_audit_findings WHERE run_id=$1 AND title='Capacity requires review'`, runID).Scan(&findingID); err != nil {
+		t.Fatal(err)
+	}
+	triage := func(token string, id uuid.UUID, body string) (int, []byte) {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPatch, platform.URL+"/v1/ai/audit-findings/"+id.String(), strings.NewReader(body))
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("X-Organization-ID", organizationID.String())
+		request.Header.Set("Content-Type", "application/json")
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		data, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return response.StatusCode, data
+	}
+	triageStatus, triageBody := triage(ownerToken, findingID, `{"disposition":"acknowledged","note":"reviewed during conformance"}`)
+	var triaged store.AIAuditFinding
+	if err = json.Unmarshal(triageBody, &triaged); triageStatus != http.StatusOK || err != nil || triaged.Disposition != "acknowledged" || triaged.TriagedByUser == nil || *triaged.TriagedByUser != ownerID || triaged.TriagedAt == nil {
+		t.Fatalf("owner triage status=%d finding=%#v body=%s err=%v", triageStatus, triaged, triageBody, err)
+	}
+	triageStatus, triageBody = triage(auditorToken, findingID, `{"disposition":"resolved"}`)
+	if triageStatus != http.StatusForbidden || !bytes.Contains(triageBody, []byte(`"code":"forbidden"`)) {
+		t.Fatalf("auditor triage status=%d body=%s", triageStatus, triageBody)
+	}
+	triageStatus, triageBody = triage(ownerToken, otherFindingID, `{"disposition":"resolved"}`)
+	if triageStatus != http.StatusNotFound {
+		t.Fatalf("cross-tenant triage status=%d body=%s", triageStatus, triageBody)
+	}
+	var otherDisposition string
+	if err = db.Pool.QueryRow(ctx, `SELECT disposition FROM ai_audit_findings WHERE id=$1`, otherFindingID).Scan(&otherDisposition); err != nil || otherDisposition != "open" {
+		t.Fatalf("other-tenant disposition=%q err=%v", otherDisposition, err)
+	}
+	var triageAuditEvents int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action='ai_audit_finding.acknowledged' AND resource_id=$3`, organizationID, ownerID, findingID.String()).Scan(&triageAuditEvents); err != nil || triageAuditEvents != 1 {
+		t.Fatalf("AI finding triage audit events=%d err=%v", triageAuditEvents, err)
+	}
 
 	evidence, _ := json.Marshal(map[string]any{
 		"status":                         "passed",
@@ -187,6 +246,9 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"durableRunCompleted":            true,
 		"lifecycleAudited":               true,
 		"auditorLeastPrivilege":          true,
+		"findingTriageAudited":           true,
+		"auditorTriageDenied":            true,
+		"triageTenantIsolated":           true,
 	})
 	fmt.Printf("AI_AUDIT_EVIDENCE %s\n", evidence)
 }

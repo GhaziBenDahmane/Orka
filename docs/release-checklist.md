@@ -86,7 +86,9 @@ links for every item below.
   tenant API and PostgreSQL store against a disposable OpenAI-compatible
   endpoint. It proves snapshot secret redaction, prompt trust boundaries,
   durable deterministic and model findings, audited completion, and denial of
-  normal workload APIs to the auditor identity. The release attaches
+  normal workload APIs to the auditor identity. It also proves audited
+  administrator finding triage, denies triage to the auditor identity, and
+  prevents cross-tenant finding mutation. The release attaches
   `ai-audit-conformance.json`.
 - `make test-notification-conformance` drives encrypted provider records and
   durable jobs through signed webhook and Slack-compatible delivery,
