@@ -81,7 +81,7 @@ printf '%s' "$AUDITOR_TOKEN" | docker secret create dockyard_ai_auditor_token -
 printf '%s' "$MODEL_API_KEY" | docker secret create dockyard_ai_api_key -
 DOCKYARD_IMAGE='registry.example/dockyard@sha256:...' \
 NINEROUTER_IMAGE='decolua/9router@sha256:...' \
-HEADROOM_IMAGE='ghcr.io/chopratejas/headroom@sha256:...' \
+HEADROOM_IMAGE='ghcr.io/headroomlabs-ai/headroom@sha256:...' \
 DOCKYARD_AI_MODEL='provider/model-name' \
 docker stack deploy -c deploy/ai-auditors.yml dockyard-ai
 ```

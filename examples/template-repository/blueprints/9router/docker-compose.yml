@@ -11,6 +11,6 @@ services:
       - router-data:/app/data
     depends_on: [headroom]
   headroom:
-    image: ghcr.io/chopratejas/headroom:${HEADROOM_VERSION}
+    image: ghcr.io/headroomlabs-ai/headroom:${HEADROOM_VERSION}
 volumes:
   router-data: {}

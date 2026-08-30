@@ -29,3 +29,22 @@ func TestBarkTraceTemplatePinsReleasedImage(t *testing.T) {
 		}
 	}
 }
+
+func TestNineRouterTemplatePinsReleasedImages(t *testing.T) {
+	definition, err := fs.ReadFile(builtinCatalog, "builtin/blueprints/9router/template.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose, err := fs.ReadFile(builtinCatalog, "builtin/blueprints/9router/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(definition), `router_version = "0.5.59"`) ||
+		!strings.Contains(string(definition), `headroom_version = "0.37.0"`) ||
+		strings.Contains(string(definition), `"latest"`) {
+		t.Fatalf("9Router template must pin released image versions: %s", definition)
+	}
+	if !strings.Contains(string(compose), "ghcr.io/headroomlabs-ai/headroom:${HEADROOM_VERSION}") {
+		t.Fatalf("9Router template uses the wrong Headroom package: %s", compose)
+	}
+}
