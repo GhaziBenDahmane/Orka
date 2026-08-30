@@ -45,8 +45,11 @@ and reads one JSON response from stdout. Protocol version 1 supports
 `describe`, `render`, `backup`, `restore`, and `readiness`. Calls time out after
 15 seconds and input and output are each capped at 4 MiB. The Go SDK rejects
 unknown request fields, trailing JSON, and operation-confused request shapes
-before invoking driver code. Utility plans are executed in the same isolated
-Docker jobs as built-in drivers; image names and artifact
+before invoking driver code. The controller independently bounds its encoded
+request and validates render names, versions, utility hosts, credential maps,
+and artifact filenames before starting the privileged extension process.
+Utility plans are executed in the same isolated Docker jobs as built-in
+drivers; image names and artifact
 extensions are validated before execution. Plans are limited to 128 non-empty
 arguments (128 KiB total), 128 POSIX-named environment entries (1 MiB total),
 and 32 basename-only helper files (1 MiB total). An argument is at most 16 KiB,

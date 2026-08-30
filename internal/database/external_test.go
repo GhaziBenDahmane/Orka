@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
 )
 
 func TestExternalDriverProtocol(t *testing.T) {
@@ -283,6 +285,47 @@ func TestExternalDriverRejectsInvalidRenderBoundaries(t *testing.T) {
 				t.Fatal("invalid external render result was accepted")
 			}
 		})
+	}
+}
+
+func TestExternalDriverRejectsInvalidRenderRequestsBeforeExecution(t *testing.T) {
+	driver := &externalDriver{path: filepath.Join(t.TempDir(), "missing-driver"), description: databaseplugin.Description{Name: "render-test", DefaultVersion: "1"}}
+	tests := []Request{
+		{Name: "../data", Version: "1"},
+		{Name: "data", Version: "../../latest"},
+		{Name: "data", Version: "1", Config: map[string]any{"unsupported": make(chan int)}},
+		{Name: "data", Version: "1", Config: map[string]any{"oversized": strings.Repeat("x", databaseplugin.MaxRequestBytes)}},
+	}
+	for _, request := range tests {
+		if _, err := driver.Render(request); err == nil || strings.Contains(err.Error(), "open database driver") {
+			t.Fatalf("invalid render request reached driver execution: request=%#v err=%v", request, err)
+		}
+	}
+}
+
+func TestExternalDriverRejectsInvalidUtilityRequestsBeforeExecution(t *testing.T) {
+	driver := &externalDriver{
+		path: filepath.Join(t.TempDir(), "missing-driver"),
+		description: databaseplugin.Description{
+			Name: "utility-test", DefaultVersion: "1", Capabilities: []string{"backup-restore"}, BackupExtension: "dump",
+		},
+	}
+	tests := []struct {
+		operation string
+		request   databaseplugin.UtilityRequest
+	}{
+		{operation: "backup", request: databaseplugin.UtilityRequest{Version: "../1", Host: "data", Filename: "backup.dump"}},
+		{operation: "backup", request: databaseplugin.UtilityRequest{Version: "1", Host: "data;evil", Filename: "backup.dump"}},
+		{operation: "backup", request: databaseplugin.UtilityRequest{Version: "1", Host: "data", Credentials: map[string]string{"bad name": "secret"}, Filename: "backup.dump"}},
+		{operation: "restore", request: databaseplugin.UtilityRequest{Version: "1", Host: "data", Filename: "../backup.dump"}},
+		{operation: "restore", request: databaseplugin.UtilityRequest{Version: "1", Host: "data", Filename: "backup.sql"}},
+		{operation: "readiness", request: databaseplugin.UtilityRequest{Version: "1", Host: "data", Filename: "unexpected.dump"}},
+		{operation: "unknown", request: databaseplugin.UtilityRequest{Version: "1", Host: "data"}},
+	}
+	for _, test := range tests {
+		if _, err := driver.plan(test.operation, test.request); err == nil || strings.Contains(err.Error(), "open database driver") {
+			t.Fatalf("invalid utility request reached driver execution: operation=%s request=%#v err=%v", test.operation, test.request, err)
+		}
 	}
 }
 

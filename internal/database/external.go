@@ -39,12 +39,18 @@ const (
 
 var (
 	externalCredentialName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
+	externalDatabaseHost   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	externalDatabaseName   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	externalArtifactName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 	externalURLScheme      = regexp.MustCompile(`^[a-z][a-z0-9+.-]{0,31}$`)
 )
 
 func (d *externalDriver) Name() string           { return d.description.Name }
 func (d *externalDriver) DefaultVersion() string { return d.description.DefaultVersion }
 func (d *externalDriver) Render(request Request) (Result, error) {
+	if !externalDatabaseName.MatchString(request.Name) || !safeVersion.MatchString(request.Version) {
+		return Result{}, errors.New("invalid external database render parameters")
+	}
 	response, err := d.call(databaseplugin.Request{Render: &databaseplugin.RenderRequest{Name: request.Name, Version: request.Version, Config: request.Config}}, "render")
 	if err != nil || response.Result == nil {
 		return Result{}, responseError(err, "driver returned no render result")
@@ -124,6 +130,9 @@ func (d *externalDriver) plan(operation string, request databaseplugin.UtilityRe
 	if (operation == "backup" || operation == "restore") && !d.hasCapability("backup-restore") {
 		return BackupPlan{}, errors.New("external database driver does not declare backup and restore support")
 	}
+	if err := d.validateUtilityRequest(operation, request); err != nil {
+		return BackupPlan{}, err
+	}
 	response, err := d.call(databaseplugin.Request{Utility: &request}, operation)
 	if err != nil || response.Plan == nil {
 		return BackupPlan{}, responseError(err, "driver returned no utility plan")
@@ -139,6 +148,29 @@ func (d *externalDriver) plan(operation string, request databaseplugin.UtilityRe
 	return plan, nil
 }
 
+func (d *externalDriver) validateUtilityRequest(operation string, request databaseplugin.UtilityRequest) error {
+	if !safeVersion.MatchString(request.Version) || !externalDatabaseHost.MatchString(request.Host) {
+		return errors.New("invalid external database utility parameters")
+	}
+	if err := validateExternalStringMap(request.Credentials, externalCredentialName); err != nil {
+		return errors.New("invalid external database utility credentials")
+	}
+	switch operation {
+	case "readiness":
+		if request.Filename != "" {
+			return errors.New("invalid external database readiness filename")
+		}
+	case "backup", "restore":
+		extension, supported := d.BackupExtension()
+		if !supported || !externalArtifactName.MatchString(request.Filename) || !strings.HasSuffix(request.Filename, "."+extension) {
+			return errors.New("invalid external database utility filename")
+		}
+	default:
+		return errors.New("invalid external database utility operation")
+	}
+	return nil
+}
+
 func (d *externalDriver) hasCapability(expected string) bool {
 	for _, capability := range d.description.Capabilities {
 		if capability == expected {
@@ -150,7 +182,13 @@ func (d *externalDriver) hasCapability(expected string) bool {
 
 func (d *externalDriver) call(request databaseplugin.Request, operation string) (databaseplugin.Response, error) {
 	request.ProtocolVersion, request.Operation = databaseplugin.ProtocolVersion, operation
-	payload, _ := json.Marshal(request)
+	payload, err := json.Marshal(request)
+	if err != nil {
+		return databaseplugin.Response{}, errors.New("encode database driver request")
+	}
+	if len(payload) > databaseplugin.MaxRequestBytes {
+		return databaseplugin.Response{}, errors.New("database driver request exceeds size limit")
+	}
 	executable, err := openTrustedDriver(d.path)
 	if err != nil {
 		return databaseplugin.Response{}, fmt.Errorf("open database driver %s: %w", filepath.Base(d.path), err)
