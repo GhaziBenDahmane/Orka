@@ -73,6 +73,8 @@ allowed to finish before deletion can begin.
 - Safe workloads may use only Docker's local, JSON-file, or disabled logging
   drivers with local rotation options; daemon-side network/plugin log drivers
   require unsafe-workload mode.
+- Host cgroup, kernel, ulimit, storage, lifecycle-hook, model-runner, and generic
+  resource directives are also reserved for explicit unsafe workloads.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

@@ -75,7 +75,9 @@ safe profile also rejects node-wide global scheduling and caps each stack at
 100 aggregate replicated tasks, preventing a single service record from
 bypassing resource-count quotas through unbounded Compose fan-out. External
 logging drivers and their daemon-side network/plugin execution are rejected;
-safe workloads can configure only bounded local log rotation. The
+safe workloads can configure only bounded local log rotation. Host cgroup,
+kernel, ulimit, storage, lifecycle-hook, model-runner, legacy scaling, and
+generic-resource directives are also rejected. The
 controller and remote agent retain Docker-manager authority and therefore
 remain high-value trusted components; tenant workloads never receive their
 sockets or credentials.

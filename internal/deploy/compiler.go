@@ -259,6 +259,8 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 		"devices", "device_cgroup_rules", "volumes_from", "gpus", "runtime", "isolation",
 		"env_file", "label_file", "extends", "develop", "provider",
 		"secrets", "configs", "credential_spec", "use_api_socket",
+		"cgroup_parent", "storage_opt", "sysctls", "ulimits", "oom_kill_disable", "oom_score_adj",
+		"scale", "models", "post_start", "pre_stop",
 	} {
 		if value, exists := service[key]; exists && value != nil {
 			return fmt.Errorf("service %q requests forbidden %s access", name, key)
@@ -266,6 +268,9 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 	}
 	if devices := nestedValue(service, "deploy", "resources", "reservations", "devices"); devices != nil {
 		return fmt.Errorf("service %q requests reserved device access", name)
+	}
+	if resources := nestedValue(service, "deploy", "resources", "reservations", "generic_resources"); resources != nil {
+		return fmt.Errorf("service %q requests reserved generic resource access", name)
 	}
 	if capabilities, exists := service["cap_add"]; exists && capabilities != nil {
 		return fmt.Errorf("service %q requests added Linux capabilities", name)
@@ -420,7 +425,7 @@ func validateSafeLogging(serviceName string, raw any) error {
 }
 
 func (c Compiler) validateSafeDocument(document map[string]any) error {
-	for _, key := range []string{"secrets", "configs", "include"} {
+	for _, key := range []string{"secrets", "configs", "include", "models"} {
 		if value, exists := document[key]; exists && value != nil {
 			return fmt.Errorf("compose document requests forbidden top-level %s", key)
 		}
