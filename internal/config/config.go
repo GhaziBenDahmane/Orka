@@ -43,8 +43,8 @@ type Config struct {
 
 func Load() (Config, error) {
 	ttl, err := time.ParseDuration(env("DOCKYARD_SESSION_TTL", "24h"))
-	if err != nil {
-		return Config{}, fmt.Errorf("parse DOCKYARD_SESSION_TTL: %w", err)
+	if err != nil || ttl < 5*time.Minute || ttl > 30*24*time.Hour {
+		return Config{}, errors.New("DOCKYARD_SESSION_TTL must be between 5m and 720h")
 	}
 	concurrency, err := strconv.Atoi(env("DOCKYARD_WORKER_CONCURRENCY", "2"))
 	if err != nil || concurrency < 1 || concurrency > 32 {
@@ -98,6 +98,11 @@ func Load() (Config, error) {
 	otlpEndpoint := strings.TrimSpace(os.Getenv("DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if otlpEndpoint == "" {
 		otlpEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	}
+	publicURL := strings.TrimRight(strings.TrimSpace(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080")), "/")
+	parsedPublicURL, err := url.Parse(publicURL)
+	if err != nil || (parsedPublicURL.Scheme != "http" && parsedPublicURL.Scheme != "https") || parsedPublicURL.Hostname() == "" || parsedPublicURL.User != nil || parsedPublicURL.RawQuery != "" || parsedPublicURL.Fragment != "" || (parsedPublicURL.Path != "" && parsedPublicURL.Path != "/") {
+		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must be an HTTP(S) origin without credentials, path, query, or fragment")
 	}
 	agentCACertificate, err := secretEnv("DOCKYARD_AGENT_CA_CERT")
 	if err != nil {
@@ -154,7 +159,7 @@ func Load() (Config, error) {
 		SessionTTL:               ttl,
 		TraefikNetwork:           env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
 		UnsafeWorkloads:          unsafeWorkloads,
-		PublicURL:                strings.TrimRight(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"), "/"),
+		PublicURL:                publicURL,
 		BackupDirectory:          filepath.Clean(backupDirectory),
 		RequireRemoteBackups:     requireRemoteBackups,
 		OTLPEndpoint:             otlpEndpoint,
@@ -173,10 +178,14 @@ func Load() (Config, error) {
 }
 
 func secretEnv(key string) (string, error) {
-	if value := os.Getenv(key); value != "" {
+	value, path := os.Getenv(key), os.Getenv(key+"_FILE")
+	if value != "" && path != "" {
+		return "", fmt.Errorf("%s and %s_FILE cannot both be configured", key, key)
+	}
+	if value != "" {
 		return strings.TrimSpace(value), nil
 	}
-	if path := os.Getenv(key + "_FILE"); path != "" {
+	if path != "" {
 		value, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read %s_FILE: %w", key, err)

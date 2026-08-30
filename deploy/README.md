@@ -58,6 +58,13 @@ convergence check. If pre-deployment setup fails, resources created by that
 attempt are removed; once stack deployment begins, failed resources are left
 intact for Docker diagnostics and an explicit retry.
 
+Controller startup also rejects ambiguous secret configuration: do not set a
+`DOCKYARD_*` secret value and its matching `DOCKYARD_*_FILE` variable at the
+same time. `DOCKYARD_PUBLIC_URL` must be a plain HTTP(S) origin without a path,
+query, fragment, or embedded credentials, and `DOCKYARD_SESSION_TTL` must be
+between five minutes and 30 days. These checks run before database migrations
+or Docker operations.
+
 The equivalent manual commands are:
 
 ```sh

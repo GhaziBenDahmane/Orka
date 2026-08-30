@@ -39,6 +39,62 @@ func TestLoadRejectsInvalidRemoteBackupPolicy(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnsafeSessionLifetime(t *testing.T) {
+	for _, value := range []string{"invalid", "0s", "4m59s", "721h"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_SESSION_TTL", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_SESSION_TTL") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	for _, value := range []string{"5m", "24h", "720h"} {
+		t.Run("valid_"+value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_SESSION_TTL", value)
+			if _, err := Load(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestLoadValidatesPublicOrigin(t *testing.T) {
+	for _, value := range []string{
+		"localhost:8080", "ftp://example.test", "https://user@example.test",
+		"https://example.test/path", "https://example.test?debug=true", "https://example.test/#fragment",
+	} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_PUBLIC_URL", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_PUBLIC_URL") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_PUBLIC_URL", " https://dockyard.example.test/ ")
+	cfg, err := Load()
+	if err != nil || cfg.PublicURL != "https://dockyard.example.test" {
+		t.Fatalf("public URL=%q error=%v", cfg.PublicURL, err)
+	}
+}
+
+func TestLoadRejectsAmbiguousSecretSources(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "secret")
+	if err := os.WriteFile(path, []byte("postgres://from-file.example.test/dockyard"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKYARD_DATABASE_URL", "postgres://from-env.example.test/dockyard")
+	t.Setenv("DOCKYARD_DATABASE_URL_FILE", path)
+	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "cannot both be configured") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestLoadRequiresVerifiedDatabaseTLSWhenConfigured(t *testing.T) {
 	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	t.Setenv("DOCKYARD_REQUIRE_DATABASE_TLS", "true")
