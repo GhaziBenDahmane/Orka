@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/google/uuid"
 )
 
 func TestBootstrapRateLimitReturnsRetryAfter(t *testing.T) {
@@ -61,5 +64,50 @@ func TestLoginDatabaseFailureIsNotReportedAsBadCredentials(t *testing.T) {
 	}
 	if bytes.Contains(recorder.Body.Bytes(), []byte("closed pool")) {
 		t.Fatalf("database detail leaked: %q", recorder.Body.String())
+	}
+}
+
+func TestPublicIdentityEndpointsAreRateLimitedBeforeExpensiveWork(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	db, err := store.Open(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Pool.Close()
+	for bucket, attempts := range map[string]int{
+		"sso-discovery-global": 300,
+		"sso-start-global":     300,
+		"sso-callback-global":  300,
+		"sso-metadata-global":  300,
+		"agent-enroll-global":  120,
+	} {
+		if _, err = db.Pool.Exec(context.Background(), `INSERT INTO auth_rate_limits(bucket,key_hash,window_started_at,attempts) VALUES($1,$2,now(),$3) ON CONFLICT(bucket,key_hash) DO UPDATE SET window_started_at=now(),attempts=excluded.attempts`, bucket, cryptox.Digest("instance"), attempts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := (&Server{Store: db, AgentCACertificate: []byte("configured"), AgentCAKey: []byte("configured")}).Handler()
+	requests := []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/discover?email=user@example.test", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/"+uuid.NewString()+"/start", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/callback?state=state&code=code", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/auth/saml/discover?email=user@example.test", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/auth/saml/"+uuid.NewString()+"/metadata", nil),
+		httptest.NewRequest(http.MethodGet, "/v1/auth/saml/"+uuid.NewString()+"/start", nil),
+		httptest.NewRequest(http.MethodPost, "/v1/auth/saml/"+uuid.NewString()+"/acs", strings.NewReader("SAMLResponse=value")),
+		httptest.NewRequest(http.MethodPost, "/v1/agent/enroll", bytes.NewBufferString(`{"token":"dky_agent_invalid","csr":"invalid"}`)),
+	}
+	for index, request := range requests {
+		request.Header.Set("Content-Type", "application/json")
+		if strings.Contains(request.URL.Path, "/acs") {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") == "" {
+			t.Fatalf("request %d %s: status=%d retry-after=%q body=%q", index, request.URL.Path, recorder.Code, recorder.Header().Get("Retry-After"), recorder.Body.String())
+		}
 	}
 }

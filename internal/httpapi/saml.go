@@ -196,6 +196,9 @@ func (s *Server) discoverSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
+		return
+	}
 	providers, err := s.Store.DiscoverSAML(r.Context(), parts[1])
 	if err != nil {
 		writeStoreError(w, err)
@@ -205,7 +208,15 @@ func (s *Server) discoverSAML(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request) {
-	provider, sp, err := s.samlServiceProvider(r.Context(), r.PathValue("providerID"))
+	providerID, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-metadata-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-metadata-provider", cryptox.Digest(providerID.String()), 60) {
+		return
+	}
+	provider, sp, err := s.samlServiceProvider(r.Context(), providerID.String())
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -222,6 +233,14 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startSAML(w http.ResponseWriter, r *http.Request) {
+	providerID, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-start-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-start-provider", cryptox.Digest(providerID.String()), 60) {
+		return
+	}
 	provider, sp, err := s.samlServiceProvider(r.Context(), r.PathValue("providerID"))
 	if err != nil {
 		writeStoreError(w, err)
@@ -257,6 +276,9 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	providerID, err := uuid.Parse(r.PathValue("providerID"))
 	if err != nil {
 		writeError(w, 400, "invalid_id", "invalid provider id")
+		return
+	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-callback-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-callback-provider", cryptox.Digest(providerID.String()), 60) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)

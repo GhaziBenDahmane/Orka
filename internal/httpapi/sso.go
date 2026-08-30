@@ -174,6 +174,9 @@ func (s *Server) discoverOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
+		return
+	}
 	providers, err := s.Store.DiscoverOIDC(r.Context(), parts[1])
 	if err != nil {
 		writeStoreError(w, err)
@@ -188,6 +191,9 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid provider id")
 		return
 	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-start-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-start-provider", cryptox.Digest(id.String()), 60) {
+		return
+	}
 	provider, err := s.Store.GetOIDCProvider(r.Context(), id)
 	if err != nil {
 		writeStoreError(w, err)
@@ -197,7 +203,7 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
-		writeError(w, 502, "oidc_discovery_failed", err.Error())
+		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery failed")
 		return
 	}
 	state, err := auth.NewToken()
@@ -229,6 +235,9 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_callback", "state and code are required")
 		return
 	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-callback-global", cryptox.Digest("instance"), 300) {
+		return
+	}
 	if !s.consumeLoginStateCookie(w, r, "oidc", stateValue, http.SameSiteLaxMode) {
 		writeError(w, 400, "invalid_state", "state is not bound to this browser")
 		return
@@ -252,7 +261,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
-		writeError(w, 502, "oidc_discovery_failed", err.Error())
+		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery failed")
 		return
 	}
 	cfg := oauth2.Config{ClientID: provider.ClientID, ClientSecret: string(secret), Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}

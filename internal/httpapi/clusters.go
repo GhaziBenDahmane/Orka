@@ -438,7 +438,11 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	tokenHash := cryptox.Digest(strings.TrimSpace(input.Token))
+	token := strings.TrimSpace(input.Token)
+	if !s.allowAuthenticationAttempt(w, r, "agent-enroll-global", cryptox.Digest("instance"), 120) || !s.allowAuthenticationAttempt(w, r, "agent-enroll-token", cryptox.Digest(token), 20) {
+		return
+	}
+	tokenHash := cryptox.Digest(token)
 	cluster, err := s.Store.LookupClusterEnrollmentToken(r.Context(), tokenHash)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
