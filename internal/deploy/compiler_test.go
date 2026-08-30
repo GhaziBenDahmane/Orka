@@ -44,6 +44,78 @@ func TestCompilePreservesImplicitDefaultNetworkForRoutedService(t *testing.T) {
 	if _, exists := networks["default"]; !exists {
 		t.Fatalf("compiled Compose does not declare the synthesized default network: %s", out)
 	}
+	assertEncryptedOverlay(t, networks, "default")
+	public, _ := stringMap(networks["public"])
+	if public["external"] != true || public["name"] != "public" {
+		t.Fatalf("platform network was changed: %#v", public)
+	}
+	if _, exists := public["driver_opts"]; exists {
+		t.Fatalf("platform network received stack-owned driver options: %#v", public)
+	}
+}
+
+func TestCompileEncryptsImplicitDefaultNetwork(t *testing.T) {
+	out, err := (Compiler{PublicNetwork: "public"}).Compile("services:\n  app:\n    image: alpine\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEncryptedOverlay(t, compiledNetworks(t, out), "default")
+}
+
+func TestCompileEncryptsExplicitStackNetworks(t *testing.T) {
+	source := `services:
+  app:
+    image: alpine
+    networks: [internal]
+networks:
+  internal:
+    internal: true
+`
+	out, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networks := compiledNetworks(t, out)
+	assertEncryptedOverlay(t, networks, "internal")
+	internal, _ := stringMap(networks["internal"])
+	if internal["internal"] != true {
+		t.Fatalf("network properties were not preserved: %#v", internal)
+	}
+}
+
+func TestCompileEncryptsImplicitDefaultAlongsideDeclaredNetwork(t *testing.T) {
+	source := `services:
+  app:
+    image: alpine
+networks:
+  unused: {}
+`
+	out, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networks := compiledNetworks(t, out)
+	assertEncryptedOverlay(t, networks, "default")
+	assertEncryptedOverlay(t, networks, "unused")
+}
+
+func TestCompileSafeModeRejectsUnsafeNetworkDriversAndOptions(t *testing.T) {
+	tests := map[string]string{
+		"bridge driver":      "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    driver: bridge\n",
+		"invalid driver":     "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    driver: 7\n",
+		"extra option":       "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    driver_opts:\n      encrypted: ''\n      com.example.option: enabled\n",
+		"invalid encryption": "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    driver_opts:\n      encrypted: 'false'\n",
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err == nil {
+				t.Fatalf("safe mode accepted unsafe network configuration:\n%s", source)
+			}
+			if _, err := (Compiler{PublicNetwork: "public", AllowUnsafe: true}).Compile(source, nil); err != nil {
+				t.Fatalf("unsafe mode changed explicit network semantics: %v", err)
+			}
+		})
+	}
 }
 
 func TestCompilePreservesImplicitDefaultNetworkAcrossMultipleRoutes(t *testing.T) {
@@ -226,6 +298,20 @@ networks:
 	}
 }
 
+func TestCompileSafeModeRejectsNamedNonExternalPlatformNetwork(t *testing.T) {
+	source := `services:
+  app:
+    image: alpine
+    networks: [public]
+networks:
+  public:
+    name: public
+`
+	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err == nil {
+		t.Fatal("safe mode accepted a cross-stack platform network without external: true")
+	}
+}
+
 func TestCompileRejectsTraefikRuleInjection(t *testing.T) {
 	c := Compiler{PublicNetwork: "public"}
 	for _, route := range []store.Route{
@@ -337,6 +423,34 @@ func compiledService(t *testing.T, compose, name string) map[string]any {
 		t.Fatalf("compiled Compose has no %s service: %s", name, compose)
 	}
 	return service
+}
+
+func compiledNetworks(t *testing.T, compose string) map[string]any {
+	t.Helper()
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(compose), &document); err != nil {
+		t.Fatal(err)
+	}
+	networks, ok := stringMap(document["networks"])
+	if !ok {
+		t.Fatalf("compiled Compose has no networks: %s", compose)
+	}
+	return networks
+}
+
+func assertEncryptedOverlay(t *testing.T, networks map[string]any, name string) {
+	t.Helper()
+	network, ok := stringMap(networks[name])
+	if !ok {
+		t.Fatalf("compiled Compose has no %s network: %#v", name, networks)
+	}
+	if network["driver"] != "overlay" {
+		t.Fatalf("network %s does not use overlay: %#v", name, network)
+	}
+	options, ok := stringMap(network["driver_opts"])
+	if !ok || len(options) != 1 || options["encrypted"] != "" {
+		t.Fatalf("network %s is not encrypted: %#v", name, network)
+	}
 }
 
 func assertNetworkNames(t *testing.T, value any, expected ...string) {

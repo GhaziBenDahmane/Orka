@@ -110,6 +110,11 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		services[route.ServiceName] = service
 	}
 	doc["services"] = services
+	if !c.AllowUnsafe {
+		if err := c.encryptStackNetworks(doc); err != nil {
+			return "", err
+		}
+	}
 	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return "", fmt.Errorf("render compose yaml: %w", err)
@@ -275,12 +280,15 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 	}
 	if networks, ok := stringMap(document["networks"]); ok {
 		for name, raw := range networks {
-			spec, _ := stringMap(raw)
+			spec, valid := stringMap(raw)
+			if raw != nil && !valid {
+				return fmt.Errorf("network %q must be an object", name)
+			}
 			externalValue, hasExternal := spec["external"]
 			external, externalValid := externalValue.(bool)
 			explicitName, hasName := spec["name"]
 			networkName, nameValid := explicitName.(string)
-			isPlatformNetwork := name == c.PublicNetwork && (!hasName || (nameValid && networkName == c.PublicNetwork))
+			isPlatformNetwork := name == c.PublicNetwork && external && (!hasName || (nameValid && networkName == c.PublicNetwork))
 			if hasExternal && !externalValid {
 				return fmt.Errorf("network %q has an invalid external declaration", name)
 			}
@@ -290,6 +298,70 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func (c Compiler) encryptStackNetworks(document map[string]any) error {
+	networks, ok := stringMap(document["networks"])
+	if document["networks"] != nil && !ok {
+		return errors.New("compose networks must be an object")
+	}
+	if networks == nil {
+		networks = map[string]any{}
+	}
+	if len(networks) == 0 || servicesUseDefaultNetwork(document["services"]) {
+		if _, exists := networks["default"]; !exists {
+			networks["default"] = map[string]any{}
+		}
+	}
+	for name, raw := range networks {
+		spec, valid := stringMap(raw)
+		if raw != nil && !valid {
+			return fmt.Errorf("network %q must be an object", name)
+		}
+		if spec == nil {
+			spec = map[string]any{}
+		}
+		if external, _ := spec["external"].(bool); external {
+			continue
+		}
+		if driver, exists := spec["driver"]; exists {
+			driverName, valid := driver.(string)
+			if !valid || driverName != "overlay" {
+				return fmt.Errorf("network %q must use the overlay driver", name)
+			}
+		}
+		if rawOptions, exists := spec["driver_opts"]; exists {
+			options, valid := stringMap(rawOptions)
+			if !valid || len(options) != 1 || options["encrypted"] != "" {
+				return fmt.Errorf("network %q requests unsafe driver options", name)
+			}
+		}
+		spec["driver"] = "overlay"
+		spec["driver_opts"] = map[string]any{"encrypted": ""}
+		networks[name] = spec
+	}
+	document["networks"] = networks
+	return nil
+}
+
+func servicesUseDefaultNetwork(rawServices any) bool {
+	services, _ := stringMap(rawServices)
+	for _, rawService := range services {
+		service, _ := stringMap(rawService)
+		if mode, _ := service["network_mode"].(string); mode == "none" {
+			continue
+		}
+		rawNetworks, exists := service["networks"]
+		if !exists || rawNetworks == nil {
+			return true
+		}
+		for _, name := range networkNames(rawNetworks) {
+			if name == "default" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func nestedValue(value map[string]any, keys ...string) any {
