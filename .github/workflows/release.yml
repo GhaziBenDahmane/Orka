@@ -295,12 +295,20 @@ jobs:
           test "$platform_count" -eq 2
           printf 'amd64=%s@%s\n' "$IMAGE" "$amd64_digest" >> "$GITHUB_OUTPUT"
           printf 'arm64=%s@%s\n' "$IMAGE" "$arm64_digest" >> "$GITHUB_OUTPUT"
+          jq -n \
+            --arg imageIndex "$IMAGE@$DIGEST" \
+            --arg amd64 "$IMAGE@$amd64_digest" \
+            --arg arm64 "$IMAGE@$arm64_digest" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            '{imageIndex:$imageIndex,sourceCommit:$sourceCommit,platforms:{"linux/amd64":$amd64,"linux/arm64":$arm64}}' \
+            > image-platforms.json
 
       - name: Scan exact promoted amd64 image
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
           image-ref: ${{ steps.platforms.outputs.amd64 }}
-          format: table
+          format: json
+          output: trivy-amd64.json
           severity: HIGH,CRITICAL
           ignore-unfixed: false
           exit-code: "1"
@@ -309,10 +317,24 @@ jobs:
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
         with:
           image-ref: ${{ steps.platforms.outputs.arm64 }}
-          format: table
+          format: json
+          output: trivy-arm64.json
           severity: HIGH,CRITICAL
           ignore-unfixed: false
           exit-code: "1"
+
+      - name: Validate vulnerability evidence
+        env:
+          IMAGE_INDEX: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          AMD64_IMAGE: ${{ steps.platforms.outputs.amd64 }}
+          ARM64_IMAGE: ${{ steps.platforms.outputs.arm64 }}
+        run: |
+          set -euo pipefail
+          jq -e --arg imageIndex "$IMAGE_INDEX" --arg amd64 "$AMD64_IMAGE" --arg arm64 "$ARM64_IMAGE" --arg sourceCommit "$GITHUB_SHA" \
+            '.imageIndex == $imageIndex and .sourceCommit == $sourceCommit and .platforms["linux/amd64"] == $amd64 and .platforms["linux/arm64"] == $arm64' \
+            image-platforms.json >/dev/null
+          jq -e '[.Results[]?.Vulnerabilities[]?] | length == 0' trivy-amd64.json >/dev/null
+          jq -e '[.Results[]?.Vulnerabilities[]?] | length == 0' trivy-arm64.json >/dev/null
 
       - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
 
@@ -421,7 +443,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -432,6 +454,9 @@ jobs:
           path: |
             promotion-manifest.json
             image-digest.txt
+            image-platforms.json
+            trivy-amd64.json
+            trivy-arm64.json
             sbom.spdx.json
             database-recovery-evidence.json
             sso-keycloak-evidence.json
@@ -452,7 +477,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

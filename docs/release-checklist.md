@@ -176,8 +176,10 @@ links for every item below.
   package-administration rights when the workflow `GITHUB_TOKEN` cannot change
   package visibility; publication fails closed instead of leaving an
   unusable private release. It also creates the matching immutable GitHub
-  Release with `promotion-manifest.json`, `image-digest.txt`, and a downloadable
-  `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
+  Release with `promotion-manifest.json`, `image-digest.txt`,
+  `image-platforms.json`, per-architecture `trivy-amd64.json` and
+  `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
+  `database-recovery-evidence.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
   `agent-certificate-conformance.json`, `ai-audit-conformance.json`,
