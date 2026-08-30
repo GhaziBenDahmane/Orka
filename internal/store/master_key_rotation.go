@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"sort"
@@ -15,6 +16,11 @@ import (
 )
 
 const masterKeyRotationLock int64 = 721046141
+
+const (
+	masterKeyVerifierContext   = "master-key-verifier:control-plane"
+	masterKeyVerifierPlaintext = "dockyard-master-key-verifier-v1"
+)
 
 // MasterKeyRotationReport contains only non-secret operational metadata.
 type MasterKeyRotationReport struct {
@@ -57,6 +63,62 @@ var masterKeyEncryptedColumns = []encryptedColumnSpec{
 	{table: "template_repositories", column: "encrypted_webhook_secret", idColumn: "id", contextColumn: "id", contextKind: "template-repository-webhook"},
 	{table: "volume_backups", column: "encrypted_data_key", idColumn: "id", contextColumn: "id", contextKind: "volume-backup-data-key"},
 	{table: "webhook_integrations", column: "encrypted_secret", idColumn: "id", contextColumn: "id", contextKind: "webhook-secret"},
+}
+
+// VerifyOrInitializeMasterKey fails closed before the controller starts any
+// workers or listeners. Existing installations are bootstrapped only after
+// every persisted ciphertext authenticates with the supplied key.
+func VerifyOrInitializeMasterKey(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) error {
+	if box == nil {
+		return errors.New("master-key verifier requires an encryption key")
+	}
+	// Read committed is intentional: a second HA replica may begin while the
+	// first holds the advisory lock and must see the verifier after that first
+	// transaction commits rather than retaining a stale pre-lock snapshot.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin master-key verification: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, masterKeyRotationLock); err != nil {
+		return fmt.Errorf("acquire master-key verification lock: %w", err)
+	}
+	var ciphertext string
+	err = tx.QueryRow(ctx, `SELECT ciphertext FROM master_key_verifier WHERE singleton=true FOR UPDATE`).Scan(&ciphertext)
+	if err == nil {
+		if err = authenticateMasterKeyVerifier(box, ciphertext); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("read master-key verifier: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		return err
+	}
+	if err = lockEncryptedTables(ctx, tx, "SHARE"); err != nil {
+		return fmt.Errorf("lock encrypted tables while initializing master-key verifier: %w", err)
+	}
+	if err = validateEncryptedColumnInventory(ctx, tx); err != nil {
+		return err
+	}
+	for _, spec := range masterKeyEncryptedColumns {
+		if _, err = validateEncryptedRows(ctx, tx, box, spec); err != nil {
+			return fmt.Errorf("initialize master-key verifier: %w", err)
+		}
+	}
+	ciphertext, err = encryptMasterKeyVerifier(box)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO master_key_verifier(singleton,ciphertext) VALUES(true,$1)`, ciphertext); err != nil {
+		return fmt.Errorf("store master-key verifier: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit master-key verification: %w", err)
+	}
+	return nil
 }
 
 // RotateMasterKey validates every ciphertext before changing any row, then
@@ -105,6 +167,10 @@ func RotateMasterKey(ctx context.Context, pool *pgxpool.Pool, oldKey, newKey []b
 	if err = validateOfflineState(ctx, tx); err != nil {
 		return report, err
 	}
+	verifierExists, err := validateMasterKeyVerifier(ctx, tx, oldBox)
+	if err != nil {
+		return report, err
+	}
 
 	// The first pass authenticates the entire data set before any row changes.
 	for _, spec := range masterKeyEncryptedColumns {
@@ -125,6 +191,18 @@ func RotateMasterKey(ctx context.Context, pool *pgxpool.Pool, oldKey, newKey []b
 			return report, err
 		}
 	}
+	verifier, err := encryptMasterKeyVerifier(newBox)
+	if err != nil {
+		return report, err
+	}
+	if verifierExists {
+		_, err = tx.Exec(ctx, `UPDATE master_key_verifier SET ciphertext=$1,updated_at=now() WHERE singleton=true`, verifier)
+	} else {
+		_, err = tx.Exec(ctx, `INSERT INTO master_key_verifier(singleton,ciphertext) VALUES(true,$1)`, verifier)
+	}
+	if err != nil {
+		return report, fmt.Errorf("rotate master-key verifier: %w", err)
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return report, fmt.Errorf("commit master-key rotation: %w", err)
 	}
@@ -133,8 +211,8 @@ func RotateMasterKey(ctx context.Context, pool *pgxpool.Pool, oldKey, newKey []b
 }
 
 func lockRotationTables(ctx context.Context, tx pgx.Tx) error {
-	tables := []string{"controller_leases", "jobs"}
-	seen := map[string]bool{"controller_leases": true, "jobs": true}
+	tables := []string{"controller_leases", "jobs", "master_key_verifier"}
+	seen := map[string]bool{"controller_leases": true, "jobs": true, "master_key_verifier": true}
 	for _, spec := range masterKeyEncryptedColumns {
 		if !seen[spec.table] {
 			tables = append(tables, spec.table)
@@ -148,6 +226,60 @@ func lockRotationTables(ctx context.Context, tx pgx.Tx) error {
 	}
 	_, err := tx.Exec(ctx, "LOCK TABLE "+strings.Join(quoted, ", ")+" IN ACCESS EXCLUSIVE MODE")
 	return err
+}
+
+func lockEncryptedTables(ctx context.Context, tx pgx.Tx, mode string) error {
+	tables := make([]string, 0, len(masterKeyEncryptedColumns))
+	seen := map[string]bool{}
+	for _, spec := range masterKeyEncryptedColumns {
+		if !seen[spec.table] {
+			tables = append(tables, spec.table)
+			seen[spec.table] = true
+		}
+	}
+	sort.Strings(tables)
+	quoted := make([]string, len(tables))
+	for i, table := range tables {
+		quoted[i] = pgx.Identifier{table}.Sanitize()
+	}
+	if mode != "SHARE" {
+		return errors.New("unsupported encrypted-table lock mode")
+	}
+	_, err := tx.Exec(ctx, "LOCK TABLE "+strings.Join(quoted, ", ")+" IN "+mode+" MODE")
+	return err
+}
+
+func validateMasterKeyVerifier(ctx context.Context, tx pgx.Tx, box *cryptox.Box) (bool, error) {
+	var ciphertext string
+	err := tx.QueryRow(ctx, `SELECT ciphertext FROM master_key_verifier WHERE singleton=true`).Scan(&ciphertext)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read master-key verifier: %w", err)
+	}
+	if err = authenticateMasterKeyVerifier(box, ciphertext); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func authenticateMasterKeyVerifier(box *cryptox.Box, ciphertext string) error {
+	plaintext, err := box.Decrypt(ciphertext, masterKeyVerifierContext)
+	if err != nil || subtle.ConstantTimeCompare(plaintext, []byte(masterKeyVerifierPlaintext)) != 1 {
+		clear(plaintext)
+		return errors.New("master key does not match encrypted control-plane data")
+	}
+	clear(plaintext)
+	return nil
+}
+
+func encryptMasterKeyVerifier(box *cryptox.Box) (string, error) {
+	value, err := box.Encrypt([]byte(masterKeyVerifierPlaintext), masterKeyVerifierContext)
+	if err != nil {
+		return "", fmt.Errorf("encrypt master-key verifier: %w", err)
+	}
+	return value, nil
 }
 
 func validateEncryptedColumnInventory(ctx context.Context, tx pgx.Tx) error {

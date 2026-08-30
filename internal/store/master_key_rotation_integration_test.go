@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
@@ -18,6 +19,9 @@ func TestRotateMasterKeyCoversEveryEncryptedColumn(t *testing.T) {
 	oldKey, newKey := bytesOf(1), bytesOf(2)
 	oldBox, _ := cryptox.New(oldKey)
 	rows := seedMasterKeyRotationRows(t, ctx, pool, oldBox)
+	if err := VerifyOrInitializeMasterKey(ctx, pool, oldBox); err != nil {
+		t.Fatalf("initialize verifier: %v", err)
+	}
 
 	dryReport, err := RotateMasterKey(ctx, pool, oldKey, newKey, true)
 	if err != nil {
@@ -40,6 +44,12 @@ func TestRotateMasterKeyCoversEveryEncryptedColumn(t *testing.T) {
 		t.Fatalf("unexpected rotation report: %#v", report)
 	}
 	newBox, _ := cryptox.New(newKey)
+	if err = VerifyOrInitializeMasterKey(ctx, pool, oldBox); err == nil || !strings.Contains(err.Error(), "master key does not match") {
+		t.Fatalf("old key remained valid after rotation: %v", err)
+	}
+	if err = VerifyOrInitializeMasterKey(ctx, pool, newBox); err != nil {
+		t.Fatalf("new key verifier: %v", err)
+	}
 	for _, row := range rows {
 		ciphertext := readEncryptedValue(t, ctx, pool, row.spec, row.id)
 		if ciphertext == row.ciphertext {
@@ -53,6 +63,68 @@ func TestRotateMasterKeyCoversEveryEncryptedColumn(t *testing.T) {
 		if _, decryptErr = oldBox.Decrypt(ciphertext, cryptox.ResourceContext(row.spec.contextKind, row.contextID)); decryptErr == nil {
 			t.Fatalf("old key still decrypts %s.%s", row.spec.table, row.spec.column)
 		}
+	}
+}
+
+func TestVerifyOrInitializeMasterKeyRejectsWrongLegacyKey(t *testing.T) {
+	pool, ctx := masterKeyRotationTestPool(t)
+	correctBox, _ := cryptox.New(bytesOf(11))
+	seedMasterKeyRotationRows(t, ctx, pool, correctBox)
+	wrongBox, _ := cryptox.New(bytesOf(12))
+	if err := VerifyOrInitializeMasterKey(ctx, pool, wrongBox); err == nil || !strings.Contains(err.Error(), "initialize master-key verifier") {
+		t.Fatalf("wrong legacy key error=%v", err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM master_key_verifier`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("wrong key initialized %d verifier rows", count)
+	}
+	if err := VerifyOrInitializeMasterKey(ctx, pool, correctBox); err != nil {
+		t.Fatalf("initialize correct key: %v", err)
+	}
+	var ciphertext string
+	if err := pool.QueryRow(ctx, `SELECT ciphertext FROM master_key_verifier WHERE singleton=true`).Scan(&ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if ciphertext == "" || strings.Contains(ciphertext, masterKeyVerifierPlaintext) {
+		t.Fatalf("verifier was not stored as ciphertext: %q", ciphertext)
+	}
+	if err := VerifyOrInitializeMasterKey(ctx, pool, wrongBox); err == nil || !strings.Contains(err.Error(), "master key does not match") {
+		t.Fatalf("wrong initialized key error=%v", err)
+	}
+}
+
+func TestVerifyOrInitializeMasterKeyIsSafeAcrossHAStartup(t *testing.T) {
+	pool, ctx := masterKeyRotationTestPool(t)
+	box, _ := cryptox.New(bytesOf(13))
+	const replicas = 8
+	start := make(chan struct{})
+	errors := make(chan error, replicas)
+	var workers sync.WaitGroup
+	for range replicas {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			errors <- VerifyOrInitializeMasterKey(ctx, pool, box)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent verifier initialization: %v", err)
+		}
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM master_key_verifier`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("verifier rows=%d want=1", count)
 	}
 }
 

@@ -339,6 +339,11 @@ func migrateDokploy(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	if !*dryRun {
+		if err = store.VerifyOrInitializeMasterKey(ctx, db.Pool, box); err != nil {
+			return fmt.Errorf("verify master key: %w", err)
+		}
+	}
 	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, RegistryPrefix: *registryPrefix, DryRun: *dryRun, EncryptionKeys: keys})
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
@@ -398,6 +403,11 @@ func migrateDokployData(arguments []string) error {
 	box, err := cryptox.New(cfg.MasterKey)
 	if err != nil {
 		return err
+	}
+	if !*dryRun {
+		if err = store.VerifyOrInitializeMasterKey(ctx, db.Pool, box); err != nil {
+			return fmt.Errorf("verify master key: %w", err)
+		}
 	}
 	report, err := dockyardmigrate.QueueDokployDatabaseTransfers(ctx, db, box, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, DryRun: *dryRun}, manifest)
 	if err == nil && !*dryRun {
@@ -532,6 +542,13 @@ func serve() error {
 	}
 	defer db.Pool.Close()
 	db.RequireRemoteBackups = cfg.RequireRemoteBackups
+	box, err := cryptox.New(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	if err = store.VerifyOrInitializeMasterKey(ctx, db.Pool, box); err != nil {
+		return fmt.Errorf("verify master key: %w", err)
+	}
 	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
 	if report, seedErr := templates.SeedBuiltinCatalog(ctx, db, compiler); seedErr != nil {
 		return fmt.Errorf("seed built-in template catalog: %w", seedErr)
@@ -540,10 +557,6 @@ func serve() error {
 	}
 	if err = db.ValidateBackupConfiguration(ctx); err != nil {
 		return fmt.Errorf("validate backup configuration: %w", err)
-	}
-	box, err := cryptox.New(cfg.MasterKey)
-	if err != nil {
-		return err
 	}
 	swarm := deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.TraefikNetwork, Timeout: 5 * time.Minute, ServiceName: cfg.SwarmServiceName}
 	databaseRegistry := database.NewRegistry()

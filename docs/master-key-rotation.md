@@ -4,7 +4,10 @@ Dockyard encrypts persisted environments, database and source credentials,
 OIDC and SAML keys, webhooks, notifications, build material, backup data keys,
 remote commands, and template inputs with `DOCKYARD_MASTER_KEY`. Rotate that key
 in a maintenance window with `dockyard rotate-master-key`; changing only the
-runtime secret makes the stored data unreadable.
+runtime secret makes the stored data unreadable. The controller authenticates
+a database-held key verifier before starting workers or HTTP listeners, so a
+missing or stale runtime secret fails startup instead of surfacing later during
+a deployment, login, backup, or restore.
 
 The command defaults to a dry run. It discovers every database column whose
 name contains `encrypted_` and refuses a schema newer or older than its audited
@@ -14,7 +17,11 @@ non-empty ciphertext with the current key, and reports counts and truncated key
 fingerprints only. Execution repeats authentication, encrypts and immediately
 verifies each replacement, and commits all updates in one PostgreSQL
 transaction. A failure leaves every original ciphertext intact. Legacy
-resource secrets are rewritten with resource-bound authenticated contexts.
+resource secrets are rewritten with resource-bound authenticated contexts, and
+the key verifier is replaced atomically in the same transaction. When an older
+installation has no verifier yet, its first controller startup authenticates
+every existing ciphertext under a short write lock before creating one; a
+wrong key can never initialize the verifier over existing encrypted data.
 
 ## Preparation
 
