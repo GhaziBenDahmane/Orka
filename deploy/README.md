@@ -23,6 +23,12 @@ cosign verify-blob \
   --certificate-identity-regexp "$identity" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   promotion-manifest.json
+certification_identity='^https://github.com/GhaziBenDahmane/Orka/.github/workflows/production-certification.yml@refs/(heads|tags)/.+$'
+cosign verify-blob \
+  --bundle production-certification.sigstore.json \
+  --certificate-identity-regexp "$certification_identity" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  production-certification.json
 expected_checksums_sha256="$(jq -er '.evidenceChecksumsSHA256 | select(test("^[a-f0-9]{64}$"))' promotion-manifest.json)"
 test "$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)" = "$expected_checksums_sha256"
 sha256sum --check --strict release-evidence.sha256
@@ -31,6 +37,9 @@ sha256sum --check --strict release-evidence.sha256
 The signed manifest names the checksum inventory. A missing or changed
 evidence file is not valid release evidence. Upgrade automation performs the
 same manifest-signature verification before trusting the previous image digest.
+Stable publication is a separate protected job and also requires a signed
+production certification for the exact candidate; follow
+[`docs/production-certification.md`](../docs/production-certification.md).
 
 Operators can repeat the same disposable check against any published digest
 from a Swarm manager:
