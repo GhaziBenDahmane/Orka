@@ -303,7 +303,8 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO environments(id,project_id,name,slug,placement_selector) VALUES($1,$2,'Production','production','{"credential":"target-placement-secret"}')`, []any{environmentID, projectID}},
 		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{projectID, developerUserID}},
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'viewer')`, []any{environmentID, developerUserID}},
-		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE], volumes: [uploads:/uploads]}}
+volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
 		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at,last_used_at) VALUES
 			($1,$2,$3,'target-active-deploy-token-secret-name',$4,now()+interval '30 days',now()),
 			($5,$2,$6,'target-expiring-deploy-token-secret-name',$4,now()+interval '2 days',NULL),
@@ -408,7 +409,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if len(snapshot.Routes) != 1 || snapshot.Routes[0].ID != routeID || snapshot.Routes[0].ComposeServiceID != serviceID || snapshot.Routes[0].TLS {
 		t.Fatalf("route posture=%#v", snapshot.Routes)
 	}
-	if len(snapshot.WorkloadPosture) != 1 || snapshot.WorkloadPosture[0].ServiceID != serviceID || !snapshot.WorkloadPosture[0].DefinitionParseable || snapshot.WorkloadPosture[0].ContainerCount != 1 || snapshot.WorkloadPosture[0].MutableImages != 1 || snapshot.WorkloadPosture[0].DigestPinnedImages != 0 || snapshot.WorkloadPosture[0].BuildOnlyServices != 0 || snapshot.WorkloadPosture[0].MissingImageOrBuild != 0 || !snapshot.WorkloadPosture[0].SuccessfulDeployment || !snapshot.WorkloadPosture[0].RuntimeSnapshotAvailable || !snapshot.WorkloadPosture[0].RuntimeDefinitionParseable || snapshot.WorkloadPosture[0].RuntimeContainerCount != 1 || snapshot.WorkloadPosture[0].RuntimeDigestPinnedImages != 1 || snapshot.WorkloadPosture[0].RuntimeMutableImages != 0 {
+	if len(snapshot.WorkloadPosture) != 1 || snapshot.WorkloadPosture[0].ServiceID != serviceID || !snapshot.WorkloadPosture[0].DefinitionParseable || snapshot.WorkloadPosture[0].ContainerCount != 1 || snapshot.WorkloadPosture[0].MutableImages != 1 || snapshot.WorkloadPosture[0].DigestPinnedImages != 0 || snapshot.WorkloadPosture[0].BuildOnlyServices != 0 || snapshot.WorkloadPosture[0].MissingImageOrBuild != 0 || len(snapshot.WorkloadPosture[0].NamedVolumes) != 1 || snapshot.WorkloadPosture[0].NamedVolumes[0] != "uploads" || !snapshot.WorkloadPosture[0].SuccessfulDeployment || !snapshot.WorkloadPosture[0].RuntimeSnapshotAvailable || !snapshot.WorkloadPosture[0].RuntimeDefinitionParseable || snapshot.WorkloadPosture[0].RuntimeContainerCount != 1 || snapshot.WorkloadPosture[0].RuntimeDigestPinnedImages != 1 || snapshot.WorkloadPosture[0].RuntimeMutableImages != 0 {
 		t.Fatalf("workload posture=%#v", snapshot.WorkloadPosture)
 	}
 	if len(snapshot.SourceBuildPosture) != 1 {

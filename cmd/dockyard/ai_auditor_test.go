@@ -541,6 +541,22 @@ func TestDeterministicAuditDetectsStalledRemoteCommands(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsNamedVolumesWithoutPolicies(t *testing.T) {
+	serviceID := uuid.New()
+	now := time.Now().UTC()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		WorkloadPosture:     []store.AIAuditWorkloadPosture{{ServiceID: serviceID, DefinitionParseable: true, NamedVolumes: []string{"cache", "uploads"}}},
+		VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{ServiceID: serviceID, VolumeName: "cache", PolicyEnabled: true, StorageNodeID: "node-1", IntervalSeconds: 3600, LastBackupStatus: "succeeded", LastBackupAt: &now, Quiesce: true, LastRestoreStatus: "succeeded", LastRestoreAt: &now}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Named volume has no backup policy" || findings[0].ResourceType != "service_volume" || findings[0].ResourceID != serviceID.String()+"/uploads" {
+		t.Fatalf("named volume findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsMutableRemoteAgentImages(t *testing.T) {
 	now := time.Now().UTC()
 	missingID, mutableID := uuid.New(), uuid.New()

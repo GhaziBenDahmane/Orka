@@ -50,7 +50,11 @@ keys make it a privileged service.
   credential IDs, artifact names and digests, and encrypted build configuration
   remain excluded.
 - The snapshot includes per-database backup policy and restore-drill posture,
-  the installed database-driver catalog with default versions, built-in or
+  plus the logical names of declared Compose volumes that are actually mounted
+  by a service. Bind mounts, tmpfs, anonymous volumes, and unused declarations
+  are excluded, allowing the baseline to identify persistent named volumes
+  with no backup policy at all. It also includes the installed database-driver
+  catalog with default versions, built-in or
   external provenance, executable SHA-256 digest, and backup capability,
   enabled SSO provider counts,
   notification coverage, and template repository
@@ -158,6 +162,7 @@ keys make it a privileged service.
   fingerprint without consuming another slot.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing, disabled, or overdue backups and restore drills,
+  including mounted named volumes with no policy,
   managed databases left in an error state, active maintenance scopes,
   near-capacity quotas, missing owners, disabled
   mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,

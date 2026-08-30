@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -245,6 +246,7 @@ type AIAuditWorkloadPosture struct {
 	RuntimeMutableImages       int       `json:"runtimeMutableImages"`
 	RuntimeBuildOnlyServices   int       `json:"runtimeBuildOnlyServices"`
 	RuntimeMissingImageOrBuild int       `json:"runtimeMissingImageOrBuild"`
+	NamedVolumes               []string  `json:"namedVolumes"`
 }
 
 type AIAuditSourceBuildPosture struct {
@@ -662,7 +664,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 }
 
 func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWorkloadPosture {
-	posture := AIAuditWorkloadPosture{ServiceID: serviceID}
+	posture := AIAuditWorkloadPosture{ServiceID: serviceID, NamedVolumes: []string{}}
 	var document map[string]any
 	if err := yaml.Unmarshal([]byte(composeYAML), &document); err != nil {
 		return posture
@@ -671,10 +673,45 @@ func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWork
 	if !ok || len(services) == 0 {
 		return posture
 	}
+	declaredVolumes := map[string]any{}
+	if document["volumes"] != nil {
+		declaredVolumes, ok = document["volumes"].(map[string]any)
+		if !ok {
+			return posture
+		}
+	}
+	usedVolumes := map[string]bool{}
 	for _, raw := range services {
 		service, valid := raw.(map[string]any)
 		if !valid {
 			return posture
+		}
+		if service["volumes"] != nil {
+			volumes, valid := service["volumes"].([]any)
+			if !valid {
+				return posture
+			}
+			for _, rawVolume := range volumes {
+				var source string
+				if spec, valid := rawVolume.(map[string]any); valid {
+					kind, _ := spec["type"].(string)
+					source, _ = spec["source"].(string)
+					if kind != "volume" {
+						continue
+					}
+				} else if text, valid := rawVolume.(string); valid {
+					parts := strings.SplitN(text, ":", 2)
+					if len(parts) != 2 {
+						continue
+					}
+					source = parts[0]
+				} else {
+					return posture
+				}
+				if _, declared := declaredVolumes[source]; source != "" && declared {
+					usedVolumes[source] = true
+				}
+			}
 		}
 		posture.ContainerCount++
 		if image, exists := service["image"]; exists {
@@ -693,6 +730,10 @@ func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWork
 			posture.MissingImageOrBuild++
 		}
 	}
+	for name := range usedVolumes {
+		posture.NamedVolumes = append(posture.NamedVolumes, name)
+	}
+	sort.Strings(posture.NamedVolumes)
 	posture.DefinitionParseable = true
 	return posture
 }

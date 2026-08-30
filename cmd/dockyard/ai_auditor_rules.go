@@ -244,6 +244,17 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database restore drill is overdue", Description: "The latest successful isolated restore drill is older than twice the configured backup interval, with a minimum one-day window.", ResourceType: "database", ResourceID: resourceID, Evidence: recoveryAgeEvidence(now, backup.LastRestoreDrillAt, backup.IntervalSeconds, 24*time.Hour), Remediation: "Run an isolated restore drill and validate application-level data before relying on recent backups."})
 		}
 	}
+	protectedVolumes := make(map[string]bool, len(snapshot.VolumeBackupPosture))
+	for _, backup := range snapshot.VolumeBackupPosture {
+		protectedVolumes[backup.ServiceID.String()+"\x00"+backup.VolumeName] = true
+	}
+	for _, workload := range snapshot.WorkloadPosture {
+		for _, volumeName := range workload.NamedVolumes {
+			if !protectedVolumes[workload.ServiceID.String()+"\x00"+volumeName] {
+				add(modelFinding{Severity: "high", Category: "backup", Title: "Named volume has no backup policy", Description: "A Compose named volume is mounted by the workload but has no configured backup policy.", ResourceType: "service_volume", ResourceID: workload.ServiceID.String() + "/" + volumeName, Evidence: map[string]any{"serviceId": workload.ServiceID.String(), "volumeName": volumeName}, Remediation: "Configure an encrypted retained volume-backup policy and complete a successful backup and restore rehearsal."})
+			}
+		}
+	}
 	for _, backup := range snapshot.VolumeBackupPosture {
 		resourceID := backup.ServiceID.String()
 		if !backup.PolicyEnabled {
