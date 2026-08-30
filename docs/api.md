@@ -221,7 +221,7 @@ TLS SMTP (`starttls` or implicit `tls`), PagerDuty Events API v2, and the
 Opsgenie Alerts API. SMTP passwords and provider integration keys are
 encrypted and never returned. Generic webhook signing secrets are revealed
 once. All providers use the same idempotent delivery records and retry queue
-for `deployment.failed`, `service.stop.failed`, `backup.failed`, `restore.failed`,
+for `deployment.failed`, `service.stop.failed`, `service.schedule.failed`, `backup.failed`, `restore.failed`,
 `restore.drill.failed`, `database.migration.failed`, and
 `audit.archive.failed`, `ai.audit.failed`, and `ai.finding.critical`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
@@ -386,6 +386,11 @@ until an administrator retries them.
 | GET | `/v1/services/{id}/deployments` | Read deployment history |
 | POST | `/v1/services/{id}/stop` | Persist stopped intent and asynchronously remove the Swarm stack while preserving named volumes; repeated requests are idempotent |
 | POST | `/v1/services/{id}/start` | Persist running intent and enqueue the current Compose revision as a `start` deployment |
+| GET/POST | `/v1/services/{id}/schedules` | List or create timezone-aware five-field cron commands for a Compose service |
+| GET/PUT/DELETE | `/v1/services/{id}/schedules/{scheduleId}` | Inspect, replace, or remove a service schedule |
+| POST | `/v1/services/{id}/schedules/{scheduleId}/executions` | Queue an immediate manual execution |
+| GET | `/v1/services/{id}/schedule-executions` | Read immutable scheduled-command execution history and bounded output |
+| POST | `/v1/services/{id}/schedule-executions/{executionId}/cancel` | Cancel a queued or running scheduled command |
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful digest-resolved snapshot; returns `409 rollback_unavailable` when no immutable snapshot exists |
 | GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |
@@ -405,6 +410,18 @@ Operations that need running containers—database backup/restore/migration and
 named-volume backup/restore—return `409 service_stopped` while their owning
 service is stopped. Scheduled policies remain due and resume after the service
 is started; their schedule is not silently advanced while stopped.
+
+Service schedules accept standard five-field cron expressions (including
+ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`
+descriptors) plus an IANA timezone. Commands run as `sh -lc` or `bash -lc`
+in a one-shot Swarm job cloned from the selected running Compose service's
+image, environment, networks, mounts, secrets, configs, placement, identity,
+and resource limits. They are serialized
+with deployment, stop, deletion, and volume operations by the service resource
+key. Each invocation has a 1–86400 second timeout, 1 MiB output cap, durable
+history, cancellation, and failure notification support. Non-idempotent
+commands are never automatically retried after a worker lease expires. A
+stopped or maintenance-blocked service keeps its due cursor unchanged.
 
 Organization owners and administrators manage scoped grants. A project grant
 is inherited by all of its environments, while a more privileged environment

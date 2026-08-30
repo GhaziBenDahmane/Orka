@@ -41,6 +41,12 @@ type Scheduler interface {
 	RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error)
 }
 
+// ServiceCommandRunner executes a bounded command inside one running task of a
+// Compose service. It is optional so storage-only schedulers remain small.
+type ServiceCommandRunner interface {
+	RunServiceCommand(context.Context, string, string, string, string) (string, error)
+}
+
 // DeploymentResult carries operator-facing output and the image identities
 // observed from Swarm so the controller can build an immutable snapshot.
 type DeploymentResult struct {
@@ -70,6 +76,7 @@ type VolumeNodeResolver interface {
 }
 
 var _ Scheduler = Swarm{}
+var _ ServiceCommandRunner = Swarm{}
 var _ VolumeArtifactRunner = Swarm{}
 var _ VolumeNodeResolver = Swarm{}
 
@@ -78,6 +85,268 @@ var safeRuntimeServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,12
 const maxDockerCommandOutputBytes = 1 << 20
 
 const dockerOutputTruncatedMarker = "\n...[docker output truncated]"
+
+func (s Swarm) RunServiceCommand(ctx context.Context, stackName, targetService, shell, command string) (string, error) {
+	if !safeName.MatchString(stackName) || !safeRuntimeServiceName.MatchString(targetService) {
+		return "", errors.New("invalid scheduled-command target")
+	}
+	if shell != "sh" && shell != "bash" {
+		return "", errors.New("scheduled-command shell must be sh or bash")
+	}
+	if command == "" || len(command) > 16384 || strings.ContainsRune(command, 0) {
+		return "", errors.New("scheduled command must contain 1 to 16384 bytes")
+	}
+	if err := s.EnsureReady(ctx); err != nil {
+		return "", err
+	}
+	serviceName := stackName + "_" + targetService
+	taskState, err := s.run(ctx, "service", "ps", "--filter", "desired-state=running", "--format", "{{.CurrentState}}", serviceName)
+	if err != nil {
+		return taskState, err
+	}
+	running := false
+	for _, state := range strings.Split(strings.TrimSpace(taskState), "\n") {
+		running = running || strings.HasPrefix(state, "Running")
+	}
+	if !running {
+		return "", fmt.Errorf("no running task found for service %s", targetService)
+	}
+	inspectOutput, err := s.run(ctx, "service", "inspect", serviceName)
+	if err != nil {
+		return inspectOutput, err
+	}
+	var inspected []scheduledServiceSpec
+	if err = json.Unmarshal([]byte(inspectOutput), &inspected); err != nil || len(inspected) != 1 {
+		return "", errors.New("decode scheduled-command target service")
+	}
+	container := inspected[0].Spec.TaskTemplate.ContainerSpec
+	if container.Image == "" {
+		return "", errors.New("scheduled-command target has no image")
+	}
+	directory, err := os.MkdirTemp("", "dockyard-schedule-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(directory)
+	args := []string{"service", "create", "--detach=true", "--mode", "replicated-job", "--replicas", "1", "--max-concurrent", "1", "--restart-condition", "none", "--no-healthcheck", "--name", fmt.Sprintf("dockyard-schedule-%d", time.Now().UnixNano()), "--label", "com.dockyard.kind=scheduled-command"}
+	if len(container.Env) > 0 {
+		for _, value := range container.Env {
+			if strings.ContainsAny(value, "\x00\r\n") {
+				return "", errors.New("target environment contains a value that cannot be safely materialized")
+			}
+		}
+		envPath := filepath.Join(directory, "environment")
+		if err = os.WriteFile(envPath, []byte(strings.Join(container.Env, "\n")+"\n"), 0600); err != nil {
+			return "", err
+		}
+		args = append(args, "--env-file", envPath)
+	}
+	args = appendScheduledContainerOptions(args, inspected[0].Spec.TaskTemplate)
+	args = append(args, "--entrypoint", shell, container.Image, "-lc", command)
+	serviceID, err := s.run(ctx, args...)
+	serviceID = strings.TrimSpace(serviceID)
+	if err != nil {
+		return serviceID, err
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cleanupCancel()
+	defer s.run(cleanupCtx, "service", "rm", serviceID)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		stateOutput, stateErr := s.run(ctx, "service", "ps", "--no-trunc", "--format", "{{.CurrentState}}|{{.Error}}", serviceID)
+		if stateErr != nil {
+			return stateOutput, stateErr
+		}
+		for _, line := range strings.Split(strings.TrimSpace(stateOutput), "\n") {
+			state, detail, _ := strings.Cut(line, "|")
+			switch {
+			case strings.HasPrefix(state, "Complete"):
+				return s.run(ctx, "service", "logs", "--raw", "--no-task-ids", serviceID)
+			case strings.HasPrefix(state, "Failed"), strings.HasPrefix(state, "Rejected"):
+				logs, _ := s.run(ctx, "service", "logs", "--raw", "--no-task-ids", serviceID)
+				if detail == "" {
+					detail = state
+				}
+				return logs, fmt.Errorf("scheduled command task failed: %s", detail)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+type scheduledServiceSpec struct {
+	Spec struct {
+		TaskTemplate scheduledTaskTemplate `json:"TaskTemplate"`
+	} `json:"Spec"`
+}
+
+type scheduledTaskTemplate struct {
+	ContainerSpec struct {
+		Image          string   `json:"Image"`
+		Env            []string `json:"Env"`
+		Dir            string   `json:"Dir"`
+		User           string   `json:"User"`
+		Groups         []string `json:"Groups"`
+		ReadOnly       bool     `json:"ReadOnly"`
+		StopSignal     string   `json:"StopSignal"`
+		CapabilityAdd  []string `json:"CapabilityAdd"`
+		CapabilityDrop []string `json:"CapabilityDrop"`
+		Hosts          []string `json:"Hosts"`
+		Mounts         []struct {
+			Type, Source, Target, Consistency string
+			ReadOnly                          bool
+			VolumeOptions                     *struct{ NoCopy bool } `json:"VolumeOptions"`
+			TmpfsOptions                      *struct {
+				SizeBytes int64
+				Mode      uint32
+			} `json:"TmpfsOptions"`
+		} `json:"Mounts"`
+		Secrets []struct {
+			SecretID string
+			File     *struct {
+				Name, UID, GID string
+				Mode           uint32
+			}
+		} `json:"Secrets"`
+		Configs []struct {
+			ConfigID string
+			File     *struct {
+				Name, UID, GID string
+				Mode           uint32
+			}
+		} `json:"Configs"`
+		DNSConfig *struct {
+			Nameservers, Search, Options []string
+		} `json:"DNSConfig"`
+		Init *bool `json:"Init"`
+	} `json:"ContainerSpec"`
+	Resources struct {
+		Limits, Reservations struct {
+			NanoCPUs, MemoryBytes int64
+			Pids                  int64
+		}
+	} `json:"Resources"`
+	Placement struct {
+		Constraints []string
+		Preferences []struct {
+			Spread *struct{ SpreadDescriptor string }
+		}
+		MaxReplicas int64
+	} `json:"Placement"`
+	Networks []struct {
+		Target  string
+		Aliases []string
+	} `json:"Networks"`
+}
+
+func appendScheduledContainerOptions(args []string, task scheduledTaskTemplate) []string {
+	container := task.ContainerSpec
+	for _, network := range task.Networks {
+		value := "name=" + network.Target
+		args = append(args, "--network", value)
+	}
+	for _, mount := range container.Mounts {
+		value := "type=" + mount.Type + ",target=" + mount.Target
+		if mount.Source != "" {
+			value += ",source=" + mount.Source
+		}
+		if mount.ReadOnly {
+			value += ",readonly"
+		}
+		if mount.VolumeOptions != nil && mount.VolumeOptions.NoCopy {
+			value += ",volume-nocopy"
+		}
+		if mount.TmpfsOptions != nil {
+			if mount.TmpfsOptions.SizeBytes > 0 {
+				value += ",tmpfs-size=" + strconv.FormatInt(mount.TmpfsOptions.SizeBytes, 10)
+			}
+			if mount.TmpfsOptions.Mode > 0 {
+				value += ",tmpfs-mode=" + fmt.Sprintf("%#o", mount.TmpfsOptions.Mode)
+			}
+		}
+		args = append(args, "--mount", value)
+	}
+	for _, secret := range container.Secrets {
+		if secret.File != nil {
+			args = append(args, "--secret", fmt.Sprintf("source=%s,target=%s,uid=%s,gid=%s,mode=%#o", secret.SecretID, secret.File.Name, secret.File.UID, secret.File.GID, secret.File.Mode))
+		}
+	}
+	for _, config := range container.Configs {
+		if config.File != nil {
+			args = append(args, "--config", fmt.Sprintf("source=%s,target=%s,uid=%s,gid=%s,mode=%#o", config.ConfigID, config.File.Name, config.File.UID, config.File.GID, config.File.Mode))
+		}
+	}
+	for _, constraint := range task.Placement.Constraints {
+		args = append(args, "--constraint", constraint)
+	}
+	for _, preference := range task.Placement.Preferences {
+		if preference.Spread != nil {
+			args = append(args, "--placement-pref", "spread="+preference.Spread.SpreadDescriptor)
+		}
+	}
+	if task.Placement.MaxReplicas > 0 {
+		args = append(args, "--replicas-max-per-node", strconv.FormatInt(task.Placement.MaxReplicas, 10))
+	}
+	if task.Resources.Limits.NanoCPUs > 0 {
+		args = append(args, "--limit-cpu", strconv.FormatFloat(float64(task.Resources.Limits.NanoCPUs)/1e9, 'f', 3, 64))
+	}
+	if task.Resources.Limits.MemoryBytes > 0 {
+		args = append(args, "--limit-memory", strconv.FormatInt(task.Resources.Limits.MemoryBytes, 10))
+	}
+	if task.Resources.Limits.Pids > 0 {
+		args = append(args, "--limit-pids", strconv.FormatInt(task.Resources.Limits.Pids, 10))
+	}
+	if task.Resources.Reservations.NanoCPUs > 0 {
+		args = append(args, "--reserve-cpu", strconv.FormatFloat(float64(task.Resources.Reservations.NanoCPUs)/1e9, 'f', 3, 64))
+	}
+	if task.Resources.Reservations.MemoryBytes > 0 {
+		args = append(args, "--reserve-memory", strconv.FormatInt(task.Resources.Reservations.MemoryBytes, 10))
+	}
+	if container.User != "" {
+		args = append(args, "--user", container.User)
+	}
+	if container.Dir != "" {
+		args = append(args, "--workdir", container.Dir)
+	}
+	if container.ReadOnly {
+		args = append(args, "--read-only")
+	}
+	if container.Init != nil && *container.Init {
+		args = append(args, "--init")
+	}
+	if container.StopSignal != "" {
+		args = append(args, "--stop-signal", container.StopSignal)
+	}
+	for _, group := range container.Groups {
+		args = append(args, "--group", group)
+	}
+	for _, capability := range container.CapabilityAdd {
+		args = append(args, "--cap-add", capability)
+	}
+	for _, capability := range container.CapabilityDrop {
+		args = append(args, "--cap-drop", capability)
+	}
+	for _, host := range container.Hosts {
+		args = append(args, "--host", host)
+	}
+	if container.DNSConfig != nil {
+		for _, server := range container.DNSConfig.Nameservers {
+			args = append(args, "--dns", server)
+		}
+		for _, search := range container.DNSConfig.Search {
+			args = append(args, "--dns-search", search)
+		}
+		for _, option := range container.DNSConfig.Options {
+			args = append(args, "--dns-option", option)
+		}
+	}
+	return args
+}
 
 type boundedCommandOutput struct {
 	buffer    bytes.Buffer

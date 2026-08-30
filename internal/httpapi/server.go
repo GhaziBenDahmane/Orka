@@ -259,6 +259,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deployService)))
 	mux.Handle("POST /v1/services/{serviceID}/stop", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.stopService)))
 	mux.Handle("POST /v1/services/{serviceID}/start", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.startService)))
+	mux.Handle("GET /v1/services/{serviceID}/schedules", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listServiceSchedules)))
+	mux.Handle("POST /v1/services/{serviceID}/schedules", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createServiceSchedule)))
+	mux.Handle("GET /v1/services/{serviceID}/schedules/{scheduleID}", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.getServiceSchedule)))
+	mux.Handle("PUT /v1/services/{serviceID}/schedules/{scheduleID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateServiceSchedule)))
+	mux.Handle("DELETE /v1/services/{serviceID}/schedules/{scheduleID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deleteServiceSchedule)))
+	mux.Handle("POST /v1/services/{serviceID}/schedules/{scheduleID}/executions", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.runServiceSchedule)))
+	mux.Handle("GET /v1/services/{serviceID}/schedule-executions", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listServiceScheduleExecutions)))
+	mux.Handle("POST /v1/services/{serviceID}/schedule-executions/{executionID}/cancel", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.cancelServiceScheduleExecution)))
 	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listDeployments)))
 	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.serviceLogs)))
 	mux.Handle("GET /v1/services/{serviceID}/volumes", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listServiceVolumes)))
@@ -2685,7 +2693,7 @@ func (s *Server) stopService(w http.ResponseWriter, r *http.Request) {
 	jobID, queued, err := s.Store.QueueServiceStop(r.Context(), p.OrganizationID, serviceID)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
-			writeError(w, http.StatusConflict, "service_busy", "wait for active backup, restore, or migration work before stopping the service")
+			writeError(w, http.StatusConflict, "service_busy", "wait for active scheduled command, backup, restore, or migration work before stopping the service")
 			return
 		}
 		writeStoreError(w, err)
@@ -3061,6 +3069,14 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrServiceStopped) {
 		writeError(w, http.StatusConflict, "service_stopped", "start the service before running this operation")
+		return
+	}
+	if errors.Is(err, store.ErrInvalidSchedule) {
+		writeError(w, http.StatusBadRequest, "invalid_schedule", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrNotCancellable) {
+		writeError(w, http.StatusConflict, "not_cancellable", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrBusy) {

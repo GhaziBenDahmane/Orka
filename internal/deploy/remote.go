@@ -109,6 +109,10 @@ func (s RemoteSwarm) RunContainerJob(ctx context.Context, network, image, mountS
 	return s.run(ctx, "container.run", map[string]any{"network": network, "image": image, "environment": environment, "command": command})
 }
 
+func (s RemoteSwarm) RunServiceCommand(ctx context.Context, stackName, targetService, shell, command string) (string, error) {
+	return s.run(ctx, "swarm.exec", map[string]string{"stackName": stackName, "targetService": targetService, "shell": shell, "command": command})
+}
+
 type RemoteArtifactJob struct {
 	Mode            string            `json:"mode"`
 	Network         string            `json:"network"`
@@ -330,5 +334,6 @@ func (s RemoteSwarm) result(command store.ClusterCommand) (commandResult, error)
 }
 
 var _ Scheduler = RemoteSwarm{}
+var _ ServiceCommandRunner = RemoteSwarm{}
 var _ VolumeArtifactRunner = RemoteSwarm{}
 var _ VolumeNodeResolver = RemoteSwarm{}

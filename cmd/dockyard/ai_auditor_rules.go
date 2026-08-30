@@ -342,6 +342,17 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository synchronization is stale", Description: "An enabled scheduled catalog has not synchronized within two configured intervals plus a five-minute grace period.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"gitRef": repository.GitRef, "syncIntervalSeconds": repository.SyncIntervalSeconds, "lastSyncedAt": repository.LastSyncedAt.UTC().Format(time.RFC3339)}, Remediation: "Restore the catalog scheduler or repository access and complete a verified synchronization."})
 		}
 	}
+	for _, schedule := range snapshot.ServiceSchedules {
+		if !schedule.Enabled || schedule.DesiredState == "stopped" {
+			continue
+		}
+		if schedule.LastStatus == "failed" {
+			add(modelFinding{Severity: "high", Category: "operations", Title: "Scheduled service command failed", Description: "The latest execution of an enabled service schedule failed.", ResourceType: "service_schedule", ResourceID: schedule.ID.String(), Evidence: map[string]any{"serviceId": schedule.ServiceID.String(), "name": schedule.Name, "failures24h": schedule.Failures24h, "lastFinishedAt": schedule.LastFinishedAt}, Remediation: "Inspect the bounded execution output, verify the target Compose service is running on the agent node, and run the schedule manually after correcting the command."})
+		}
+		if schedule.NextRunAt.Before(now.Add(-10 * time.Minute)) {
+			add(modelFinding{Severity: "high", Category: "operations", Title: "Service schedule dispatch is overdue", Description: "An enabled service schedule has remained due for more than ten minutes.", ResourceType: "service_schedule", ResourceID: schedule.ID.String(), Evidence: map[string]any{"serviceId": schedule.ServiceID.String(), "name": schedule.Name, "timezone": schedule.Timezone, "nextRunAt": schedule.NextRunAt.UTC().Format(time.RFC3339)}, Remediation: "Restore the service-command scheduler lease, worker capacity, and assigned cluster connectivity."})
+		}
+	}
 	if snapshot.QueuePosture.OldestPendingAt != nil && now.Sub(*snapshot.QueuePosture.OldestPendingAt) > 10*time.Minute {
 		add(modelFinding{Severity: "high", Category: "operations", Title: "Platform job queue is stalled", Description: "A tenant-scoped deployment, recovery, integration, audit, or deletion job has remained pending for more than ten minutes.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingJobs": snapshot.QueuePosture.PendingJobs, "runningJobs": snapshot.QueuePosture.RunningJobs, "oldestPendingAt": snapshot.QueuePosture.OldestPendingAt.UTC().Format(time.RFC3339), "kinds": snapshot.QueuePosture.Kinds}, Remediation: "Check worker health, leader leases, cluster admission, and job retry state before accepting more work."})
 	}
@@ -457,6 +468,7 @@ func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) [
 	required := map[string]bool{
 		"deployment.failed":         false,
 		"service.stop.failed":       false,
+		"service.schedule.failed":   false,
 		"backup.failed":             false,
 		"restore.failed":            false,
 		"restore.drill.failed":      false,

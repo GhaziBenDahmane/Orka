@@ -36,6 +36,18 @@ candidate selection and repair commit time. Manual and scheduled database or
 named-volume backup, restore, and migration admission locks the same service
 row and rejects stopped intent, preventing data jobs from racing stack removal.
 
+Timezone-aware service schedules use the same singleton-lease and durable-job
+path. Dispatch atomically advances the cron cursor and snapshots the target,
+shell, and command into an execution record. The job shares the service
+resource key, so a command cannot overlap deployment, stop, deletion, or
+volume work. Local and remote agents create a one-shot replicated Swarm job
+from the running target service's runtime contract, bound output and runtime,
+and honor cancellation through the parent job lease. This preserves placement
+and named volumes on multi-node clusters without requiring an agent on every
+worker.
+Expired command leases are failed without replay to avoid duplicate external
+side effects. Stopped services retain overdue cursors and resume after start.
+
 The leader-elected stack reconciler inspects every previously deployed stack
 once per minute through the same local-or-remote scheduler boundary. Missing or
 under-replicated stacks must be observed twice before repair. Repairs replay the

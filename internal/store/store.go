@@ -46,6 +46,7 @@ var ErrSAMLCertificateRotationPending = errors.New("a SAML certificate rotation 
 var ErrRollbackUnavailable = errors.New("no successful immutable deployment is available for rollback")
 var ErrProtectedVolumeRemoved = errors.New("a protected named volume cannot be removed while its backup policy exists")
 var ErrVolumeNotDeclared = errors.New("named volume is not mounted by the service")
+var ErrInvalidSchedule = errors.New("invalid service schedule")
 
 type Store struct {
 	Pool                 *pgxpool.Pool
@@ -1158,6 +1159,9 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 		return ComposeService{}, err
 	}
 	if err = ensureProtectedVolumesDeclared(ctx, tx, id, composeYAML); err != nil {
+		return ComposeService{}, err
+	}
+	if err = ensureScheduledTargetsDeclared(ctx, tx, id, composeYAML); err != nil {
 		return ComposeService{}, err
 	}
 	var service ComposeService
@@ -2675,6 +2679,9 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 		return ComposeService{}, nil, err
 	}
 	if err = ensureProtectedVolumesDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = ensureScheduledTargetsDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
 		return ComposeService{}, nil, err
 	}
 	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 AND deletion_requested_at IS NULL RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,desired_state,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)

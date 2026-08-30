@@ -3325,6 +3325,221 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/schedule-executions:
+    get:
+      operationId: get_v1_services_serviceID_schedule_executions
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/schedule-executions/{executionID}/cancel:
+    post:
+      operationId: post_v1_services_serviceID_schedule_executions_executionID_cancel
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: executionID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/schedules:
+    get:
+      operationId: get_v1_services_serviceID_schedules
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_services_serviceID_schedules
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/schedules/{scheduleID}:
+    delete:
+      operationId: delete_v1_services_serviceID_schedules_scheduleID
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scheduleID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    get:
+      operationId: get_v1_services_serviceID_schedules_scheduleID
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scheduleID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      operationId: put_v1_services_serviceID_schedules_scheduleID
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scheduleID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/schedules/{scheduleID}/executions:
+    post:
+      operationId: post_v1_services_serviceID_schedules_scheduleID_executions
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: scheduleID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/services/{serviceID}/source:
     put:
       operationId: put_v1_services_serviceID_source

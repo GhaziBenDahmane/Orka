@@ -678,6 +678,21 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		status, err := inspector.Status(ctx, payload.StackName)
 		encoded, _ := json.Marshal(status)
 		return string(encoded), err
+	case "swarm.exec":
+		var execution struct {
+			StackName     string `json:"stackName"`
+			TargetService string `json:"targetService"`
+			Shell         string `json:"shell"`
+			Command       string `json:"command"`
+		}
+		if err := json.Unmarshal(cmd.Payload, &execution); err != nil {
+			return "", err
+		}
+		runner, ok := c.swarm.(deploy.ServiceCommandRunner)
+		if !ok {
+			return "", errors.New("scheduler does not support service commands")
+		}
+		return runner.RunServiceCommand(ctx, execution.StackName, execution.TargetService, execution.Shell, execution.Command)
 	case "swarm.nodes":
 		nodes, err := c.swarm.Nodes(ctx)
 		encoded, _ := json.Marshal(nodes)

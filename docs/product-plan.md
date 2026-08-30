@@ -172,6 +172,10 @@ durable provider build-status callbacks implemented.
 - Durable service stop/start intent preserves named volumes, is serialized with
   deployments and deletion, works through local or remote Swarm schedulers,
   and prevents reconciliation from resurrecting intentionally stopped stacks.
+- Durable Compose-service schedules support five-field cron expressions and
+  IANA timezones, manual runs, cancellation, bounded output, immutable history,
+  local/remote agent execution, stopped-service fencing, AI posture, and
+  failure notifications without retrying ambiguous non-idempotent commands.
 
 Exit gate: end-to-end push-to-deploy, cancellation, rollback, alert, and
 disaster-recovery scenarios pass under load.

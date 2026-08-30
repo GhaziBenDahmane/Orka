@@ -67,8 +67,9 @@ type job struct {
 func (w *Worker) Run(ctx context.Context) {
 	w.recoverStale(ctx)
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); w.scheduleBackups(ctx) }()
+	go func() { defer wg.Done(); w.scheduleServiceCommands(ctx) }()
 	go func() { defer wg.Done(); w.pruneAuditEvents(ctx) }()
 	go func() { defer wg.Done(); w.scheduleAuditArchives(ctx) }()
 	go func() { defer wg.Done(); w.scheduleBackupArtifactCleanup(ctx) }()
@@ -79,6 +80,33 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 	<-ctx.Done()
 	wg.Wait()
+}
+
+func (w *Worker) scheduleServiceCommands(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		leader, err := w.Store.AcquireControllerLease(ctx, "service-command-scheduler", w.ID, 90*time.Second)
+		if err != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire service command scheduler lease", "error", err)
+		} else if leader {
+			for queued := 0; queued < 100 && ctx.Err() == nil; queued++ {
+				_, queueErr := w.Store.QueueNextDueServiceSchedule(ctx, time.Now())
+				if errors.Is(queueErr, store.ErrNotFound) {
+					break
+				}
+				if queueErr != nil {
+					w.Logger.Error("schedule service command", "error", queueErr)
+					break
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (w *Worker) reconcileStacks(ctx context.Context) {
@@ -495,6 +523,31 @@ func (w *Worker) recoverStale(ctx context.Context) {
 	rows.Close()
 	retried := 0
 	for _, item := range expired {
+		if item.kind == "run.service-schedule" {
+			var payload map[string]string
+			if json.Unmarshal(item.payload, &payload) == nil {
+				if executionID, parseErr := uuid.Parse(payload["executionId"]); parseErr == nil {
+					status, message := "failed", "worker lease expired; command was not retried to avoid duplicate side effects"
+					if item.cancelled {
+						status, message = "cancelled", "cancelled by user"
+					}
+					if _, err = tx.Exec(ctx, `UPDATE service_schedule_executions SET status=$2,error=$3,finished_at=now() WHERE id=$1 AND status IN ('queued','running')`, executionID, status, message); err != nil {
+						w.Logger.Error("recover stale scheduled command", "error", err)
+						return
+					}
+				}
+			}
+			jobStatus := "failed"
+			if item.cancelled {
+				jobStatus = "cancelled"
+			}
+			_, err = tx.Exec(ctx, `UPDATE jobs SET status=$2,last_error='worker lease expired',finished_at=now(),locked_at=NULL,locked_by=NULL,lease_id=NULL WHERE id=$1`, item.id, jobStatus)
+			if err != nil {
+				w.Logger.Error("recover stale scheduled command", "error", err)
+				return
+			}
+			continue
+		}
 		if item.cancelled {
 			if err = markCancelledResourceTx(ctx, tx, item.kind, item.payload); err != nil {
 				w.Logger.Error("recover stale jobs", "error", err)
@@ -538,6 +591,8 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 		key = "restoreId"
 	case "migrate.database":
 		key = "migrationId"
+	case "run.service-schedule":
+		key = "executionId"
 	default:
 		return nil
 	}
@@ -559,6 +614,8 @@ func markCancelledResourceTx(ctx context.Context, tx pgx.Tx, kind string, rawPay
 		query = `UPDATE volume_restores SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
 	case "migrate.database":
 		query = `UPDATE database_migrations SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`
+	case "run.service-schedule":
+		query = `UPDATE service_schedule_executions SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1 AND status IN ('queued','running','failed')`
 	}
 	_, err = tx.Exec(ctx, query, id)
 	return err
@@ -643,6 +700,9 @@ func (w *Worker) updateResourceForJob(ctx context.Context, j job, query string, 
 }
 
 func (w *Worker) execute(ctx context.Context, j job) error {
+	if j.Kind == "run.service-schedule" {
+		return w.runServiceSchedule(ctx, j)
+	}
 	if j.Kind == "stop.compose" {
 		return w.stopComposeService(ctx, j)
 	}
@@ -837,6 +897,52 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		w.markDeployment(ctx, j, id, "failed", buildOutput, err)
 	}
 	return err
+}
+
+func (w *Worker) runServiceSchedule(ctx context.Context, j job) error {
+	var payload struct {
+		ExecutionID string `json:"executionId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	executionID, err := uuid.Parse(payload.ExecutionID)
+	if err != nil {
+		return err
+	}
+	var stackName, targetService, shell, command string
+	var timeoutSeconds int
+	var clusterID *uuid.UUID
+	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `UPDATE service_schedule_executions execution SET status='running',started_at=now(),error='' FROM compose_services service,environments environment WHERE execution.id=$1 AND execution.compose_service_id=service.id AND environment.id=service.environment_id AND execution.status='queued' AND service.desired_state='running' AND service.deletion_requested_at IS NULL RETURNING service.stack_name,execution.target_service,execution.shell,execution.command,execution.timeout_seconds,environment.cluster_id`, executionID).Scan(&stackName, &targetService, &shell, &command, &timeoutSeconds, &clusterID)
+	})
+	if err != nil {
+		return err
+	}
+	runner, ok := w.scheduler(clusterID).(ServiceCommandRunner)
+	if !ok {
+		err = errors.New("scheduler does not support service commands")
+	} else {
+		runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+		output, runErr := runner.RunServiceCommand(runCtx, stackName, targetService, shell, command)
+		cancel()
+		status := "succeeded"
+		message := ""
+		if runErr != nil {
+			status, message = "failed", runErr.Error()
+		}
+		finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		finishErr := w.updateResourceForJob(finalizeCtx, j, `UPDATE service_schedule_executions SET status=$2,output=$3,error=$4,finished_at=now() WHERE id=$1 AND status='running'`, executionID, status, truncate(output, MaxRemoteCommandOutputBytes), truncate(message, MaxRemoteCommandErrorBytes))
+		finalizeCancel()
+		if finishErr != nil {
+			return errors.Join(runErr, finishErr)
+		}
+		return runErr
+	}
+	finalizeCtx, finalizeCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	finishErr := w.updateResourceForJob(finalizeCtx, j, `UPDATE service_schedule_executions SET status='failed',error=$2,finished_at=now() WHERE id=$1 AND status='running'`, executionID, truncate(err.Error(), MaxRemoteCommandErrorBytes))
+	finalizeCancel()
+	return errors.Join(err, finishErr)
 }
 
 func (w *Worker) stopComposeService(ctx context.Context, j job) error {

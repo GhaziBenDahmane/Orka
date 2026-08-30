@@ -531,6 +531,48 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodPost, "/v1/services/" + args[1] + "/start", map[string]any{}, nil
+	case "schedules":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/schedules", nil, nil
+	case "schedule":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/schedules/" + args[2], nil, nil
+	case "create-schedule":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPost, "/v1/services/" + args[1] + "/schedules", input, err
+	case "update-schedule":
+		if err := require(4); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[3], stdin)
+		return http.MethodPut, "/v1/services/" + args[1] + "/schedules/" + args[2], input, err
+	case "delete-schedule":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/services/" + args[1] + "/schedules/" + args[2], nil, nil
+	case "run-schedule":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/services/" + args[1] + "/schedules/" + args[2] + "/executions", map[string]any{}, nil
+	case "schedule-executions":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/schedule-executions", nil, nil
+	case "cancel-schedule-execution":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/services/" + args[1] + "/schedule-executions/" + args[2] + "/cancel", map[string]any{}, nil
 	case "rollback":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -772,5 +814,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|change-password|mfa-status|begin-mfa|confirm-mfa|disable-mfa|regenerate-mfa-recovery-codes|members|update-member|delete-member|deploy-tokens|create-deploy-token|revoke-deploy-token|invitations|invitation|create-invitation|revoke-invitation|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|audit-retention|put-audit-retention|audit-archives|audit-archive|create-audit-archive|run-audit-archive|audit-archive-batches|delete-audit-archive|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|policy|put-policy|project-policy|put-project-policy|environment-policy|put-environment-policy|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|notification-endpoints|create-notification-endpoint|delete-notification-endpoint|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates [cursor]|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|create-cluster|update-cluster|delete-cluster|deploy|stop|start|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
 }
