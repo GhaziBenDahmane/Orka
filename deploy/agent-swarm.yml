@@ -9,12 +9,19 @@ services:
       DOCKYARD_AGENT_STATE_DIRECTORY: /var/lib/dockyard-agent
       DOCKYARD_AGENT_SERVICE_NAME: ${DOCKYARD_AGENT_SERVICE_NAME:-dockyard-agent_agent}
       DOCKYARD_TRAEFIK_NETWORK: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+      HOME: /tmp/dockyard-home
+      XDG_CACHE_HOME: /tmp/dockyard-cache
     secrets:
       - source: dockyard_agent_enrollment_token
         target: dockyard_agent_enrollment_token
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - agent-state:/var/lib/dockyard-agent
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1073741824,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     logging:
       driver: local
       options:

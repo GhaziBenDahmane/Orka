@@ -56,10 +56,17 @@ services:
       DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE: ${DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE:-false}
       DOCKYARD_OTEL_SERVICE_NAME: ${DOCKYARD_OTEL_SERVICE_NAME:-dockyard}
       DOCKYARD_SWARM_SERVICE_NAME: ${DOCKYARD_SWARM_SERVICE_NAME:-dockyard_dockyard}
+      HOME: /tmp/dockyard-home
+      XDG_CACHE_HOME: /tmp/dockyard-cache
     secrets: [dockyard_database_url, dockyard_master_key, dockyard_metrics_token]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - backup-artifacts:/var/lib/dockyard/backups
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1073741824,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks: [control, edge-control]
     logging:
       driver: local

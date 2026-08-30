@@ -88,7 +88,12 @@ kernel, ulimit, storage, lifecycle-hook, model-runner, legacy scaling, and
 generic-resource directives are also rejected. The
 controller and remote agent retain Docker-manager authority and therefore
 remain high-value trusted components; tenant workloads never receive their
-sockets or credentials.
+sockets or credentials. Their production services use read-only root
+filesystems, drop every Linux capability, forbid privilege escalation, and keep
+transient build material on bounded tmpfs mounts. A read-only bind mount does
+not reduce the Docker API authority carried by the socket; it only prevents
+filesystem mutation of the mount, so host access remains possible after a
+controller or agent compromise.
 
 ### Source and supply-chain substitution
 

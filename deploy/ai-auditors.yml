@@ -49,6 +49,8 @@ services:
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
     networks: [ai-control]
     read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     logging:
       driver: local
       options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
@@ -78,6 +80,8 @@ services:
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
     networks: [ai-control]
     read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     logging:
       driver: local
       options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}

@@ -17,6 +17,10 @@ type deploymentManifest struct {
 		Secrets     []any             `yaml:"secrets"`
 		Ports       []any             `yaml:"ports"`
 		Volumes     []string          `yaml:"volumes"`
+		ReadOnly    bool              `yaml:"read_only"`
+		Tmpfs       []string          `yaml:"tmpfs"`
+		CapDrop     []string          `yaml:"cap_drop"`
+		SecurityOpt []string          `yaml:"security_opt"`
 		Logging     struct {
 			Driver  string            `yaml:"driver"`
 			Options map[string]string `yaml:"options"`
@@ -127,6 +131,34 @@ func TestProductionManifestsBoundLocalLogs(t *testing.T) {
 	}
 }
 
+func TestPrivilegedControlProcessesHaveHardenedContainers(t *testing.T) {
+	for path, names := range map[string][]string{
+		"../../deploy/swarm.yml":       {"dockyard"},
+		"../../deploy/agent-swarm.yml": {"agent"},
+		"../../deploy/ai-auditors.yml": {"security-auditor", "reliability-auditor"},
+	} {
+		manifest := readDeploymentManifest(t, path)
+		for _, name := range names {
+			service := manifest.Services[name]
+			if !service.ReadOnly || !slices.Contains(service.CapDrop, "ALL") || !slices.Contains(service.SecurityOpt, "no-new-privileges:true") {
+				t.Errorf("%s service %s lacks container hardening: readOnly=%v capDrop=%v securityOpt=%v", path, name, service.ReadOnly, service.CapDrop, service.SecurityOpt)
+			}
+			if (name == "dockyard" || name == "agent") && !slices.ContainsFunc(service.Tmpfs, func(value string) bool { return strings.HasPrefix(value, "/tmp:") }) {
+				t.Errorf("%s service %s has no writable bounded /tmp tmpfs: %v", path, name, service.Tmpfs)
+			}
+		}
+	}
+	for path, name := range map[string]string{
+		"../../deploy/swarm.yml":       "dockyard",
+		"../../deploy/agent-swarm.yml": "agent",
+	} {
+		service := readDeploymentManifest(t, path).Services[name]
+		if !slices.Contains(service.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
+			t.Errorf("%s service %s does not mount the Docker socket read-only: %v", path, name, service.Volumes)
+		}
+	}
+}
+
 func TestAgentManifestRollsBackFailedStartFirstUpdate(t *testing.T) {
 	service := readDeploymentManifest(t, "../../deploy/agent-swarm.yml").Services["agent"]
 	if service.Deploy.Replicas != 1 || service.Deploy.UpdateConfig.Order != "start-first" || service.Deploy.UpdateConfig.FailureAction != "rollback" || service.Deploy.RollbackConfig.Order != "stop-first" {
@@ -157,15 +189,22 @@ func TestControllerBackupStorageIsProvisionedBySwarm(t *testing.T) {
 	}
 }
 
-func TestControllerDatabaseSecretsCanBeVersioned(t *testing.T) {
+func TestControllerSecretsCanBeVersioned(t *testing.T) {
 	manifest := readDeploymentManifest(t, "../../deploy/swarm.yml")
 	for logicalName, expectedName := range map[string]string{
-		"dockyard_db_password":  "${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}",
-		"dockyard_database_url": "${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}",
+		"dockyard_db_password":   "${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}",
+		"dockyard_database_url":  "${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}",
+		"dockyard_master_key":    "${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}",
+		"dockyard_metrics_token": "${DOCKYARD_METRICS_TOKEN_SECRET:-dockyard_metrics_token}",
 	} {
 		secret, ok := manifest.Secrets[logicalName]
 		if !ok || !secret.External || secret.Name != expectedName {
 			t.Errorf("secret %s is not configurable and external: %#v", logicalName, secret)
+		}
+	}
+	for _, logicalName := range []string{"dockyard_database_url", "dockyard_master_key", "dockyard_metrics_token"} {
+		if !slices.Contains(manifest.Services["dockyard"].Secrets, any(logicalName)) {
+			t.Errorf("controller does not mount logical secret %s", logicalName)
 		}
 	}
 }

@@ -91,6 +91,13 @@ Defaults are `4.0` CPU/`4G` memory for the controller and remote agent,
 reservation defaults are `0.25`/`256M`, `0.25`/`256M`, and `0.10`/`64M`.
 The full variable prefixes are `DOCKYARD_CONTROLLER`, `DOCKYARD_AGENT`,
 `DOCKYARD_POSTGRES`, and `DOCKYARD_TRAEFIK`.
+The controller and remote agent run with a read-only root filesystem, all Linux
+capabilities dropped, `no-new-privileges`, and a bounded one-GiB `/tmp` tmpfs
+for transient Compose, Git, registry, and build material. Their state and
+backup paths remain explicit volumes. The Docker socket is mounted read-only at
+the filesystem level, but Docker's API still grants root-equivalent manager
+authority; protect these services as infrastructure administrators and never
+attach tenant workloads to their control networks.
 All bundled services use Docker's bounded `local` logging driver with five
 20-MiB files by default. Set `DOCKYARD_CONTAINER_LOG_MAX_SIZE` and
 `DOCKYARD_CONTAINER_LOG_MAX_FILES` before rendering any platform, agent, or AI
