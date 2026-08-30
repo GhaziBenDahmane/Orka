@@ -179,14 +179,24 @@ Swarm secrets for it and the model gateway key. Deploy one or more focused
 auditors with the supplied overlay:
 
 ```sh
-printf '%s' "$AUDITOR_TOKEN" | docker secret create dockyard_ai_auditor_token -
-printf '%s' "$MODEL_API_KEY" | docker secret create dockyard_ai_api_key -
+export DOCKYARD_AI_AUDITOR_TOKEN_SECRET=dockyard_ai_auditor_token_v1
+export DOCKYARD_AI_API_KEY_SECRET=dockyard_ai_api_key_v1
+printf '%s' "$AUDITOR_TOKEN" | docker secret create "$DOCKYARD_AI_AUDITOR_TOKEN_SECRET" -
+printf '%s' "$MODEL_API_KEY" | docker secret create "$DOCKYARD_AI_API_KEY_SECRET" -
 DOCKYARD_IMAGE='registry.example/dockyard@sha256:...' \
 NINEROUTER_IMAGE='decolua/9router@sha256:...' \
 HEADROOM_IMAGE='ghcr.io/headroomlabs-ai/headroom@sha256:...' \
 DOCKYARD_AI_MODEL='provider/model-name' \
 docker stack deploy -c deploy/ai-auditors.yml dockyard-ai
 ```
+
+Docker secrets are immutable. To rotate either credential, create a new
+versioned secret, update `DOCKYARD_AI_AUDITOR_TOKEN_SECRET` or
+`DOCKYARD_AI_API_KEY_SECRET`, redeploy the stack, verify both auditors complete
+a run, and only then remove the previous secret. The external secret names may
+change while the files inside each container remain
+`/run/secrets/dockyard_ai_auditor_token` and
+`/run/secrets/dockyard_ai_api_key`.
 
 Set `DOCKYARD_AI_BASE_URL=http://9router:20128/v1` when 9Router shares the
 stack's encrypted `ai-control` network, or use another OpenAI-compatible

@@ -91,8 +91,12 @@ services:
         constraints: [node.role == manager]
 
 secrets:
-  dockyard_ai_auditor_token: {external: true}
-  dockyard_ai_api_key: {external: true}
+  dockyard_ai_auditor_token:
+    external: true
+    name: ${DOCKYARD_AI_AUDITOR_TOKEN_SECRET:-dockyard_ai_auditor_token}
+  dockyard_ai_api_key:
+    external: true
+    name: ${DOCKYARD_AI_API_KEY_SECRET:-dockyard_ai_api_key}
 networks:
   ai-control:
     driver: overlay
