@@ -49,6 +49,9 @@ keys make it a privileged service.
   and per-destination checkpoint, backlog, and latest batch status/timestamps.
   Destination names, storage configuration, object keys, chain hashes,
   credentials, and delivery errors remain outside the agent boundary.
+- Public route inventory includes only routing metadata. The deterministic
+  baseline reports any Traefik route that permits plaintext HTTP so operators
+  can enable certificate-backed TLS or explicitly retire the exposure.
 - Dokploy migration posture is grouped by source organization and reports
   imported versus unresolved resources plus successful native database
   transfers. Up to 200 unresolved parity records include their source kind,
@@ -99,7 +102,8 @@ keys make it a privileged service.
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
   incomplete Dokploy migrations. It also reports a missing immutable audit
   archive, a failed latest archive delivery, or tenant events left unarchived
-  for more than five minutes. These findings survive a model gateway
+  for more than five minutes, along with public routes that permit plaintext
+  HTTP. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and

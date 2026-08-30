@@ -333,6 +333,23 @@ func TestDeterministicAuditDetectsMissingImmutableAuditArchive(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsPlaintextPublicRoutes(t *testing.T) {
+	insecureID := uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		Routes: []store.Route{
+			{ID: insecureID, ComposeServiceID: uuid.New(), Host: "legacy.example.test", PathPrefix: "/", TargetPort: 8080},
+			{ID: uuid.New(), ComposeServiceID: uuid.New(), Host: "secure.example.test", PathPrefix: "/", TargetPort: 8443, TLS: true, CertificateResolver: "letsencrypt"},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 1 || findings[0].Title != "Public route permits plaintext HTTP" || findings[0].ResourceID != insecureID.String() || findings[0].Severity != "medium" {
+		t.Fatalf("route findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

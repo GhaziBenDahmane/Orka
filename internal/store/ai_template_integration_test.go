@@ -233,6 +233,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	backupID, policyID := uuid.New(), uuid.New()
+	routeID, otherRouteID := uuid.New(), uuid.New()
 	auditArchiveID, disabledAuditArchiveID, otherAuditArchiveID := uuid.New(), uuid.New(), uuid.New()
 	auditBackupDestinationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID := uuid.New(), uuid.New(), uuid.New()
 	latestDeploymentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
@@ -244,6 +245,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audit project','audit-project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
+		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','audit-api.example.test','/',8080,false,'letsencrypt')`, []any{routeID, serviceID}},
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'replica shortfall',now()-interval '30 seconds')`, []any{serviceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','deployment-secret','succeeded','manual',$3::timestamptz - interval '1 minute',$3::timestamptz - interval '30 seconds')`, []any{uuid.New(), serviceID, latestDeploymentAt}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','queued-secret','queued','manual',$3)`, []any{uuid.New(), serviceID, latestDeploymentAt}},
@@ -268,6 +270,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Other audit project','other-audit-project')`, []any{otherProjectID, otherOrganizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{otherEnvironmentID, otherProjectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Other API','other-api',$3,'services: {api: {environment: [OTHER_COMPOSE_SECRET]}}','other-encrypted-env',7)`, []any{otherServiceID, otherEnvironmentID, "other-audit-api-" + otherServiceID.String()}},
+		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','other-audit-api.example.test','/',8080,true,'letsencrypt')`, []any{otherRouteID, otherServiceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,7,'services: {api: {image: other:v7}}','other-deployment-secret','failed','manual',now())`, []any{uuid.New(), otherServiceID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Other primary','other-primary','postgres','17','other-database-secret','ready')`, []any{otherDatabaseID, otherEnvironmentID}},
 		{`INSERT INTO resource_policies(organization_id,scope_type,scope_id,maintenance_enabled,maintenance_reason,max_projects) VALUES($1,'organization',$1,true,'other-policy-secret',1)`, []any{otherOrganizationID}},
@@ -312,6 +315,9 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	if len(snapshot.BackupPosture) != 1 || snapshot.BackupPosture[0].DatabaseID != databaseID || !snapshot.BackupPosture[0].VerifyRestore || snapshot.BackupPosture[0].LastBackupStatus != "succeeded" || snapshot.BackupPosture[0].LastRestoreDrillStatus != "succeeded" {
 		t.Fatalf("backup posture=%#v", snapshot.BackupPosture)
+	}
+	if len(snapshot.Routes) != 1 || snapshot.Routes[0].ID != routeID || snapshot.Routes[0].ComposeServiceID != serviceID || snapshot.Routes[0].TLS {
+		t.Fatalf("route posture=%#v", snapshot.Routes)
 	}
 	if len(snapshot.ResourcePolicies) != 1 || snapshot.ResourcePolicies[0].ScopeID != organizationID || !snapshot.ResourcePolicies[0].Maintenance || snapshot.ResourcePolicies[0].CurrentProjects != 1 || snapshot.ResourcePolicies[0].CurrentEnvironments != 1 || snapshot.ResourcePolicies[0].CurrentServices != 1 || snapshot.ResourcePolicies[0].CurrentDatabases != 1 {
 		t.Fatalf("resource policy posture=%#v", snapshot.ResourcePolicies)
@@ -368,7 +374,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 			t.Fatalf("snapshot leaked %q: body=%s", secret, encodedSnapshot)
 		}
 	}
-	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherAuditArchiveID, otherAuditBackupDestinationID} {
+	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherRouteID, otherAuditArchiveID, otherAuditBackupDestinationID} {
 		if strings.Contains(string(encodedSnapshot), otherTenantID.String()) {
 			t.Fatalf("snapshot leaked cross-tenant resource %s: body=%s", otherTenantID, encodedSnapshot)
 		}
