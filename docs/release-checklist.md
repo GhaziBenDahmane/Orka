@@ -89,7 +89,8 @@ links for every item below.
   normal workload APIs to the auditor identity. It also proves audited
   administrator finding triage, atomic rollback when its audit write fails,
   denial of triage to the auditor identity, and prevention of cross-tenant
-  finding mutation. The release attaches
+  finding mutation, and verifies that a new critical finding queues a durable
+  operator notification. The release attaches
   `ai-audit-conformance.json`.
 - `make test-notification-conformance` drives encrypted provider records and
   durable jobs through signed webhook and Slack-compatible delivery,

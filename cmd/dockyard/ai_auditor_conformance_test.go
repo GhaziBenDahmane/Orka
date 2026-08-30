@@ -39,7 +39,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	organizationID, accountID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	ownerID, ownerSessionID := uuid.New(), uuid.New()
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
 	secretMarker := "DO_NOT_EXPOSE_AI_CONFORMANCE_SECRET_" + uuid.NewString()
@@ -68,6 +68,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'other-conformance-auditor','auditor',true)`, []any{otherAccountID, otherOrganizationID}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status) VALUES($1,$2,$3,'other-auditor','completed')`, []any{otherRunID, otherOrganizationID, otherAccountID}},
 		{`INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,evidence,fingerprint) VALUES($1,$2,'low','isolation','Other tenant finding','Must remain unchanged','{}','other-tenant')`, []any{otherFindingID, otherRunID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'AI on-call','webhook','encrypted','encrypted',ARRAY['ai.finding.critical'])`, []any{notificationEndpointID, organizationID}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audited project','audited-project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Sensitive service','sensitive-service',$3,$4,$5,2)`, []any{serviceID, environmentID, "ai-conformance-" + serviceID.String(), "services: {app: {image: example.invalid/private, environment: [" + secretMarker + "]}}", "encrypted:" + secretMarker}},
@@ -113,7 +114,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			return
 		}
 		modelCalled = true
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"Conformance audit completed","findings":[{"severity":"medium","category":"capacity","title":"Capacity requires review","description":"The service has no recorded deployment capacity evidence.","resourceType":"service","resourceId":"` + serviceID.String() + `","evidence":{"source":"model-conformance"},"remediation":"Record a successful deployment and capacity observation."}]}`}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"Conformance audit completed","findings":[{"severity":"critical","category":"capacity","title":"Capacity requires review","description":"The service has no recorded deployment capacity evidence.","resourceType":"service","resourceId":"` + serviceID.String() + `","evidence":{"source":"model-conformance"},"remediation":"Record a successful deployment and capacity observation."}]}`}}}})
 	}))
 	defer model.Close()
 
@@ -192,6 +193,13 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	var findingID uuid.UUID
 	if err = db.Pool.QueryRow(ctx, `SELECT id FROM ai_audit_findings WHERE run_id=$1 AND title='Capacity requires review'`, runID).Scan(&findingID); err != nil {
 		t.Fatal(err)
+	}
+	var criticalNotifications, criticalNotificationJobs int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE endpoint_id=$1 AND event_type='ai.finding.critical' AND resource_id=$2`, notificationEndpointID, findingID.String()).Scan(&criticalNotifications); err != nil || criticalNotifications != 1 {
+		t.Fatalf("critical finding notifications=%d err=%v", criticalNotifications, err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1 AND resource_id=$2)`, notificationEndpointID, findingID.String()).Scan(&criticalNotificationJobs); err != nil || criticalNotificationJobs != 1 {
+		t.Fatalf("critical finding notification jobs=%d err=%v", criticalNotificationJobs, err)
 	}
 	if _, err = db.Pool.Exec(ctx, `
 		CREATE FUNCTION reject_ai_triage_audit() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -272,6 +280,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"auditorLeastPrivilege":          true,
 		"findingTriageAudited":           true,
 		"findingTriageAtomic":            true,
+		"criticalFindingNotified":        true,
 		"auditorTriageDenied":            true,
 		"triageTenantIsolated":           true,
 	})

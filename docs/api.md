@@ -145,7 +145,7 @@ encrypted and never returned. Generic webhook signing secrets are revealed
 once. All providers use the same idempotent delivery records and retry queue
 for `deployment.failed`, `backup.failed`, `restore.failed`,
 `restore.drill.failed`, `database.migration.failed`, and
-`audit.archive.failed`, and `ai.audit.failed`. URLs and signing
+`audit.archive.failed`, `ai.audit.failed`, and `ai.finding.critical`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are

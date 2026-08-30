@@ -68,6 +68,10 @@ keys make it a privileged service.
   (365 days by default). The newest completed run in every auditor/agent
   lineage is retained even after that period so the current-finding view does
   not silently lose its last known state; running audits are never pruned.
+- Notification endpoints can subscribe to `ai.finding.critical`. Delivery is
+  queued transactionally for a new critical fingerprint, a same-run escalation
+  to critical, or a critical recurrence after resolution. Unchanged open or
+  acknowledged critical findings do not alert again on every scheduled run.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds model responses and finding counts, validates every structured
   field, and rejects oversized evidence before submitting results. The API
@@ -148,6 +152,8 @@ auditor token was created. The default Swarm schedule is 24 hours, so the
 48-hour threshold tolerates one missed execution before alerting. Failed runs
 also enqueue the durable `ai.audit.failed` notification event in the same
 transaction as their terminal state, for any subscribed organization endpoint.
+Newly critical findings enqueue `ai.finding.critical` transactionally; repeated
+unchanged critical occurrences remain visible without paging on every run.
 
 `make test-ai-audit-conformance` runs the built-in auditor against the real
 Dockyard API and PostgreSQL store with a disposable OpenAI-compatible model

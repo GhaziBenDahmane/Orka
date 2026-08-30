@@ -537,7 +537,7 @@ function Audit({ flash, setError }: { flash: (s: string) => void; setError: (s: 
   </>;
 }
 
-const notificationEvents = ["deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed"];
+const notificationEvents = ["deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical"];
 
 function Notifications({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {
   const [items, setItems] = useState<NotificationEndpoint[]>([]);

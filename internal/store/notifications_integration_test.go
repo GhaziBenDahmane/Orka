@@ -113,14 +113,15 @@ func TestFailedAIAuditsQueueTenantNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Pool.Close)
-	organizationID, accountID, endpointID := uuid.New(), uuid.New(), uuid.New()
+	organizationID, accountID, endpointID, ownerID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'AI notifications',$2)`, []any{organizationID, "ai-notifications-" + organizationID.String()}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, []any{ownerID, ownerID.String() + "@example.test"}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role) VALUES($1,$2,'auditor','auditor')`, []any{accountID, organizationID}},
-		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'ai-on-call','webhook','url','secret',ARRAY['ai.audit.failed'])`, []any{endpointID, organizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'ai-on-call','webhook','url','secret',ARRAY['ai.audit.failed','ai.finding.critical'])`, []any{endpointID, organizationID}},
 	} {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)
@@ -128,6 +129,7 @@ func TestFailedAIAuditsQueueTenantNotifications(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, ownerID)
 	})
 
 	failedRun, err := db.CreateAIAuditRun(ctx, organizationID, accountID, "security", "v1", "test", json.RawMessage(`{}`))
@@ -155,6 +157,53 @@ func TestFailedAIAuditsQueueTenantNotifications(t *testing.T) {
 	if err = db.FinishAIAuditRun(ctx, organizationID, accountID, replacementRun.ID, "completed", "healthy"); err != nil {
 		t.Fatal(err)
 	}
+	criticalRun, err := db.CreateAIAuditRun(ctx, organizationID, accountID, "security-findings", "v1", "test", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	criticalFinding, err := db.AddAIAuditFinding(ctx, organizationID, accountID, AIAuditFinding{RunID: criticalRun.ID, Severity: "critical", Category: "security", Title: "Exposed control plane", Description: "The control plane is exposed", Evidence: json.RawMessage(`{}`), Fingerprint: "security:exposed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated, repeatErr := db.AddAIAuditFinding(ctx, organizationID, accountID, AIAuditFinding{RunID: criticalRun.ID, Severity: "critical", Category: "security", Title: "Exposed control plane", Description: "Still exposed", Evidence: json.RawMessage(`{}`), Fingerprint: "security:exposed"}); repeatErr != nil || repeated.ID != criticalFinding.ID {
+		t.Fatalf("repeated critical finding=%#v err=%v", repeated, repeatErr)
+	}
+	escalatedFinding, err := db.AddAIAuditFinding(ctx, organizationID, accountID, AIAuditFinding{RunID: criticalRun.ID, Severity: "high", Category: "security", Title: "Weak policy", Description: "Policy needs review", Evidence: json.RawMessage(`{}`), Fingerprint: "security:policy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	escalatedFinding, err = db.AddAIAuditFinding(ctx, organizationID, accountID, AIAuditFinding{RunID: criticalRun.ID, Severity: "critical", Category: "security", Title: "Weak policy", Description: "Policy is now critical", Evidence: json.RawMessage(`{}`), Fingerprint: "security:policy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishAIAuditRun(ctx, organizationID, accountID, criticalRun.ID, "completed", "critical finding"); err != nil {
+		t.Fatal(err)
+	}
+	recurrenceRun, err := db.CreateAIAuditRun(ctx, organizationID, accountID, "security-findings", "v2", "test", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recurrence, err := db.AddAIAuditFinding(ctx, organizationID, accountID, AIAuditFinding{RunID: recurrenceRun.ID, Severity: "critical", Category: "security", Title: "Exposed control plane", Description: "Still exposed in the next run", Evidence: json.RawMessage(`{}`), Fingerprint: "security:exposed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishAIAuditRun(ctx, organizationID, accountID, recurrenceRun.ID, "completed", "unchanged critical finding"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.UpdateAIAuditFindingDisposition(ctx, Principal{UserID: ownerID, OrganizationID: organizationID, Role: "owner"}, recurrence.ID, "resolved", "fixed", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	reopenedRun, err := db.CreateAIAuditRun(ctx, organizationID, accountID, "security-findings", "v3", "test", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedFinding, err := db.AddAIAuditFinding(ctx, organizationID, accountID, AIAuditFinding{RunID: reopenedRun.ID, Severity: "critical", Category: "security", Title: "Exposed control plane", Description: "The resolved condition returned", Evidence: json.RawMessage(`{}`), Fingerprint: "security:exposed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishAIAuditRun(ctx, organizationID, accountID, reopenedRun.ID, "completed", "reopened critical finding"); err != nil {
+		t.Fatal(err)
+	}
 
 	rows, err := db.Pool.Query(ctx, `SELECT event_type,resource_type,resource_id,payload FROM notification_deliveries WHERE endpoint_id=$1 ORDER BY created_at,id`, endpointID)
 	if err != nil {
@@ -168,23 +217,27 @@ func TestFailedAIAuditsQueueTenantNotifications(t *testing.T) {
 		if err = rows.Scan(&eventType, &resourceType, &resourceID, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if eventType != "ai.audit.failed" || resourceType != "ai_audit_run" {
+		if (eventType != "ai.audit.failed" && eventType != "ai.finding.critical") || (eventType == "ai.audit.failed" && resourceType != "ai_audit_run") || (eventType == "ai.finding.critical" && resourceType != "ai_audit_finding") {
 			t.Fatalf("unexpected delivery event=%q resource=%q", eventType, resourceType)
 		}
-		deliveries[resourceID] = payload
+		deliveries[eventType+":"+resourceID] = payload
 	}
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(deliveries) != 2 || deliveries[failedRun.ID.String()] == nil || deliveries[orphanedRun.ID.String()] == nil || deliveries[completedRun.ID.String()] != nil {
+	if len(deliveries) != 5 || deliveries["ai.audit.failed:"+failedRun.ID.String()] == nil || deliveries["ai.audit.failed:"+orphanedRun.ID.String()] == nil || deliveries["ai.audit.failed:"+completedRun.ID.String()] != nil || deliveries["ai.finding.critical:"+criticalFinding.ID.String()] == nil || deliveries["ai.finding.critical:"+escalatedFinding.ID.String()] == nil || deliveries["ai.finding.critical:"+reopenedFinding.ID.String()] == nil {
 		t.Fatalf("AI audit deliveries=%v", deliveries)
 	}
 	var failedPayload map[string]any
-	if err = json.Unmarshal(deliveries[failedRun.ID.String()], &failedPayload); err != nil || failedPayload["agentName"] != "security" || failedPayload["error"] != "model unavailable" {
+	if err = json.Unmarshal(deliveries["ai.audit.failed:"+failedRun.ID.String()], &failedPayload); err != nil || failedPayload["agentName"] != "security" || failedPayload["error"] != "model unavailable" {
 		t.Fatalf("failed audit payload=%v err=%v", failedPayload, err)
 	}
+	var criticalPayload map[string]any
+	if err = json.Unmarshal(deliveries["ai.finding.critical:"+criticalFinding.ID.String()], &criticalPayload); err != nil || criticalPayload["agentName"] != "security-findings" || criticalPayload["title"] != "Exposed control plane" {
+		t.Fatalf("critical finding payload=%v err=%v", criticalPayload, err)
+	}
 	var jobs int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1)`, endpointID).Scan(&jobs); err != nil || jobs != 2 {
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1)`, endpointID).Scan(&jobs); err != nil || jobs != 5 {
 		t.Fatalf("notification jobs=%d err=%v", jobs, err)
 	}
 }

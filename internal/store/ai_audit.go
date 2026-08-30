@@ -594,7 +594,8 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 	}
 	var findingCount int
 	var fingerprintExists bool
-	if err = tx.QueryRow(ctx, `SELECT count(*),COALESCE(bool_or(fingerprint=$2),false) FROM ai_audit_findings WHERE run_id=$1`, runID, item.Fingerprint).Scan(&findingCount, &fingerprintExists); err != nil {
+	var currentSeverity string
+	if err = tx.QueryRow(ctx, `SELECT count(*),COALESCE(bool_or(fingerprint=$2),false),COALESCE(max(severity) FILTER (WHERE fingerprint=$2),'') FROM ai_audit_findings WHERE run_id=$1`, runID, item.Fingerprint).Scan(&findingCount, &fingerprintExists, &currentSeverity); err != nil {
 		return AIAuditFinding{}, err
 	}
 	if !fingerprintExists && findingCount >= MaxAIAuditFindingsPerRun {
@@ -609,13 +610,17 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 	item.TriagedAt = nil
 	item.PreviousFindingID = nil
 	item.OccurrenceNumber = 1
+	previousFound := false
+	previousSeverity, previousDisposition := "", ""
 	if !fingerprintExists {
 		var previous AIAuditFinding
-		err = tx.QueryRow(ctx, `SELECT f.id,f.occurrence_number,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id WHERE r.organization_id=$1 AND r.service_account_id=$2 AND r.agent_name=$3 AND f.run_id<>$4 AND f.fingerprint=$5 ORDER BY r.started_at DESC,f.created_at DESC LIMIT 1`, organizationID, accountID, agentName, runID, item.Fingerprint).Scan(&previous.ID, &previous.OccurrenceNumber, &previous.Disposition, &previous.TriageNote, &previous.TriagedByUser, &previous.TriagedByServiceAccount, &previous.TriagedAt)
+		err = tx.QueryRow(ctx, `SELECT f.id,f.occurrence_number,f.severity,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id WHERE r.organization_id=$1 AND r.service_account_id=$2 AND r.agent_name=$3 AND f.run_id<>$4 AND f.fingerprint=$5 ORDER BY r.started_at DESC,f.created_at DESC LIMIT 1`, organizationID, accountID, agentName, runID, item.Fingerprint).Scan(&previous.ID, &previous.OccurrenceNumber, &previous.Severity, &previous.Disposition, &previous.TriageNote, &previous.TriagedByUser, &previous.TriagedByServiceAccount, &previous.TriagedAt)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return AIAuditFinding{}, err
 		}
 		if err == nil {
+			previousFound = true
+			previousSeverity, previousDisposition = previous.Severity, previous.Disposition
 			item.PreviousFindingID = &previous.ID
 			item.OccurrenceNumber = previous.OccurrenceNumber + 1
 			if previous.Disposition == "acknowledged" {
@@ -631,6 +636,13 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 	err = tx.QueryRow(ctx, `INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,resource_type,resource_id,evidence,remediation,fingerprint,disposition,triage_note,triaged_by_user_id,triaged_by_service_account_id,triaged_at,previous_finding_id,occurrence_number) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT(run_id,fingerprint) DO UPDATE SET severity=excluded.severity,category=excluded.category,title=excluded.title,description=excluded.description,resource_type=excluded.resource_type,resource_id=excluded.resource_id,evidence=excluded.evidence,remediation=excluded.remediation RETURNING id,created_at,disposition,triage_note,triaged_by_user_id,triaged_by_service_account_id,triaged_at,previous_finding_id,occurrence_number`, item.ID, runID, item.Severity, item.Category, item.Title, item.Description, item.ResourceType, item.ResourceID, item.Evidence, item.Remediation, item.Fingerprint, item.Disposition, item.TriageNote, item.TriagedByUser, item.TriagedByServiceAccount, item.TriagedAt, item.PreviousFindingID, item.OccurrenceNumber).Scan(&item.ID, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt, &item.PreviousFindingID, &item.OccurrenceNumber)
 	if err != nil {
 		return AIAuditFinding{}, err
+	}
+	shouldNotifyCritical := item.Severity == "critical" && ((fingerprintExists && currentSeverity != "critical") || (!fingerprintExists && (!previousFound || previousSeverity != "critical" || previousDisposition == "resolved")))
+	if shouldNotifyCritical {
+		payload, _ := json.Marshal(map[string]any{"event": "ai.finding.critical", "resourceType": "ai_audit_finding", "resourceId": item.ID.String(), "runId": runID, "agentName": agentName, "category": item.Category, "title": item.Title, "occurredAt": time.Now().UTC(), "text": "Dockyard ai.finding.critical: " + item.Title})
+		if err = queueNotificationDeliveries(ctx, tx, organizationID, "ai.finding.critical", "ai_audit_finding", item.ID.String(), payload); err != nil {
+			return AIAuditFinding{}, err
+		}
 	}
 	return item, tx.Commit(ctx)
 }
