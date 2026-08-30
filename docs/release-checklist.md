@@ -100,7 +100,10 @@ links for every item below.
   tenant API and PostgreSQL store against a disposable OpenAI-compatible
   endpoint. It proves snapshot secret redaction, prompt trust boundaries,
   durable deterministic and model findings, audited completion, and denial of
-  normal workload APIs to the auditor identity. It also proves audited
+  normal workload APIs to the auditor identity. It distinguishes desired
+  template tags from digest-pinned effective runtime snapshots, reports a
+  mutable deployed image, and keeps runtime image identities outside the model
+  boundary. It also proves audited
   administrator finding triage, atomic rollback when its audit write fails,
   denial of triage to the auditor identity, and prevention of cross-tenant
   finding mutation, and verifies that a new critical finding queues a durable

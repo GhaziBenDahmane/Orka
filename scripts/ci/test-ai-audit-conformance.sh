@@ -62,6 +62,7 @@ jq -e '
   .status == "passed" and .realPlatformAPI and
   .openAICompatibleGateway and .snapshotSecretsRedacted and
   .promptInjectionBoundaryPresent and .deterministicFindingsPersisted and
+  .deployedImageProvenanceAudited and
   .agentCAMismatchDetected and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and

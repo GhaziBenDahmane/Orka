@@ -245,10 +245,13 @@ Enabled SAML providers expose only an opaque provider ID, certificate
 configuration validity, and SP/IdP expiry timestamps; certificates, keys,
 metadata, names, and domains remain excluded. Invalid/expired trust is a high
 severity baseline finding, while expiry inside thirty days is medium severity.
-Compose definitions are summarized as image-provenance counts per workload;
-image names, registry paths, build contexts, commands, labels, and environment
-values are not returned. The baseline reports malformed definitions, mutable
-image references, and services missing both an image and a build source.
+Desired Compose definitions and latest successful effective runtime snapshots
+are summarized as image-provenance counts per workload; image names, registry
+paths, build contexts, commands, labels, and environment values are not
+returned. The baseline reports malformed desired definitions, missing or
+malformed runtime snapshots, mutable deployed images, and services missing
+both an image and a build source. Mutable desired template tags alone are not
+reported as deployed-image vulnerabilities.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
 Repository URLs and refs, output image names, credential identifiers, artifact

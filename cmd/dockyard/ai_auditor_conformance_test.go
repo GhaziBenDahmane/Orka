@@ -39,10 +39,11 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	organizationID, accountID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	ownerID, ownerSessionID := uuid.New(), uuid.New()
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	projectID, environmentID, serviceID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, mutableRuntimeServiceID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
 	secretMarker := "DO_NOT_EXPOSE_AI_CONFORMANCE_SECRET_" + uuid.NewString()
+	runtimeImageMarker := "runtime-private-" + uuid.NewString()
 	activeAgentCA, _, err := agentpki.NewCA(time.Now(), 48*time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -72,6 +73,9 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audited project','audited-project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Sensitive service','sensitive-service',$3,$4,$5,2)`, []any{serviceID, environmentID, "ai-conformance-" + serviceID.String(), "services: {app: {image: example.invalid/private, environment: [" + secretMarker + "]}}", "encrypted:" + secretMarker}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,'services: {app: {image: example.invalid/private:v1}}',$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), serviceID, "services: {app: {image: example.invalid/private@sha256:" + strings.Repeat("a", 64) + "}}"}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,revision) VALUES($1,$2,'Mutable runtime service','mutable-runtime-service',$3,$4,1)`, []any{mutableRuntimeServiceID, environmentID, "ai-conformance-" + mutableRuntimeServiceID.String(), "services: {app: {image: example.invalid/desired:released}}"}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,$3,$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), mutableRuntimeServiceID, "services: {app: {image: example.invalid/" + runtimeImageMarker + ":latest}}"}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,certificate_ca_fingerprint,certificate_not_after,last_seen_at) VALUES($1,$2,'Legacy CA cluster','legacy-ca','active',$3,now()+interval '1 day',now())`, []any{clusterID, organizationID, previousAgentCAFingerprint}},
 	}
 	for _, statement := range statements {
@@ -103,12 +107,22 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			http.Error(w, "read failed", http.StatusBadRequest)
 			return
 		}
-		if bytes.Contains(body, []byte(secretMarker)) {
-			t.Error("workload secret reached the model request")
+		if bytes.Contains(body, []byte(secretMarker)) || bytes.Contains(body, []byte(runtimeImageMarker)) {
+			t.Error("workload secret or runtime image identity reached the model request")
 			http.Error(w, "secret exposed", http.StatusBadRequest)
 			return
 		}
-		if !bytes.Contains(body, []byte("SNAPSHOT_DATA_BEGIN")) || !bytes.Contains(body, []byte(serviceID.String())) || !bytes.Contains(body, []byte("untrusted data")) {
+		var modelRequest struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if decodeErr := json.Unmarshal(body, &modelRequest); decodeErr != nil {
+			t.Error(decodeErr)
+			http.Error(w, "invalid model request", http.StatusBadRequest)
+			return
+		}
+		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) {
 			t.Error("model request did not contain the bounded platform snapshot and trust instruction")
 			http.Error(w, "incomplete prompt", http.StatusBadRequest)
 			return
@@ -174,7 +188,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -273,6 +287,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"snapshotSecretsRedacted":        true,
 		"promptInjectionBoundaryPresent": true,
 		"deterministicFindingsPersisted": true,
+		"deployedImageProvenanceAudited": true,
 		"agentCAMismatchDetected":        true,
 		"modelFindingsPersisted":         true,
 		"durableRunCompleted":            true,
