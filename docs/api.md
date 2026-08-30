@@ -313,6 +313,11 @@ Active and draining remote clusters whose reported agent runtime image is
 missing or not digest-pinned produce a high-severity supply-chain finding.
 Managed databases left in an error state produce a high-severity availability
 finding independently of their backup posture.
+Managed-network posture exposes only topology metadata, lifecycle state, and
+the last safe state-update timestamp. Raw Docker/agent errors, Docker IDs,
+MTU, and IPAM details are excluded. Failed provisioning and provisioning that
+remains pending beyond fifteen minutes produce high-severity deterministic
+findings.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
 Repository URLs and refs, output image names, credential identifiers, artifact

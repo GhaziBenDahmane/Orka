@@ -1007,6 +1007,26 @@ func TestDeterministicAuditDetectsMissingCustomTLSEdgeTarget(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsManagedNetworkLifecycleRisks(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	failedID, stalledID, freshID, readyID, clusterID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		ManagedNetworks: []store.AIAuditManagedNetworkInfo{
+			{ID: failedID, ClusterID: &clusterID, Driver: "overlay", Status: "error", UpdatedAt: now},
+			{ID: stalledID, Driver: "overlay", Status: "provisioning", UpdatedAt: now.Add(-16 * time.Minute)},
+			{ID: freshID, Driver: "overlay", Status: "provisioning", UpdatedAt: now.Add(-time.Minute)},
+			{ID: readyID, Driver: "overlay", Status: "ready", UpdatedAt: now.Add(-24 * time.Hour)},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 2 || findings[0].Title != "Managed network provisioning failed" || findings[0].ResourceID != failedID.String() || findings[0].Evidence["scope"] != "remote" || findings[1].Title != "Managed network provisioning is stalled" || findings[1].ResourceID != stalledID.String() || findings[1].Evidence["scope"] != "local" {
+		t.Fatalf("managed network findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsWorkloadImageProvenanceGaps(t *testing.T) {
 	invalidID, missingSnapshotID, invalidRuntimeID, mutableID, incompleteID, healthyID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	snapshot := store.AIAuditSnapshot{

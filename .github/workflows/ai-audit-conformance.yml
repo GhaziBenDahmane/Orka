@@ -28,6 +28,7 @@ jobs:
             .deployedImageProvenanceAudited and
             .agentCAMismatchDetected and .agentImageProvenanceAudited and
             .databaseAvailabilityAudited and
+            .managedNetworkPostureAudited and
             .customTLSValidityAudited and .edgeTLSConvergenceAudited and
             .durableRunCompleted and .lifecycleAudited and .auditorLeastPrivilege and
             .findingTriageAudited and .findingTriageAtomic and

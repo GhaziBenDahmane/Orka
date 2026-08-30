@@ -113,11 +113,12 @@ links for every item below.
   boundary. It also proves deterministic detection of a managed database left
   in an error state, an expired custom TLS certificate, and a missing edge
   reconciliation target while keeping encrypted certificate and private-key
-  material outside the model boundary, plus audited
-  administrator finding triage, atomic rollback when its audit write fails,
-  denial of triage to the auditor identity, and prevention of cross-tenant
-  finding mutation, and verifies that a new critical finding queues a durable
-  operator notification. The release attaches
+  material outside the model boundary. A failed managed network must also
+  produce a deterministic finding without exposing its raw Docker/agent error.
+  The gate additionally verifies audited administrator finding triage, atomic
+  rollback when its audit write fails, denial of triage to the auditor identity,
+  prevention of cross-tenant finding mutation, and durable notification for a
+  new critical finding. The release attaches
   `ai-audit-conformance.json`.
 - `make test-notification-conformance` drives encrypted provider records and
   durable jobs through signed webhook and Slack-compatible delivery,

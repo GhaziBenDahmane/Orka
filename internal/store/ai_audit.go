@@ -115,7 +115,7 @@ type AIAuditManagedNetworkInfo struct {
 	EnableIPv4 bool       `json:"enableIpv4"`
 	EnableIPv6 bool       `json:"enableIpv6"`
 	Status     string     `json:"status"`
-	LastError  string     `json:"lastError,omitempty"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
 type AIAuditRouteInfo struct {
@@ -565,7 +565,7 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	for _, item := range networks {
-		snapshot.ManagedNetworks = append(snapshot.ManagedNetworks, AIAuditManagedNetworkInfo{ID: item.ID, ClusterID: item.ClusterID, Name: item.Name, Driver: item.Driver, Internal: item.Internal, Attachable: item.Attachable, EnableIPv4: item.EnableIPv4, EnableIPv6: item.EnableIPv6, Status: item.Status, LastError: item.LastError})
+		snapshot.ManagedNetworks = append(snapshot.ManagedNetworks, AIAuditManagedNetworkInfo{ID: item.ID, ClusterID: item.ClusterID, Name: item.Name, Driver: item.Driver, Internal: item.Internal, Attachable: item.Attachable, EnableIPv4: item.EnableIPv4, EnableIPv6: item.EnableIPv6, Status: item.Status, UpdatedAt: item.UpdatedAt})
 	}
 	reconciliation, err := s.ListServiceReconciliations(ctx, organizationID)
 	if err != nil {

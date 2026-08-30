@@ -1,6 +1,8 @@
 package store
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -40,8 +42,16 @@ func TestManagedNetworkLifecycleAndTenantIsolation(t *testing.T) {
 	if _, err = pool.Exec(ctx, `UPDATE jobs SET status='failed',attempts=max_attempts,finished_at=now() WHERE kind='network.create' AND payload->>'networkId'=$1`, item.ID.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `UPDATE managed_networks SET status='error',last_error='daemon unavailable' WHERE id=$1`, item.ID); err != nil {
+	if _, err = pool.Exec(ctx, `UPDATE managed_networks SET status='error',last_error='DO_NOT_EXPOSE_NETWORK_ERROR_SECRET' WHERE id=$1`, item.ID); err != nil {
 		t.Fatal(err)
+	}
+	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil || len(snapshot.ManagedNetworks) != 1 || snapshot.ManagedNetworks[0].ID != item.ID || snapshot.ManagedNetworks[0].Status != "error" || snapshot.ManagedNetworks[0].UpdatedAt.IsZero() {
+		t.Fatalf("managed network audit posture=%#v err=%v", snapshot.ManagedNetworks, err)
+	}
+	encodedSnapshot, err := json.Marshal(snapshot)
+	if err != nil || bytes.Contains(encodedSnapshot, []byte("DO_NOT_EXPOSE_NETWORK_ERROR_SECRET")) || bytes.Contains(encodedSnapshot, []byte(`"lastError"`)) {
+		t.Fatalf("AI snapshot leaked managed-network failure text: error=%v body=%s", err, encodedSnapshot)
 	}
 	if _, err = db.RetryManagedNetworkProvisioning(ctx, otherOrganizationID, item.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant retry error=%v", err)

@@ -41,6 +41,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedDatabaseID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	customTLSCertificateID, customTLSRouteID := uuid.New(), uuid.New()
+	managedNetworkID := uuid.New()
 	customTLSHost := "ai-" + customTLSCertificateID.String() + ".example.test"
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
@@ -83,6 +84,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Sensitive service','sensitive-service',$3,$4,$5,2)`, []any{serviceID, environmentID, "ai-conformance-" + serviceID.String(), "services: {app: {image: example.invalid/private, environment: [" + secretMarker + "]}}", "encrypted:" + secretMarker}},
 		{`INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,common_name,dns_names,not_before,not_after) VALUES($1,$2,'Expired conformance certificate',$3,$4,$5,$6,ARRAY[$6],now()-interval '90 days',now()-interval '1 hour')`, []any{customTLSCertificateID, organizationID, "encrypted-certificate:" + secretMarker, "encrypted-private-key:" + secretMarker, "sha256:" + strings.Repeat("c", 64), customTLSHost}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,enabled,target_port,tls,certificate_resolver,custom_certificate_id) VALUES($1,$2,'app',$4,'/','/',true,8080,true,'',$3)`, []any{customTLSRouteID, serviceID, customTLSCertificateID, customTLSHost}},
+		{`INSERT INTO managed_networks(id,organization_id,cluster_id,name,driver,status,last_error) VALUES($1,$2,$3,$4,'overlay','error',$5)`, []any{managedNetworkID, organizationID, clusterID, "audit-network-" + managedNetworkID.String(), "network-error:" + secretMarker}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,'services: {app: {image: example.invalid/private:v1}}',$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), serviceID, "services: {app: {image: example.invalid/private@sha256:" + strings.Repeat("a", 64) + "}}"}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,revision) VALUES($1,$2,'Mutable runtime service','mutable-runtime-service',$3,$4,1)`, []any{mutableRuntimeServiceID, environmentID, "ai-conformance-" + mutableRuntimeServiceID.String(), "services: {app: {image: example.invalid/desired:released}}"}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,$3,$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), mutableRuntimeServiceID, "services: {app: {image: example.invalid/" + runtimeImageMarker + ":latest}}"}},
@@ -126,7 +128,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			http.Error(w, "invalid model request", http.StatusBadRequest)
 			return
 		}
-		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) {
+		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) {
 			t.Error("model request did not contain the bounded platform snapshot and trust instruction")
 			http.Error(w, "incomplete prompt", http.StatusBadRequest)
 			return
@@ -192,7 +194,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -295,6 +297,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"agentCAMismatchDetected":        true,
 		"agentImageProvenanceAudited":    true,
 		"databaseAvailabilityAudited":    true,
+		"managedNetworkPostureAudited":   true,
 		"customTLSValidityAudited":       true,
 		"edgeTLSConvergenceAudited":      true,
 		"modelFindingsPersisted":         true,

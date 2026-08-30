@@ -18,6 +18,7 @@ const finalizerStallThreshold = 15 * time.Minute
 const jobHeartbeatStallThreshold = 2 * time.Minute
 const agentCommandStallThreshold = 2 * time.Minute
 const edgeTLSReconciliationStallThreshold = 5 * time.Minute
+const managedNetworkProvisioningStallThreshold = 15 * time.Minute
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -183,6 +184,23 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	for _, destination := range snapshot.BackupDestinations {
 		if !destination.UseTLS {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Backup destination permits plaintext object-store transport", Description: "A configured backup destination can send credentials and recovery data without transport encryption.", ResourceType: "backup_destination", ResourceID: destination.ID.String(), Evidence: map[string]any{"useTls": false, "databasePolicyReferences": destination.DatabasePolicies, "volumePolicyReferences": destination.VolumePolicies, "auditArchiveReferences": destination.AuditArchives}, Remediation: "Move the destination to a certificate-validated TLS endpoint, rotate its credentials, and verify database, volume, and audit-archive delivery."})
+		}
+	}
+	for _, network := range snapshot.ManagedNetworks {
+		scope := "local"
+		evidence := map[string]any{"scope": scope, "driver": network.Driver, "status": network.Status, "updatedAt": network.UpdatedAt.UTC().Format(time.RFC3339)}
+		if network.ClusterID != nil {
+			scope = "remote"
+			evidence["scope"] = scope
+			evidence["clusterId"] = network.ClusterID.String()
+		}
+		switch {
+		case network.Status == "error":
+			add(modelFinding{Severity: "high", Category: "network", Title: "Managed network provisioning failed", Description: "A managed Docker network is in a terminal provisioning error state.", ResourceType: "managed_network", ResourceID: network.ID.String(), Evidence: evidence, Remediation: "Inspect the redacted network state and durable provisioning job, restore Docker or agent connectivity, and retry provisioning before attaching workloads."})
+		case network.Status == "provisioning" && now.Sub(network.UpdatedAt) > managedNetworkProvisioningStallThreshold:
+			evidence["ageSeconds"] = int64(now.Sub(network.UpdatedAt) / time.Second)
+			evidence["maximumProvisioningSeconds"] = int64(managedNetworkProvisioningStallThreshold / time.Second)
+			add(modelFinding{Severity: "high", Category: "network", Title: "Managed network provisioning is stalled", Description: "A managed Docker network has remained in provisioning beyond fifteen minutes.", ResourceType: "managed_network", ResourceID: network.ID.String(), Evidence: evidence, Remediation: "Restore worker or remote-agent connectivity, inspect the durable create job, and confirm the network becomes ready before attaching workloads."})
 		}
 	}
 	for _, workload := range snapshot.WorkloadPosture {
