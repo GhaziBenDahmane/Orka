@@ -94,6 +94,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	missingCluster := uuid.New()
 	upgradeID := uuid.New()
 	deployTokenID, finalizerClusterID := uuid.New(), uuid.New()
+	failedNetworkID, deletingNetworkID := uuid.New(), uuid.New()
 	auditorA := uuid.New()
 	auditorB := uuid.New()
 	scimToken := uuid.New()
@@ -109,6 +110,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics A',$2)`, []any{organizationA, "metrics-a-" + organizationA.String()}},
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics B',$2)`, []any{organizationB, "metrics-b-" + organizationB.String()}},
+		{`INSERT INTO managed_networks(id,organization_id,name,driver,status,last_error) VALUES($1,$2,'failed-overlay','overlay','error','metrics-network-error')`, []any{failedNetworkID, organizationA}},
+		{`INSERT INTO managed_networks(id,organization_id,name,driver,status,deletion_requested_at) VALUES($1,$2,'deleting-overlay','overlay','deleting',now()-interval '25 minutes')`, []any{deletingNetworkID, organizationA}},
+		{`INSERT INTO jobs(id,kind,payload,status,last_error,finished_at) VALUES($1,'network.delete',$2,'failed','metrics-network-finalizer-error',now()-interval '10 minutes')`, []any{uuid.New(), `{"networkId":"` + deletingNetworkID.String() + `"}`}},
 		{`INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,sync_requested_at) VALUES($1,$2,'Pending catalog','pending','https://github.com/acme/pending','main',now()-interval '10 minutes')`, []any{templatePending, organizationA}},
 		{`INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,last_sync_status,sync_started_at) VALUES($1,$2,'Running catalog','running','https://github.com/acme/running','main','running',now()-interval '11 minutes')`, []any{templateRunning, organizationB}},
 		{`INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,last_sync_status) VALUES($1,$2,'Failed catalog','failed','https://github.com/acme/failed','main','failed')`, []any{templateFailed, organizationA}},
@@ -159,7 +163,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -174,6 +178,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_deploy_token_expiry_seconds{organization="` + organizationA.String() + `",service="` + serviceID.String() + `",token="` + deployTokenID.String() + `"}`,
 		`dockyard_resource_finalizers{organization="` + organizationA.String() + `",kind="cluster",state="failed"} 1`,
 		`dockyard_resource_finalizer_oldest_age_seconds{organization="` + organizationA.String() + `",kind="cluster"}`,
+		`dockyard_managed_networks{organization="` + organizationA.String() + `",scope="local",driver="overlay",status="error"} 1`,
+		`dockyard_resource_finalizers{organization="` + organizationA.String() + `",kind="network",state="failed"} 1`,
+		`dockyard_resource_finalizer_oldest_age_seconds{organization="` + organizationA.String() + `",kind="network"}`,
 	} {
 		if !strings.Contains(metrics, expected) {
 			t.Errorf("missing %q in metrics output", expected)
@@ -360,6 +367,10 @@ func TestPrometheusAlertsCoverDeployTokensAndFinalizers(t *testing.T) {
 		`expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
 		"alert: DockyardResourceFinalizerStalled",
 		`expr: dockyard_resource_finalizer_oldest_age_seconds > 900 unless on (organization, kind) dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
+		"alert: DockyardManagedNetworkProvisioningFailed",
+		`expr: dockyard_managed_networks{status="error"} > 0`,
+		"alert: DockyardManagedNetworkProvisioningStalled",
+		"expr: dockyard_managed_network_provisioning_age_seconds > 900",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

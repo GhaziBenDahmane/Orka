@@ -315,6 +315,10 @@ expiry and become critical once automation or an AI auditor can no longer
 authenticate. Non-revoked deploy-hook credentials expose expiry by immutable
 service and token IDs, while deletion finalizer metrics distinguish active,
 failed, and missing work and alert after fifteen minutes without convergence.
+Managed-network metrics distinguish local and remote lifecycle state, page on
+terminal provisioning errors, and warn when creation remains pending for more
+than fifteen minutes; network deletions participate in the same finalizer
+alerts.
 Non-revoked SCIM tokens have equivalent expiry gauges and alerts
 so directory provisioning does not stop silently. The
 `dockyard_expired_credential_backlog` gauge reports retained records that an

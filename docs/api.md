@@ -356,7 +356,9 @@ CI deployment-hook tokens follow the same bounded-expiry model, record their
 last successful use, and expose expiry metrics keyed only by immutable
 organization, service, and token IDs. Resource-finalizer metrics report active,
 failed, and missing deletion jobs plus oldest deletion age without exporting
-job payloads or failure text.
+job payloads or failure text, including managed-network deletions. Managed
+networks additionally expose aggregate lifecycle state by local/remote scope
+and driver, plus per-network provisioning age for stalled-create alerts.
 Audit exports are ordered by immutable event ID. Each response includes
 `X-Content-SHA256` for offline verification and `X-Next-After-ID` for resumable
 pagination. The default retention is 365 days and is enforced even before an

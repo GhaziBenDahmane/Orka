@@ -325,6 +325,24 @@ groups:
           summary: A Dockyard resource deletion is stalled
           description: Organization {{ $labels.organization }} has a {{ $labels.kind }} deletion pending for more than fifteen minutes.
 
+      - alert: DockyardManagedNetworkProvisioningFailed
+        expr: dockyard_managed_networks{status="error"} > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard managed network could not be reconciled
+          description: Organization {{ $labels.organization }} has {{ $value }} failed {{ $labels.scope }} {{ $labels.driver }} network(s); inspect the network state and durable job failure before retrying.
+
+      - alert: DockyardManagedNetworkProvisioningStalled
+        expr: dockyard_managed_network_provisioning_age_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard managed network is still provisioning
+          description: Managed network {{ $labels.network }} in organization {{ $labels.organization }} has not become ready within fifteen minutes.
+
       - alert: DockyardSCIMTokenExpiring
         expr: dockyard_scim_token_expiry_seconds > 0 and dockyard_scim_token_expiry_seconds < 604800
         for: 15m
