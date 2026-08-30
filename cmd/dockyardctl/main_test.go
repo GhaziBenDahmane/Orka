@@ -16,6 +16,10 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"environments", "project-id"}, http.MethodGet, "/v1/projects/project-id/environments"},
 		{[]string{"deploy", "service-id"}, http.MethodPost, "/v1/services/service-id/deployments"},
 		{[]string{"database-engines"}, http.MethodGet, "/v1/database-engines"},
+		{[]string{"backup-destinations"}, http.MethodGet, "/v1/backup-destinations"},
+		{[]string{"create-backup-destination", `{}`}, http.MethodPost, "/v1/backup-destinations"},
+		{[]string{"update-backup-destination", "destination-id", `{}`}, http.MethodPut, "/v1/backup-destinations/destination-id"},
+		{[]string{"delete-backup-destination", "destination-id"}, http.MethodDelete, "/v1/backup-destinations/destination-id"},
 		{[]string{"databases", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/databases"},
 		{[]string{"database", "database-id"}, http.MethodGet, "/v1/databases/database-id"},
 		{[]string{"backup-policy", "database-id"}, http.MethodGet, "/v1/databases/database-id/backup-policy"},
@@ -102,6 +106,25 @@ func TestDatabaseBackupCommandBodies(t *testing.T) {
 	confirmation := input.(map[string]string)
 	if confirmation["confirm"] != "production-db" {
 		t.Fatalf("restore input=%#v", confirmation)
+	}
+}
+
+func TestBackupDestinationCommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-backup-destination", "-"}, strings.NewReader(`{"name":"archive","accessKey":"access","secretKey":"secret"}`))
+	if err != nil || method != http.MethodPost || path != "/v1/backup-destinations" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	destination := input.(map[string]any)
+	if destination["name"] != "archive" || destination["accessKey"] != "access" || destination["secretKey"] != "secret" {
+		t.Fatalf("destination input=%#v", destination)
+	}
+	method, path, input, err = commandRequest([]string{"update-backup-destination", "destination-id", `{"name":"rotated","accessKey":"new-access","secretKey":"new-secret"}`}, strings.NewReader(""))
+	if err != nil || method != http.MethodPut || path != "/v1/backup-destinations/destination-id" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	destination = input.(map[string]any)
+	if destination["name"] != "rotated" || destination["accessKey"] != "new-access" || destination["secretKey"] != "new-secret" {
+		t.Fatalf("destination input=%#v", destination)
 	}
 }
 

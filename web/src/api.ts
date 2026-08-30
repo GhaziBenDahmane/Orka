@@ -165,6 +165,7 @@ export const api = {
   deleteSourceCredential: (id: string) => request<void>(`/v1/source-credentials/${id}`, { method: "DELETE" }),
   backupDestinations: () => request<Envelope<BackupDestination>>("/v1/backup-destinations"),
   createBackupDestination: (body: { name: string; endpoint: string; region: string; bucket: string; prefix: string; useTls: boolean; accessKey: string; secretKey: string; sessionToken?: string }) => request<BackupDestination>("/v1/backup-destinations", { method: "POST", body: JSON.stringify(body) }),
+  updateBackupDestination: (id: string, body: { name: string; endpoint: string; region: string; bucket: string; prefix: string; useTls: boolean; accessKey: string; secretKey: string; sessionToken?: string }) => request<BackupDestination>(`/v1/backup-destinations/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteBackupDestination: (id: string) => request<void>(`/v1/backup-destinations/${id}`, { method: "DELETE" }),
   oidcProviders: () => request<Envelope<OIDCProvider>>("/v1/sso/oidc-providers"),
   createOIDCProvider: (body: { name: string; issuer: string; clientId: string; clientSecret: string; domains: string[]; scopes: string[]; defaultRole: string }) => request<OIDCProvider>("/v1/sso/oidc-providers", { method: "POST", body: JSON.stringify(body) }),

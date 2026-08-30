@@ -97,6 +97,21 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		return http.MethodGet, "/v1/services/" + args[1] + "/logs", nil, nil
 	case "database-engines":
 		return http.MethodGet, "/v1/database-engines", nil, require(1)
+	case "backup-destinations":
+		return http.MethodGet, "/v1/backup-destinations", nil, require(1)
+	case "create-backup-destination":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/backup-destinations", 2)
+	case "update-backup-destination":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/backup-destinations/" + args[1], input, err
+	case "delete-backup-destination":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/backup-destinations/" + args[1], nil, nil
 	case "databases":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -432,5 +447,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|database-engines|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }

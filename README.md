@@ -151,6 +151,11 @@ ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 cancellation use `database-backup`, `database-restore`,
 `cancel-database-backup`, and `cancel-database-restore`.
 
+S3-compatible backup destinations can be managed with `backup-destinations`,
+`create-backup-destination JSON`, `update-backup-destination DESTINATION_ID JSON`,
+and `delete-backup-destination DESTINATION_ID`. Use `-` instead of JSON to read
+credentials from standard input without placing them in shell history.
+
 Named-volume recovery also has dedicated commands: `volumes SERVICE_ID`,
 `volume-policies SERVICE_ID`, `put-volume-policy SERVICE_ID VOLUME_NAME JSON`,
 `backup-volume SERVICE_ID VOLUME_NAME`, `volume-backups SERVICE_ID`, and

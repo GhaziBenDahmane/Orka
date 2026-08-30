@@ -616,10 +616,11 @@ function Settings({ flash, setError }: { flash: (s: string) => void; setError: (
   const [oidc, setOIDC] = useState<OIDCProvider[]>([]);
   const [saml, setSAML] = useState<SAMLProvider[]>([]);
   const [credential, setCredential] = useState({ kind: "git", name: "", server: "", username: "", secret: "", privateKey: "", knownHosts: "" });
-  const [destination, setDestination] = useState({ name: "", endpoint: "https://", region: "", bucket: "", prefix: "", useTls: true, accessKey: "", secretKey: "" });
+  const emptyDestination = { name: "", endpoint: "https://", region: "", bucket: "", prefix: "", useTls: true, accessKey: "", secretKey: "", sessionToken: "" };
+  const [destination, setDestination] = useState(emptyDestination);
   const [oidcInput, setOIDCInput] = useState({ name: "", issuer: "https://", clientId: "", clientSecret: "", domains: "", scopes: "openid,email,profile", defaultRole: "developer" });
   const [samlInput, setSAMLInput] = useState({ name: "", metadataXml: "", domains: "", emailAttribute: "email", nameAttribute: "name", defaultRole: "developer", allowIdpInitiated: false });
-  const [editingOIDC, setEditingOIDC] = useState(""); const [editingSAML, setEditingSAML] = useState("");
+  const [editingDestination, setEditingDestination] = useState(""); const [editingOIDC, setEditingOIDC] = useState(""); const [editingSAML, setEditingSAML] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -646,15 +647,17 @@ function Settings({ flash, setError }: { flash: (s: string) => void; setError: (
       <button className="primary" disabled={busy}>Add credential</button>
     </form><AdminItems items={credentials.map(x => ({ id: x.id, title: x.name, detail: `${x.kind} · ${x.username}@${x.server}` }))} action="Remove" onAction={id => run(() => api.deleteSourceCredential(id), "Credential removed")} /></section>
 
-    <section className="card settings-card"><p className="eyebrow">Off-site storage</p><h2>Backup destinations</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createBackupDestination(destination), "Backup destination verified and saved"); }}>
+    <section className="card settings-card"><p className="eyebrow">Off-site storage</p><h2>Backup destinations</h2><form onSubmit={event => { event.preventDefault(); void run(async () => { if (editingDestination) await api.updateBackupDestination(editingDestination, destination); else await api.createBackupDestination(destination); setEditingDestination(""); setDestination(emptyDestination); }, editingDestination ? "Backup destination verified and credentials rotated" : "Backup destination verified and saved"); }}>
       <label>Name<input value={destination.name} onChange={e => setDestination({ ...destination, name: e.target.value })} required /></label>
       <label>Endpoint<input value={destination.endpoint} onChange={e => setDestination({ ...destination, endpoint: e.target.value, useTls: e.target.value.startsWith("https://") })} required /></label>
       <div className="field-row"><label>Region<input value={destination.region} onChange={e => setDestination({ ...destination, region: e.target.value })} /></label><label>Bucket<input value={destination.bucket} onChange={e => setDestination({ ...destination, bucket: e.target.value })} required /></label></div>
       <label>Object prefix<input value={destination.prefix} onChange={e => setDestination({ ...destination, prefix: e.target.value })} /></label>
-      <label>Access key<input value={destination.accessKey} onChange={e => setDestination({ ...destination, accessKey: e.target.value })} required /></label>
+      <label>Access key<input type="password" value={destination.accessKey} onChange={e => setDestination({ ...destination, accessKey: e.target.value })} required /></label>
       <label>Secret key<input type="password" value={destination.secretKey} onChange={e => setDestination({ ...destination, secretKey: e.target.value })} required /></label>
-      <button className="primary" disabled={busy}>Verify and add</button>
-    </form><AdminItems items={destinations.map(x => ({ id: x.id, title: x.name, detail: `${x.bucket} · ${x.endpoint}` }))} action="Remove" onAction={id => run(() => api.deleteBackupDestination(id), "Destination removed")} /></section>
+      <label>Session token (optional)<input type="password" value={destination.sessionToken} onChange={e => setDestination({ ...destination, sessionToken: e.target.value })} /></label>
+      {editingDestination && <p className="muted">Enter replacement credentials. Stored credentials are never displayed.</p>}
+      <button className="primary" disabled={busy}>{editingDestination ? "Verify and rotate" : "Verify and add"}</button>{editingDestination && <button type="button" onClick={() => { setEditingDestination(""); setDestination(emptyDestination); }}>Cancel edit</button>}
+    </form><AdminItems items={destinations.map(x => ({ id: x.id, title: x.name, detail: `${x.bucket} · ${x.endpoint}` }))} action="Remove" onEdit={id => { const x = destinations.find(item => item.id === id); if (x) { setEditingDestination(id); setDestination({ name: x.name, endpoint: x.endpoint, region: x.region, bucket: x.bucket, prefix: x.prefix, useTls: x.useTls, accessKey: "", secretKey: "", sessionToken: "" }); } }} onAction={id => run(() => api.deleteBackupDestination(id), "Destination removed")} /></section>
 
     <section className="card settings-card"><p className="eyebrow">Single sign-on</p><h2>OIDC providers</h2><form onSubmit={event => { event.preventDefault(); const body = { ...oidcInput, domains: domains(oidcInput.domains), scopes: domains(oidcInput.scopes) }; void run(() => editingOIDC ? api.updateOIDCProvider(editingOIDC, body) : api.createOIDCProvider(body), editingOIDC ? "OIDC provider updated" : "OIDC provider enabled"); }}>
       <label>Name<input value={oidcInput.name} onChange={e => setOIDCInput({ ...oidcInput, name: e.target.value })} required /></label>
