@@ -1696,6 +1696,9 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	cleanRoot := filepath.Clean(w.BackupDirectory)
 	cleanPath := filepath.Clean(path)
 	if destinationID != nil {
+		if expectedSize == nil || *expectedSize <= 0 {
+			return w.failRestore(ctx, j, restoreID, errors.New("S3 backup is missing a verified artifact size"))
+		}
 		directory := filepath.Join(cleanRoot, "restore-"+restoreID.String())
 		if err = os.MkdirAll(directory, 0700); err != nil {
 			return w.failRestore(ctx, j, restoreID, err)
@@ -1706,7 +1709,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		if remoteErr != nil {
 			return w.failRestore(ctx, j, restoreID, remoteErr)
 		}
-		if remoteErr = remote.Get(ctx, objectKey, cleanPath); remoteErr != nil {
+		if remoteErr = remote.Get(ctx, objectKey, cleanPath, *expectedSize); remoteErr != nil {
 			return w.failRestore(ctx, j, restoreID, remoteErr)
 		}
 	}

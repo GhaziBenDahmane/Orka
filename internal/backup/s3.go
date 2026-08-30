@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -114,8 +115,52 @@ func sha256sumReader(reader io.Reader) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func (s *S3) Get(ctx context.Context, key, filename string) error {
-	return s.client.FGetObject(ctx, s.bucket, key, filename, minio.GetObjectOptions{})
+func (s *S3) Get(ctx context.Context, key, filename string, expectedSize int64) error {
+	if expectedSize <= 0 {
+		return errors.New("S3 download requires a positive expected size")
+	}
+	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return err
+	}
+	defer object.Close()
+	info, err := object.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size != expectedSize {
+		return errors.New("S3 object size does not match backup metadata")
+	}
+	return copyExactFile(filename, object, expectedSize)
+}
+
+func copyExactFile(filename string, source io.Reader, expectedSize int64) error {
+	if expectedSize <= 0 {
+		return errors.New("download requires a positive expected size")
+	}
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(filename)
+		}
+	}()
+	written, copyErr := io.Copy(file, io.LimitReader(source, expectedSize+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if written != expectedSize {
+		return errors.New("download size mismatch")
+	}
+	keep = true
+	return nil
 }
 
 func (s *S3) Delete(ctx context.Context, key string) error {

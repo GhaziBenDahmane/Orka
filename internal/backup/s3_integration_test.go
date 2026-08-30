@@ -40,7 +40,7 @@ func TestS3RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(t.TempDir(), "destination")
-	if err = client.Get(ctx, key, destination); err != nil {
+	if err = client.Get(ctx, key, destination, int64(len("verified backup"))); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(destination)
