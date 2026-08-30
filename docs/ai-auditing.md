@@ -137,7 +137,14 @@ keys make it a privileged service.
   acknowledged critical findings do not alert again on every scheduled run.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds the serialized snapshot, model responses, and finding counts, validates every structured
-  field, and rejects oversized evidence before submitting results. The API
+  field, and rejects oversized evidence before submitting results. It retains
+  the complete snapshot for deterministic rules, then partitions model input
+  into deterministic 512 KiB JSON chunks. Organization and generation context
+  accompany every chunk, array entries are never split, and explicit chunk
+  metadata tells the model not to infer that omitted sections are absent. All
+  chunks must succeed for the run to complete. Duplicate model findings are
+  merged by resource identity and the highest reported severity is retained;
+  the run scope and summary record the chunk count. The API
   independently enforces the 100-finding limit under concurrent submissions;
   third-party agents cannot bypass the bound, while they may update an existing
   fingerprint without consuming another slot.
@@ -248,7 +255,9 @@ to record failures and retries on its configured interval.
 
 ## Agent API lifecycle
 
-1. Fetch `GET /v1/ai/audit-snapshot`.
+1. Fetch `GET /v1/ai/audit-snapshot`. Third-party agents should partition
+   large model prompts while retaining complete deterministic coverage; the
+   built-in runner uses 512 KiB chunks and permits at most 64.
 2. Create `POST /v1/ai/audit-runs` with identity, model, and scope metadata.
 3. Submit normalized findings to
    `POST /v1/ai/audit-runs/{runID}/findings`.

@@ -30,7 +30,7 @@ new mutations instead of weakening authentication or silently skipping checks.
 | Build sources and registries | Git/OCI credentials | repositories, submodules, Dockerfiles, ZIP files | host-bound credentials, pinned SSH host keys, hardened extraction, BuildKit secret mounts, no shell interpolation |
 | Backup/object storage | encrypted destination credentials, per-backup keys | remote objects and checksums | client-side authenticated encryption, presigned single-operation transfers, size/hash verification, restore drills |
 | Notifications and webhooks | signing/provider secrets | provider requests, callbacks, receiver URLs | HMAC verification, delivery replay protection, encrypted storage, bounded retries, redacted errors |
-| AI auditors and model gateway | short-lived auditor/model tokens | platform snapshot strings and model output | dedicated encrypted model overlay, secret-free snapshot, least-privilege role, prompt trust markers, bounded validated findings, no remediation capability |
+| AI auditors and model gateway | short-lived auditor/model tokens | platform snapshot strings and model output | dedicated encrypted model overlay, secret-free snapshot, least-privilege role, prompt trust markers, bounded whole-platform chunking, cross-chunk deduplication, validated findings, no remediation capability |
 | External database drivers | root-owned reviewed executable | driver output and utility plans | no inherited controller environment, startup-digest binding, file-descriptor execution, owner/mode revalidation, size/timeout/output bounds, plan validation |
 
 ## Principal threats and implemented controls

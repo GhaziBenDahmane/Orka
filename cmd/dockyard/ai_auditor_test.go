@@ -52,7 +52,7 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
-		} else if len(request.Messages) != 2 || !strings.Contains(request.Messages[0].Content, "untrusted data") || !strings.Contains(request.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") {
+		} else if len(request.Messages) != 2 || !strings.Contains(request.Messages[0].Content, "untrusted data") || !strings.Contains(request.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(request.Messages[1].Content, "never infer") {
 			t.Errorf("model prompt does not preserve the snapshot trust boundary: %#v", request.Messages)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"healthy","findings":[{"severity":"low","category":"capacity","title":"No projects","description":"Inventory is empty","resourceType":"organization","resourceId":"org","evidence":{},"remediation":"Create a project"}]}`}}}})
@@ -124,6 +124,120 @@ func TestAIAuditRetryDelay(t *testing.T) {
 		if got := aiAuditRetryDelay(test.failures, base, maximum); got != test.want {
 			t.Errorf("aiAuditRetryDelay(%d)=%s, want %s", test.failures, got, test.want)
 		}
+	}
+}
+
+func TestChunkAuditSnapshotPreservesEveryResource(t *testing.T) {
+	projects := make([]map[string]any, 5)
+	for index := range projects {
+		projects[index] = map[string]any{"id": index, "payload": strings.Repeat(string(rune('a'+index)), 180<<10)}
+	}
+	snapshot, _ := json.Marshal(map[string]any{
+		"generatedAt": "2026-08-30T12:00:00Z", "organizationId": "00000000-0000-0000-0000-000000000001",
+		"projects": projects, "identityPosture": map[string]any{"activeOwners": 1},
+	})
+	chunks, err := chunkAuditSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("large snapshot produced %d chunk(s), want multiple", len(chunks))
+	}
+	seen := map[int]bool{}
+	for index, chunk := range chunks {
+		if len(chunk) > maxAuditModelChunkBytes {
+			t.Fatalf("chunk %d has %d bytes", index, len(chunk))
+		}
+		var decoded struct {
+			OrganizationID string `json:"organizationId"`
+			AuditChunk     struct {
+				Index    int      `json:"index"`
+				Total    int      `json:"total"`
+				Partial  bool     `json:"partial"`
+				Sections []string `json:"sections"`
+			} `json:"auditChunk"`
+			Projects []struct {
+				ID int `json:"id"`
+			} `json:"projects"`
+		}
+		if err = json.Unmarshal(chunk, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.OrganizationID == "" || decoded.AuditChunk.Index != index+1 || decoded.AuditChunk.Total != len(chunks) || !decoded.AuditChunk.Partial || len(decoded.AuditChunk.Sections) == 0 {
+			t.Fatalf("chunk metadata=%#v organization=%q", decoded.AuditChunk, decoded.OrganizationID)
+		}
+		for _, project := range decoded.Projects {
+			if seen[project.ID] {
+				t.Fatalf("project %d appeared in multiple chunks", project.ID)
+			}
+			seen[project.ID] = true
+		}
+	}
+	if len(seen) != len(projects) {
+		t.Fatalf("chunked projects=%v, want %d", seen, len(projects))
+	}
+}
+
+func TestChunkAuditSnapshotRejectsOversizedResource(t *testing.T) {
+	snapshot, _ := json.Marshal(map[string]any{"projects": []map[string]string{{"payload": strings.Repeat("x", maxAuditModelChunkBytes)}}})
+	if _, err := chunkAuditSnapshot(snapshot); err == nil || !strings.Contains(err.Error(), "item exceeding") {
+		t.Fatalf("oversized resource error=%v", err)
+	}
+}
+
+func TestPerformAIAuditReviewsEverySnapshotChunk(t *testing.T) {
+	projects := make([]map[string]any, 5)
+	for index := range projects {
+		projects[index] = map[string]any{"id": uuid.New(), "name": "project", "payload": strings.Repeat(string(rune('a'+index)), 180<<10)}
+	}
+	modelRequests, recordedChunks, modelFindingRequests := 0, 0, 0
+	modelFindingSeverity := ""
+	completion := map[string]string{}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/ai/audit-snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{"projects": projects, "identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}, "notificationPosture": fullyCoveredNotifications()})
+		case r.URL.Path == "/v1/ai/audit-runs":
+			var input struct {
+				Scope struct {
+					SnapshotChunks int `json:"snapshotChunks"`
+				} `json:"scope"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			recordedChunks = input.Scope.SnapshotChunks
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
+		case r.Method == http.MethodPatch:
+			_ = json.NewDecoder(r.Body).Decode(&completion)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			var finding modelFinding
+			_ = json.NewDecoder(r.Body).Decode(&finding)
+			if finding.Category == "chunk" {
+				modelFindingRequests++
+				modelFindingSeverity = finding.Severity
+			}
+			w.WriteHeader(http.StatusCreated)
+		}
+	}))
+	defer platform.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		modelRequests++
+		severity := "low"
+		if modelRequests > 1 {
+			severity = "high"
+		}
+		report := modelReport{Summary: "chunk reviewed", Findings: []modelFinding{{Severity: severity, Category: "chunk", Title: "Repeated issue", Description: "Repeated across related sections", ResourceType: "organization", ResourceID: "platform", Evidence: map[string]any{}, Remediation: "Review once"}}}
+		content, _ := json.Marshal(report)
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": string(content)}}}})
+	}))
+	defer model.Close()
+	err := performAIAudit(context.Background(), platform.Client(), auditorConfig{DockyardURL: platform.URL, DockyardToken: "token", ModelURL: model.URL, Model: "test", AgentName: "chunk-test", Focus: "security"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelRequests < 2 || recordedChunks != modelRequests || modelFindingRequests != 1 || modelFindingSeverity != "high" || !strings.Contains(completion["summary"], "Model review: ") || !strings.Contains(completion["summary"], "snapshot chunk(s)") || !strings.Contains(completion["summary"], "Duplicate model findings merged") {
+		t.Fatalf("model requests=%d recorded=%d finding requests=%d severity=%q completion=%#v", modelRequests, recordedChunks, modelFindingRequests, modelFindingSeverity, completion)
 	}
 }
 
