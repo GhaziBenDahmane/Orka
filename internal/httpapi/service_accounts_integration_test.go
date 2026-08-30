@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -125,7 +126,8 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 		t.Fatalf("create auditor status = %d: %s", response.StatusCode, data)
 	}
 	var auditor struct {
-		Token string `json:"token"`
+		ServiceAccount store.ServiceAccount `json:"serviceAccount"`
+		Token          string               `json:"token"`
 	}
 	if err = json.Unmarshal(data, &auditor); err != nil || auditor.Token == "" {
 		t.Fatalf("auditor response=%s err=%v", data, err)
@@ -155,6 +157,19 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	response, _ = do(http.MethodPost, "/v1/ai/audit-runs/"+auditRun.ID.String()+"/findings", auditor.Token, []byte(`{"severity":"high","category":"security","title":"Invalid evidence","description":"must be an object","evidence":[]}`))
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("non-object audit evidence status=%d, want 400", response.StatusCode)
+	}
+	for index := 0; index < store.MaxAIAuditFindingsPerRun; index++ {
+		if _, err = db.AddAIAuditFinding(ctx, orgID, auditor.ServiceAccount.ID, store.AIAuditFinding{RunID: auditRun.ID, Severity: "low", Category: "limit-test", Title: "Finding", Description: "Bounded finding", Evidence: json.RawMessage(`{}`), Fingerprint: fmt.Sprintf("limit-%d", index)}); err != nil {
+			t.Fatalf("seed audit finding %d: %v", index, err)
+		}
+	}
+	response, data = do(http.MethodPost, "/v1/ai/audit-runs/"+auditRun.ID.String()+"/findings", auditor.Token, []byte(`{"severity":"low","category":"limit-test","title":"Overflow","description":"must be rejected","evidence":{},"fingerprint":"overflow"}`))
+	if response.StatusCode != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"ai_audit_finding_limit"`)) {
+		t.Fatalf("audit finding overflow status=%d body=%s", response.StatusCode, data)
+	}
+	response, data = do(http.MethodPost, "/v1/ai/audit-runs/"+auditRun.ID.String()+"/findings", auditor.Token, []byte(`{"severity":"medium","category":"limit-test","title":"Updated","description":"existing fingerprints remain writable","evidence":{},"fingerprint":"limit-0"}`))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("audit finding update at limit status=%d body=%s", response.StatusCode, data)
 	}
 	response, _ = do(http.MethodPatch, "/v1/ai/audit-runs/"+auditRun.ID.String(), auditor.Token, []byte(`{"status":"completed","summary":"`+strings.Repeat("x", 8001)+`"}`))
 	if response.StatusCode != http.StatusBadRequest {

@@ -2407,6 +2407,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "no_cluster_capacity", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrAIAuditFindingLimit) {
+		writeError(w, http.StatusConflict, "ai_audit_finding_limit", err.Error())
+		return
+	}
 	var quota *store.QuotaExceededError
 	if errors.As(err, &quota) {
 		writeError(w, http.StatusConflict, "quota_exceeded", quota.Error())

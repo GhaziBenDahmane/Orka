@@ -10,6 +10,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const MaxAIAuditFindingsPerRun = 100
+
+var ErrAIAuditFindingLimit = errors.New("AI audit run finding limit reached")
+
 type AIAuditSnapshot struct {
 	GeneratedAt          time.Time                       `json:"generatedAt"`
 	Organization         uuid.UUID                       `json:"organizationId"`
@@ -530,12 +534,33 @@ func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID 
 }
 
 func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID uuid.UUID, item AIAuditFinding) (AIAuditFinding, error) {
-	item.ID = uuid.New()
-	err := s.Pool.QueryRow(ctx, `INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,resource_type,resource_id,evidence,remediation,fingerprint) SELECT $1,r.id,$4,$5,$6,$7,$8,$9,$10,$11,$12 FROM ai_audit_runs r WHERE r.id=$2 AND r.organization_id=$3 AND r.service_account_id=$13 AND r.status='running' ON CONFLICT(run_id,fingerprint) DO UPDATE SET severity=excluded.severity,category=excluded.category,title=excluded.title,description=excluded.description,resource_type=excluded.resource_type,resource_id=excluded.resource_id,evidence=excluded.evidence,remediation=excluded.remediation RETURNING id,created_at`, item.ID, item.RunID, organizationID, item.Severity, item.Category, item.Title, item.Description, item.ResourceType, item.ResourceID, item.Evidence, item.Remediation, item.Fingerprint, accountID).Scan(&item.ID, &item.CreatedAt)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	defer tx.Rollback(ctx)
+	var runID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM ai_audit_runs WHERE id=$1 AND organization_id=$2 AND service_account_id=$3 AND status='running' FOR UPDATE`, item.RunID, organizationID, accountID).Scan(&runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AIAuditFinding{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	var findingCount int
+	var fingerprintExists bool
+	if err = tx.QueryRow(ctx, `SELECT count(*),COALESCE(bool_or(fingerprint=$2),false) FROM ai_audit_findings WHERE run_id=$1`, runID, item.Fingerprint).Scan(&findingCount, &fingerprintExists); err != nil {
+		return AIAuditFinding{}, err
+	}
+	if !fingerprintExists && findingCount >= MaxAIAuditFindingsPerRun {
+		return AIAuditFinding{}, ErrAIAuditFindingLimit
+	}
+	item.ID = uuid.New()
+	err = tx.QueryRow(ctx, `INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,resource_type,resource_id,evidence,remediation,fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(run_id,fingerprint) DO UPDATE SET severity=excluded.severity,category=excluded.category,title=excluded.title,description=excluded.description,resource_type=excluded.resource_type,resource_id=excluded.resource_id,evidence=excluded.evidence,remediation=excluded.remediation RETURNING id,created_at`, item.ID, runID, item.Severity, item.Category, item.Title, item.Description, item.ResourceType, item.ResourceID, item.Evidence, item.Remediation, item.Fingerprint).Scan(&item.ID, &item.CreatedAt)
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) FinishAIAuditRun(ctx context.Context, organizationID, accountID, runID uuid.UUID, status, summary string) error {

@@ -19,6 +19,7 @@ func TestWriteStoreErrorClassifiesRemoteClusterAvailability(t *testing.T) {
 	}{
 		{name: "partitioned", err: store.ErrClusterUnavailable, status: http.StatusServiceUnavailable, code: "cluster_unavailable", retryAfter: "30"},
 		{name: "capacity", err: store.ErrNoCapacity, status: http.StatusConflict, code: "no_cluster_capacity"},
+		{name: "AI finding limit", err: store.ErrAIAuditFindingLimit, status: http.StatusConflict, code: "ai_audit_finding_limit"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

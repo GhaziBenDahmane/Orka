@@ -39,7 +39,7 @@ type modelReport struct {
 
 const (
 	maxAuditModelResponseBytes = 4 << 20
-	maxAuditFindings           = 100
+	maxAuditFindings           = store.MaxAIAuditFindingsPerRun
 )
 
 func runAIAuditor() error {
@@ -126,17 +126,32 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	if err != nil {
 		return fmt.Errorf("deterministic baseline recorded %d findings; model audit failed: %w", len(baseline), err)
 	}
-	for _, finding := range report.Findings {
+	modelFindings, omittedModelFindings := fitModelFindings(len(baseline), report.Findings)
+	for _, finding := range modelFindings {
 		if err = auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs/"+run.ID+"/findings", finding, nil); err != nil {
 			return err
 		}
 	}
 	summary := fmt.Sprintf("Deterministic baseline: %d finding(s). %s", len(baseline), report.Summary)
+	if omittedModelFindings > 0 {
+		summary = fmt.Sprintf("%s Model findings truncated: %d omitted to respect the %d-finding run limit.", summary, omittedModelFindings, maxAuditFindings)
+	}
 	if err = auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "completed", "summary": boundedAuditSummary(summary)}, nil); err != nil {
 		return err
 	}
 	finalized = true
 	return nil
+}
+
+func fitModelFindings(baselineCount int, findings []modelFinding) ([]modelFinding, int) {
+	remaining := maxAuditFindings - baselineCount
+	if remaining < 0 {
+		remaining = 0
+	}
+	if len(findings) <= remaining {
+		return findings, 0
+	}
+	return findings[:remaining], len(findings) - remaining
 }
 
 func finishFailedAudit(ctx context.Context, client *http.Client, cfg auditorConfig, runID string, auditErr error) error {

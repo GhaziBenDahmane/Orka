@@ -229,3 +229,19 @@ func TestValidateModelReportRejectsUnboundedOrMalformedOutput(t *testing.T) {
 		t.Fatal("accepted too many model findings")
 	}
 }
+
+func TestFitModelFindingsSharesRunLimitWithBaseline(t *testing.T) {
+	findings := make([]modelFinding, 10)
+	selected, omitted := fitModelFindings(maxAuditFindings-3, findings)
+	if len(selected) != 3 || omitted != 7 {
+		t.Fatalf("selected=%d omitted=%d", len(selected), omitted)
+	}
+	selected, omitted = fitModelFindings(maxAuditFindings, findings)
+	if len(selected) != 0 || omitted != 10 {
+		t.Fatalf("full baseline selected=%d omitted=%d", len(selected), omitted)
+	}
+	selected, omitted = fitModelFindings(1, findings)
+	if len(selected) != len(findings) || omitted != 0 {
+		t.Fatalf("available budget selected=%d omitted=%d", len(selected), omitted)
+	}
+}

@@ -54,7 +54,10 @@ keys make it a privileged service.
   change, or remediation without a separate human-approved workflow.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds model responses and finding counts, validates every structured
-  field, and rejects oversized evidence before submitting results.
+  field, and rejects oversized evidence before submitting results. The API
+  independently enforces the 100-finding limit under concurrent submissions;
+  third-party agents cannot bypass the bound, while they may update an existing
+  fingerprint without consuming another slot.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing or disabled backups, missing owners, disabled
   mandatory SSO, stale cluster heartbeats, expiring agent certificates,
