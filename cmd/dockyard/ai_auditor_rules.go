@@ -32,6 +32,30 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	if snapshot.IdentityPosture.PendingSAMLCertificateRotations > 0 && snapshot.IdentityPosture.OldestPendingSAMLRotationAt != nil && now.Sub(*snapshot.IdentityPosture.OldestPendingSAMLRotationAt) > 7*24*time.Hour {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "SAML certificate rotation is stalled", Description: "A replacement service-provider signing certificate has remained published without promotion or cancellation for more than seven days.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingRotations": snapshot.IdentityPosture.PendingSAMLCertificateRotations, "oldestPendingAt": snapshot.IdentityPosture.OldestPendingSAMLRotationAt.UTC().Format(time.RFC3339)}, Remediation: "Confirm the IdP imported the replacement certificate and promote it, or cancel the pending rotation."})
 	}
+	for _, provider := range snapshot.SAMLPosture {
+		if !provider.CertificateConfigurationOK {
+			evidence := map[string]any{}
+			if provider.SPCertificateNotAfter != nil {
+				evidence["spCertificateNotAfter"] = provider.SPCertificateNotAfter.UTC().Format(time.RFC3339)
+			}
+			if provider.IDPCertificateNotAfter != nil {
+				evidence["idpCertificateNotAfter"] = provider.IDPCertificateNotAfter.UTC().Format(time.RFC3339)
+			}
+			add(modelFinding{Severity: "high", Category: "identity", Title: "SAML certificate configuration is invalid", Description: "An enabled SAML provider has an invalid, expired, or unusable service-provider or identity-provider trust certificate.", ResourceType: "saml_provider", ResourceID: provider.ID.String(), Evidence: evidence, Remediation: "Refresh IdP metadata and rotate the service-provider signing certificate, then validate both trust chains before relying on SSO."})
+			continue
+		}
+		for _, certificate := range []struct {
+			kind      string
+			expiresAt *time.Time
+		}{
+			{kind: "service_provider", expiresAt: provider.SPCertificateNotAfter},
+			{kind: "identity_provider", expiresAt: provider.IDPCertificateNotAfter},
+		} {
+			if certificate.expiresAt != nil && certificate.expiresAt.Before(now.Add(30*24*time.Hour)) {
+				add(modelFinding{Severity: "medium", Category: "identity", Title: "SAML trust certificate expires soon", Description: "An enabled SAML trust certificate expires in less than thirty days.", ResourceType: "saml_provider", ResourceID: provider.ID.String(), Evidence: map[string]any{"kind": certificate.kind, "certificateNotAfter": certificate.expiresAt.UTC().Format(time.RFC3339)}, Remediation: "Complete the documented certificate or IdP metadata rotation before the trust boundary expires."})
+			}
+		}
+	}
 	if snapshot.IdentityPosture.ExpiringServiceAccounts > 0 {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Service account credentials expire soon", Description: "One or more active service accounts have credentials expiring within seven days.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"expiringServiceAccounts7d": snapshot.IdentityPosture.ExpiringServiceAccounts}, Remediation: "Rotate each expiring service-account token and verify its consumer before revoking the old credential."})
 	}

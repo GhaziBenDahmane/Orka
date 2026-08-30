@@ -192,6 +192,10 @@ retention, event checkpoints/backlog, and latest batch status/timestamps.
 Destination names, storage details, object keys, chain hashes, credentials,
 and failure text are excluded. Public route metadata is included, and the
 built-in deterministic baseline flags routes that accept plaintext HTTP.
+Enabled SAML providers expose only an opaque provider ID, certificate
+configuration validity, and SP/IdP expiry timestamps; certificates, keys,
+metadata, names, and domains remain excluded. Invalid/expired trust is a high
+severity baseline finding, while expiry inside thirty days is medium severity.
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a

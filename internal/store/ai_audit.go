@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/crewjam/saml/samlsp"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -31,6 +33,7 @@ type AIAuditSnapshot struct {
 	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
 	AuditLogPosture      AIAuditLogPosture               `json:"auditLogPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
+	SAMLPosture          []AIAuditSAMLProviderPosture    `json:"samlPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
 	MigrationPosture     []AIAuditMigrationPosture       `json:"migrationPosture"`
@@ -186,6 +189,13 @@ type AIAuditIdentityPosture struct {
 	OldestPendingSAMLRotationAt     *time.Time `json:"oldestPendingSamlRotationAt,omitempty"`
 }
 
+type AIAuditSAMLProviderPosture struct {
+	ID                         uuid.UUID  `json:"id"`
+	CertificateConfigurationOK bool       `json:"certificateConfigurationOk"`
+	SPCertificateNotAfter      *time.Time `json:"spCertificateNotAfter,omitempty"`
+	IDPCertificateNotAfter     *time.Time `json:"idpCertificateNotAfter,omitempty"`
+}
+
 type AIAuditNotificationPosture struct {
 	ID      uuid.UUID `json:"id"`
 	Name    string    `json:"name"`
@@ -230,7 +240,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -531,6 +541,9 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	if err != nil {
 		return err
 	}
+	if err = s.loadAIAuditSAMLPosture(ctx, organizationID, &snapshot.SAMLPosture); err != nil {
+		return err
+	}
 
 	endpoints, err := s.ListNotificationEndpoints(ctx, organizationID)
 	if err != nil {
@@ -605,6 +618,40 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	rows.Close()
 	return nil
+}
+
+func (s *Store) loadAIAuditSAMLPosture(ctx context.Context, organizationID uuid.UUID, posture *[]AIAuditSAMLProviderPosture) error {
+	rows, err := s.Pool.Query(ctx, `SELECT id,idp_metadata,certificate_pem FROM saml_providers WHERE organization_id=$1 AND enabled ORDER BY id`, organizationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	now := time.Now()
+	for rows.Next() {
+		var item AIAuditSAMLProviderPosture
+		var metadataXML, certificatePEM string
+		if err = rows.Scan(&item.ID, &metadataXML, &certificatePEM); err != nil {
+			return err
+		}
+		spExpiry, spErr := auth.SAMLServiceProviderCertificateExpiry(certificatePEM, now)
+		if !spExpiry.IsZero() {
+			item.SPCertificateNotAfter = &spExpiry
+		}
+		metadata, parseErr := samlsp.ParseMetadata([]byte(metadataXML))
+		var idpExpiry time.Time
+		var idpErr error
+		if parseErr != nil {
+			idpErr = parseErr
+		} else {
+			idpExpiry, idpErr = auth.SAMLIdentityProviderCertificateExpiry(metadata, now)
+		}
+		if !idpExpiry.IsZero() {
+			item.IDPCertificateNotAfter = &idpExpiry
+		}
+		item.CertificateConfigurationOK = spErr == nil && idpErr == nil
+		*posture = append(*posture, item)
+	}
+	return rows.Err()
 }
 
 func (s *Store) loadAIAuditLogPosture(ctx context.Context, organizationID uuid.UUID, posture *AIAuditLogPosture) error {

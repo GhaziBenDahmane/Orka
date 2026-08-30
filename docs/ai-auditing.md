@@ -60,7 +60,10 @@ keys make it a privileged service.
 - Identity posture is aggregate-only: active and disabled membership counts by
   role, active local/OIDC/SAML sessions, active and soon-expiring service
   accounts, auditor accounts, active SCIM token count/age, and pending SAML
-  certificate rotation count/age. User identities,
+  certificate rotation count/age. Enabled SAML providers additionally expose
+  only their opaque ID, combined certificate-configuration validity, and SP
+  and IdP trust expiry timestamps. Certificates, private keys, IdP metadata,
+  provider names, domains, and user identities,
   session metadata, token hashes, and provider configuration remain excluded.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.
@@ -94,7 +97,7 @@ keys make it a privileged service.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing, disabled, or overdue backups and restore drills,
   active maintenance scopes, near-capacity quotas, missing owners, disabled
-  mandatory SSO, stale cluster heartbeats, expiring agent certificates,
+  mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats, expiring agent certificates,
   expiring service-account and stale SCIM credentials, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
   notification coverage gaps, unavailable, unbound, mismatched, or

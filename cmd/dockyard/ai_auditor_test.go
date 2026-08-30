@@ -292,6 +292,26 @@ func TestDeterministicAuditDetectsMaintenanceAndQuotaPressure(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsSAMLTrustExpiryAndInvalidConfiguration(t *testing.T) {
+	now := time.Now().UTC()
+	soon, later := now.Add(29*24*time.Hour), now.Add(31*24*time.Hour)
+	invalidID, expiringID, healthyID := uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		SAMLPosture: []store.AIAuditSAMLProviderPosture{
+			{ID: invalidID},
+			{ID: expiringID, CertificateConfigurationOK: true, SPCertificateNotAfter: &soon, IDPCertificateNotAfter: &later},
+			{ID: healthyID, CertificateConfigurationOK: true, SPCertificateNotAfter: &later, IDPCertificateNotAfter: &later},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 2 || findings[0].Title != "SAML certificate configuration is invalid" || findings[0].ResourceID != invalidID.String() || findings[1].Title != "SAML trust certificate expires soon" || findings[1].ResourceID != expiringID.String() {
+		t.Fatalf("SAML posture findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsAuditArchiveDurabilityGaps(t *testing.T) {
 	now := time.Now().UTC()
 	failedAt, staleEvent, recentEvent := now.Add(-time.Minute), now.Add(-6*time.Minute), now.Add(-4*time.Minute)
