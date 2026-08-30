@@ -142,6 +142,36 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, run.ID, "completed", "one finding"); err != nil {
 		t.Fatal(err)
 	}
+	previous, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "reliability", "v1", "test", json.RawMessage(`{"kind":"platform"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementRun, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "reliability", "v2", "test", json.RawMessage(`{"kind":"platform"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var previousStatus, previousSummary string
+	var previousCompletedAt *time.Time
+	if err = pool.QueryRow(ctx, `SELECT status,summary,completed_at FROM ai_audit_runs WHERE id=$1`, previous.ID).Scan(&previousStatus, &previousSummary, &previousCompletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if previousStatus != "failed" || previousCompletedAt == nil || previousSummary != "superseded by a newer run for the same auditor identity" {
+		t.Fatalf("superseded run status=%q summary=%q completed=%v", previousStatus, previousSummary, previousCompletedAt)
+	}
+	parallelRun, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "security", "v2", "test", json.RawMessage(`{"kind":"platform"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var activeRuns int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM ai_audit_runs WHERE service_account_id=$1 AND status='running'`, account.ID).Scan(&activeRuns); err != nil || activeRuns != 2 {
+		t.Fatalf("independent active audit runs=%d err=%v", activeRuns, err)
+	}
+	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, replacementRun.ID, "completed", "replacement completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, parallelRun.ID, "completed", "parallel specialist completed"); err != nil {
+		t.Fatal(err)
+	}
 	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	backupID, policyID := uuid.New(), uuid.New()

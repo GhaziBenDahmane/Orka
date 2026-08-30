@@ -505,12 +505,28 @@ func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID 
 	if len(scope) == 0 {
 		scope = json.RawMessage(`{}`)
 	}
-	item := AIAuditRun{ID: uuid.New(), OrganizationID: organizationID, ServiceAccountID: accountID, AgentName: agentName, AgentVersion: agentVersion, Model: model, Status: "running", Scope: scope}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,agent_version,model,scope) SELECT $1,a.organization_id,a.id,$4,$5,$6,$7 FROM service_accounts a WHERE a.id=$2 AND a.organization_id=$3 AND a.enabled AND a.role='auditor' RETURNING started_at`, item.ID, accountID, organizationID, agentName, agentVersion, model, scope).Scan(&item.StartedAt)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AIAuditRun{}, err
+	}
+	defer tx.Rollback(ctx)
+	var accountOrganizationID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT organization_id FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled AND role='auditor' FOR UPDATE`, accountID, organizationID).Scan(&accountOrganizationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AIAuditRun{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return AIAuditRun{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE ai_audit_runs SET status='failed',summary='superseded by a newer run for the same auditor identity',completed_at=now() WHERE service_account_id=$1 AND agent_name=$2 AND status='running'`, accountID, agentName); err != nil {
+		return AIAuditRun{}, err
+	}
+	item := AIAuditRun{ID: uuid.New(), OrganizationID: organizationID, ServiceAccountID: accountID, AgentName: agentName, AgentVersion: agentVersion, Model: model, Status: "running", Scope: scope}
+	err = tx.QueryRow(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,agent_version,model,scope) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING started_at`, item.ID, accountOrganizationID, accountID, agentName, agentVersion, model, scope).Scan(&item.StartedAt)
+	if err != nil {
+		return AIAuditRun{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID uuid.UUID, item AIAuditFinding) (AIAuditFinding, error) {

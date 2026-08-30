@@ -32,6 +32,7 @@ services:
       DOCKYARD_AI_AGENT_NAME: security-auditor
       DOCKYARD_AI_AUDIT_FOCUS: identity, access control, exposed services, suspicious audit activity, and secret-handling risks
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
+      DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
     networks: [dockyard-public]
     read_only: true
@@ -53,6 +54,7 @@ services:
       DOCKYARD_AI_AGENT_NAME: reliability-auditor
       DOCKYARD_AI_AUDIT_FOCUS: stale clusters, capacity, failed deployments, drift, availability, and recovery readiness
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
+      DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
     networks: [dockyard-public]
     read_only: true

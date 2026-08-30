@@ -20,7 +20,7 @@ import (
 
 type auditorConfig struct {
 	DockyardURL, DockyardToken, ModelURL, ModelToken, Model, AgentName, AgentVersion, Focus string
-	Interval                                                                                time.Duration
+	Interval, Timeout                                                                       time.Duration
 }
 type modelFinding struct {
 	Severity     string         `json:"severity"`
@@ -47,7 +47,11 @@ func runAIAuditor() error {
 	if err != nil || interval < time.Minute {
 		return errors.New("DOCKYARD_AI_AUDIT_INTERVAL must be at least one minute")
 	}
-	cfg := auditorConfig{DockyardURL: strings.TrimRight(os.Getenv("DOCKYARD_CONTROL_PLANE_URL"), "/"), DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: strings.TrimRight(os.Getenv("DOCKYARD_AI_BASE_URL"), "/"), ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval}
+	timeout, err := time.ParseDuration(envDefault("DOCKYARD_AI_AUDIT_TIMEOUT", "10m"))
+	if err != nil || timeout < time.Minute {
+		return errors.New("DOCKYARD_AI_AUDIT_TIMEOUT must be at least one minute")
+	}
+	cfg := auditorConfig{DockyardURL: strings.TrimRight(os.Getenv("DOCKYARD_CONTROL_PLANE_URL"), "/"), DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: strings.TrimRight(os.Getenv("DOCKYARD_AI_BASE_URL"), "/"), ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, Timeout: timeout}
 	if cfg.DockyardURL == "" || cfg.DockyardToken == "" || cfg.ModelURL == "" || cfg.Model == "" {
 		return errors.New("control-plane URL, auditor token, AI base URL, and model are required")
 	}
@@ -55,7 +59,10 @@ func runAIAuditor() error {
 	defer stop()
 	client := &http.Client{Timeout: 2 * time.Minute}
 	for {
-		if err = performAIAudit(ctx, client, cfg); err != nil {
+		runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		err = performAIAudit(runCtx, client, cfg)
+		cancel()
+		if err != nil {
 			slog.Error("AI audit failed", "error", err)
 		} else {
 			slog.Info("AI audit completed")
@@ -85,7 +92,7 @@ func secretValue(name string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig) error {
+func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig) (auditErr error) {
 	var snapshot json.RawMessage
 	if err := auditorRequest(ctx, client, cfg, http.MethodGet, "/v1/ai/audit-snapshot", nil, &snapshot); err != nil {
 		return err
@@ -100,30 +107,42 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs", map[string]any{"agentName": cfg.AgentName, "agentVersion": cfg.AgentVersion, "model": cfg.Model, "scope": map[string]any{"kind": "platform", "focus": cfg.Focus}}, &run); err != nil {
 		return err
 	}
+	finalized := false
+	defer func() {
+		if finalized || auditErr == nil {
+			return
+		}
+		if err := finishFailedAudit(ctx, client, cfg, run.ID, auditErr); err != nil {
+			auditErr = errors.Join(auditErr, fmt.Errorf("finalize failed audit: %w", err))
+		}
+	}()
 	baseline := deterministicAuditFindings(platform, time.Now().UTC())
 	for _, finding := range baseline {
 		if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs/"+run.ID+"/findings", finding, nil); err != nil {
-			_ = finishFailedAudit(ctx, client, cfg, run.ID, err)
 			return err
 		}
 	}
 	report, err := requestAuditModel(ctx, client, cfg, snapshot)
 	if err != nil {
-		_ = finishFailedAudit(ctx, client, cfg, run.ID, fmt.Errorf("deterministic baseline recorded %d findings; model audit failed: %w", len(baseline), err))
-		return err
+		return fmt.Errorf("deterministic baseline recorded %d findings; model audit failed: %w", len(baseline), err)
 	}
 	for _, finding := range report.Findings {
 		if err = auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs/"+run.ID+"/findings", finding, nil); err != nil {
-			_ = finishFailedAudit(ctx, client, cfg, run.ID, err)
 			return err
 		}
 	}
 	summary := fmt.Sprintf("Deterministic baseline: %d finding(s). %s", len(baseline), report.Summary)
-	return auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "completed", "summary": boundedAuditSummary(summary)}, nil)
+	if err = auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "completed", "summary": boundedAuditSummary(summary)}, nil); err != nil {
+		return err
+	}
+	finalized = true
+	return nil
 }
 
 func finishFailedAudit(ctx context.Context, client *http.Client, cfg auditorConfig, runID string, auditErr error) error {
-	return auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+runID, map[string]string{"status": "failed", "summary": boundedAuditSummary(auditErr.Error())}, nil)
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return auditorRequest(finalizeCtx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+runID, map[string]string{"status": "failed", "summary": boundedAuditSummary(auditErr.Error())}, nil)
 }
 
 func boundedAuditSummary(value string) string {

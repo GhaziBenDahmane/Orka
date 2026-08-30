@@ -161,6 +161,50 @@ func TestPerformAIAuditPreservesBaselineWhenModelFails(t *testing.T) {
 	}
 }
 
+func TestPerformAIAuditFinalizesRunAfterContextDeadline(t *testing.T) {
+	var mutex sync.Mutex
+	completion := map[string]string{}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/ai/audit-snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{"identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}})
+		case r.URL.Path == "/v1/ai/audit-runs":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
+		case r.Method == http.MethodPatch:
+			mutex.Lock()
+			defer mutex.Unlock()
+			if err := json.NewDecoder(r.Body).Decode(&completion); err != nil {
+				t.Error(err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected platform request %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer platform.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(200 * time.Millisecond):
+		}
+	}))
+	defer model.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	cfg := auditorConfig{DockyardURL: platform.URL, DockyardToken: "auditor-token", ModelURL: model.URL + "/v1", Model: "test", AgentName: "test-agent", Focus: "reliability"}
+	err := performAIAudit(ctx, &http.Client{Timeout: time.Second}, cfg)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("deadline failure=%v", err)
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if completion["status"] != "failed" || !strings.Contains(completion["summary"], "context deadline exceeded") {
+		t.Fatalf("completion=%#v", completion)
+	}
+}
+
 func TestValidateModelReportRejectsUnboundedOrMalformedOutput(t *testing.T) {
 	valid := modelReport{Summary: "healthy", Findings: []modelFinding{{Severity: "HIGH", Category: " backup ", Title: " Missing backup ", Description: "No recent backup", Evidence: nil}}}
 	if err := validateModelReport(&valid); err != nil {

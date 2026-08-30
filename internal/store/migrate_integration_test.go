@@ -270,7 +270,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -288,6 +288,41 @@ func TestMigrateRejectsChecksumMismatch(t *testing.T) {
 	}
 	if err := Migrate(ctx, pool); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("expected checksum mismatch, got %v", err)
+	}
+}
+
+func TestMigrateAIAuditSingleFlightReconcilesExistingRuns(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "075_ai_audit_observability.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, accountID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'AI migration',$2)`, organizationID, "ai-migration-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO service_accounts(id,organization_id,name,role) VALUES($1,$2,'auditor','auditor')`, accountID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	olderID, newerID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at) VALUES($1,$2,$3,'security','running',now()-interval '1 hour'),($4,$2,$3,'security','running',now())`, olderID, organizationID, accountID, newerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var olderStatus, newerStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM ai_audit_runs WHERE id=$1`, olderID).Scan(&olderStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM ai_audit_runs WHERE id=$1`, newerID).Scan(&newerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if olderStatus != "failed" || newerStatus != "running" {
+		t.Fatalf("migration statuses older=%q newer=%q", olderStatus, newerStatus)
+	}
+	var indexExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('ai_audit_runs_active_agent_idx') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
+		t.Fatalf("single-flight index exists=%v err=%v", indexExists, err)
 	}
 }
 
