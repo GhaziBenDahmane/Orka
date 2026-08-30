@@ -488,8 +488,15 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if len(snapshot.Reconciliation) != 1 || snapshot.Reconciliation[0].ComposeServiceID != serviceID || snapshot.Reconciliation[0].State != "degraded" || snapshot.Reconciliation[0].ConsecutiveFailures != 2 {
 		t.Fatalf("reconciliation posture=%#v", snapshot.Reconciliation)
 	}
-	if snapshot.QueuePosture.Coverage != "resource-keyed-service-and-database-jobs" || snapshot.QueuePosture.PendingServiceJobs != 1 || snapshot.QueuePosture.RunningServiceJobs != 1 || snapshot.QueuePosture.PendingDatabaseJobs != 1 || snapshot.QueuePosture.RunningDatabaseJobs != 1 || snapshot.QueuePosture.OldestPendingAt == nil || !snapshot.QueuePosture.OldestPendingAt.Equal(oldestPendingAt) {
+	queueKinds := map[string]AIAuditQueueKindPosture{}
+	for _, item := range snapshot.QueuePosture.Kinds {
+		queueKinds[item.Kind] = item
+	}
+	if snapshot.QueuePosture.Coverage != "all-supported-tenant-jobs" || snapshot.QueuePosture.PendingJobs != 3 || snapshot.QueuePosture.RunningJobs != 2 || snapshot.QueuePosture.PendingServiceJobs != 1 || snapshot.QueuePosture.RunningServiceJobs != 1 || snapshot.QueuePosture.PendingDatabaseJobs != 1 || snapshot.QueuePosture.RunningDatabaseJobs != 1 || snapshot.QueuePosture.OldestPendingAt == nil || !snapshot.QueuePosture.OldestPendingAt.Equal(oldestPendingAt) || snapshot.QueuePosture.OldestRunningHeartbeatAt == nil {
 		t.Fatalf("queue posture=%#v", snapshot.QueuePosture)
+	}
+	if len(queueKinds) != 4 || queueKinds["delete.compose"].PendingJobs != 1 || queueKinds["deploy.compose"].PendingJobs != 1 || queueKinds["deploy.compose"].RunningJobs != 1 || queueKinds["backup.database"].PendingJobs != 1 || queueKinds["restore.database"].RunningJobs != 1 {
+		t.Fatalf("queue kind posture=%#v", queueKinds)
 	}
 	if snapshot.FinalizerPosture.DeletingProjects != 0 || snapshot.FinalizerPosture.DeletingEnvironments != 0 || snapshot.FinalizerPosture.DeletingServices != 1 || snapshot.FinalizerPosture.DeletingClusters != 1 || snapshot.FinalizerPosture.PendingJobs != 1 || snapshot.FinalizerPosture.RunningJobs != 0 || snapshot.FinalizerPosture.FailedJobs != 1 || snapshot.FinalizerPosture.ResourcesWithoutActiveJob != 1 || snapshot.FinalizerPosture.OldestRequestedAt == nil {
 		t.Fatalf("finalizer posture=%#v", snapshot.FinalizerPosture)

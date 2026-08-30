@@ -444,7 +444,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	organizationID, databaseID, clusterID, repositoryID, serviceID, backupDestinationID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	staleHeartbeat, expiringCertificate := now.Add(-3*time.Minute), now.Add(6*24*time.Hour)
 	stalledSAMLRotation := now.Add(-8 * 24 * time.Hour)
-	oldSCIMToken, oldPendingJob := now.Add(-181*24*time.Hour), now.Add(-11*time.Minute)
+	oldSCIMToken, oldPendingJob, staleJobHeartbeat := now.Add(-181*24*time.Hour), now.Add(-11*time.Minute), now.Add(-3*time.Minute)
 	snapshot := store.AIAuditSnapshot{
 		Organization:       organizationID,
 		IdentityPosture:    store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation, ExpiringServiceAccounts: 2, ActiveSCIMTokens: 1, OldestActiveSCIMTokenCreatedAt: &oldSCIMToken, PendingInvitations: 2, PendingPrivilegedInvitations: 1, InvitationsExpiringSoon: 1, ExpiredInvitations: 1, ProjectScopedGrants: 1, EnvironmentScopedGrants: 1, AdminScopedGrants: 1, RedundantScopedGrants: 1, SCIMGroups: 2, WriteCapableSCIMGroups: 1, SCIMGroupMemberships: 2},
@@ -460,7 +460,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 		AgentUpgradePosture:  []store.AIAuditAgentUpgradePosture{{ClusterID: clusterID, Status: "verifying", VerificationOverdue: true, TargetImage: "registry.example/dockyard@sha256:test"}},
 		TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{ID: repositoryID, Enabled: true, GitRef: "main", LastSyncStatus: "failed"}},
 		NotificationPosture:  []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{"deployment.failed"}}},
-		QueuePosture:         store.AIAuditQueuePosture{PendingServiceJobs: 1, PendingDatabaseJobs: 1, OldestPendingAt: &oldPendingJob},
+		QueuePosture:         store.AIAuditQueuePosture{PendingJobs: 2, RunningJobs: 1, OldestPendingAt: &oldPendingJob, OldestRunningHeartbeatAt: &staleJobHeartbeat, Kinds: []store.AIAuditQueueKindPosture{{Kind: "audit.archive", PendingJobs: 1}, {Kind: "backup.database", PendingJobs: 1, RunningJobs: 1}}},
 		FinalizerPosture:     store.AIAuditFinalizerPosture{DeletingClusters: 1, FailedJobs: 1, ResourcesWithoutActiveJob: 1},
 		ServiceDeployments:   []store.AIAuditServiceDeployment{{ServiceID: serviceID, DesiredRevision: 2, LatestDeploymentRevision: 1, LatestDeploymentStatus: "succeeded"}},
 		Reconciliation:       []store.AIAuditReconciliationPosture{{ComposeServiceID: serviceID, State: "degraded", ConsecutiveFailures: 2, LastCheckedAt: now}},
@@ -470,7 +470,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	for _, finding := range findings {
 		titles[finding.Title] = true
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Service account credentials expire soon", "Long-lived SCIM credential requires rotation", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Volume backup policy is disabled", "Protected volume has no storage-node binding", "Volume lacks a successful backup", "Volume backups do not pause writers", "Volume restore has not been validated", "Remote agent image is not immutable", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Deployment queue is stalled", "Failure notifications have coverage gaps", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Service account credentials expire soon", "Long-lived SCIM credential requires rotation", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Volume backup policy is disabled", "Protected volume has no storage-node binding", "Volume lacks a successful backup", "Volume backups do not pause writers", "Volume restore has not been validated", "Remote agent image is not immutable", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Platform job queue is stalled", "Platform job lease heartbeat is stale", "Failure notifications have coverage gaps", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
 		if !titles[title] {
 			t.Errorf("missing deterministic finding %q in %#v", title, findings)
 		}
@@ -491,8 +491,8 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 			t.Errorf("missing deployment token finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 32 {
-		t.Fatalf("findings=%d, want 32: %#v", len(findings), findings)
+	if len(findings) != 33 {
+		t.Fatalf("findings=%d, want 33: %#v", len(findings), findings)
 	}
 }
 

@@ -55,18 +55,20 @@ keys make it a privileged service.
   enabled SSO provider counts,
   notification coverage, and template repository
   signing/synchronization posture so findings can identify concrete gaps. It
-  also reports each service's desired and latest deployed revision plus
-  pending/running service and database jobs. Resource-policy posture includes
+  also reports each service's desired and latest deployed revision plus every
+  tenant-owned durable worker job, grouped by kind with pending age and running
+  lease-heartbeat age. This includes deployments, recovery and migration work,
+  notifications, commit statuses, immutable audit archives, and deletion
+  finalizers. Resource-policy posture includes
   active maintenance scopes, configured quota limits, and current usage while
   excluding operator-supplied maintenance reasons. Each cluster exposes its
   reported agent runtime image, and the latest agent upgrade includes its
   immutable target, state, attempt count, deadline, and overdue flag, but never
   its encrypted command, result, or raw failure text.
   Reconciliation posture includes only state, failure count, and timestamps;
-  raw Docker and agent detail stays outside the model boundary. Queue counts cover
-  only jobs with a resource key that resolves through the requesting
-  organization; unscoped platform jobs and another organization's jobs are
-  never included.
+  raw Docker and agent detail stays outside the model boundary. Queue scoping
+  follows validated resource relationships; job payloads, errors, worker names,
+  and another organization's jobs are never included.
 - Thirty-day operational signals contain only tenant-scoped counts by
   operation kind and status. The deterministic baseline reports a fleet-level
   reliability finding once at least four terminal operations exist and at
@@ -159,7 +161,8 @@ keys make it a privileged service.
   missing or mutable active-agent images, expiring agent certificates,
   expiring service-account and deployment-hook credentials, stale SCIM credentials,
   unrevoked expired deployment hooks, agent identities signed
-  by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
+  by a non-active CA, lingering dual-trust rollovers, stalled tenant queues or
+  stale running-job lease heartbeats,
   notification coverage gaps, unavailable, unbound, mismatched, or
   recovery-incapable database drivers, unhealthy reconciliation, unsigned,
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and

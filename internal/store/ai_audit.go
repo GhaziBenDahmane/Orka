@@ -414,12 +414,24 @@ type AIAuditServiceDeployment struct {
 }
 
 type AIAuditQueuePosture struct {
-	Coverage            string     `json:"coverage"`
-	PendingServiceJobs  int64      `json:"pendingServiceJobs"`
-	RunningServiceJobs  int64      `json:"runningServiceJobs"`
-	PendingDatabaseJobs int64      `json:"pendingDatabaseJobs"`
-	RunningDatabaseJobs int64      `json:"runningDatabaseJobs"`
-	OldestPendingAt     *time.Time `json:"oldestPendingAt,omitempty"`
+	Coverage                 string                    `json:"coverage"`
+	PendingJobs              int64                     `json:"pendingJobs"`
+	RunningJobs              int64                     `json:"runningJobs"`
+	PendingServiceJobs       int64                     `json:"pendingServiceJobs"`
+	RunningServiceJobs       int64                     `json:"runningServiceJobs"`
+	PendingDatabaseJobs      int64                     `json:"pendingDatabaseJobs"`
+	RunningDatabaseJobs      int64                     `json:"runningDatabaseJobs"`
+	OldestPendingAt          *time.Time                `json:"oldestPendingAt,omitempty"`
+	OldestRunningHeartbeatAt *time.Time                `json:"oldestRunningHeartbeatAt,omitempty"`
+	Kinds                    []AIAuditQueueKindPosture `json:"kinds"`
+}
+
+type AIAuditQueueKindPosture struct {
+	Kind                     string     `json:"kind"`
+	PendingJobs              int64      `json:"pendingJobs"`
+	RunningJobs              int64      `json:"runningJobs"`
+	OldestPendingAt          *time.Time `json:"oldestPendingAt,omitempty"`
+	OldestRunningHeartbeatAt *time.Time `json:"oldestRunningHeartbeatAt,omitempty"`
 }
 
 type AIAuditFinalizerPosture struct {
@@ -438,7 +450,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -854,6 +866,99 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	if err != nil {
 		return err
 	}
+
+	rows, err = s.Pool.Query(ctx, `
+		WITH scoped_job_ids AS (
+			SELECT job.id FROM jobs job
+			JOIN compose_services service ON job.resource_key='service:' || service.id::text
+			JOIN environments environment ON environment.id=service.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN database_instances database ON job.resource_key='database:' || database.id::text
+			JOIN environments environment ON environment.id=database.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN deployments deployment ON deployment.id::text=job.payload->>'deploymentId'
+			JOIN compose_services service ON service.id=deployment.compose_service_id
+			JOIN environments environment ON environment.id=service.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE job.kind='deploy.compose' AND project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN notification_deliveries delivery ON delivery.id::text=job.payload->>'deliveryId'
+			JOIN notification_endpoints endpoint ON endpoint.id=delivery.endpoint_id
+			WHERE job.kind='notify.webhook' AND endpoint.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN commit_status_deliveries delivery ON delivery.id::text=job.payload->>'deliveryId'
+			JOIN deployments deployment ON deployment.id=delivery.deployment_id
+			JOIN compose_services service ON service.id=deployment.compose_service_id
+			JOIN environments environment ON environment.id=service.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE job.kind='commit.status' AND project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN audit_archive_batches batch ON batch.id::text=job.payload->>'batchId'
+			JOIN audit_archive_destinations destination ON destination.id=batch.destination_id
+			WHERE job.kind='audit.archive' AND destination.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN compose_services service ON service.id::text=job.payload->>'serviceId'
+			JOIN environments environment ON environment.id=service.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE job.kind='delete.compose' AND project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN environments environment ON environment.id::text=job.payload->>'environmentId'
+			JOIN projects project ON project.id=environment.project_id
+			WHERE job.kind='delete.environment' AND project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN projects project ON project.id::text=job.payload->>'projectId'
+			WHERE job.kind='delete.project' AND project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN clusters cluster ON cluster.id::text=job.payload->>'clusterId'
+			WHERE job.kind='delete.cluster' AND cluster.organization_id=$1
+		)
+		SELECT job.kind,
+			count(*) FILTER (WHERE job.status='pending'),
+			count(*) FILTER (WHERE job.status='running'),
+			min(job.created_at) FILTER (WHERE job.status='pending'),
+			min(COALESCE(job.locked_at,job.created_at)) FILTER (WHERE job.status='running')
+		FROM jobs job
+		JOIN scoped_job_ids scoped ON scoped.id=job.id
+		WHERE job.status IN ('pending','running')
+		GROUP BY job.kind
+		ORDER BY job.kind`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditQueueKindPosture
+		if err = rows.Scan(&item.Kind, &item.PendingJobs, &item.RunningJobs, &item.OldestPendingAt, &item.OldestRunningHeartbeatAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.QueuePosture.Kinds = append(snapshot.QueuePosture.Kinds, item)
+		snapshot.QueuePosture.PendingJobs += item.PendingJobs
+		snapshot.QueuePosture.RunningJobs += item.RunningJobs
+		if item.OldestPendingAt != nil && (snapshot.QueuePosture.OldestPendingAt == nil || item.OldestPendingAt.Before(*snapshot.QueuePosture.OldestPendingAt)) {
+			snapshot.QueuePosture.OldestPendingAt = item.OldestPendingAt
+		}
+		if item.OldestRunningHeartbeatAt != nil && (snapshot.QueuePosture.OldestRunningHeartbeatAt == nil || item.OldestRunningHeartbeatAt.Before(*snapshot.QueuePosture.OldestRunningHeartbeatAt)) {
+			snapshot.QueuePosture.OldestRunningHeartbeatAt = item.OldestRunningHeartbeatAt
+		}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 
 	err = s.Pool.QueryRow(ctx, `SELECT
 		COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false),

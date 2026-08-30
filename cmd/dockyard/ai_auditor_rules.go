@@ -15,6 +15,7 @@ const maxDeterministicAuditFindings = 100
 const auditArchiveSchedulerGrace = 5 * time.Minute
 const minimumOperationalSignalSample = 4
 const finalizerStallThreshold = 15 * time.Minute
+const jobHeartbeatStallThreshold = 2 * time.Minute
 
 var immutableAuditImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
@@ -318,7 +319,10 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 	}
 	if snapshot.QueuePosture.OldestPendingAt != nil && now.Sub(*snapshot.QueuePosture.OldestPendingAt) > 10*time.Minute {
-		add(modelFinding{Severity: "high", Category: "operations", Title: "Deployment queue is stalled", Description: "A tenant-scoped service or database job has remained pending for more than ten minutes.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingServiceJobs": snapshot.QueuePosture.PendingServiceJobs, "pendingDatabaseJobs": snapshot.QueuePosture.PendingDatabaseJobs, "oldestPendingAt": snapshot.QueuePosture.OldestPendingAt.UTC().Format(time.RFC3339)}, Remediation: "Check worker health, leader leases, cluster admission, and job retry state before accepting more work."})
+		add(modelFinding{Severity: "high", Category: "operations", Title: "Platform job queue is stalled", Description: "A tenant-scoped deployment, recovery, integration, audit, or deletion job has remained pending for more than ten minutes.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingJobs": snapshot.QueuePosture.PendingJobs, "runningJobs": snapshot.QueuePosture.RunningJobs, "oldestPendingAt": snapshot.QueuePosture.OldestPendingAt.UTC().Format(time.RFC3339), "kinds": snapshot.QueuePosture.Kinds}, Remediation: "Check worker health, leader leases, cluster admission, and job retry state before accepting more work."})
+	}
+	if snapshot.QueuePosture.OldestRunningHeartbeatAt != nil && now.Sub(*snapshot.QueuePosture.OldestRunningHeartbeatAt) > jobHeartbeatStallThreshold {
+		add(modelFinding{Severity: "high", Category: "operations", Title: "Platform job lease heartbeat is stale", Description: "A running tenant-scoped job has not renewed its worker lease heartbeat within two minutes.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"runningJobs": snapshot.QueuePosture.RunningJobs, "oldestRunningHeartbeatAt": snapshot.QueuePosture.OldestRunningHeartbeatAt.UTC().Format(time.RFC3339), "maximumHeartbeatAgeSeconds": int64(jobHeartbeatStallThreshold / time.Second), "kinds": snapshot.QueuePosture.Kinds}, Remediation: "Restore worker processing and stale-job recovery, then verify the fenced replacement attempt completes without duplicate side effects."})
 	}
 	finalizers := snapshot.FinalizerPosture
 	if finalizers.FailedJobs > 0 || finalizers.ResourcesWithoutActiveJob > 0 {
