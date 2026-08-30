@@ -91,6 +91,7 @@ type AIAuditDatabaseEngineInfo struct {
 	Name            string `json:"name"`
 	DefaultVersion  string `json:"defaultVersion"`
 	Source          string `json:"source"`
+	ArtifactDigest  string `json:"artifactDigest,omitempty"`
 	BackupCapable   bool   `json:"backupCapable"`
 	BackupExtension string `json:"backupExtension"`
 }

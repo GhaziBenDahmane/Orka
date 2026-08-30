@@ -33,7 +33,7 @@ func (s *Server) aiAuditSnapshot(w http.ResponseWriter, r *http.Request) {
 	if s.Databases != nil {
 		for _, engine := range s.Databases.Engines() {
 			snapshot.DatabaseEngines = append(snapshot.DatabaseEngines, store.AIAuditDatabaseEngineInfo{
-				Name: engine.Name, DefaultVersion: engine.DefaultVersion, Source: engine.Source,
+				Name: engine.Name, DefaultVersion: engine.DefaultVersion, Source: engine.Source, ArtifactDigest: engine.ArtifactDigest,
 				BackupCapable: engine.BackupCapable, BackupExtension: engine.BackupExtension,
 			})
 		}

@@ -47,7 +47,7 @@ esac
 	found := false
 	for _, engine := range response.Engines {
 		if engine.Name == "cockroach" {
-			found = engine.Source == "external" && engine.DefaultVersion == "v25.2" && engine.BackupCapable && engine.BackupExtension == "dump"
+			found = engine.Source == "external" && engine.DefaultVersion == "v25.2" && strings.HasPrefix(engine.ArtifactDigest, "sha256:") && len(engine.ArtifactDigest) == 71 && engine.BackupCapable && engine.BackupExtension == "dump"
 		}
 	}
 	if !found {

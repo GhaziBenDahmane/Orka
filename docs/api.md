@@ -381,8 +381,9 @@ Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
-`backupCapable`, and `backupExtension`. External executable paths are never
-exposed. The legacy `items` and `backupCapable` name lists remain available for
+optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.
+The digest is present for external executables; their filesystem paths are
+never exposed. The legacy `items` and `backupCapable` name lists remain available for
 API compatibility. Verified engine-specific
 backup/restore is currently available for PostgreSQL, MySQL, MariaDB, MongoDB,
 Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch.

@@ -9,7 +9,11 @@ used as the directory, and symlinked entries and non-executable files are
 ignored. Driver names cannot replace built-ins. External drivers are supported
 only on Linux. Every invocation opens the driver without following symlinks,
 revalidates the opened inode, and executes that file descriptor so a path swap
-cannot bypass the startup checks.
+cannot bypass the startup checks. The controller also hashes the executable
+used for `describe`, rejects files larger than 64 MiB, and refuses every later
+operation if the newly opened artifact no longer matches that startup digest.
+The digest, but never the host path, is exposed in engine inventory and AI
+audit snapshots for release provenance.
 
 Dockyard starts a fresh process for each call, writes one JSON request to stdin,
 and reads one JSON response from stdout. Protocol version 1 supports

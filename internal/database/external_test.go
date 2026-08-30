@@ -44,7 +44,7 @@ esac
 			break
 		}
 	}
-	if metadata == nil || metadata.DefaultVersion != "v25.2" || metadata.Source != "external" || !metadata.BackupCapable || metadata.BackupExtension != "dump" {
+	if metadata == nil || metadata.DefaultVersion != "v25.2" || metadata.Source != "external" || !strings.HasPrefix(metadata.ArtifactDigest, "sha256:") || len(metadata.ArtifactDigest) != 71 || !metadata.BackupCapable || metadata.BackupExtension != "dump" {
 		t.Fatalf("external metadata=%#v", metadata)
 	}
 	encoded, err := json.Marshal(metadata)
@@ -56,6 +56,48 @@ esac
 	}
 	if plan, err := registry.Backup("cockroach", "v25.2", "data", map[string]string{}, "backup.dump"); err != nil || len(plan.Command) == 0 {
 		t.Fatalf("backup plan=%#v err=%v", plan, err)
+	}
+}
+
+func TestExternalDriverRejectsExecutableReplacementAfterDescription(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "replaceable-driver")
+	original := `#!/bin/sh
+case "$(cat)" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"replaceable","defaultVersion":"1","capabilities":[]}}' ;;
+  *) echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(original), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(directory, "replacement")
+	if err := os.WriteFile(replacement, []byte(strings.Replace(original, "services: {}", "services: {changed: {}}", 1)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.Render("replaceable", Request{Name: "data"}); err == nil || !strings.Contains(err.Error(), "changed since startup") {
+		t.Fatalf("replacement error=%v", err)
+	}
+}
+
+func TestExternalDriverRejectsOversizedExecutable(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "oversized-driver")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, maxExternalDriverBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRegistry().LoadExternal(directory); err == nil || !strings.Contains(err.Error(), "size is outside") {
+		t.Fatalf("oversized driver error=%v", err)
 	}
 }
 

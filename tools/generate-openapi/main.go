@@ -103,6 +103,7 @@ paths:
         name: {type: string}
         defaultVersion: {type: string}
         source: {type: string, enum: [built-in, external]}
+        artifactDigest: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
         backupCapable: {type: boolean}
         backupExtension: {type: string}
     DatabaseEngineList:

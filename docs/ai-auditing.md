@@ -31,7 +31,8 @@ keys make it a privileged service.
   database config, credentials, backup payloads, and secret material.
 - The snapshot includes per-database backup policy and restore-drill posture,
   the installed database-driver catalog with default versions, built-in or
-  external provenance, and backup capability, enabled SSO provider counts,
+  external provenance, executable SHA-256 digest, and backup capability,
+  enabled SSO provider counts,
   notification coverage, and template repository
   signing/synchronization posture so findings can identify concrete gaps. It
   also reports each service's desired and latest deployed revision plus

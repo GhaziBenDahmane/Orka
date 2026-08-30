@@ -51,6 +51,7 @@ type EngineInfo struct {
 	Name            string `json:"name"`
 	DefaultVersion  string `json:"defaultVersion"`
 	Source          string `json:"source"`
+	ArtifactDigest  string `json:"artifactDigest,omitempty"`
 	BackupCapable   bool   `json:"backupCapable"`
 	BackupExtension string `json:"backupExtension"`
 }
@@ -92,13 +93,16 @@ func (r *Registry) Engines() []EngineInfo {
 	for name, driver := range r.drivers {
 		extension, backupCapable := r.BackupExtension(name)
 		source := "built-in"
-		if _, external := driver.(*externalDriver); external {
+		artifactDigest := ""
+		if external, ok := driver.(*externalDriver); ok {
 			source = "external"
+			artifactDigest = external.digest
 		}
 		engines = append(engines, EngineInfo{
 			Name:            name,
 			DefaultVersion:  driver.DefaultVersion(),
 			Source:          source,
+			ArtifactDigest:  artifactDigest,
 			BackupCapable:   backupCapable,
 			BackupExtension: extension,
 		})

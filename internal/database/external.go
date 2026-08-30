@@ -3,9 +3,12 @@ package database
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +21,11 @@ import (
 
 type externalDriver struct {
 	path        string
+	digest      string
 	description databaseplugin.Description
 }
+
+const maxExternalDriverBytes = 64 << 20
 
 func (d *externalDriver) Name() string           { return d.description.Name }
 func (d *externalDriver) DefaultVersion() string { return d.description.DefaultVersion }
@@ -92,6 +98,15 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 		return databaseplugin.Response{}, fmt.Errorf("open database driver %s: %w", filepath.Base(d.path), err)
 	}
 	defer executable.Close()
+	digest, err := externalDriverDigest(executable)
+	if err != nil {
+		return databaseplugin.Response{}, fmt.Errorf("verify database driver %s: %w", filepath.Base(d.path), err)
+	}
+	if d.digest == "" {
+		d.digest = digest
+	} else if d.digest != digest {
+		return databaseplugin.Response{}, fmt.Errorf("database driver %s changed since startup", driverLabel(d))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "/proc/self/fd/3")
@@ -120,6 +135,24 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 		return response, fmt.Errorf("database driver %s reported a failure during %s", driverLabel(d), operation)
 	}
 	return response, nil
+}
+
+func externalDriverDigest(executable *os.File) (string, error) {
+	info, err := executable.Stat()
+	if err != nil {
+		return "", err
+	}
+	if info.Size() < 1 || info.Size() > maxExternalDriverBytes {
+		return "", errors.New("executable size is outside the allowed range")
+	}
+	if _, err = executable.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	if _, err = io.Copy(hash, executable); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func driverLabel(driver *externalDriver) string {
