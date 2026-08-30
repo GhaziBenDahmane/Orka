@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,7 @@ const (
 var errOIDCResponseTooLarge = errors.New("OIDC response exceeds 4 MiB")
 var errOIDCEmailUnverified = errors.New("OIDC email claim is not verified")
 var ssoDomainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+var ssoHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 
 func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -361,7 +364,7 @@ func normalizedOIDCIssuer(raw string) (string, error) {
 		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
 	}
 	issuer, err := url.Parse(raw)
-	if err != nil || issuer.Scheme != "https" || issuer.Hostname() == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || issuer.Opaque != "" {
+	if err != nil || issuer.Scheme != "https" || !validSSOURLHost(issuer) || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || issuer.Opaque != "" {
 		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
 	}
 	issuer.Path = strings.TrimRight(issuer.Path, "/")
@@ -416,11 +419,38 @@ func validateOIDCProviderEndpoints(provider *oidc.Provider) error {
 		"jwks_uri":               metadata.JWKSURI,
 	} {
 		endpoint, err := url.Parse(strings.TrimSpace(raw))
-		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
+		if err != nil || endpoint.Scheme != "https" || !validSSOURLHost(endpoint) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
 			return errors.New(name + " must be an absolute HTTPS URL")
 		}
 	}
 	return nil
+}
+
+func validSSOURLHost(endpoint *url.URL) bool {
+	host := endpoint.Hostname()
+	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(host) == nil {
+		return false
+	}
+	if net.ParseIP(host) == nil {
+		if len(host) == 0 || len(host) > 253 {
+			return false
+		}
+		for _, label := range strings.Split(host, ".") {
+			if len(label) == 0 || len(label) > 63 || !ssoHostnameLabelPattern.MatchString(label) {
+				return false
+			}
+		}
+	}
+	if strings.HasSuffix(endpoint.Host, ":") {
+		return false
+	}
+	if port := endpoint.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) oidcHTTPClient() *http.Client {

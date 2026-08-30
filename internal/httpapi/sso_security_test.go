@@ -23,6 +23,8 @@ func TestNormalizedOIDCIssuer(t *testing.T) {
 		"http://login.example.test", "https://user@login.example.test",
 		"https://login.example.test?tenant=one", "https://login.example.test/#fragment",
 		"//login.example.test", "https:///missing-host", "https://" + strings.Repeat("a", maxOIDCIssuerBytes),
+		"https://bad_label.example.test", "https://-bad.example.test", "https://login.example.test:",
+		"https://login.example.test:0", "https://login.example.test:65536", "https://[not-an-ip]",
 	} {
 		if _, err = normalizedOIDCIssuer(invalid); err == nil {
 			t.Errorf("accepted unsafe issuer %q", invalid)

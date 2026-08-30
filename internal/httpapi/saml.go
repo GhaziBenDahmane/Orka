@@ -575,7 +575,7 @@ func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.S
 
 func validateSAMLRedirectEndpoint(raw string) error {
 	endpoint, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
+	if err != nil || endpoint.Scheme != "https" || !validSSOURLHost(endpoint) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
 		return errors.New("identity-provider metadata must advertise an absolute HTTPS HTTP-Redirect SSO endpoint")
 	}
 	return nil

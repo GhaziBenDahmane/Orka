@@ -121,7 +121,7 @@ func Load() (Config, error) {
 	}
 	publicURL := strings.TrimSpace(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"))
 	parsedPublicURL, err := url.Parse(publicURL)
-	if err != nil || (parsedPublicURL.Scheme != "http" && parsedPublicURL.Scheme != "https") || !validPublicHostname(parsedPublicURL.Hostname()) || parsedPublicURL.User != nil || parsedPublicURL.RawQuery != "" || parsedPublicURL.Fragment != "" || (parsedPublicURL.Path != "" && parsedPublicURL.Path != "/") || strings.HasSuffix(parsedPublicURL.Host, ":") {
+	if err != nil || (parsedPublicURL.Scheme != "http" && parsedPublicURL.Scheme != "https") || !validPublicURLHost(parsedPublicURL) || parsedPublicURL.User != nil || parsedPublicURL.RawQuery != "" || parsedPublicURL.Fragment != "" || (parsedPublicURL.Path != "" && parsedPublicURL.Path != "/") {
 		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must be an HTTP(S) origin without credentials, path, query, or fragment and with a valid host and port")
 	}
 	if port := parsedPublicURL.Port(); port != "" {
@@ -330,19 +330,22 @@ func loopbackHostname(host string) bool {
 	return address != nil && address.IsLoopback()
 }
 
-func validPublicHostname(host string) bool {
-	if net.ParseIP(host) != nil {
-		return true
-	}
-	if len(host) == 0 || len(host) > 253 {
+func validPublicURLHost(endpoint *url.URL) bool {
+	host := endpoint.Hostname()
+	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(host) == nil {
 		return false
 	}
-	for _, label := range strings.Split(host, ".") {
-		if len(label) == 0 || len(label) > 63 || !publicHostnameLabel.MatchString(label) {
+	if net.ParseIP(host) == nil {
+		if len(host) == 0 || len(host) > 253 {
 			return false
 		}
+		for _, label := range strings.Split(host, ".") {
+			if len(label) == 0 || len(label) > 63 || !publicHostnameLabel.MatchString(label) {
+				return false
+			}
+		}
 	}
-	return true
+	return !strings.HasSuffix(endpoint.Host, ":")
 }
 
 func secretEnv(key string) (string, error) {
