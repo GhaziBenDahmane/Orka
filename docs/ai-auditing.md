@@ -198,6 +198,10 @@ and limits each complete audit lifecycle to ten minutes with
 `DOCKYARD_AI_AUDIT_TIMEOUT`. A replacement process with the same service
 account and agent name marks its predecessor failed before starting, while
 different named specialists remain independent.
+The overlay also applies configurable CPU and memory reservations and limits
+to 9Router, Headroom, and both auditor services. Override the corresponding
+`NINEROUTER_*`, `HEADROOM_*`, or `DOCKYARD_AI_AUDITOR_*` resource variables
+when capacity planning requires different bounds.
 After a failed run, the auditor retries after
 `DOCKYARD_AI_AUDIT_RETRY_INTERVAL` (five minutes by default, or the normal
 interval when it is shorter), doubles that delay after consecutive failures,

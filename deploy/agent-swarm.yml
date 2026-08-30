@@ -15,6 +15,13 @@ services:
       - agent-state:/var/lib/dockyard-agent
     deploy:
       replicas: 1
+      resources:
+        limits:
+          cpus: ${DOCKYARD_AGENT_CPU_LIMIT:-4.0}
+          memory: ${DOCKYARD_AGENT_MEMORY_LIMIT:-4G}
+        reservations:
+          cpus: ${DOCKYARD_AGENT_CPU_RESERVATION:-0.25}
+          memory: ${DOCKYARD_AGENT_MEMORY_RESERVATION:-256M}
       placement:
         constraints: [node.role == manager]
       restart_policy:

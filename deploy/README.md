@@ -80,6 +80,16 @@ explicitly disabled, and then
 waits for every service to hold its desired replica count continuously for 90
 seconds. It also requires every control-plane service to run the exact requested
 image digest and rejects any updating, paused, or rolled-back service state.
+The supplied Swarm manifests set CPU and memory reservations plus hard limits
+for every long-running platform, agent, and AI service. Override the documented
+`*_CPU_LIMIT`, `*_MEMORY_LIMIT`, `*_CPU_RESERVATION`, and
+`*_MEMORY_RESERVATION` environment variables when sizing the stack for its
+host; Docker validates the rendered values before the installer mutates state.
+Defaults are `4.0` CPU/`4G` memory for the controller and remote agent,
+`2.0`/`2G` for PostgreSQL, and `1.0`/`512M` for Traefik. Their respective
+reservation defaults are `0.25`/`256M`, `0.25`/`256M`, and `0.10`/`64M`.
+The full variable prefixes are `DOCKYARD_CONTROLLER`, `DOCKYARD_AGENT`,
+`DOCKYARD_POSTGRES`, and `DOCKYARD_TRAEFIK`.
 This covers the bundled health-check start periods and retry windows, so a task
 that starts and then fails readiness—or silently returns to an older image—does
 not produce a false installation success. `DOCKYARD_INSTALL_STABILITY_SECONDS`

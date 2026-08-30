@@ -11,6 +11,9 @@ services:
     networks: [ai-control]
     deploy:
       replicas: 1
+      resources:
+        limits: {cpus: "${NINEROUTER_CPU_LIMIT:-1.0}", memory: "${NINEROUTER_MEMORY_LIMIT:-1G}"}
+        reservations: {cpus: "${NINEROUTER_CPU_RESERVATION:-0.10}", memory: "${NINEROUTER_MEMORY_RESERVATION:-128M}"}
       restart_policy: {condition: on-failure, delay: 10s}
 
   headroom:
@@ -18,6 +21,9 @@ services:
     networks: [ai-control]
     deploy:
       replicas: 1
+      resources:
+        limits: {cpus: "${HEADROOM_CPU_LIMIT:-1.0}", memory: "${HEADROOM_MEMORY_LIMIT:-512M}"}
+        reservations: {cpus: "${HEADROOM_CPU_RESERVATION:-0.10}", memory: "${HEADROOM_MEMORY_RESERVATION:-64M}"}
       restart_policy: {condition: on-failure, delay: 10s}
 
   security-auditor:
@@ -39,6 +45,9 @@ services:
     read_only: true
     deploy:
       replicas: 1
+      resources:
+        limits: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_LIMIT:-0.50}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_LIMIT:-256M}"}
+        reservations: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_RESERVATION:-0.05}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_RESERVATION:-32M}"}
       restart_policy: {condition: on-failure, delay: 10s, max_attempts: 5}
       placement:
         constraints: [node.role == manager]
@@ -62,6 +71,9 @@ services:
     read_only: true
     deploy:
       replicas: 1
+      resources:
+        limits: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_LIMIT:-0.50}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_LIMIT:-256M}"}
+        reservations: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_RESERVATION:-0.05}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_RESERVATION:-32M}"}
       restart_policy: {condition: on-failure, delay: 10s, max_attempts: 5}
       placement:
         constraints: [node.role == manager]

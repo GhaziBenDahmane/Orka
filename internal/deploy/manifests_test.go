@@ -20,8 +20,12 @@ type deploymentManifest struct {
 			Test []string `yaml:"test"`
 		} `yaml:"healthcheck"`
 		Deploy struct {
-			Replicas     int               `yaml:"replicas"`
-			Labels       map[string]string `yaml:"labels"`
+			Replicas  int               `yaml:"replicas"`
+			Labels    map[string]string `yaml:"labels"`
+			Resources struct {
+				Limits       manifestResourceSpec `yaml:"limits"`
+				Reservations manifestResourceSpec `yaml:"reservations"`
+			} `yaml:"resources"`
 			UpdateConfig struct {
 				Order         string `yaml:"order"`
 				FailureAction string `yaml:"failure_action"`
@@ -31,6 +35,11 @@ type deploymentManifest struct {
 			} `yaml:"rollback_config"`
 		} `yaml:"deploy"`
 	} `yaml:"services"`
+}
+
+type manifestResourceSpec struct {
+	CPUs   string `yaml:"cpus"`
+	Memory string `yaml:"memory"`
 }
 
 func readDeploymentManifest(t *testing.T, path string) deploymentManifest {
@@ -73,6 +82,22 @@ func TestControllerManifestHasHealthGatedRollbackUpdates(t *testing.T) {
 	}
 	if !slices.Contains(manifest.Services["traefik"].Command, "--ping=true") {
 		t.Fatal("Traefik ping endpoint is not enabled")
+	}
+}
+
+func TestProductionManifestsBoundLongRunningResources(t *testing.T) {
+	for path, names := range map[string][]string{
+		"../../deploy/swarm.yml":       {"postgres", "dockyard", "traefik"},
+		"../../deploy/agent-swarm.yml": {"agent"},
+		"../../deploy/ai-auditors.yml": {"9router", "headroom", "security-auditor", "reliability-auditor"},
+	} {
+		manifest := readDeploymentManifest(t, path)
+		for _, name := range names {
+			resources := manifest.Services[name].Deploy.Resources
+			if resources.Limits.CPUs == "" || resources.Limits.Memory == "" || resources.Reservations.CPUs == "" || resources.Reservations.Memory == "" {
+				t.Errorf("%s service %s has incomplete resource bounds: %#v", path, name, resources)
+			}
+		}
 	}
 }
 
