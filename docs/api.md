@@ -224,9 +224,11 @@ TLS SMTP (`starttls` or implicit `tls`), PagerDuty Events API v2, and the
 Opsgenie Alerts API. SMTP passwords and provider integration keys are
 encrypted and never returned. Generic webhook signing secrets are revealed
 once. All providers use the same idempotent delivery records and retry queue
-for `deployment.failed`, `service.stop.failed`, `service.schedule.failed`, `backup.failed`, `restore.failed`,
-`restore.drill.failed`, `database.migration.failed`, and
-`audit.archive.failed`, `ai.audit.failed`, and `ai.finding.critical`. URLs and signing
+for `deployment.failed`, `service.stop.failed`, `service.schedule.failed`,
+`backup.failed`, `restore.failed`, `restore.drill.failed`,
+`database.migration.failed`, `network.provision.failed`,
+`network.delete.failed`, `audit.archive.failed`, `ai.audit.failed`, and
+`ai.finding.critical`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are

@@ -473,6 +473,8 @@ func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) [
 		"restore.failed":            false,
 		"restore.drill.failed":      false,
 		"database.migration.failed": false,
+		"network.provision.failed":  false,
+		"network.delete.failed":     false,
 		"audit.archive.failed":      false,
 		"ai.audit.failed":           false,
 		"ai.finding.critical":       false,

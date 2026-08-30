@@ -161,6 +161,8 @@ resource "dockyard_notification_endpoint" "operations" {
     "deployment.failed",
     "backup.failed",
     "restore.failed",
+    "network.provision.failed",
+    "network.delete.failed",
     "ai.finding.critical",
   ]
   configuration_json = jsonencode({ url = var.notification_webhook_url })

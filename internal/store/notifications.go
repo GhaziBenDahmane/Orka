@@ -127,7 +127,7 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 	if err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"event": eventType, "resourceType": resourceType, "resourceId": resourceID, "error": truncateStore(cause.Error(), 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard " + eventType + " for " + resourceType + " " + resourceID})
+	payload, _ := json.Marshal(map[string]any{"event": eventType, "operation": jobKind, "resourceType": resourceType, "resourceId": resourceID, "error": truncateStore(cause.Error(), 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard " + eventType + " for " + resourceType + " " + resourceID})
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -224,6 +224,12 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 	case "audit.archive":
 		resourceID, resourceType, eventType = payload["batchId"], "audit_archive_batch", "audit.archive.failed"
 		query = `SELECT a.organization_id FROM audit_archive_batches b JOIN audit_archive_destinations a ON a.id=b.destination_id WHERE b.id=$1`
+	case "network.create":
+		resourceID, resourceType, eventType = payload["networkId"], "managed_network", "network.provision.failed"
+		query = `SELECT organization_id FROM managed_networks WHERE id=$1`
+	case "network.delete":
+		resourceID, resourceType, eventType = payload["networkId"], "managed_network", "network.delete.failed"
+		query = `SELECT organization_id FROM managed_networks WHERE id=$1`
 	default:
 		return "", "", "", uuid.Nil, ErrNotFound
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -98,6 +99,65 @@ func TestRestoreDrillFailureUsesDedicatedEvent(t *testing.T) {
 	var event string
 	if err := db.Pool.QueryRow(ctx, `SELECT event_type FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&event); err != nil || event != "restore.drill.failed" {
 		t.Fatalf("event=%q err=%v", event, err)
+	}
+}
+
+func TestManagedNetworkFailuresUseDedicatedEvents(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID, networkID, endpointID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Network notifications',$2)`, []any{organizationID, "network-notifications-" + organizationID.String()}},
+		{`INSERT INTO managed_networks(id,organization_id,name,driver,status) VALUES($1,$2,'shared','overlay','error')`, []any{networkID, organizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'network-on-call','webhook','url','secret',ARRAY['network.provision.failed','network.delete.failed'])`, []any{endpointID, organizationID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	payload, _ := json.Marshal(map[string]string{"networkId": networkID.String()})
+	for _, kind := range []string{"network.create", "network.delete"} {
+		if err = db.QueueFailureNotifications(ctx, kind, payload, errors.New("daemon unavailable")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.Pool.Query(ctx, `SELECT event_type,resource_type,payload->>'operation' FROM notification_deliveries WHERE endpoint_id=$1 ORDER BY event_type`, endpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	want := map[string]string{"network.provision.failed": "network.create", "network.delete.failed": "network.delete"}
+	seen := map[string]string{}
+	for rows.Next() {
+		var eventType, resourceType, operation string
+		if err = rows.Scan(&eventType, &resourceType, &operation); err != nil {
+			t.Fatal(err)
+		}
+		if resourceType != "managed_network" {
+			t.Fatalf("resource type=%q", resourceType)
+		}
+		seen[eventType] = operation
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("network failure events=%#v want=%#v", seen, want)
 	}
 }
 
