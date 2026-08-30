@@ -41,7 +41,7 @@ export type SCIMToken = { id: string; organizationId: string; name: string; defa
 export type OrganizationMember = { userId: string; email: string; displayName: string; role: Role; active: boolean; managedByScim: boolean; createdAt: string };
 export type OrganizationInvitation = { id: string; organizationId: string; email: string; role: Role; expiresAt: string; acceptedAt?: string; revokedAt?: string; createdAt: string };
 export type AIAuditRun = { id: string; serviceAccountId: string; agentName: string; agentVersion: string; model: string; status: string; scope: Record<string, unknown>; summary: string; startedAt: string; completedAt?: string };
-export type AIAuditFinding = { id: string; runId: string; severity: string; category: string; title: string; description: string; resourceType?: string; resourceId?: string; evidence: Record<string, unknown>; remediation?: string; fingerprint: string; createdAt: string; disposition: "open" | "acknowledged" | "resolved"; triageNote?: string; triagedByUserId?: string; triagedByServiceAccountId?: string; triagedAt?: string; previousFindingId?: string; occurrenceNumber: number };
+export type AIAuditFinding = { id: string; runId: string; serviceAccountId: string; agentName: string; severity: string; category: string; title: string; description: string; resourceType?: string; resourceId?: string; evidence: Record<string, unknown>; remediation?: string; fingerprint: string; createdAt: string; disposition: "open" | "acknowledged" | "resolved"; triageNote?: string; triagedByUserId?: string; triagedByServiceAccountId?: string; triagedAt?: string; previousFindingId?: string; occurrenceNumber: number };
 
 type Envelope<T> = { items: T[] };
 type ErrorEnvelope = { error?: { code?: string; message?: string } };
@@ -192,6 +192,7 @@ export const api = {
   rotateServiceAccount: (id: string, expiresInDays: number) => request<{ token: string; expiresAt: string }>(`/v1/service-accounts/${id}/rotate`, { method: "POST", body: JSON.stringify({ expiresInDays }) }),
   disableServiceAccount: (id: string) => request<void>(`/v1/service-accounts/${id}`, { method: "DELETE" }),
   aiAuditRuns: () => request<Envelope<AIAuditRun>>("/v1/ai/audit-runs"),
+  currentAIAuditFindings: (disposition = "") => request<Envelope<AIAuditFinding>>(`/v1/ai/audit-findings${disposition ? `?disposition=${encodeURIComponent(disposition)}` : ""}`),
   aiAuditFindings: (runId: string) => request<Envelope<AIAuditFinding>>(`/v1/ai/audit-runs/${runId}/findings`),
   updateAIAuditFinding: (findingId: string, disposition: AIAuditFinding["disposition"], note: string) => request<AIAuditFinding>(`/v1/ai/audit-findings/${findingId}`, { method: "PATCH", body: JSON.stringify({ disposition, note }) }),
 };

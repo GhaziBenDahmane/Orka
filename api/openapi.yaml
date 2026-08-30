@@ -407,6 +407,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/audit-findings:
+    get:
+      operationId: get_v1_ai_audit_findings
+      tags: [ai]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/ai/audit-findings/{findingID}:
     patch:
       operationId: patch_v1_ai_audit_findings_findingID

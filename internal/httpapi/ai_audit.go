@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
@@ -179,6 +180,34 @@ func (s *Server) listAIAuditFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) listCurrentAIAuditFindings(w http.ResponseWriter, r *http.Request) {
+	disposition := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("disposition")))
+	severity := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("severity")))
+	if disposition != "" && disposition != "active" && disposition != "open" && disposition != "acknowledged" && disposition != "resolved" {
+		writeError(w, http.StatusBadRequest, "invalid_disposition", "disposition must be active, open, acknowledged, or resolved")
+		return
+	}
+	if severity != "" && severity != "info" && severity != "low" && severity != "medium" && severity != "high" && severity != "critical" {
+		writeError(w, http.StatusBadRequest, "invalid_severity", "severity must be info, low, medium, high, or critical")
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 200")
+			return
+		}
+		limit = parsed
+	}
+	items, err := s.Store.ListCurrentAIAuditFindings(r.Context(), principal(r).OrganizationID, disposition, severity, limit)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) updateAIAuditFindingDisposition(w http.ResponseWriter, r *http.Request) {

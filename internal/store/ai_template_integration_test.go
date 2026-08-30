@@ -177,6 +177,10 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM ai_audit_runs WHERE service_account_id=$1 AND status='running'`, account.ID).Scan(&activeRuns); err != nil || activeRuns != 2 {
 		t.Fatalf("independent active audit runs=%d err=%v", activeRuns, err)
 	}
+	reliabilityFinding, err := db.AddAIAuditFinding(ctx, organizationID, account.ID, AIAuditFinding{RunID: replacementRun.ID, Severity: "low", Category: "backup", Title: "Reliability backup review", Description: "Independent agent lineage", Evidence: json.RawMessage(`{}`), Fingerprint: "backup:none"})
+	if err != nil || reliabilityFinding.OccurrenceNumber != 1 || reliabilityFinding.PreviousFindingID != nil || reliabilityFinding.AgentName != "reliability" || reliabilityFinding.ServiceAccountID != account.ID {
+		t.Fatalf("independent agent finding=%#v err=%v", reliabilityFinding, err)
+	}
 	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, replacementRun.ID, "completed", "replacement completed"); err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +200,21 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, reopenedRun.ID, "completed", "recurrence reopened"); err != nil {
 		t.Fatal(err)
+	}
+	currentFindings, err := db.ListCurrentAIAuditFindings(ctx, organizationID, "active", "", 100)
+	if err != nil || len(currentFindings) != 2 {
+		t.Fatalf("current findings=%#v err=%v", currentFindings, err)
+	}
+	currentByAgent := map[string]AIAuditFinding{}
+	for _, current := range currentFindings {
+		currentByAgent[current.AgentName] = current
+	}
+	if currentByAgent["security"].ID != reopened.ID || currentByAgent["security"].OccurrenceNumber != 3 || currentByAgent["reliability"].ID != reliabilityFinding.ID || currentByAgent["reliability"].OccurrenceNumber != 1 {
+		t.Fatalf("current lineage selection=%#v", currentByAgent)
+	}
+	highFindings, err := db.ListCurrentAIAuditFindings(ctx, organizationID, "open", "high", 1)
+	if err != nil || len(highFindings) != 1 || highFindings[0].ID != reopened.ID {
+		t.Fatalf("filtered current findings=%#v err=%v", highFindings, err)
 	}
 	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()

@@ -180,6 +180,7 @@ renewal/completion is fenced by a per-attempt UUID.
 | POST | `/v1/ai/audit-runs/{id}/findings` | Upsert a structured finding by fingerprint |
 | PATCH | `/v1/ai/audit-runs/{id}` | Complete or fail the caller's active run |
 | GET | `/v1/ai/audit-runs` | List runs as an organization administrator |
+| GET | `/v1/ai/audit-findings` | List the latest finding in every auditor/agent fingerprint lineage |
 | GET | `/v1/ai/audit-runs/{id}/findings` | Review findings as an organization administrator |
 | PATCH | `/v1/ai/audit-findings/{id}` | Acknowledge, resolve, or reopen a finding with an operator note |
 
@@ -190,8 +191,11 @@ linked to its previous occurrence. Acknowledgements carry forward, while a
 resolved finding reopens when it recurs. The API reports `previousFindingId`
 and `occurrenceNumber` for this lineage. A new fingerprint after the limit
 returns `409 ai_audit_finding_limit`.
+The current-findings endpoint accepts optional `disposition` (`active` selects
+open and acknowledged findings) and `severity` filters plus a `limit` from 1
+to 200 (default 100).
 
-The first four endpoints require an `auditor` service account; the last three
+The first four endpoints require an `auditor` service account; the last four
 require an administrator. Auditor identities have no normal RBAC rank and
 cannot mutate workloads. See `ai-auditing.md` for the deployment contract.
 

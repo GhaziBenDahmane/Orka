@@ -61,6 +61,9 @@ keys make it a privileged service.
   acknowledged disposition and its operator context into the next run. A
   finding that reappears after resolution is reopened automatically, linked to
   the prior occurrence, and shown with its occurrence count.
+- The current-findings view selects only the newest occurrence in each
+  auditor/agent fingerprint lineage, so administrators can review active work
+  across runs without older occurrences obscuring the present state.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds model responses and finding counts, validates every structured
   field, and rejects oversized evidence before submitting results. The API

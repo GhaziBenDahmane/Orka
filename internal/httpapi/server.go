@@ -111,6 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /v1/ai/audit-runs/{runID}", s.requireAuditor(http.HandlerFunc(s.finishAIAuditRun)))
 	mux.Handle("GET /v1/ai/audit-runs", s.requireRole("admin", http.HandlerFunc(s.listAIAuditRuns)))
 	mux.Handle("GET /v1/ai/audit-runs/{runID}/findings", s.requireRole("admin", http.HandlerFunc(s.listAIAuditFindings)))
+	mux.Handle("GET /v1/ai/audit-findings", s.requireRole("admin", http.HandlerFunc(s.listCurrentAIAuditFindings)))
 	mux.Handle("PATCH /v1/ai/audit-findings/{findingID}", s.requireRole("admin", http.HandlerFunc(s.updateAIAuditFindingDisposition)))
 	mux.Handle("GET /v1/audit-events", s.requireRole("admin", http.HandlerFunc(s.auditEvents)))
 	mux.Handle("GET /v1/audit-events/export", s.requireRole("admin", http.HandlerFunc(s.exportAuditEvents)))

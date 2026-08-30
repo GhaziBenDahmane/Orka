@@ -207,6 +207,7 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("admin service account finding triage status=%d body=%s", response.StatusCode, data)
 	}
+	triaged = store.AIAuditFinding{}
 	if err = json.Unmarshal(data, &triaged); err != nil || triaged.Disposition != "resolved" || triaged.TriagedByUser != nil || triaged.TriagedByServiceAccount == nil || *triaged.TriagedByServiceAccount != created.ServiceAccount.ID {
 		t.Fatalf("service account triaged finding=%#v err=%v", triaged, err)
 	}
@@ -217,6 +218,18 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	var findingAuditEvents int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND resource_id=$2 AND action IN ('ai_audit_finding.acknowledged','ai_audit_finding.resolved')`, orgID, findingID.String()).Scan(&findingAuditEvents); err != nil || findingAuditEvents != 2 {
 		t.Fatalf("finding triage audit events=%d err=%v", findingAuditEvents, err)
+	}
+	response, data = do(http.MethodGet, "/v1/ai/audit-findings?disposition=resolved&limit=1", userToken, nil)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(findingID.String())) || !bytes.Contains(data, []byte(`"agentName":"test-auditor"`)) || !bytes.Contains(data, []byte(auditor.ServiceAccount.ID.String())) {
+		t.Fatalf("current audit findings status=%d body=%s", response.StatusCode, data)
+	}
+	response, _ = do(http.MethodGet, "/v1/ai/audit-findings", auditor.Token, nil)
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("auditor current findings status=%d, want 403", response.StatusCode)
+	}
+	response, _ = do(http.MethodGet, "/v1/ai/audit-findings?severity=urgent", userToken, nil)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid current finding severity status=%d, want 400", response.StatusCode)
 	}
 	response, _ = do(http.MethodPatch, "/v1/ai/audit-runs/"+auditRun.ID.String(), auditor.Token, []byte(`{"status":"completed","summary":"`+strings.Repeat("x", 8001)+`"}`))
 	if response.StatusCode != http.StatusBadRequest {

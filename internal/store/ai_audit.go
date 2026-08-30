@@ -507,6 +507,8 @@ type AIAuditRun struct {
 type AIAuditFinding struct {
 	ID                      uuid.UUID       `json:"id"`
 	RunID                   uuid.UUID       `json:"runId"`
+	ServiceAccountID        uuid.UUID       `json:"serviceAccountId"`
+	AgentName               string          `json:"agentName"`
 	Severity                string          `json:"severity"`
 	Category                string          `json:"category"`
 	Title                   string          `json:"title"`
@@ -598,6 +600,8 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 	if !fingerprintExists && findingCount >= MaxAIAuditFindingsPerRun {
 		return AIAuditFinding{}, ErrAIAuditFindingLimit
 	}
+	item.ServiceAccountID = accountID
+	item.AgentName = agentName
 	item.Disposition = "open"
 	item.TriageNote = ""
 	item.TriagedByUser = nil
@@ -676,7 +680,7 @@ func (s *Store) ListAIAuditRuns(ctx context.Context, organizationID uuid.UUID) (
 }
 
 func (s *Store) ListAIAuditFindings(ctx context.Context, organizationID, runID uuid.UUID) ([]AIAuditFinding, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at,f.previous_finding_id,f.occurrence_number FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id WHERE f.run_id=$1 AND r.organization_id=$2 ORDER BY CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END,f.created_at`, runID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT f.id,f.run_id,r.service_account_id,r.agent_name,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at,f.previous_finding_id,f.occurrence_number FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id WHERE f.run_id=$1 AND r.organization_id=$2 ORDER BY CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END,f.created_at`, runID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +688,38 @@ func (s *Store) ListAIAuditFindings(ctx context.Context, organizationID, runID u
 	items := []AIAuditFinding{}
 	for rows.Next() {
 		var item AIAuditFinding
-		if err = rows.Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt, &item.PreviousFindingID, &item.OccurrenceNumber); err != nil {
+		if err = rows.Scan(&item.ID, &item.RunID, &item.ServiceAccountID, &item.AgentName, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt, &item.PreviousFindingID, &item.OccurrenceNumber); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) ListCurrentAIAuditFindings(ctx context.Context, organizationID uuid.UUID, disposition, severity string, limit int) ([]AIAuditFinding, error) {
+	if limit < 1 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.Pool.Query(ctx, `WITH latest AS (
+		SELECT DISTINCT ON (r.service_account_id,r.agent_name,f.fingerprint)
+			f.id,f.run_id,r.service_account_id,r.agent_name,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at,f.previous_finding_id,f.occurrence_number,r.started_at
+		FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id
+		WHERE r.organization_id=$1
+		ORDER BY r.service_account_id,r.agent_name,f.fingerprint,r.started_at DESC,f.created_at DESC
+	)
+	SELECT id,run_id,service_account_id,agent_name,severity,category,title,description,resource_type,resource_id,evidence,remediation,fingerprint,created_at,disposition,triage_note,triaged_by_user_id,triaged_by_service_account_id,triaged_at,previous_finding_id,occurrence_number
+	FROM latest
+	WHERE ($2='' OR ($2='active' AND disposition<>'resolved') OR disposition=$2) AND ($3='' OR severity=$3)
+	ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END,started_at DESC,created_at DESC
+	LIMIT $4`, organizationID, disposition, severity, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AIAuditFinding{}
+	for rows.Next() {
+		var item AIAuditFinding
+		if err = rows.Scan(&item.ID, &item.RunID, &item.ServiceAccountID, &item.AgentName, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt, &item.PreviousFindingID, &item.OccurrenceNumber); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -703,7 +738,7 @@ func (s *Store) UpdateAIAuditFindingDisposition(ctx context.Context, principal P
 	if principal.ServiceAccountID != nil {
 		serviceAccountID = *principal.ServiceAccountID
 	}
-	err = tx.QueryRow(ctx, `UPDATE ai_audit_findings f SET disposition=$4,triage_note=$5,triaged_by_user_id=$3,triaged_by_service_account_id=$6,triaged_at=now() FROM ai_audit_runs r WHERE f.id=$1 AND f.run_id=r.id AND r.organization_id=$2 RETURNING f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at,f.previous_finding_id,f.occurrence_number`, findingID, principal.OrganizationID, nullableUUID(principal.UserID), disposition, note, serviceAccountID).Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt, &item.PreviousFindingID, &item.OccurrenceNumber)
+	err = tx.QueryRow(ctx, `UPDATE ai_audit_findings f SET disposition=$4,triage_note=$5,triaged_by_user_id=$3,triaged_by_service_account_id=$6,triaged_at=now() FROM ai_audit_runs r WHERE f.id=$1 AND f.run_id=r.id AND r.organization_id=$2 RETURNING f.id,f.run_id,r.service_account_id,r.agent_name,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at,f.previous_finding_id,f.occurrence_number`, findingID, principal.OrganizationID, nullableUUID(principal.UserID), disposition, note, serviceAccountID).Scan(&item.ID, &item.RunID, &item.ServiceAccountID, &item.AgentName, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt, &item.PreviousFindingID, &item.OccurrenceNumber)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AIAuditFinding{}, ErrNotFound
 	}
