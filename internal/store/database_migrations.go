@@ -37,9 +37,13 @@ func (s *Store) QueueDatabaseMigration(ctx context.Context, organizationID uuid.
 	}
 	defer tx.Rollback(ctx)
 	var lockedID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT d.id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, item.DatabaseInstanceID, organizationID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+	var composeServiceID *uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT d.id,d.compose_service_id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, item.DatabaseInstanceID, organizationID).Scan(&lockedID, &composeServiceID); errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseMigration{}, ErrNotFound
 	} else if err != nil {
+		return DatabaseMigration{}, err
+	}
+	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
 		return DatabaseMigration{}, err
 	}
 	if item.ID == uuid.Nil {

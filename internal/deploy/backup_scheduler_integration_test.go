@@ -55,7 +55,7 @@ func TestBackupSchedulersDoNotQueueBehindActiveBackups(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key=ANY($1)`, []string{"database:" + databaseID.String(), "service:" + volumeServiceID.String()})
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key=ANY($1) OR (kind='delete.compose' AND payload->>'serviceId'=ANY($2))`, []string{"database:" + databaseID.String(), "service:" + volumeServiceID.String()}, []string{databaseServiceID.String(), volumeServiceID.String()})
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
 	})
 
@@ -122,4 +122,45 @@ func TestBackupSchedulersDoNotQueueBehindActiveBackups(t *testing.T) {
 	if activeDatabaseBackups != 1 || activeVolumeBackups != 1 {
 		t.Fatalf("active backups database=%d volume=%d, want one each", activeDatabaseBackups, activeVolumeBackups)
 	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE database_backups SET status='cancelled',finished_at=now() WHERE database_instance_id=$1 AND status IN ('queued','running')`, databaseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE volume_backups SET status='cancelled',finished_at=now() WHERE compose_service_id=$1 AND status IN ('queued','running')`, volumeServiceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now() WHERE resource_key=ANY($1) AND status IN ('pending','running')`, []string{"database:" + databaseID.String(), "service:" + volumeServiceID.String()}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueueServiceDeletion(ctx, organizationID, databaseServiceID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueueServiceDeletion(ctx, organizationID, volumeServiceID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `UPDATE backup_policies SET next_run_at='2000-01-01' WHERE id=$1 RETURNING last_run_at`, databasePolicyID).Scan(&databaseLastRun); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Pool.QueryRow(ctx, `UPDATE volume_backup_policies SET next_run_at='2000-01-01' WHERE id=$1 RETURNING last_run_at`, volumePolicyID).Scan(&volumeLastRun); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.enqueueDueBackup(ctx); err != nil && !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if err = worker.enqueueDueVolumeBackup(ctx); err != nil && !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	var databaseLastRunAfter, volumeLastRunAfter *time.Time
+	if err = db.Pool.QueryRow(ctx, `SELECT last_run_at FROM backup_policies WHERE id=$1`, databasePolicyID).Scan(&databaseLastRunAfter); err != nil || !sameOptionalTime(databaseLastRun, databaseLastRunAfter) {
+		t.Fatalf("database policy ran after service deletion: before=%v after=%v err=%v", databaseLastRun, databaseLastRunAfter, err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT last_run_at FROM volume_backup_policies WHERE id=$1`, volumePolicyID).Scan(&volumeLastRunAfter); err != nil || !sameOptionalTime(volumeLastRun, volumeLastRunAfter) {
+		t.Fatalf("volume policy ran after service deletion: before=%v after=%v err=%v", volumeLastRun, volumeLastRunAfter, err)
+	}
+}
+
+func sameOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
 }

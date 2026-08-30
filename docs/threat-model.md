@@ -191,6 +191,9 @@ retirement is serialized with backup and restore admission, rejects active
 resource or durable-job state, and retains completed operation history. Operators
 must explicitly remove the policy first, preserving a deliberate boundary
 between configuration changes and retirement of protected state.
+Service deletion uses the same service-row boundary: active deployments,
+database migrations, backups, and restores reject deletion, while new manual
+or scheduled data operations reject a service whose deletion has been queued.
 
 ### AI prompt injection and unsafe autonomy
 

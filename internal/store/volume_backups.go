@@ -163,13 +163,17 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 	var policyID, destinationID uuid.UUID
 	var nodeID string
 	var quiesce bool
+	var deleting bool
 	var retentionCount int
-	err = tx.QueryRow(ctx, `SELECT policy.id,policy.destination_id,service.storage_node_id,policy.quiesce,policy.retention_count FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID, &destinationID, &nodeID, &quiesce, &retentionCount)
+	err = tx.QueryRow(ctx, `SELECT policy.id,policy.destination_id,service.storage_node_id,policy.quiesce,policy.retention_count,service.deletion_requested_at IS NOT NULL FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID, &destinationID, &nodeID, &quiesce, &retentionCount, &deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackup{}, ErrNotFound
 	}
 	if err != nil {
 		return VolumeBackup{}, err
+	}
+	if deleting {
+		return VolumeBackup{}, ErrDeleting
 	}
 	if nodeID == "" {
 		return VolumeBackup{}, errors.New("service storage node has not been assigned")
@@ -228,12 +232,16 @@ func (s *Store) QueueVolumeRestore(ctx context.Context, organizationID, backupID
 	defer tx.Rollback(ctx)
 	var serviceID uuid.UUID
 	var slug, status string
-	err = tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status)
+	var deleting bool
+	err = tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound
 	}
 	if err != nil {
 		return VolumeRestore{}, err
+	}
+	if deleting {
+		return VolumeRestore{}, ErrDeleting
 	}
 	if status != "succeeded" {
 		return VolumeRestore{}, errors.New("volume backup is not restorable")

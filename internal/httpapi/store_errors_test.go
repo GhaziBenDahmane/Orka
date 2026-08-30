@@ -24,6 +24,7 @@ func TestWriteStoreErrorClassifiesRemoteClusterAvailability(t *testing.T) {
 		{name: "SSO provider required", err: store.ErrSSOProviderRequired, status: http.StatusConflict, code: "sso_provider_required"},
 		{name: "protected volume removed", err: store.ErrProtectedVolumeRemoved, status: http.StatusConflict, code: "protected_volume_removed"},
 		{name: "volume not declared", err: store.ErrVolumeNotDeclared, status: http.StatusConflict, code: "volume_not_declared"},
+		{name: "resource deleting", err: store.ErrDeleting, status: http.StatusConflict, code: "resource_deleting"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

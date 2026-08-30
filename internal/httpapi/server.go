@@ -2782,6 +2782,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "volume_not_declared", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrDeleting) {
+		writeError(w, http.StatusConflict, "resource_deleting", err.Error())
+		return
+	}
 	if errors.Is(err, store.ErrMaintenance) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, http.StatusServiceUnavailable, "maintenance_mode", "resource is in maintenance mode")

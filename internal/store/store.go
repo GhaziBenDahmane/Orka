@@ -19,6 +19,7 @@ var ErrNotFound = errors.New("not found")
 var ErrAlreadyBootstrapped = errors.New("instance is already bootstrapped")
 var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
+var ErrDeleting = errors.New("resource is being deleted")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
 var ErrNoCapacity = errors.New("no eligible cluster has the requested placement capacity")
@@ -1339,7 +1340,14 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 		return err
 	}
 	var busy bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON j.kind='deploy.compose' AND d.id=(j.payload->>'deploymentId')::uuid WHERE d.compose_service_id=$1 AND j.status IN ('pending','running'))`, serviceID).Scan(&busy); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM jobs job WHERE job.status IN ('pending','running') AND (job.resource_key=$2 OR job.resource_key IN (SELECT 'database:' || database.id::text FROM database_instances database WHERE database.compose_service_id=$1)))
+		OR EXISTS(SELECT 1 FROM deployments deployment WHERE deployment.compose_service_id=$1 AND deployment.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=$1 AND backup.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=$1 AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_backups backup JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=$1 AND backup.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=$1 AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_migrations migration JOIN database_instances database ON database.id=migration.database_instance_id WHERE database.compose_service_id=$1 AND migration.status IN ('queued','running'))`, serviceID, "service:"+serviceID.String()).Scan(&busy); err != nil {
 		return err
 	}
 	if busy {
@@ -1547,9 +1555,13 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	}
 	defer tx.Rollback(ctx)
 	var lockedID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT d.id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, databaseID, organizationID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+	var composeServiceID *uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT d.id,d.compose_service_id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, databaseID, organizationID).Scan(&lockedID, &composeServiceID); errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseBackup{}, ErrNotFound
 	} else if err != nil {
+		return DatabaseBackup{}, err
+	}
+	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
 		return DatabaseBackup{}, err
 	}
 	var active bool
@@ -1724,11 +1736,15 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	defer tx.Rollback(ctx)
 	var slug, status string
 	var backupDatabaseID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status)
+	var composeServiceID *uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status, &composeServiceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}
 	if err != nil {
+		return DatabaseRestore{}, err
+	}
+	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
 		return DatabaseRestore{}, err
 	}
 	if status != "succeeded" {
@@ -1760,6 +1776,19 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	}
 	return restore, nil
 }
+
+func lockDatabaseServiceForOperation(ctx context.Context, tx pgx.Tx, composeServiceID *uuid.UUID) error {
+	if composeServiceID == nil {
+		return nil
+	}
+	var lockedID uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM compose_services WHERE id=$1 AND deletion_requested_at IS NULL FOR UPDATE`, *composeServiceID).Scan(&lockedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrDeleting
+	}
+	return err
+}
+
 func (s *Store) GetDatabaseRestore(ctx context.Context, organizationID, id uuid.UUID) (DatabaseRestore, error) {
 	var item DatabaseRestore
 	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.database_backup_id,r.status,r.kind,r.error,r.created_at,r.started_at,r.finished_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseBackupID, &item.Status, &item.Kind, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
