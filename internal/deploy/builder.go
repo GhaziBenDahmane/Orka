@@ -181,14 +181,20 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	}
 	defer os.RemoveAll(directory)
 	gitEnvironment := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
+	gitConfigCount := 0
+	addGitConfig := func(key, value string) {
+		index := fmt.Sprint(gitConfigCount)
+		gitEnvironment["GIT_CONFIG_KEY_"+index] = key
+		gitEnvironment["GIT_CONFIG_VALUE_"+index] = value
+		gitConfigCount++
+		gitEnvironment["GIT_CONFIG_COUNT"] = fmt.Sprint(gitConfigCount)
+	}
 	if len(resolvedAddresses) > 0 && repo.Scheme == "https" {
 		port := repo.Port()
 		if port == "" {
 			port = "443"
 		}
-		gitEnvironment["GIT_CONFIG_COUNT"] = "1"
-		gitEnvironment["GIT_CONFIG_KEY_0"] = "http.curloptResolve"
-		gitEnvironment["GIT_CONFIG_VALUE_0"] = repo.Hostname() + ":" + port + ":" + strings.Join(resolvedAddresses, ",")
+		addGitConfig("http.curloptResolve", repo.Hostname()+":"+port+":"+strings.Join(resolvedAddresses, ","))
 	}
 	if repo.Scheme == "ssh" {
 		if credentials.Git.Kind != "git-ssh" || credentials.Git.Secret == "" || credentials.Git.KnownHosts == "" {
@@ -210,13 +216,16 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		if credentials.Git.Kind != "git" {
 			return "", "", errors.New("HTTPS repository requires a Git token credential")
 		}
-		askPass, createErr := writeAskPass()
+		if credentials.Git.Username == "" || len(credentials.Git.Username) > 4<<10 || len(credentials.Git.Secret) > 64<<10 || strings.ContainsAny(credentials.Git.Username+credentials.Git.Secret, "\x00\r\n") {
+			return "", "", errors.New("HTTPS Git credential contains invalid username or secret material")
+		}
+		helper, createErr := writeCredentialHelper()
 		if createErr != nil {
 			return "", "", createErr
 		}
-		defer os.Remove(askPass)
-		gitEnvironment["GIT_ASKPASS"] = askPass
-		gitEnvironment["DOCKYARD_GIT_SERVER"] = credentials.Git.Server
+		defer os.Remove(helper)
+		addGitConfig("credential.helper", "!"+helper)
+		gitEnvironment["DOCKYARD_GIT_AUTHORITY"] = repo.Host
 		gitEnvironment["DOCKYARD_GIT_USERNAME"] = credentials.Git.Username
 		gitEnvironment["DOCKYARD_GIT_SECRET"] = credentials.Git.Secret
 	}
@@ -701,13 +710,13 @@ func writeSSHConfig(credential Credential) (string, error) {
 	return directory, nil
 }
 
-func writeAskPass() (string, error) {
-	file, err := os.CreateTemp("", "dockyard-askpass-*")
+func writeCredentialHelper() (string, error) {
+	file, err := os.CreateTemp("", "dockyard-git-credential-*")
 	if err != nil {
 		return "", err
 	}
 	path := file.Name()
-	content := "#!/bin/sh\ncase \"$1\" in *\"//$DOCKYARD_GIT_SERVER\"*) ;; *) exit 1 ;; esac\ncase \"$1\" in *Username*) printf '%s' \"$DOCKYARD_GIT_USERNAME\" ;; *) printf '%s' \"$DOCKYARD_GIT_SECRET\" ;; esac\n"
+	content := "#!/bin/sh\n[ \"${1:-}\" = get ] || exit 0\nprotocol=\nhost=\nwhile IFS= read -r line; do\n  [ -n \"$line\" ] || break\n  case \"$line\" in\n    protocol=*) protocol=${line#protocol=} ;;\n    host=*) host=${line#host=} ;;\n  esac\ndone\n[ \"$protocol\" = https ] && [ \"$host\" = \"$DOCKYARD_GIT_AUTHORITY\" ] || exit 0\nprintf 'username=%s\\npassword=%s\\n\\n' \"$DOCKYARD_GIT_USERNAME\" \"$DOCKYARD_GIT_SECRET\"\n"
 	if _, err = file.WriteString(content); err == nil {
 		err = file.Chmod(0700)
 	}

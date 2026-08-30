@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -177,6 +178,53 @@ func TestBuildRejectsCredentialPortMismatchBeforeClone(t *testing.T) {
 	_, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: Credential{Kind: "git", Server: "git.example.test:9443", Username: "robot", Secret: "secret"}})
 	if err == nil || !strings.Contains(err.Error(), "authority") {
 		t.Fatalf("expected authority mismatch, got %v", err)
+	}
+}
+
+func TestGitCredentialHelperMatchesExactProtocolAndAuthority(t *testing.T) {
+	helper, err := writeCredentialHelper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(helper)
+	run := func(protocol, host string) string {
+		t.Helper()
+		command := exec.Command(helper, "get")
+		command.Env = append(os.Environ(), "DOCKYARD_GIT_AUTHORITY=git.example.test:8443", "DOCKYARD_GIT_USERNAME=robot", "DOCKYARD_GIT_SECRET=secret")
+		command.Stdin = strings.NewReader("protocol=" + protocol + "\nhost=" + host + "\n\n")
+		output, runErr := command.Output()
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		return string(output)
+	}
+	if output := run("https", "git.example.test:8443"); output != "username=robot\npassword=secret\n\n" {
+		t.Fatalf("exact credential output = %q", output)
+	}
+	git := exec.Command("git", "-c", "credential.helper=!"+helper, "credential", "fill")
+	git.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "DOCKYARD_GIT_AUTHORITY=git.example.test:8443", "DOCKYARD_GIT_USERNAME=robot", "DOCKYARD_GIT_SECRET=secret")
+	git.Stdin = strings.NewReader("protocol=https\nhost=git.example.test:8443\n\n")
+	output, err := git.Output()
+	if err != nil || !strings.Contains(string(output), "username=robot\n") || !strings.Contains(string(output), "password=secret\n") {
+		t.Fatalf("Git did not invoke the credential helper correctly: output=%q err=%v", output, err)
+	}
+	for _, attempt := range []struct{ protocol, host string }{{"https", "git.example.test.attacker:8443"}, {"https", "git.example.test:9443"}, {"http", "git.example.test:8443"}} {
+		if output := run(attempt.protocol, attempt.host); output != "" {
+			t.Errorf("credential helper disclosed credentials for %#v: %q", attempt, output)
+		}
+	}
+}
+
+func TestBuildRejectsUnsafeHTTPSCredentialMaterial(t *testing.T) {
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
+	for _, credential := range []Credential{
+		{Kind: "git", Server: "git.example.test", Username: "", Secret: "secret"},
+		{Kind: "git", Server: "git.example.test", Username: "robot\nusername=attacker", Secret: "secret"},
+		{Kind: "git", Server: "git.example.test", Username: "robot", Secret: "secret\npassword=attacker"},
+	} {
+		if _, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: credential}); err == nil || !strings.Contains(err.Error(), "invalid username or secret") {
+			t.Errorf("unsafe credential %#v returned %v", credential, err)
+		}
 	}
 }
 
