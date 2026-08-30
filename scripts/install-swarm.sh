@@ -284,14 +284,14 @@ done <<EOF
 $secret_specs
 EOF
 
-deployment_started=true
 if [ "$mode" = ha ] && [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
-  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" -c "$root/deploy/swarm-agent-ca-rollover.yml" "$stack"
+  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" -c "$root/deploy/swarm-agent-ca-rollover.yml" "$stack" || fail "could not submit $mode stack $stack"
 elif [ "$mode" = ha ]; then
-  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" "$stack"
+  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" "$stack" || fail "could not submit $mode stack $stack"
 else
-  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" "$stack"
+  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" "$stack" || fail "could not submit $mode stack $stack"
 fi
+deployment_started=true
 if [ "$skip_wait" = true ]; then
   echo "Stack $stack submitted; convergence wait was skipped."
   exit 0

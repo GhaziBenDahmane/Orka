@@ -109,8 +109,8 @@ if ! docker secret inspect "$token_secret" >/dev/null 2>&1; then
   created_secret=true
 fi
 
+docker stack deploy --prune --with-registry-auth -c "$root/deploy/agent-swarm.yml" "$stack" || fail "could not submit agent stack $stack"
 deployment_started=true
-docker stack deploy --prune --with-registry-auth -c "$root/deploy/agent-swarm.yml" "$stack"
 if [ "$skip_wait" = true ]; then
   echo "Agent stack $stack submitted; convergence wait was skipped."
   exit 0

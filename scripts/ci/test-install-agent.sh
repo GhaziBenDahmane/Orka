@@ -42,6 +42,8 @@ case "$1 $2" in
   "stack config")
     printf 'service=%s network=%s\n' "$DOCKYARD_AGENT_SERVICE_NAME" "$DOCKYARD_TRAEFIK_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG"
     printf 'enrollment-secret=%s\n' "$DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
+  "stack deploy")
+    [ "${DOCKYARD_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
   "service inspect")
     image=${DOCKYARD_INSTALL_TEST_AGENT_IMAGE:-$DOCKYARD_IMAGE}
     state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
@@ -106,6 +108,15 @@ if grep -Fq "$enrollment_token" "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'enrollment token leaked to Docker command log' >&2
   exit 1
 fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_FAIL_DEPLOY=true "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer ignored an immediate stack deployment failure' >&2
+  exit 1
+fi
+grep -q 'could not submit agent stack edge' "$temporary/err"
+grep -q '^secret rm dockyard_agent_enrollment_token$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^network rm dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET=dockyard_agent_enrollment_token_v2 \

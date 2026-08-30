@@ -39,6 +39,8 @@ case "$1 $2" in
       exit 0
     fi
     exit 1 ;;
+  "stack deploy")
+    [ "${DOCKYARD_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
   "service inspect")
     service=$5
     state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
@@ -161,6 +163,17 @@ if grep -Eq 'correct horse battery staple|test-metrics-token-at-least-32-bytes' 
   echo 'secret value leaked to Docker command log' >&2
   exit 1
 fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_FAIL_DEPLOY=true "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer ignored an immediate stack deployment failure' >&2
+  exit 1
+fi
+grep -q 'could not submit single stack dockyard' "$temporary/err"
+for secret in dockyard_db_password dockyard_database_url dockyard_master_key dockyard_metrics_token; do
+  grep -q "^secret rm $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
+done
+grep -q '^network rm dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='bridge|local|false|{}' \
