@@ -149,9 +149,11 @@ func ValidateJob(job Job) error {
 	if err != nil || len(key) != 32 || job.EncryptionAAD == "" {
 		return errors.New("invalid volume artifact encryption parameters")
 	}
-	if len(job.SHA256) != 64 || len(job.PlaintextSHA256) != 64 || job.SizeBytes <= 0 {
-		if job.Mode == "restore" {
-			return errors.New("restore requires artifact checksums and size")
+	if job.Mode == "restore" {
+		sha256Bytes, sha256Err := hex.DecodeString(job.SHA256)
+		plaintextBytes, plaintextErr := hex.DecodeString(job.PlaintextSHA256)
+		if job.SizeBytes <= 0 || sha256Err != nil || len(sha256Bytes) != 32 || plaintextErr != nil || len(plaintextBytes) != 32 {
+			return errors.New("restore requires SHA-256 checksums and size")
 		}
 	}
 	return nil

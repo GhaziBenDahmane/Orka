@@ -129,6 +129,25 @@ func TestTransferSendsVerifiedUploadLength(t *testing.T) {
 	}
 }
 
+func TestValidateRestoreRequiresHexChecksums(t *testing.T) {
+	job := Job{
+		Mode:            "restore",
+		TransferURL:     "https://objects.example.test/artifact",
+		EncryptionKey:   base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
+		EncryptionAAD:   "volume-backup:test",
+		SHA256:          strings.Repeat("a", 64),
+		PlaintextSHA256: strings.Repeat("b", 64),
+		SizeBytes:       1,
+	}
+	if err := ValidateJob(job); err != nil {
+		t.Fatalf("valid restore rejected: %v", err)
+	}
+	job.SHA256 = strings.Repeat("z", 64)
+	if err := ValidateJob(job); err == nil {
+		t.Fatal("non-hex checksum was accepted")
+	}
+}
+
 func TestRestoreRejectsTamperedCiphertextWithoutChangingVolume(t *testing.T) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)

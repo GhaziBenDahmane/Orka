@@ -2,9 +2,12 @@ package deploy
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
@@ -173,8 +176,20 @@ func ValidateRemoteArtifactJob(job RemoteArtifactJob) error {
 	if _, exists := job.Files[job.ArtifactName]; exists {
 		return errors.New("utility file conflicts with artifact name")
 	}
-	if job.Mode == "download" && (job.SizeBytes <= 0 || len(job.SHA256) != 64 || len(job.PlaintextSHA256) != 64) {
-		return errors.New("artifact download requires checksums and size")
+	parsed, err := url.Parse(job.TransferURL)
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("artifact transfer URL must be HTTP(S) without credentials or a fragment")
+	}
+	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
+	if err != nil || len(key) != 32 || job.EncryptionAAD == "" {
+		return errors.New("invalid artifact encryption parameters")
+	}
+	if job.Mode == "download" {
+		sha256Bytes, sha256Err := hex.DecodeString(job.SHA256)
+		plaintextBytes, plaintextErr := hex.DecodeString(job.PlaintextSHA256)
+		if job.SizeBytes <= 0 || sha256Err != nil || len(sha256Bytes) != 32 || plaintextErr != nil || len(plaintextBytes) != 32 {
+			return errors.New("artifact download requires SHA-256 checksums and size")
+		}
 	}
 	return database.ValidateUtilityPlan(database.BackupPlan{Image: job.Image, Command: job.Command, Environment: job.Environment, Files: job.Files})
 }
