@@ -163,6 +163,69 @@ func TestCompileRejectsHostMount(t *testing.T) {
 	}
 }
 
+func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
+	tests := map[string]string{
+		"device":                  "services:\n  app:\n    image: alpine\n    devices: [/dev/kvm:/dev/kvm]\n",
+		"capability":              "services:\n  app:\n    image: alpine\n    cap_add: [SYS_ADMIN]\n",
+		"host user namespace":     "services:\n  app:\n    image: alpine\n    userns_mode: host\n",
+		"host cgroup namespace":   "services:\n  app:\n    image: alpine\n    cgroup: host\n",
+		"unconfined profile":      "services:\n  app:\n    image: alpine\n    security_opt: [seccomp=unconfined]\n",
+		"host env file":           "services:\n  app:\n    image: alpine\n    env_file: /etc/environment\n",
+		"compose secret":          "services:\n  app:\n    image: alpine\n    secrets: [host]\nsecrets:\n  host:\n    file: /etc/shadow\n",
+		"external volume":         "services:\n  app:\n    image: alpine\n    volumes: [shared:/data]\nvolumes:\n  shared:\n    external: true\n",
+		"volume driver options":   "services:\n  app:\n    image: alpine\n    volumes: [host:/data]\nvolumes:\n  host:\n    driver_opts:\n      type: none\n      o: bind\n      device: /etc\n",
+		"external network":        "services:\n  app:\n    image: alpine\n    networks: [shared]\nnetworks:\n  shared:\n    external: true\n",
+		"legacy external network": "services:\n  app:\n    image: alpine\n    networks: [shared]\nnetworks:\n  shared:\n    external:\n      name: shared\n",
+		"custom network name":     "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    name: another-stack_default\n",
+		"service traefik label":   "services:\n  app:\n    image: alpine\n    labels:\n      traefik.enable: 'true'\n",
+		"swarm traefik label":     "services:\n  app:\n    image: alpine\n    deploy:\n      labels:\n        - traefik.http.routers.escape.rule=Host(`other.example.test`)\n",
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err == nil {
+				t.Fatalf("safe mode accepted privileged Compose input:\n%s", source)
+			}
+			if _, err := (Compiler{PublicNetwork: "public", AllowUnsafe: true}).Compile(source, nil); err != nil {
+				t.Fatalf("explicit unsafe mode rejected input: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompileSafeModeAllowsScopedResourcesAndHardening(t *testing.T) {
+	source := `services:
+  app:
+    image: alpine
+    volumes: [data:/data]
+    networks: [default]
+    security_opt: [no-new-privileges:true]
+    labels:
+      com.example.owner: platform
+volumes:
+  data: {}
+networks:
+  default: {}
+`
+	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompileSafeModeAllowsOnlyPlatformExternalNetwork(t *testing.T) {
+	source := `services:
+  app:
+    image: alpine
+    networks: [public]
+networks:
+  public:
+    external: true
+    name: public
+`
+	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompileRejectsTraefikRuleInjection(t *testing.T) {
 	c := Compiler{PublicNetwork: "public"}
 	for _, route := range []store.Route{

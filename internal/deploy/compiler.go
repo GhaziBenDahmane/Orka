@@ -29,6 +29,11 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 	if !ok || len(services) == 0 {
 		return "", errors.New("compose document must define at least one service")
 	}
+	if !c.AllowUnsafe {
+		if err := c.validateSafeDocument(doc); err != nil {
+			return "", err
+		}
+	}
 	for name, raw := range services {
 		if !safeName.MatchString(name) {
 			return "", fmt.Errorf("invalid compose service name %q", name)
@@ -189,6 +194,43 @@ func validateSafeService(name string, service map[string]any) error {
 	if value, _ := service["network_mode"].(string); value == "host" {
 		return fmt.Errorf("service %q requests host networking", name)
 	}
+	for _, key := range []string{"devices", "device_cgroup_rules", "volumes_from", "env_file", "secrets", "configs", "credential_spec", "use_api_socket"} {
+		if value, exists := service[key]; exists && value != nil {
+			return fmt.Errorf("service %q requests forbidden %s access", name, key)
+		}
+	}
+	if capabilities, exists := service["cap_add"]; exists && capabilities != nil {
+		return fmt.Errorf("service %q requests added Linux capabilities", name)
+	}
+	if value, _ := service["userns_mode"].(string); value == "host" {
+		return fmt.Errorf("service %q requests the host user namespace", name)
+	}
+	if value, _ := service["cgroup"].(string); value == "host" {
+		return fmt.Errorf("service %q requests the host cgroup namespace", name)
+	}
+	if rawOptions, exists := service["security_opt"]; exists && rawOptions != nil {
+		options, ok := rawOptions.([]any)
+		if !ok {
+			return fmt.Errorf("service %q security_opt must be a list", name)
+		}
+		for _, rawOption := range options {
+			option, ok := rawOption.(string)
+			if !ok {
+				return fmt.Errorf("service %q security_opt must contain only strings", name)
+			}
+			normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(option), "=", ":"))
+			if normalized != "no-new-privileges:true" {
+				return fmt.Errorf("service %q requests unsafe security option %q", name, option)
+			}
+		}
+	}
+	for _, rawLabels := range []any{service["labels"], nestedValue(service, "deploy", "labels")} {
+		for _, label := range labelNames(rawLabels) {
+			if strings.HasPrefix(strings.ToLower(label), "traefik.") {
+				return fmt.Errorf("service %q requests platform-managed Traefik label %q", name, label)
+			}
+		}
+	}
 	for _, volume := range anySlice(service["volumes"]) {
 		if spec, ok := stringMap(volume); ok {
 			kind, _ := spec["type"].(string)
@@ -207,6 +249,84 @@ func validateSafeService(name string, service map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func (c Compiler) validateSafeDocument(document map[string]any) error {
+	for _, key := range []string{"secrets", "configs", "include"} {
+		if value, exists := document[key]; exists && value != nil {
+			return fmt.Errorf("compose document requests forbidden top-level %s", key)
+		}
+	}
+	if volumes, ok := stringMap(document["volumes"]); ok {
+		for name, raw := range volumes {
+			spec, _ := stringMap(raw)
+			if external, exists := spec["external"]; exists {
+				externalValue, valid := external.(bool)
+				if !valid || externalValue {
+					return fmt.Errorf("volume %q requests cross-stack external access", name)
+				}
+			}
+			for _, key := range []string{"name", "driver_opts"} {
+				if value, exists := spec[key]; exists && value != nil {
+					return fmt.Errorf("volume %q requests forbidden %s", name, key)
+				}
+			}
+		}
+	}
+	if networks, ok := stringMap(document["networks"]); ok {
+		for name, raw := range networks {
+			spec, _ := stringMap(raw)
+			externalValue, hasExternal := spec["external"]
+			external, externalValid := externalValue.(bool)
+			explicitName, hasName := spec["name"]
+			networkName, nameValid := explicitName.(string)
+			isPlatformNetwork := name == c.PublicNetwork && (!hasName || (nameValid && networkName == c.PublicNetwork))
+			if hasExternal && !externalValid {
+				return fmt.Errorf("network %q has an invalid external declaration", name)
+			}
+			if (external || hasName) && !isPlatformNetwork {
+				return fmt.Errorf("network %q requests cross-stack external access", name)
+			}
+		}
+	}
+	return nil
+}
+
+func nestedValue(value map[string]any, keys ...string) any {
+	var current any = value
+	for _, key := range keys {
+		mapping, ok := stringMap(current)
+		if !ok {
+			return nil
+		}
+		current = mapping[key]
+	}
+	return current
+}
+
+func stringValues(value any) []string {
+	values := []string{}
+	for _, item := range anySlice(value) {
+		if text, ok := item.(string); ok {
+			values = append(values, text)
+		}
+	}
+	return values
+}
+
+func labelNames(value any) []string {
+	names := []string{}
+	if labels, ok := stringMap(value); ok {
+		for name := range labels {
+			names = append(names, name)
+		}
+		return names
+	}
+	for _, label := range stringValues(value) {
+		name, _, _ := strings.Cut(label, "=")
+		names = append(names, strings.TrimSpace(name))
+	}
+	return names
 }
 
 func stringMap(value any) (map[string]any, bool) { v, ok := value.(map[string]any); return v, ok }

@@ -57,9 +57,13 @@ allowed to finish before deletion can begin.
   can execute the build. Extraction rejects traversal, links, devices, FIFOs,
   duplicate/conflicting paths, encrypted entries, and expansion bombs.
 - Every query is scoped through an organization membership.
-- Compose validation rejects privileged containers, host networking, host PID,
-  Docker socket mounts, and host-path volumes unless an administrator explicitly
-  enables unsafe workloads.
+- Compose validation rejects privileged containers, host namespaces and
+  mounts, device/capability access, unsafe security profiles, controller-local
+  environment files, Compose-managed secrets/configs, cross-stack volumes or
+  networks, and caller-supplied Traefik labels unless an administrator
+  explicitly enables unsafe workloads. The one exception is the configured
+  public overlay network, which the compiler attaches for approved routes;
+  those routing labels are generated only from tenant-scoped route records.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 
