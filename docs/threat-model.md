@@ -136,8 +136,11 @@ record; retention removes metadata before the remote object, so it cannot leave
 a restorable record pointing at an object that it already deleted. Database
 retention uses the same lock boundary, preserves every manual restore and every
 active verification drill, and constrains recursive local cleanup to the exact
-backup-ID directory. A backup is not considered production evidence until its
-native engine restore and application-level data checks succeed.
+backup-ID directory. Remote deletion intent is committed before backup metadata
+is removed, retains the destination credential reference, retries transient
+object-store failures, and exposes backlog age for alerting. A backup is not
+considered production evidence until its native engine restore and
+application-level data checks succeed.
 Managed databases backed by Docker's node-local volume driver persist their
 first storage-node assignment and receive a platform-owned `node.id` placement
 constraint on every deployment. Legacy stacks are adopted only when all

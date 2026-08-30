@@ -140,6 +140,8 @@ links for every item below.
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. Race retention against queued manual restores and
   running verification drills; both references must prevent artifact deletion.
+  Inject an object-store deletion failure and verify the durable cleanup record,
+  retry backoff, destination protection, backlog metric, and eventual deletion.
   On a Swarm manager, `make test-database-recovery`
   exercises the exact engine-specific readiness, backup, and restore commands
   against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,

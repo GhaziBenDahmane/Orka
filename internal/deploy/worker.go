@@ -64,10 +64,11 @@ type job struct {
 func (w *Worker) Run(ctx context.Context) {
 	w.recoverStale(ctx)
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() { defer wg.Done(); w.scheduleBackups(ctx) }()
 	go func() { defer wg.Done(); w.pruneAuditEvents(ctx) }()
 	go func() { defer wg.Done(); w.scheduleAuditArchives(ctx) }()
+	go func() { defer wg.Done(); w.scheduleBackupArtifactCleanup(ctx) }()
 	go func() { defer wg.Done(); w.reconcileStacks(ctx) }()
 	for i := 0; i < w.Concurrency; i++ {
 		wg.Add(1)
@@ -193,6 +194,72 @@ func (w *Worker) scheduleAuditArchives(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (w *Worker) scheduleBackupArtifactCleanup(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		leader, err := w.Store.AcquireControllerLease(ctx, "backup-artifact-cleaner", w.ID, 90*time.Second)
+		if err != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire backup artifact cleanup lease", "error", err)
+		} else if leader {
+			for processed := 0; processed < 100 && ctx.Err() == nil; processed++ {
+				found, cleanupErr := w.cleanupNextBackupArtifact(ctx)
+				if cleanupErr != nil {
+					w.Logger.Error("delete queued backup artifact", "error", cleanupErr)
+				}
+				if !found {
+					break
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+type backupArtifactDeletion struct {
+	id            uuid.UUID
+	destinationID uuid.UUID
+	objectKey     string
+	attempts      int
+}
+
+func (w *Worker) cleanupNextBackupArtifact(ctx context.Context) (bool, error) {
+	var item backupArtifactDeletion
+	err := w.Store.Pool.QueryRow(ctx, `SELECT id,destination_id,object_key,attempts FROM backup_artifact_deletions WHERE next_attempt_at<=now() ORDER BY next_attempt_at,id LIMIT 1`).Scan(&item.id, &item.destinationID, &item.objectKey, &item.attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	storage, err := w.s3(ctx, item.destinationID)
+	if err != nil {
+		return true, w.deferBackupArtifactDeletion(ctx, item, err)
+	}
+	return true, w.deleteQueuedBackupArtifact(ctx, item, storage)
+}
+
+func (w *Worker) deleteQueuedBackupArtifact(ctx context.Context, item backupArtifactDeletion, storage *backupstore.S3) error {
+	if err := storage.Delete(ctx, item.objectKey); err != nil {
+		return w.deferBackupArtifactDeletion(ctx, item, err)
+	}
+	_, err := w.Store.Pool.Exec(ctx, `DELETE FROM backup_artifact_deletions WHERE id=$1`, item.id)
+	return err
+}
+
+func (w *Worker) deferBackupArtifactDeletion(ctx context.Context, item backupArtifactDeletion, deleteErr error) error {
+	delay := 15 * time.Second * time.Duration(1<<min(item.attempts, 8))
+	if delay > time.Hour {
+		delay = time.Hour
+	}
+	_, recordErr := w.Store.Pool.Exec(ctx, `UPDATE backup_artifact_deletions SET attempts=attempts+1,next_attempt_at=$2,last_error=$3,updated_at=now() WHERE id=$1`, item.id, time.Now().Add(delay), truncate(deleteErr.Error(), 2048))
+	return errors.Join(deleteErr, recordErr)
 }
 
 func (w *Worker) enqueueDueVolumeBackup(ctx context.Context) error {
@@ -792,40 +859,43 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 			return err
 		}
 	}
-	rows, err := w.Store.Pool.Query(ctx, `SELECT b.path,b.destination_id,b.object_key FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1`, serviceID)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT b.id,'database',b.path,b.destination_id,b.object_key FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id WHERE d.compose_service_id=$1
+		UNION ALL
+		SELECT backup.id,'volume','',backup.destination_id,backup.object_key FROM volume_backups backup WHERE backup.compose_service_id=$1 AND backup.status='succeeded' AND backup.object_key<>''`, serviceID)
 	if err != nil {
 		return err
 	}
 	type backupArtifact struct {
+		id, cleanupID   uuid.UUID
+		sourceKind      string
 		path, objectKey string
 		destinationID   *uuid.UUID
 	}
 	artifacts := []backupArtifact{}
 	for rows.Next() {
 		var artifact backupArtifact
-		if err = rows.Scan(&artifact.path, &artifact.destinationID, &artifact.objectKey); err != nil {
+		if err = rows.Scan(&artifact.id, &artifact.sourceKind, &artifact.path, &artifact.destinationID, &artifact.objectKey); err != nil {
 			rows.Close()
 			return err
 		}
 		artifacts = append(artifacts, artifact)
 	}
 	rows.Close()
-	for _, artifact := range artifacts {
-		if artifact.destinationID != nil && artifact.objectKey != "" {
-			remote, remoteErr := w.s3(ctx, *artifact.destinationID)
-			if remoteErr != nil {
-				return remoteErr
-			}
-			if remoteErr = remote.Delete(ctx, artifact.objectKey); remoteErr != nil {
-				return remoteErr
-			}
-		}
-	}
 	tx, err := w.Store.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	for index := range artifacts {
+		artifact := &artifacts[index]
+		if artifact.destinationID == nil || artifact.objectKey == "" {
+			continue
+		}
+		artifact.cleanupID = uuid.New()
+		if err = tx.QueryRow(ctx, `INSERT INTO backup_artifact_deletions(id,destination_id,object_key,source_kind,source_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(destination_id,object_key) DO UPDATE SET updated_at=now() RETURNING id`, artifact.cleanupID, *artifact.destinationID, artifact.objectKey, artifact.sourceKind, artifact.id).Scan(&artifact.cleanupID); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec(ctx, `DELETE FROM database_instances WHERE compose_service_id=$1`, serviceID); err != nil {
 		return err
 	}
@@ -839,14 +909,30 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	root := filepath.Clean(w.BackupDirectory)
 	for _, artifact := range artifacts {
+		if artifact.destinationID != nil && artifact.objectKey != "" {
+			queued := backupArtifactDeletion{id: artifact.cleanupID, destinationID: *artifact.destinationID, objectKey: artifact.objectKey}
+			remote, cleanupErr := w.s3(ctx, queued.destinationID)
+			if cleanupErr != nil {
+				cleanupErr = w.deferBackupArtifactDeletion(ctx, queued, cleanupErr)
+			} else {
+				cleanupErr = w.deleteQueuedBackupArtifact(ctx, queued, remote)
+			}
+			if cleanupErr != nil {
+				w.Logger.Error("delete service backup artifact", "service", serviceID, "backup", artifact.id, "error", cleanupErr)
+			}
+			continue
+		}
 		if artifact.path == "" {
 			continue
 		}
-		relative, relErr := filepath.Rel(root, filepath.Clean(artifact.path))
-		if relErr == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			_ = os.RemoveAll(filepath.Dir(artifact.path))
+		directory, pathErr := validatedLocalBackupDirectory(w.BackupDirectory, artifact.id, artifact.path)
+		if pathErr != nil {
+			w.Logger.Error("refuse unsafe local backup cleanup", "service", serviceID, "backup", artifact.id, "error", pathErr)
+			continue
+		}
+		if pathErr = os.RemoveAll(directory); pathErr != nil {
+			w.Logger.Error("delete service local backup", "service", serviceID, "backup", artifact.id, "error", pathErr)
 		}
 	}
 	return nil
@@ -1153,11 +1239,9 @@ func (w *Worker) pruneVolumeBackups(ctx context.Context, newestID uuid.UUID, kee
 			// never remove an artifact that a restore can still consume.
 			continue
 		}
-		storageErr = storage.Delete(ctx, item.objectKey)
+		storageErr = w.deleteQueuedBackupArtifact(ctx, backupArtifactDeletion{id: item.cleanupID, destinationID: item.destinationID, objectKey: item.objectKey}, storage)
 		if storageErr != nil {
-			// Metadata is removed first so a restore can never be admitted for an
-			// artifact that retention has already deleted. An object deletion
-			// failure is an orphaned-object leak, not a false restorable backup.
+			// The durable deletion record remains queued for the cleanup leader.
 			w.Logger.Error("delete expired volume backup object", "backup", candidate.id, "objectKey", item.objectKey, "error", storageErr)
 		}
 	}
@@ -1166,6 +1250,7 @@ func (w *Worker) pruneVolumeBackups(ctx context.Context, newestID uuid.UUID, kee
 type expiredVolumeBackup struct {
 	destinationID uuid.UUID
 	objectKey     string
+	cleanupID     uuid.UUID
 }
 
 // deleteExpiredVolumeBackupMetadata is the retention admission boundary. It
@@ -1192,6 +1277,10 @@ func (w *Worker) deleteExpiredVolumeBackupMetadata(ctx context.Context, id uuid.
 	}
 	if item.objectKey == "" {
 		return expiredVolumeBackup{}, false, errors.New("succeeded volume backup has no object key")
+	}
+	item.cleanupID = uuid.New()
+	if err = tx.QueryRow(ctx, `INSERT INTO backup_artifact_deletions(id,destination_id,object_key,source_kind,source_id) VALUES($1,$2,$3,'volume',$4) ON CONFLICT(destination_id,object_key) DO UPDATE SET updated_at=now() RETURNING id`, item.cleanupID, item.destinationID, item.objectKey, id).Scan(&item.cleanupID); err != nil {
+		return expiredVolumeBackup{}, false, err
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM volume_backups backup WHERE backup.id=$1 AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=backup.id)`, id)
 	if err != nil {
@@ -1476,7 +1565,7 @@ func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int)
 			continue
 		}
 		if remote != nil {
-			remoteErr := remote.Delete(ctx, deletedItem.objectKey)
+			remoteErr := w.deleteQueuedBackupArtifact(ctx, backupArtifactDeletion{id: deletedItem.cleanupID, destinationID: *deletedItem.destinationID, objectKey: deletedItem.objectKey}, remote)
 			if remoteErr != nil {
 				w.Logger.Error("delete expired remote backup", "backup", item.id, "error", remoteErr)
 			}
@@ -1490,6 +1579,7 @@ type expiredDatabaseBackup struct {
 	path          string
 	destinationID *uuid.UUID
 	objectKey     string
+	cleanupID     uuid.UUID
 }
 
 func (w *Worker) deleteExpiredDatabaseBackupMetadata(ctx context.Context, id uuid.UUID) (expiredDatabaseBackup, bool, error) {
@@ -1514,6 +1604,15 @@ func (w *Worker) deleteExpiredDatabaseBackupMetadata(ctx context.Context, id uui
 	}
 	if protected {
 		return expiredDatabaseBackup{}, false, nil
+	}
+	if item.destinationID != nil {
+		if item.objectKey == "" {
+			return expiredDatabaseBackup{}, false, errors.New("remote database backup has no object key")
+		}
+		item.cleanupID = uuid.New()
+		if err = tx.QueryRow(ctx, `INSERT INTO backup_artifact_deletions(id,destination_id,object_key,source_kind,source_id) VALUES($1,$2,$3,'database',$4) ON CONFLICT(destination_id,object_key) DO UPDATE SET updated_at=now() RETURNING id`, item.cleanupID, *item.destinationID, item.objectKey, id).Scan(&item.cleanupID); err != nil {
+			return expiredDatabaseBackup{}, false, err
+		}
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM database_restores WHERE database_backup_id=$1 AND kind='drill'`, id); err != nil {
 		return expiredDatabaseBackup{}, false, err

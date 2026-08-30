@@ -3,10 +3,13 @@ package deploy
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	backupstore "github.com/bendahma/dokploy-go/internal/backup"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -53,6 +56,7 @@ func TestVolumeRetentionNeverDeletesRestoreReferencedBackup(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key=$1`, "service:"+serviceID.String())
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM backup_artifact_deletions WHERE source_id=$1`, backupID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM volume_restores WHERE volume_backup_id=$1`, backupID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
 	})
@@ -81,6 +85,40 @@ func TestVolumeRetentionNeverDeletesRestoreReferencedBackup(t *testing.T) {
 	}
 	if item.destinationID != destinationID || item.objectKey != "volumes/object.enc" {
 		t.Fatalf("deleted artifact=%+v", item)
+	}
+	var queuedDestination uuid.UUID
+	var queuedKey, sourceKind string
+	if err = db.Pool.QueryRow(ctx, `SELECT destination_id,object_key,source_kind FROM backup_artifact_deletions WHERE id=$1`, item.cleanupID).Scan(&queuedDestination, &queuedKey, &sourceKind); err != nil || queuedDestination != destinationID || queuedKey != item.objectKey || sourceKind != "volume" {
+		t.Fatalf("queued cleanup destination=%s key=%q kind=%q err=%v", queuedDestination, queuedKey, sourceKind, err)
+	}
+	deleteFailure := errors.New("object store unavailable")
+	if err = worker.deferBackupArtifactDeletion(ctx, backupArtifactDeletion{id: item.cleanupID, destinationID: destinationID, objectKey: item.objectKey}, deleteFailure); !errors.Is(err, deleteFailure) {
+		t.Fatalf("deferred cleanup error=%v", err)
+	}
+	var attempts int
+	var retryAt time.Time
+	var lastError string
+	if err = db.Pool.QueryRow(ctx, `SELECT attempts,next_attempt_at,last_error FROM backup_artifact_deletions WHERE id=$1`, item.cleanupID).Scan(&attempts, &retryAt, &lastError); err != nil || attempts != 1 || !retryAt.After(time.Now()) || lastError != deleteFailure.Error() {
+		t.Fatalf("deferred cleanup attempts=%d retryAt=%s lastError=%q err=%v", attempts, retryAt, lastError, err)
+	}
+	deletedPath := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deletedPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	storage, err := backupstore.NewS3(backupstore.S3Config{Endpoint: server.URL, Region: "us-east-1", Bucket: "backups", AccessKey: "access", SecretKey: "secret", UseTLS: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.deleteQueuedBackupArtifact(ctx, backupArtifactDeletion{id: item.cleanupID, destinationID: destinationID, objectKey: item.objectKey, attempts: attempts}, storage); err != nil {
+		t.Fatal(err)
+	}
+	if deletedPath != "/backups/volumes/object.enc" {
+		t.Fatalf("deleted object path=%q", deletedPath)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT id FROM backup_artifact_deletions WHERE id=$1`, item.cleanupID).Scan(new(uuid.UUID)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("completed cleanup record lookup error=%v", err)
 	}
 	if err = db.Pool.QueryRow(ctx, `SELECT id FROM volume_backups WHERE id=$1`, backupID).Scan(new(uuid.UUID)); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("deleted backup lookup error=%v", err)

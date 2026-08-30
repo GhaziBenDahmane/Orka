@@ -186,10 +186,11 @@ Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
 account configured as an HTTP bearer token. The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, stale backups, overdue
-restore drills, stalled or failed Dokploy database migrations, and maintenance
-mode left enabled. They also detect missing remote-cluster heartbeats, stalled
-agent upgrades, missed image-verification deadlines, and paused or rolled-back
-Swarm agent updates, plus expiring, expired, or stalled certificate rotations.
+restore drills, stalled durable artifact deletion, stalled or failed Dokploy
+database migrations, and maintenance mode left enabled. They also detect
+missing remote-cluster heartbeats, stalled agent upgrades, missed
+image-verification deadlines, and paused or rolled-back Swarm agent updates,
+plus expiring, expired, or stalled certificate rotations.
 The `dockyard_control_plane_certificate_expiry_seconds` gauges separately track
 the configured active agent CA, optional previous agent CA, and server
 certificate; warning alerts begin seven days before expiry. Enabled service-account credentials expose their current token

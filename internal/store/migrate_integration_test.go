@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -647,5 +648,56 @@ func TestMigrateUpgradeFrom086AddsRetryableClusterEnrollment(t *testing.T) {
 	}
 	if csrHash != nil || certificate != "" || caBundle != "" || signingCA != "" || fingerprint != "" {
 		t.Fatalf("legacy used token unexpectedly became replayable: csr=%x certificate=%q CA=%q signer=%q fingerprint=%q", csrHash, certificate, caBundle, signingCA, fingerprint)
+	}
+}
+
+func TestMigrateUpgradeFrom087AddsDurableArtifactCleanup(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "087_retryable_cluster_enrollment.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	serviceID, destinationID, backupID, restoreID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Cleanup migration',$2)`, []any{organizationID, "cleanup-migration-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,storage_node_id) VALUES($1,$2,'App','app',$3,'services: {}','node1')`, []any{serviceID, environmentID, "cleanup-" + serviceID.String()}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'archive','https://objects.example.test','backups','ciphertext')`, []any{destinationID, organizationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key) VALUES($1,$2,'data','node1',$3,true,'succeeded','volume/object.enc')`, []any{backupID, serviceID, destinationID}},
+		{`INSERT INTO volume_restores(id,volume_backup_id,status) VALUES($1,$2,'succeeded')`, []any{restoreID, backupID}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	cleanupID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO backup_artifact_deletions(id,destination_id,object_key,source_kind,source_id) VALUES($1,$2,'volume/object.enc','volume',$3)`, cleanupID, destinationID, backupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM compose_services WHERE id=$1`, serviceID); err != nil {
+		t.Fatalf("volume restore history did not cascade with service deletion: %v", err)
+	}
+	var backups, restores int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM volume_backups WHERE id=$1),(SELECT count(*) FROM volume_restores WHERE id=$2)`, backupID, restoreID).Scan(&backups, &restores); err != nil || backups != 0 || restores != 0 {
+		t.Fatalf("remaining backups=%d restores=%d err=%v", backups, restores, err)
+	}
+	_, err := pool.Exec(ctx, `DELETE FROM backup_destinations WHERE id=$1`, destinationID)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+		t.Fatalf("pending cleanup did not protect destination: %v", err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM backup_artifact_deletions WHERE id=$1`, cleanupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM backup_destinations WHERE id=$1`, destinationID); err != nil {
+		t.Fatalf("destination remained blocked after cleanup: %v", err)
 	}
 }

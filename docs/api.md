@@ -26,7 +26,8 @@ Expired limiter state is pruned by the singleton hourly maintenance loop.
 Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a
 Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,
-deployments, backups, restores, restore drills, and operation durations.
+deployments, backups, restores, restore drills, durable artifact-cleanup backlog,
+and operation durations.
 
 ## Identity
 

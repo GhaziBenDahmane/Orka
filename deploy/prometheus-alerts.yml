@@ -124,6 +124,15 @@ groups:
           summary: No successful Dockyard database backup in 24 hours
           description: Review backup policies, queue health, and remote storage availability.
 
+      - alert: DockyardBackupArtifactDeletionStalled
+        expr: dockyard_backup_artifact_deletion_oldest_age_seconds > 900
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Remote backup artifact cleanup is stalled
+          description: A {{ $labels.kind }} backup object has remained in the durable deletion queue for more than fifteen minutes; review object-store access and destination credentials.
+
       - alert: DockyardVolumeBackupOverdue
         expr: dockyard_volume_backup_overdue == 1
         for: 15m
