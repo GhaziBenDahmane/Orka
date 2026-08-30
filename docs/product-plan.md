@@ -280,10 +280,12 @@ resource preservation, interrupted queue recovery, and live stack
 reconciliation. It also covers vulnerability/license checks, an SPDX SBOM,
 container scanning, and a tag/manual promotion workflow that publishes an
 amd64/arm64 digest with BuildKit provenance and SBOM attestations, then
-keylessly signs and verifies it through Sigstore. Each promotion creates a
-non-overwritable GitHub Release with the immutable digest, promotion manifest,
-and downloadable SPDX JSON evidence. An actual signed promotion and its soak
-evidence, plus the staging production-data upgrade, load, real-provider,
-production-topology partition, full Dokploy cutover, and measured
-disaster-recovery gates, remain open; see
+keylessly signs and verifies it through Sigstore. The exact signed digest must
+remain healthy and observable during a disposable Swarm soak and recover its
+session and image after an intentionally failed update triggers automatic
+rollback. Each promotion creates a non-overwritable GitHub Release with the
+immutable digest, promotion manifest, and downloadable JSON evidence. An
+actual signed promotion and its production soak evidence, plus the staging
+production-data upgrade, load, real-provider, production-topology partition,
+full Dokploy cutover, and measured disaster-recovery gates, remain open; see
 `docs/release-checklist.md`.

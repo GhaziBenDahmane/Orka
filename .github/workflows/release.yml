@@ -261,6 +261,26 @@ jobs:
           cosign verify-attestation --type slsaprovenance --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
           cosign verify-attestation --type spdxjson --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
 
+      - name: Soak signed release and verify automatic rollback
+        env:
+          DOCKYARD_IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+          DOCKYARD_RELEASE_SOAK_SECONDS: ${{ vars.DOCKYARD_RELEASE_SOAK_SECONDS || '300' }}
+          DOCKYARD_SOAK_EVIDENCE: release-soak-evidence.json
+        run: scripts/ci/test-release-soak.sh
+
+      - name: Validate release soak evidence
+        env:
+          RELEASE_IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
+        run: |
+          jq -e --arg image "$RELEASE_IMAGE" --arg sourceCommit "$GITHUB_SHA" '
+            .image == $image and .sourceCommit == $sourceCommit and .status == "passed" and
+            .configuredSoakSeconds >= 60 and .healthChecks >= 1 and .healthVerified and
+            .readinessVerified and .authenticationVerified and .metricsVerified and
+            .replicaConvergenceVerified and .failedHealthCheckInjected and
+            .automaticRollbackVerified and .originalHealthcheckRestored and
+            .rollbackState == "rollback_completed"
+          ' release-soak-evidence.json >/dev/null
+
       - name: Export promoted image SPDX SBOM
         uses: anchore/sbom-action@aa80c8c5bd439a416a62804f2151ab38c671a638 # v0.24.1
         with:
@@ -320,7 +340,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -336,6 +356,7 @@ jobs:
             sso-keycloak-evidence.json
             swarm-ha-conformance.json
             upgrade-conformance.json
+            release-soak-evidence.json
           if-no-files-found: error
 
       - name: Publish immutable release evidence
@@ -344,7 +365,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json upgrade-conformance.json)
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

@@ -45,6 +45,12 @@ links for every item below.
   reconciles the existing stack. Publication fails closed if a prior release
   lacks an immutable promotion manifest. The first release records an explicit
   `not_applicable` result rather than pretending an upgrade occurred.
+- The exact public, signed candidate digest runs in a disposable Swarm through
+  a configurable soak window (five minutes by default). Health, readiness,
+  authenticated API access, Prometheus output, and replica convergence must
+  remain healthy. The gate then deploys a deliberately failing health check and
+  requires Swarm to report `rollback_completed`, restore the signed digest and
+  original health configuration, and preserve the authenticated session.
 
 ## Staging gates
 
@@ -113,10 +119,13 @@ links for every item below.
   unusable private release. It also creates the matching immutable GitHub
   Release with `promotion-manifest.json`, `image-digest.txt`, and a downloadable
   `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
-  `sso-keycloak-evidence.json`, and `swarm-ha-conformance.json`; the same files
-  remain available as a workflow artifact. `upgrade-conformance.json` records
-  the previous immutable image and the authentication, migration, secret,
-  resource-count, queue-recovery, and reconciliation assertions.
+  `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
+  `upgrade-conformance.json`, and `release-soak-evidence.json`; the same files
+  remain available as a workflow artifact. Upgrade evidence records the
+  previous immutable image and the authentication, migration, secret,
+  resource-count, queue-recovery, and reconciliation assertions. Soak evidence
+  records the exact promoted digest, observation count, and automatic rollback
+  result.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
@@ -127,9 +136,8 @@ links for every item below.
 - Run `scripts/ci/check-image-digests.sh controller` (or `agent`) against the
   exact environment used for `docker stack deploy`; production manifests do
   not provide mutable-tag fallbacks.
-- Confirm Swarm reports healthy replacement tasks and a completed update. Force
-  one candidate task to fail its health check and verify automatic rollback
-  before promoting the image digest.
+- Repeat the automated healthy-update and failed-task rollback sequence on the
+  production-equivalent topology before completing the real soak window.
 - Roll forward for application defects. If schema rollback is required, stop
   all controllers/workers and restore the pre-upgrade database plus matching
   master key and artifacts before starting the previous image.

@@ -5,7 +5,24 @@ through `.github/workflows/release.yml`. Download `image-digest.txt` from the
 workflow artifact and use that exact `ghcr.io/...@sha256:...` value for
 `DOCKYARD_IMAGE`; the version tag is only a discovery alias. The workflow
 verifies the keyless Sigstore signature, SLSA provenance, and SPDX SBOM before
-making the promotion artifact available.
+making the promotion artifact available. The exact signed digest is also run
+as a disposable Swarm service for a five-minute default soak. That gate checks
+health, readiness, authenticated API access, metrics, and replica convergence,
+then injects a failing controller health check and requires Swarm to restore
+the signed digest automatically. Repository administrators may lengthen the
+automated window with the `DOCKYARD_RELEASE_SOAK_SECONDS` Actions variable.
+
+Operators can repeat the same disposable check against any published digest
+from a Swarm manager:
+
+```sh
+DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
+DOCKYARD_RELEASE_SOAK_SECONDS=900 \
+make test-release-soak
+```
+
+The script writes `release-soak-evidence.json`. It does not exercise the real
+production topology or replace the monitored production soak window.
 
 For a repeatable non-interactive installation, put the three secret values in
 mode-0600 files and run the installer on a Swarm manager:

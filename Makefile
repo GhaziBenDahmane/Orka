@@ -1,4 +1,4 @@
-.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-swarm-ha test-templates test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
+.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
 
 test:
 	go test ./...
@@ -26,6 +26,10 @@ test-release-upgrade:
 	@test -n "$${DOCKYARD_PREVIOUS_IMAGE:-}" || { echo "DOCKYARD_PREVIOUS_IMAGE must be an immutable image digest" >&2; exit 1; }
 	@test -n "$${DOCKYARD_CANDIDATE_IMAGE:-}" || { echo "DOCKYARD_CANDIDATE_IMAGE must name a locally available candidate image" >&2; exit 1; }
 	./scripts/ci/test-release-upgrade.sh
+
+test-release-soak:
+	@test -n "$${DOCKYARD_IMAGE:-}" || { echo "DOCKYARD_IMAGE must be an immutable image digest" >&2; exit 1; }
+	./scripts/ci/test-release-soak.sh
 
 lint:
 	go vet ./...
