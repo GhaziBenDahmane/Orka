@@ -57,13 +57,14 @@ leaving the executing node.
 
 Safe mode rejects privileged containers, custom PID/IPC/UTS/user/cgroup
 namespaces, network namespace sharing other than disabled networking, devices,
-dangerous capabilities, host mounts, cross-stack resources, caller-defined
-Traefik labels, direct port publishing, and local Compose secret/config
-imports. Stack-owned overlays are encrypted. Safe Compose input cannot declare
-or attach the shared platform routing network; the compiler attaches it only
-to services with tenant-scoped approved routes. The controller and remote
-agent retain Docker-manager authority and therefore remain high-value trusted
-components; tenant workloads never receive their sockets or credentials.
+dangerous capabilities, host/cluster/named-pipe mounts, custom volume drivers,
+cross-stack resources, caller-defined Traefik labels, direct port publishing,
+and local Compose secret/config imports. Stack-owned overlays are encrypted.
+Safe Compose input cannot declare or attach the shared platform routing
+network; the compiler attaches it only to services with tenant-scoped approved
+routes. The controller and remote agent retain Docker-manager authority and
+therefore remain high-value trusted components; tenant workloads never receive
+their sockets or credentials.
 
 ### Source and supply-chain substitution
 

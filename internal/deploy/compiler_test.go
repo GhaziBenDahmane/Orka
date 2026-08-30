@@ -237,6 +237,10 @@ func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 		"compose secret":          "services:\n  app:\n    image: alpine\n    secrets: [host]\nsecrets:\n  host:\n    file: /etc/shadow\n",
 		"external volume":         "services:\n  app:\n    image: alpine\n    volumes: [shared:/data]\nvolumes:\n  shared:\n    external: true\n",
 		"volume driver options":   "services:\n  app:\n    image: alpine\n    volumes: [host:/data]\nvolumes:\n  host:\n    driver_opts:\n      type: none\n      o: bind\n      device: /etc\n",
+		"volume plugin":           "services:\n  app:\n    image: alpine\n    volumes: [data:/data]\nvolumes:\n  data:\n    driver: vendor/plugin\n",
+		"cluster volume":          "services:\n  app:\n    image: alpine\n    volumes:\n      - type: cluster\n        source: shared\n        target: /data\n",
+		"named pipe":              "services:\n  app:\n    image: alpine\n    volumes:\n      - type: npipe\n        source: pipe\n        target: /pipe\n",
+		"interpolated host mount": "services:\n  app:\n    image: alpine\n    volumes: ['${HOME}:/host']\n",
 		"external network":        "services:\n  app:\n    image: alpine\n    networks: [shared]\nnetworks:\n  shared:\n    external: true\n",
 		"legacy external network": "services:\n  app:\n    image: alpine\n    networks: [shared]\nnetworks:\n  shared:\n    external:\n      name: shared\n",
 		"custom network name":     "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    name: another-stack_default\n",
@@ -279,6 +283,27 @@ volumes:
   data: {}
 networks:
   default: {}
+`
+	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompileSafeModeAllowsAnonymousNamedAndTmpfsVolumes(t *testing.T) {
+	source := `services:
+  app:
+    image: alpine
+    volumes:
+      - /cache
+      - data:/data:ro
+      - type: volume
+        source: data
+        target: /other
+      - type: tmpfs
+        target: /run
+volumes:
+  data:
+    driver: local
 `
 	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err != nil {
 		t.Fatal(err)

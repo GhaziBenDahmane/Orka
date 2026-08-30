@@ -14,6 +14,7 @@ import (
 var safeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var safeHostname = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var safeCertificateResolver = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+var safeVolumeSource = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 type Compiler struct {
 	PublicNetwork string
@@ -247,20 +248,38 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 			}
 		}
 	}
-	for _, volume := range anySlice(service["volumes"]) {
+	volumes, err := safeServiceVolumes(service["volumes"])
+	if err != nil {
+		return fmt.Errorf("service %q: %w", name, err)
+	}
+	for _, volume := range volumes {
 		if spec, ok := stringMap(volume); ok {
-			kind, _ := spec["type"].(string)
-			source, _ := spec["source"].(string)
-			if kind == "bind" || strings.HasPrefix(source, "/") {
+			kind, valid := spec["type"].(string)
+			if !valid || (kind != "volume" && kind != "tmpfs") {
+				return fmt.Errorf("service %q requests forbidden mount type", name)
+			}
+			source, sourceExists := spec["source"].(string)
+			if spec["source"] != nil && !sourceExists {
+				return fmt.Errorf("service %q volume source must be a string", name)
+			}
+			if kind == "tmpfs" && source != "" {
+				return fmt.Errorf("service %q tmpfs mount requests a source", name)
+			}
+			if kind == "volume" && source != "" && !safeVolumeSource.MatchString(source) {
 				return fmt.Errorf("service %q requests forbidden bind mount %q", name, source)
 			}
+			continue
 		}
 		text, ok := volume.(string)
 		if !ok {
+			return fmt.Errorf("service %q volume must be a string or object", name)
+		}
+		parts := strings.SplitN(text, ":", 2)
+		if len(parts) == 1 {
 			continue
 		}
-		source := strings.SplitN(text, ":", 2)[0]
-		if source == "/var/run/docker.sock" || strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") {
+		source := parts[0]
+		if !safeVolumeSource.MatchString(source) {
 			return fmt.Errorf("service %q requests forbidden host mount %q", name, source)
 		}
 	}
@@ -273,9 +292,16 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 			return fmt.Errorf("compose document requests forbidden top-level %s", key)
 		}
 	}
-	if volumes, ok := stringMap(document["volumes"]); ok {
+	volumes, volumesValid := stringMap(document["volumes"])
+	if document["volumes"] != nil && !volumesValid {
+		return errors.New("compose volumes must be an object")
+	}
+	if volumesValid {
 		for name, raw := range volumes {
-			spec, _ := stringMap(raw)
+			spec, valid := stringMap(raw)
+			if raw != nil && !valid {
+				return fmt.Errorf("volume %q must be an object", name)
+			}
 			if external, exists := spec["external"]; exists {
 				externalValue, valid := external.(bool)
 				if !valid || externalValue {
@@ -285,6 +311,12 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 			for _, key := range []string{"name", "driver_opts"} {
 				if value, exists := spec[key]; exists && value != nil {
 					return fmt.Errorf("volume %q requests forbidden %s", name, key)
+				}
+			}
+			if driver, exists := spec["driver"]; exists {
+				driverName, valid := driver.(string)
+				if !valid || driverName != "local" {
+					return fmt.Errorf("volume %q requests a non-local driver", name)
 				}
 			}
 		}
@@ -310,6 +342,17 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func safeServiceVolumes(value any) ([]any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	volumes, valid := value.([]any)
+	if !valid {
+		return nil, errors.New("volumes must be a list")
+	}
+	return volumes, nil
 }
 
 func validatedServiceNetworkNames(value any) ([]string, error) {
