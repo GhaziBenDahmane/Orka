@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
+	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -66,6 +68,8 @@ func main() {
 		err = verifyDokployImport(os.Args[2:])
 	case "rotate-master-key":
 		err = rotateMasterKey(os.Args[2:])
+	case "volume-artifact":
+		err = runVolumeArtifact(os.Args[2:])
 	default:
 		fmt.Fprintln(os.Stderr, dockyardUsage)
 		os.Exit(2)
@@ -76,7 +80,29 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|volume-artifact>"
+
+func runVolumeArtifact(arguments []string) error {
+	flags := flag.NewFlagSet("volume-artifact", flag.ContinueOnError)
+	jobFile := flags.String("job-file", "", "path to the mode-0400 volume artifact job secret")
+	volumeRoot := flags.String("volume-root", "/volume", "mounted volume root")
+	workRoot := flags.String("work-root", "/scratch", "temporary artifact workspace")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *jobFile == "" || !filepath.IsAbs(*volumeRoot) || !filepath.IsAbs(*workRoot) {
+		return errors.New("usage: dockyard volume-artifact --job-file PATH [--volume-root /volume --work-root /scratch]")
+	}
+	job, err := volumeartifact.ReadJob(*jobFile)
+	if err != nil {
+		return fmt.Errorf("read volume artifact job: %w", err)
+	}
+	result, err := volumeartifact.Run(context.Background(), job, *volumeRoot, *workRoot)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(result)
+}
 
 func rotateMasterKey(arguments []string) error {
 	flags := flag.NewFlagSet("rotate-master-key", flag.ContinueOnError)
