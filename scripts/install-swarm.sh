@@ -129,8 +129,11 @@ rm -f -- "$temporary/master-key"
 database_url=$(tr -d '\r\n' <"$DOCKYARD_DATABASE_URL_FILE")
 [ "$(wc -c <"$DOCKYARD_DATABASE_URL_FILE" | tr -d ' ')" -eq "$(printf '%s' "$database_url" | wc -c | tr -d ' ')" ] || fail "DOCKYARD_DATABASE_URL_FILE must contain one URL without line breaks"
 case "$database_url" in postgres://*|postgresql://*) ;; *) fail "DOCKYARD_DATABASE_URL_FILE must contain a PostgreSQL URL" ;; esac
-if [ "$mode" = ha ] && ! printf '%s\n' "$database_url" | grep -Eq '[?&]sslmode=verify-full(&|$)'; then
-  fail "HA installation requires sslmode=verify-full in DOCKYARD_DATABASE_URL_FILE"
+if [ "$mode" = ha ]; then
+  sslmode_count=$(printf '%s\n' "$database_url" | awk -F'[?&]' '{ count=0; for (i=2; i<=NF; i++) if ($i ~ /^sslmode=/) count++; print count }')
+  if [ "$sslmode_count" -ne 1 ] || ! printf '%s\n' "$database_url" | grep -Eq '[?&]sslmode=verify-full(&|$)'; then
+    fail "HA installation requires exactly one sslmode=verify-full parameter in DOCKYARD_DATABASE_URL_FILE"
+  fi
 fi
 unset database_url
 

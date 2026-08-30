@@ -84,7 +84,11 @@ func Load() (Config, error) {
 	}
 	if requireDatabaseTLS {
 		parsed, parseErr := url.Parse(databaseURL)
-		if parseErr != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" || parsed.Query().Get("sslmode") != "verify-full" {
+		var sslModes []string
+		if parseErr == nil {
+			sslModes = parsed.Query()["sslmode"]
+		}
+		if parseErr != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" || len(sslModes) != 1 || sslModes[0] != "verify-full" {
 			return Config{}, errors.New("DOCKYARD_DATABASE_URL must use a PostgreSQL URL with sslmode=verify-full when DOCKYARD_REQUIRE_DATABASE_TLS=true")
 		}
 	}

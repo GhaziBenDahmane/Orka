@@ -135,8 +135,9 @@ requires every enabled or manually requested managed-database backup to use an
 S3-compatible destination. Startup fails if an older enabled policy still
 targets node-local storage. Configure and test remote backup destinations
 before switching profiles. It also requires the external PostgreSQL URL to use
-`sslmode=verify-full`; install the provider CA in the controller image or use a
-libpq `sslrootcert` URL parameter when it is not publicly trusted. PostgreSQL
+exactly one `sslmode=verify-full` parameter; ambiguous duplicate TLS modes are
+rejected. Install the provider CA in the controller image or use a libpq
+`sslrootcert` URL parameter when it is not publicly trusted. PostgreSQL
 availability, replication, PITR, connection pooling, and failover remain the
 database provider's responsibility.
 

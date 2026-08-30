@@ -165,6 +165,9 @@ func TestLoadRequiresVerifiedDatabaseTLSWhenConfigured(t *testing.T) {
 		"postgres://dockyard@example.test/dockyard",
 		"postgres://dockyard@example.test/dockyard?sslmode=disable",
 		"postgres://dockyard@example.test/dockyard?sslmode=require",
+		"postgres://dockyard@example.test/dockyard?sslmode=verify-full&sslmode=disable",
+		"postgres://dockyard@example.test/dockyard?sslmode=disable&sslmode=verify-full",
+		"postgres://dockyard@example.test/dockyard?sslmode=verify-full&sslmode=verify-full",
 		"host=example.test dbname=dockyard sslmode=verify-full",
 	} {
 		t.Run(databaseURL, func(t *testing.T) {

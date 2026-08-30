@@ -251,6 +251,25 @@ if DOCKYARD_INSTALL_MODE=ha "$root/scripts/install-swarm.sh" >"$temporary/out" 2
 fi
 grep -q 'sslmode=verify-full' "$temporary/err"
 
+for ambiguous_database_url in \
+  'postgres://dockyard:safe-value@database.example.test:5432/dockyard?sslmode=verify-full&sslmode=disable' \
+  'postgres://dockyard:safe-value@database.example.test:5432/dockyard?sslmode=disable&sslmode=verify-full' \
+  'postgres://dockyard:safe-value@database.example.test:5432/dockyard?sslmode=verify-full&sslmode=verify-full'; do
+  printf '%s' "$ambiguous_database_url" >"$temporary/secrets/database-url-ambiguous"
+  chmod 0600 "$temporary/secrets/database-url-ambiguous"
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_INSTALL_MODE=ha DOCKYARD_DATABASE_URL_FILE="$temporary/secrets/database-url-ambiguous" \
+    "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo 'HA installer accepted ambiguous sslmode parameters' >&2
+    exit 1
+  fi
+  grep -q 'requires exactly one sslmode=verify-full parameter' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo 'ambiguous database TLS URL mutated Docker state' >&2
+    exit 1
+  fi
+done
+
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Dockyard Test CA' \
   -keyout "$temporary/secrets/agent-ca.key" -out "$temporary/secrets/agent-ca.crt" >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -subj '/CN=agents.example.test' \
