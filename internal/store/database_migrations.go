@@ -43,7 +43,7 @@ func (s *Store) QueueDatabaseMigration(ctx context.Context, organizationID uuid.
 	} else if err != nil {
 		return DatabaseMigration{}, err
 	}
-	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
+	if err = lockDatabaseServiceForOperation(ctx, tx, item.DatabaseInstanceID, composeServiceID); err != nil {
 		return DatabaseMigration{}, err
 	}
 	if item.ID == uuid.Nil {

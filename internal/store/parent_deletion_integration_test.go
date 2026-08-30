@@ -161,3 +161,114 @@ func TestParentDeletionFencesChildOperationsAndCreation(t *testing.T) {
 		t.Fatalf("deletion flags project=%v firstEnvironment=%v secondEnvironment=%v service=%v", projectDeleting, firstEnvironmentDeleting, secondEnvironmentDeleting, serviceDeleting)
 	}
 }
+
+func TestParentDeletionFencesUnboundDatabaseOperations(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	organizationID, projectID := uuid.New(), uuid.New()
+	firstEnvironmentID, secondEnvironmentID := uuid.New(), uuid.New()
+	firstDatabaseID, secondDatabaseID := uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Unbound database deletion fence',$2)`, []any{organizationID, "unbound-database-deletion-fence-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'First','first'),($3,$2,'Second','second')`, []any{firstEnvironmentID, projectID, secondEnvironmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'First database','first-database','postgres','17','encrypted'),($3,$4,'Second database','second-database','postgres','17','encrypted')`, []any{firstDatabaseID, firstEnvironmentID, secondDatabaseID, secondEnvironmentID}},
+	}
+	for _, statement := range statements {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key=ANY($1) OR payload->>'projectId'=$2 OR payload->>'environmentId'=ANY($3)`, []string{"database:" + firstDatabaseID.String(), "database:" + secondDatabaseID.String()}, projectID.String(), []string{firstEnvironmentID.String(), secondEnvironmentID.String()})
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+
+	migration, err := db.QueueDatabaseMigration(ctx, organizationID, DatabaseMigration{
+		DatabaseInstanceID:    firstDatabaseID,
+		SourceKind:            "postgres",
+		SourceID:              "source",
+		SourceEngine:          "postgres",
+		SourceVersion:         "16",
+		SourceHost:            "source.example.test",
+		EncryptedSourceConfig: "encrypted",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DeleteEnvironment(ctx, organizationID, firstEnvironmentID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("environment deletion during unbound database migration error=%v, want ErrBusy", err)
+	}
+	if err = db.DeleteProject(ctx, organizationID, projectID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("project deletion during unbound database migration error=%v, want ErrBusy", err)
+	}
+	if err = db.CancelDatabaseMigration(ctx, organizationID, migration.ID); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if err = blocker.QueryRow(ctx, `SELECT id FROM database_instances WHERE id=$1 FOR UPDATE`, firstDatabaseID).Scan(new(uuid.UUID)); err != nil {
+		t.Fatal(err)
+	}
+	deleteResult := make(chan error, 1)
+	go func() { deleteResult <- db.DeleteEnvironment(ctx, organizationID, firstEnvironmentID) }()
+	waitForBlockedStoreQuery(t, ctx, db, "SELECT id FROM database_instances WHERE environment_id=$1 ORDER BY id FOR UPDATE")
+	type backupResult struct {
+		backup DatabaseBackup
+		err    error
+	}
+	backupResultChannel := make(chan backupResult, 1)
+	go func() {
+		backup, backupErr := db.QueueDatabaseBackup(ctx, organizationID, firstDatabaseID, uuid.Nil, nil)
+		backupResultChannel <- backupResult{backup: backup, err: backupErr}
+	}()
+	waitForBlockedStoreQuery(t, ctx, db, "SELECT d.id,d.compose_service_id FROM database_instances")
+	if err = blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deleteErr := <-deleteResult
+	concurrentBackup := <-backupResultChannel
+	switch {
+	case deleteErr == nil:
+		if !errors.Is(concurrentBackup.err, ErrDeleting) {
+			t.Fatalf("database backup admitted after environment deletion request: backup=%#v err=%v", concurrentBackup.backup, concurrentBackup.err)
+		}
+	case concurrentBackup.err == nil:
+		if !errors.Is(deleteErr, ErrBusy) {
+			t.Fatalf("environment deletion did not reject concurrent unbound database backup: %v", deleteErr)
+		}
+		if err = db.CancelDatabaseBackup(ctx, organizationID, concurrentBackup.backup.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.DeleteEnvironment(ctx, organizationID, firstEnvironmentID); err != nil {
+			t.Fatalf("delete environment after concurrent backup cancellation: %v", err)
+		}
+	default:
+		t.Fatalf("unbound database deletion race produced no valid winner: deletion=%v backup=%v", deleteErr, concurrentBackup.err)
+	}
+	if _, err = db.QueueDatabaseBackup(ctx, organizationID, firstDatabaseID, uuid.Nil, nil); !errors.Is(err, ErrDeleting) {
+		t.Fatalf("database backup in deleting environment error=%v, want ErrDeleting", err)
+	}
+	if err = db.DeleteProject(ctx, organizationID, projectID); err != nil {
+		t.Fatalf("delete project after migration cancellation: %v", err)
+	}
+	if _, err = db.QueueDatabaseMigration(ctx, organizationID, DatabaseMigration{DatabaseInstanceID: secondDatabaseID}); !errors.Is(err, ErrDeleting) {
+		t.Fatalf("database migration in deleting project error=%v, want ErrDeleting", err)
+	}
+}

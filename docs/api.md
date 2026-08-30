@@ -379,8 +379,9 @@ organization role; they never reduce an owner or administrator's authority.
 Service accounts continue to use their organization-scoped role.
 
 Project and environment deletion is asynchronous and cascades through service
-stack finalizers. Cascades lock every child service, reject active deployment
-or data work, and prevent concurrent child creation from escaping the deletion.
+stack finalizers. Cascades lock every child database and service, reject active
+deployment or data work (including databases without a linked Compose service),
+and prevent concurrent child creation from escaping the deletion.
 Repeating a delete safely resumes failed finalizers. Cluster
 deletion revokes its agent certificate and queued commands and is allowed only
 after environments have been moved or deleted. Named volumes are retained by

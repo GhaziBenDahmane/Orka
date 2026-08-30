@@ -772,24 +772,32 @@ type deletionServiceChild struct {
 	deleting bool
 }
 
-func activeServiceOperations(ctx context.Context, tx pgx.Tx, serviceIDs []uuid.UUID) (bool, error) {
-	if len(serviceIDs) == 0 {
+func activeChildOperations(ctx context.Context, tx pgx.Tx, serviceIDs, databaseIDs []uuid.UUID) (bool, error) {
+	if len(serviceIDs) == 0 && len(databaseIDs) == 0 {
 		return false, nil
 	}
 	serviceKeys := make([]string, 0, len(serviceIDs))
 	for _, serviceID := range serviceIDs {
 		serviceKeys = append(serviceKeys, "service:"+serviceID.String())
 	}
+	databaseKeys := make([]string, 0, len(databaseIDs))
+	for _, databaseID := range databaseIDs {
+		databaseKeys = append(databaseKeys, "database:"+databaseID.String())
+	}
 	var busy bool
 	err := tx.QueryRow(ctx, `SELECT
-		EXISTS(SELECT 1 FROM jobs job WHERE job.status IN ('pending','running') AND (job.resource_key=ANY($2) OR job.resource_key IN (SELECT 'database:' || database.id::text FROM database_instances database WHERE database.compose_service_id=ANY($1))))
+		EXISTS(SELECT 1 FROM jobs job WHERE job.status IN ('pending','running') AND (job.resource_key=ANY($2) OR job.resource_key=ANY($4) OR job.resource_key IN (SELECT 'database:' || database.id::text FROM database_instances database WHERE database.compose_service_id=ANY($1))))
 		OR EXISTS(SELECT 1 FROM deployments deployment WHERE deployment.compose_service_id=ANY($1) AND deployment.status IN ('queued','running'))
 		OR EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=ANY($1) AND backup.status IN ('queued','running'))
 		OR EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=ANY($1) AND restore.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM database_backups backup JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=ANY($1) AND backup.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=ANY($1) AND restore.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM database_migrations migration JOIN database_instances database ON database.id=migration.database_instance_id WHERE database.compose_service_id=ANY($1) AND migration.status IN ('queued','running'))`, serviceIDs, serviceKeys).Scan(&busy)
+		OR EXISTS(SELECT 1 FROM database_backups backup JOIN database_instances database ON database.id=backup.database_instance_id WHERE (database.compose_service_id=ANY($1) OR database.id=ANY($3)) AND backup.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id JOIN database_instances database ON database.id=backup.database_instance_id WHERE (database.compose_service_id=ANY($1) OR database.id=ANY($3)) AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_migrations migration JOIN database_instances database ON database.id=migration.database_instance_id WHERE (database.compose_service_id=ANY($1) OR database.id=ANY($3)) AND migration.status IN ('queued','running'))`, serviceIDs, serviceKeys, databaseIDs, databaseKeys).Scan(&busy)
 	return busy, err
+}
+
+func activeServiceOperations(ctx context.Context, tx pgx.Tx, serviceIDs []uuid.UUID) (bool, error) {
+	return activeChildOperations(ctx, tx, serviceIDs, nil)
 }
 
 func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uuid.UUID) error {
@@ -826,6 +834,25 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 	if err = rows.Err(); err != nil {
 		return err
 	}
+	databaseIDs := []uuid.UUID{}
+	if len(environmentIDs) > 0 {
+		rows, err = tx.Query(ctx, `SELECT id FROM database_instances WHERE environment_id=ANY($1) ORDER BY environment_id,id FOR UPDATE`, environmentIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var databaseID uuid.UUID
+			if err = rows.Scan(&databaseID); err != nil {
+				rows.Close()
+				return err
+			}
+			databaseIDs = append(databaseIDs, databaseID)
+		}
+		rows.Close()
+		if err = rows.Err(); err != nil {
+			return err
+		}
+	}
 	services := []deletionServiceChild{}
 	serviceIDs := []uuid.UUID{}
 	if len(environmentIDs) > 0 {
@@ -847,7 +874,7 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 			return err
 		}
 	}
-	busy, err := activeServiceOperations(ctx, tx, serviceIDs)
+	busy, err := activeChildOperations(ctx, tx, serviceIDs, databaseIDs)
 	if err != nil {
 		return err
 	}
@@ -992,7 +1019,24 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT id,stack_name,deletion_requested_at IS NOT NULL FROM compose_services WHERE environment_id=$1 ORDER BY id FOR UPDATE`, environmentID)
+	databaseIDs := []uuid.UUID{}
+	rows, err := tx.Query(ctx, `SELECT id FROM database_instances WHERE environment_id=$1 ORDER BY id FOR UPDATE`, environmentID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var databaseID uuid.UUID
+		if err = rows.Scan(&databaseID); err != nil {
+			rows.Close()
+			return err
+		}
+		databaseIDs = append(databaseIDs, databaseID)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	rows, err = tx.Query(ctx, `SELECT id,stack_name,deletion_requested_at IS NOT NULL FROM compose_services WHERE environment_id=$1 ORDER BY id FOR UPDATE`, environmentID)
 	if err != nil {
 		return err
 	}
@@ -1011,7 +1055,7 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 	if err = rows.Err(); err != nil {
 		return err
 	}
-	busy, err := activeServiceOperations(ctx, tx, serviceIDs)
+	busy, err := activeChildOperations(ctx, tx, serviceIDs, databaseIDs)
 	if err != nil {
 		return err
 	}
@@ -1611,7 +1655,7 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	} else if err != nil {
 		return DatabaseBackup{}, err
 	}
-	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
+	if err = lockDatabaseServiceForOperation(ctx, tx, databaseID, composeServiceID); err != nil {
 		return DatabaseBackup{}, err
 	}
 	var active bool
@@ -1676,7 +1720,7 @@ func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, database
 	} else if err != nil {
 		return BackupPolicy{}, err
 	}
-	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
+	if err = lockDatabaseServiceForOperation(ctx, tx, databaseID, composeServiceID); err != nil {
 		return BackupPolicy{}, err
 	}
 	if destinationID != nil {
@@ -1818,7 +1862,7 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	if err != nil {
 		return DatabaseRestore{}, err
 	}
-	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
+	if err = lockDatabaseServiceForOperation(ctx, tx, backupDatabaseID, composeServiceID); err != nil {
 		return DatabaseRestore{}, err
 	}
 	if status != "succeeded" {
@@ -1851,16 +1895,25 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	return restore, nil
 }
 
-func lockDatabaseServiceForOperation(ctx context.Context, tx pgx.Tx, composeServiceID *uuid.UUID) error {
-	if composeServiceID == nil {
-		return nil
+func lockDatabaseServiceForOperation(ctx context.Context, tx pgx.Tx, databaseID uuid.UUID, composeServiceID *uuid.UUID) error {
+	if composeServiceID != nil {
+		var lockedID uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT id FROM compose_services WHERE id=$1 AND deletion_requested_at IS NULL FOR UPDATE`, *composeServiceID).Scan(&lockedID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrDeleting
+		}
+		if err != nil {
+			return err
+		}
 	}
-	var lockedID uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT id FROM compose_services WHERE id=$1 AND deletion_requested_at IS NULL FOR UPDATE`, *composeServiceID).Scan(&lockedID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var parentsActive bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL)`, databaseID).Scan(&parentsActive); err != nil {
+		return err
+	}
+	if !parentsActive {
 		return ErrDeleting
 	}
-	return err
+	return nil
 }
 
 func (s *Store) GetDatabaseRestore(ctx context.Context, organizationID, id uuid.UUID) (DatabaseRestore, error) {
