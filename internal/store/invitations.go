@@ -85,6 +85,17 @@ func (s *Store) ListOrganizationInvitations(ctx context.Context, organizationID 
 	return items, rows.Err()
 }
 
+func (s *Store) GetOrganizationInvitation(ctx context.Context, organizationID, invitationID uuid.UUID) (OrganizationInvitation, error) {
+	var item OrganizationInvitation
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,email,role,expires_at,accepted_at,revoked_at,created_at FROM organization_invitations WHERE id=$1 AND organization_id=$2`, invitationID, organizationID).Scan(
+		&item.ID, &item.OrganizationID, &item.Email, &item.Role, &item.ExpiresAt, &item.AcceptedAt, &item.RevokedAt, &item.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrganizationInvitation{}, ErrNotFound
+	}
+	return item, err
+}
+
 func (s *Store) RevokeOrganizationInvitation(ctx context.Context, organizationID, invitationID uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `UPDATE organization_invitations SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID, organizationID)
 	if err != nil {

@@ -2053,6 +2053,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
   /v1/invitations/{invitationID}:
+    get:
+      operationId: get_v1_invitations_invitationID
+      tags: [invitations]
+      parameters:
+        - name: invitationID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     delete:
       operationId: delete_v1_invitations_invitationID
       tags: [invitations]

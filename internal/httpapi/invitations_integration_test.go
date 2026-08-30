@@ -78,6 +78,13 @@ func TestOrganizationInvitationLifecycle(t *testing.T) {
 	if status != http.StatusOK || bytes.Contains(body, []byte(created.Token)) {
 		t.Fatalf("invitation list status=%d leaked token=%v body=%s", status, bytes.Contains(body, []byte(created.Token)), body)
 	}
+	status, body = scopedAPIRequest(t, invitationsURL+"/"+created.Invitation.ID.String(), adminToken, organizationID, http.MethodGet, nil)
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"email":"new-local@invite.test"`)) || bytes.Contains(body, []byte(created.Token)) {
+		t.Fatalf("invitation get status=%d body=%s", status, body)
+	}
+	if status, _ = scopedAPIRequest(t, invitationsURL+"/"+created.Invitation.ID.String(), otherOwnerToken, otherOrganizationID, http.MethodGet, nil); status != http.StatusNotFound {
+		t.Fatalf("cross-tenant invitation get status=%d, want 404", status)
+	}
 	if status, _ = apiRequest(t, server.URL+"/v1/invitations/accept", http.MethodPost, map[string]string{"token": created.Token}); status != http.StatusBadRequest {
 		t.Fatalf("passwordless local acceptance status=%d, want 400", status)
 	}

@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 19 {
+	if len(instance.Resources(context.Background())) != 20 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -52,6 +52,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_service_account") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_invitation") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_access_grant") {
@@ -224,6 +227,56 @@ func TestServiceAccountSecretRetentionAndExpiry(t *testing.T) {
 	}
 	if !validServiceAccountRole("auditor") || validServiceAccountRole("owner") {
 		t.Fatal("service account role validation mismatch")
+	}
+}
+
+func TestInvitationSecretStatusAndRenewal(t *testing.T) {
+	var schemaResponse resource.SchemaResponse
+	newInvitationResource().Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+	for _, name := range []string{"token", "accept_url"} {
+		attribute, ok := schemaResponse.Schema.Attributes[name].(resourceschema.StringAttribute)
+		if !ok || !attribute.Sensitive || !attribute.Computed {
+			t.Fatalf("%s schema = %#v", name, schemaResponse.Schema.Attributes[name])
+		}
+	}
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(7 * 24 * time.Hour).Format(time.RFC3339Nano)
+	model := invitationModel{Token: types.StringValue("one-time-token"), AcceptURL: types.StringValue("https://dockyard.example/#invitation=secret")}
+	item := invitationResponse{ID: "invitation-id", Email: "operator@example.com", Role: "developer", ExpiresAt: expiresAt, CreatedAt: now.Format(time.RFC3339Nano)}
+	setInvitation(&model, item, now)
+	if model.Token.ValueString() != "one-time-token" || model.AcceptURL.ValueString() == "" || model.Status.ValueString() != "pending" {
+		t.Fatalf("invitation state did not retain one-time material: %#v", model)
+	}
+	if renew, err := invitationRequiresRenewal(model.ExpiresAt, model.AcceptedAt, now, 1); err != nil || renew {
+		t.Fatalf("fresh invitation renewal=%v err=%v", renew, err)
+	}
+	acceptedAt := now.Add(time.Hour).Format(time.RFC3339Nano)
+	item.AcceptedAt = &acceptedAt
+	setInvitation(&model, item, now.Add(40*24*time.Hour))
+	if model.Status.ValueString() != "accepted" {
+		t.Fatalf("accepted invitation status=%q", model.Status.ValueString())
+	}
+	if renew, err := invitationRequiresRenewal(model.ExpiresAt, model.AcceptedAt, now.Add(40*24*time.Hour), 1); err != nil || renew {
+		t.Fatalf("accepted invitation renewal=%v err=%v", renew, err)
+	}
+	if renew, err := invitationRequiresRenewal(types.StringValue(now.Add(24*time.Hour).Format(time.RFC3339Nano)), types.StringNull(), now, 1); err != nil || !renew {
+		t.Fatalf("invitation at renewal boundary renewal=%v err=%v", renew, err)
+	}
+	for _, email := range []string{"Operator@example.com", "Operator <operator@example.com>", " operator@example.com "} {
+		if err := validateInvitationEmail(email); err == nil {
+			t.Errorf("non-normalized invitation email %q accepted", email)
+		}
+	}
+	if err := validateInvitationEmail("operator@example.com"); err != nil {
+		t.Fatalf("valid invitation email rejected: %v", err)
+	}
+	for _, values := range [][2]int64{{0, 0}, {31, 0}, {7, -1}, {7, 7}} {
+		if _, err := validateInvitationWindow(values[0], values[1]); err == nil {
+			t.Errorf("invitation window %v accepted", values)
+		}
+	}
+	if !validInvitationRole("owner") || validInvitationRole("auditor") {
+		t.Fatal("invitation role validation mismatch")
 	}
 }
 

@@ -35,6 +35,11 @@ variable "developer_user_id" {
   description = "Organization member UUID receiving project-scoped access"
 }
 
+variable "invited_operator_email" {
+  type        = string
+  description = "Normalized lowercase email address to invite into the organization"
+}
+
 variable "notification_webhook_url" {
   type      = string
   sensitive = true
@@ -112,6 +117,23 @@ output "deployment_automation_token" {
   description = "Store this one-time bearer token in the deployment system's secret manager."
   sensitive   = true
   value       = dockyard_service_account.deployment_automation.token
+}
+
+resource "dockyard_invitation" "operator" {
+  email             = var.invited_operator_email
+  role              = "developer"
+  expires_in_days   = 7
+  renew_before_days = 1
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+output "operator_invitation_url" {
+  description = "Share this one-time enrollment URL through a secure channel."
+  sensitive   = true
+  value       = dockyard_invitation.operator.accept_url
 }
 
 resource "dockyard_auth_settings" "organization" {

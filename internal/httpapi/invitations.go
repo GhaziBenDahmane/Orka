@@ -70,6 +70,20 @@ func (s *Server) listOrganizationInvitations(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) getOrganizationInvitation(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("invitationID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid invitation id")
+		return
+	}
+	item, err := s.Store.GetOrganizationInvitation(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) revokeOrganizationInvitation(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("invitationID"))
 	if err != nil {

@@ -168,9 +168,13 @@ as expiring `dockyard_scim_token` Terraform/OpenTofu resources. Use `-` instead
 of JSON to keep token configuration out of shell history; newly issued bearer
 tokens are returned only once.
 
-Organization member IDs are available through `members`. Project and
-environment grants have list, put, and delete CLI commands and can be managed
-declaratively with `dockyard_access_grant`.
+Organization member IDs are available through `members`; `update-member` and
+`delete-member` expose guarded manual membership changes. Invitations can be
+listed, inspected, issued, and revoked with `invitations`, `invitation ID`,
+`create-invitation JSON`, and `revoke-invitation ID`, or managed as expiring
+`dockyard_invitation` resources.
+Project and environment grants have list, put, and delete CLI commands and can
+be managed declaratively with `dockyard_access_grant`.
 
 Organization, project, and environment maintenance/quota policy can be read or
 updated with the corresponding `policy`/`put-*-policy` CLI commands and managed

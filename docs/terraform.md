@@ -17,6 +17,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_saml_provider`
 - `dockyard_scim_token`
 - `dockyard_service_account`
+- `dockyard_invitation`
 - `dockyard_access_grant`
 - `dockyard_resource_policy`
 - `dockyard_cluster`
@@ -107,6 +108,14 @@ so apply creates a fresh credential and disables the previous account. Use
 `create_before_destroy` to avoid a credential gap and deliver the new token to
 the consuming secret store before removing the old value. Service accounts
 cannot be imported because their bearer tokens are never returned by the API.
+
+`dockyard_invitation` issues a one-time organization enrollment link for a
+normalized lowercase email address. Pending invitations are replaced inside
+the configured renewal window, while accepted invitations remain in state as
+historical records and are never reissued. The token and acceptance URL are
+sensitive one-time values. Destroy revokes only a still-pending invitation;
+accepted invitations do not remove the resulting membership. Use
+`dockyard_access_grant` for narrower project or environment permissions.
 
 `dockyard_access_grant` manages an explicit `viewer`, `developer`, or `admin`
 role for one organization member at project or environment scope. Organization

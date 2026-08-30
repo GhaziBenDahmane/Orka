@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/members/{userID}", s.requireRole("admin", http.HandlerFunc(s.deleteOrganizationMember)))
 	mux.Handle("GET /v1/invitations", s.requireRole("admin", http.HandlerFunc(s.listOrganizationInvitations)))
 	mux.Handle("POST /v1/invitations", s.requireRole("admin", http.HandlerFunc(s.createOrganizationInvitation)))
+	mux.Handle("GET /v1/invitations/{invitationID}", s.requireRole("admin", http.HandlerFunc(s.getOrganizationInvitation)))
 	mux.Handle("DELETE /v1/invitations/{invitationID}", s.requireRole("admin", http.HandlerFunc(s.revokeOrganizationInvitation)))
 	mux.Handle("GET /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.getAuthSettings)))
 	mux.Handle("PUT /v1/sso/settings", s.requireRole("admin", http.HandlerFunc(s.putAuthSettings)))

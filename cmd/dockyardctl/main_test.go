@@ -13,6 +13,13 @@ func TestCommandRequestMappings(t *testing.T) {
 		path   string
 	}{
 		{[]string{"projects"}, http.MethodGet, "/v1/projects"},
+		{[]string{"members"}, http.MethodGet, "/v1/members"},
+		{[]string{"update-member", "user-id", `{}`}, http.MethodPatch, "/v1/members/user-id"},
+		{[]string{"delete-member", "user-id"}, http.MethodDelete, "/v1/members/user-id"},
+		{[]string{"invitations"}, http.MethodGet, "/v1/invitations"},
+		{[]string{"invitation", "invitation-id"}, http.MethodGet, "/v1/invitations/invitation-id"},
+		{[]string{"create-invitation", `{}`}, http.MethodPost, "/v1/invitations"},
+		{[]string{"revoke-invitation", "invitation-id"}, http.MethodDelete, "/v1/invitations/invitation-id"},
 		{[]string{"service-accounts"}, http.MethodGet, "/v1/service-accounts"},
 		{[]string{"create-service-account", `{}`}, http.MethodPost, "/v1/service-accounts"},
 		{[]string{"rotate-service-account", "account-id", `{}`}, http.MethodPost, "/v1/service-accounts/account-id/rotate"},
@@ -31,7 +38,6 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"scim-tokens"}, http.MethodGet, "/v1/scim/tokens"},
 		{[]string{"create-scim-token", `{}`}, http.MethodPost, "/v1/scim/tokens"},
 		{[]string{"revoke-scim-token", "token-id"}, http.MethodDelete, "/v1/scim/tokens/token-id"},
-		{[]string{"members"}, http.MethodGet, "/v1/members"},
 		{[]string{"project-grants", "project-id"}, http.MethodGet, "/v1/projects/project-id/grants"},
 		{[]string{"put-project-grant", "project-id", "user-id", `{}`}, http.MethodPut, "/v1/projects/project-id/grants/user-id"},
 		{[]string{"delete-project-grant", "project-id", "user-id"}, http.MethodDelete, "/v1/projects/project-id/grants/user-id"},

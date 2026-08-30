@@ -45,7 +45,7 @@ and operation durations.
 | PATCH | `/v1/members/{userID}` | Change a manually managed organization membership role |
 | DELETE | `/v1/members/{userID}` | Remove a manually managed member and their scoped grants |
 | GET/POST | `/v1/invitations` | List invitations or create a one-time, 1–30 day organization invitation |
-| DELETE | `/v1/invitations/{invitationID}` | Revoke a pending organization invitation |
+| GET/DELETE | `/v1/invitations/{invitationID}` | Inspect or revoke an organization invitation |
 | POST | `/v1/invitations/accept` | Publicly consume an invitation token and create or attach an identity |
 | GET/PUT | `/v1/sso/settings` | Read or enforce organization-wide SSO |
 | GET/POST | `/v1/service-accounts` | List or create scoped automation identities |

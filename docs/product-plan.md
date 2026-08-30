@@ -237,7 +237,7 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
   projects, environments, Compose services, routes, managed databases, source
   credentials, backup destinations, database backup policies, named-volume
   backup policies, federated template repositories, OIDC/SAML providers,
-  expiring SCIM provisioning credentials and service accounts,
+  expiring SCIM provisioning credentials, service accounts, and invitations,
   project/environment access grants,
   hierarchical maintenance/quota policy, remote cluster registration, and
   encrypted notification endpoints, and organization authentication policy.
