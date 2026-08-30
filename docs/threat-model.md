@@ -55,11 +55,13 @@ leaving the executing node.
 
 ### Workload-to-control-plane escape
 
-Safe mode rejects privileged containers, host namespaces, devices, dangerous
-capabilities, host mounts, cross-stack resources, caller-defined Traefik
-labels, and local Compose secret/config imports. The controller and remote
-agent retain Docker-manager authority and therefore remain high-value trusted
-components; tenant workloads never receive their sockets or credentials.
+Safe mode rejects privileged containers, custom PID/IPC/UTS/user/cgroup
+namespaces, network namespace sharing other than disabled networking, devices,
+dangerous capabilities, host mounts, cross-stack resources, caller-defined
+Traefik labels, and local Compose secret/config imports. The controller and
+remote agent retain Docker-manager authority and therefore remain high-value
+trusted components; tenant workloads never receive their sockets or
+credentials.
 
 ### Source and supply-chain substitution
 

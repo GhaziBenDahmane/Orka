@@ -191,13 +191,16 @@ func validateSafeService(name string, service map[string]any) error {
 	if value, _ := service["privileged"].(bool); value {
 		return fmt.Errorf("service %q requests privileged mode", name)
 	}
-	for _, key := range []string{"pid", "ipc"} {
-		if value, _ := service[key].(string); value == "host" {
-			return fmt.Errorf("service %q requests host %s", name, key)
+	for _, key := range []string{"pid", "ipc", "uts", "userns_mode", "cgroup"} {
+		if value, exists := service[key]; exists && value != nil {
+			return fmt.Errorf("service %q requests custom %s namespace access", name, key)
 		}
 	}
-	if value, _ := service["network_mode"].(string); value == "host" {
-		return fmt.Errorf("service %q requests host networking", name)
+	if rawMode, exists := service["network_mode"]; exists && rawMode != nil {
+		mode, valid := rawMode.(string)
+		if !valid || mode != "none" {
+			return fmt.Errorf("service %q requests custom network namespace access", name)
+		}
 	}
 	for _, key := range []string{"devices", "device_cgroup_rules", "volumes_from", "env_file", "secrets", "configs", "credential_spec", "use_api_socket"} {
 		if value, exists := service[key]; exists && value != nil {
@@ -206,12 +209,6 @@ func validateSafeService(name string, service map[string]any) error {
 	}
 	if capabilities, exists := service["cap_add"]; exists && capabilities != nil {
 		return fmt.Errorf("service %q requests added Linux capabilities", name)
-	}
-	if value, _ := service["userns_mode"].(string); value == "host" {
-		return fmt.Errorf("service %q requests the host user namespace", name)
-	}
-	if value, _ := service["cgroup"].(string); value == "host" {
-		return fmt.Errorf("service %q requests the host cgroup namespace", name)
 	}
 	if rawOptions, exists := service["security_opt"]; exists && rawOptions != nil {
 		options, ok := rawOptions.([]any)
@@ -308,7 +305,7 @@ func (c Compiler) encryptStackNetworks(document map[string]any) error {
 	if networks == nil {
 		networks = map[string]any{}
 	}
-	if len(networks) == 0 || servicesUseDefaultNetwork(document["services"]) {
+	if servicesUseDefaultNetwork(document["services"]) {
 		if _, exists := networks["default"]; !exists {
 			networks["default"] = map[string]any{}
 		}

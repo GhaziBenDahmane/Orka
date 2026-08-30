@@ -239,6 +239,10 @@ func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 	tests := map[string]string{
 		"device":                  "services:\n  app:\n    image: alpine\n    devices: [/dev/kvm:/dev/kvm]\n",
 		"capability":              "services:\n  app:\n    image: alpine\n    cap_add: [SYS_ADMIN]\n",
+		"container network":       "services:\n  app:\n    image: alpine\n    network_mode: container:control-plane\n",
+		"service process":         "services:\n  app:\n    image: alpine\n    pid: service:other\n",
+		"container ipc":           "services:\n  app:\n    image: alpine\n    ipc: container:control-plane\n",
+		"host uts":                "services:\n  app:\n    image: alpine\n    uts: host\n",
 		"host user namespace":     "services:\n  app:\n    image: alpine\n    userns_mode: host\n",
 		"host cgroup namespace":   "services:\n  app:\n    image: alpine\n    cgroup: host\n",
 		"unconfined profile":      "services:\n  app:\n    image: alpine\n    security_opt: [seccomp=unconfined]\n",
@@ -261,6 +265,17 @@ func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 				t.Fatalf("explicit unsafe mode rejected input: %v", err)
 			}
 		})
+	}
+}
+
+func TestCompileSafeModeAllowsDisabledNetworking(t *testing.T) {
+	source := "services:\n  app:\n    image: alpine\n    network_mode: none\n"
+	out, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := compiledNetworks(t, out)["default"]; exists {
+		t.Fatalf("network-disabled service caused a default network to be created: %s", out)
 	}
 }
 
