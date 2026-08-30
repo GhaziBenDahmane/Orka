@@ -47,8 +47,8 @@ type Worker struct {
 	NotificationClient *http.Client
 	// notificationTLS lets conformance tests trust an isolated SMTP server
 	// without weakening the system trust store used in production.
-	notificationTLS    *tls.Config
-	RemoteScheduler    func(uuid.UUID) Scheduler
+	notificationTLS *tls.Config
+	RemoteScheduler func(uuid.UUID) Scheduler
 }
 
 type job struct {
@@ -194,6 +194,9 @@ func (w *Worker) pruneAuditEvents(ctx context.Context) {
 		} else if leader {
 			if _, err := w.Store.PruneAuditEvents(ctx); err != nil && ctx.Err() == nil {
 				w.Logger.Error("prune audit events", "error", err)
+			}
+			if _, err := w.Store.PruneAIAuditRuns(ctx); err != nil && ctx.Err() == nil {
+				w.Logger.Error("prune AI audit runs", "error", err)
 			}
 			if _, err := w.Store.PruneAuthenticationRateLimits(ctx, 24*time.Hour); err != nil && ctx.Err() == nil {
 				w.Logger.Error("prune authentication rate limits", "error", err)

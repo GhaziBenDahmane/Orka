@@ -216,6 +216,20 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil || len(highFindings) != 1 || highFindings[0].ID != reopened.ID {
 		t.Fatalf("filtered current findings=%#v err=%v", highFindings, err)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE ai_audit_runs SET started_at=started_at-interval '400 days',completed_at=completed_at-interval '400 days' WHERE service_account_id=$1`, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	if removed, pruneErr := db.PruneAIAuditRuns(ctx); pruneErr != nil || removed != 3 {
+		t.Fatalf("pruned AI audit runs=%d err=%v", removed, pruneErr)
+	}
+	var retainedRuns int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM ai_audit_runs WHERE service_account_id=$1`, account.ID).Scan(&retainedRuns); err != nil || retainedRuns != 2 {
+		t.Fatalf("retained latest AI audit runs=%d err=%v", retainedRuns, err)
+	}
+	currentFindings, err = db.ListCurrentAIAuditFindings(ctx, organizationID, "active", "", 100)
+	if err != nil || len(currentFindings) != 2 {
+		t.Fatalf("current findings after retention=%#v err=%v", currentFindings, err)
+	}
 	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	backupID, policyID := uuid.New(), uuid.New()

@@ -238,8 +238,11 @@ and account IDs so operators can rotate consuming secrets before expiry.
 Non-revoked SCIM tokens expose the same seven-day operational expiry signal.
 Audit exports are ordered by immutable event ID. Each response includes
 `X-Content-SHA256` for offline verification and `X-Next-After-ID` for resumable
-pagination. The default retention is 365 days; configured policies are pruned
-hourly by workers. External archives require an HTTPS S3-compatible backup
+pagination. The default retention is 365 days and is enforced even before an
+organization saves a custom policy; workers prune hourly. Completed AI audit
+runs follow the same period, except that the newest completed run in each
+auditor/agent lineage is preserved and running audits are never pruned.
+External archives require an HTTPS S3-compatible backup
 destination whose bucket has Object Lock enabled. Workers upload batches with
 COMPLIANCE retention and create a SHA-256 chain from each manifest to the
 previous object. Pruning stops at the least-progressed enabled archive, so an

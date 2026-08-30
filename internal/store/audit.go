@@ -82,6 +82,20 @@ func (s *Store) UpsertAuditRetentionPolicy(ctx context.Context, organizationID u
 }
 
 func (s *Store) PruneAuditEvents(ctx context.Context) (int64, error) {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM audit_events a USING audit_retention_policies p WHERE a.organization_id=p.organization_id AND a.created_at < now()-(p.retention_days * interval '1 day') AND (NOT EXISTS(SELECT 1 FROM audit_archive_destinations d WHERE d.organization_id=a.organization_id AND d.enabled) OR a.id<=(SELECT min(d.last_archived_id) FROM audit_archive_destinations d WHERE d.organization_id=a.organization_id AND d.enabled))`)
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM audit_events a WHERE a.created_at < now()-(COALESCE((SELECT p.retention_days FROM audit_retention_policies p WHERE p.organization_id=a.organization_id),365) * interval '1 day') AND (NOT EXISTS(SELECT 1 FROM audit_archive_destinations d WHERE d.organization_id=a.organization_id AND d.enabled) OR a.id<=(SELECT min(d.last_archived_id) FROM audit_archive_destinations d WHERE d.organization_id=a.organization_id AND d.enabled))`)
+	return tag.RowsAffected(), err
+}
+
+func (s *Store) PruneAIAuditRuns(ctx context.Context) (int64, error) {
+	tag, err := s.Pool.Exec(ctx, `WITH candidates AS (
+		SELECT r.id,COALESCE(p.retention_days,365) AS retention_days,
+			row_number() OVER (PARTITION BY r.organization_id,r.service_account_id,r.agent_name ORDER BY r.started_at DESC,r.id DESC) AS lineage_position
+		FROM ai_audit_runs r
+		LEFT JOIN audit_retention_policies p ON p.organization_id=r.organization_id
+		WHERE r.status<>'running'
+	)
+	DELETE FROM ai_audit_runs r USING candidates c
+	WHERE r.id=c.id AND c.lineage_position>1
+		AND COALESCE(r.completed_at,r.started_at) < now()-(c.retention_days * interval '1 day')`)
 	return tag.RowsAffected(), err
 }

@@ -64,6 +64,10 @@ keys make it a privileged service.
 - The current-findings view selects only the newest occurrence in each
   auditor/agent fingerprint lineage, so administrators can review active work
   across runs without older occurrences obscuring the present state.
+- Completed run history follows the organization's audit-retention period
+  (365 days by default). The newest completed run in every auditor/agent
+  lineage is retained even after that period so the current-finding view does
+  not silently lose its last known state; running audits are never pruned.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds model responses and finding counts, validates every structured
   field, and rejects oversized evidence before submitting results. The API
