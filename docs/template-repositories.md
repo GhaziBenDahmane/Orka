@@ -1,5 +1,12 @@
 # Template repositories
 
+To request a new built-in product, use the public
+[template request form](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml).
+Contributors can add a Dokploy-compatible blueprint directly by following
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). Each request records its upstream
+image, persistence model, health check, and Swarm constraints before catalog
+review begins.
+
 An organization can register multiple public GitHub repositories as template
 sources. Each repository has its own slug, URL, Git ref, optional catalog
 subdirectory, and optional pinned Ed25519 signing key. Imported keys are

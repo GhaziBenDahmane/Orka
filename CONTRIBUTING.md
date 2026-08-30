@@ -1,45 +1,49 @@
 # Contributing
 
-## Suggest or publish a template
+## Suggest a template
 
-Use the public [Template request](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml)
-GitHub form to suggest software for the built-in catalog. A request should
-identify the upstream project, container images, exposed ports, persistent
-data, required secrets, and health check.
+Use the repository's
+[template request form](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml)
+to propose a product. Include its upstream project, stable container image,
+official Docker Compose example, persistence requirements, health check, and
+any Docker Swarm constraints. Never include credentials in an issue.
 
-To contribute an implementation, add a Dokploy-compatible blueprint under
-`internal/templates/builtin/blueprints/<slug>` with:
+## Add a template
 
-- `meta.json` containing `id`, `name`, `version`, and `description`;
-- `template.toml` declaring every configurable value and generated secret;
-- `docker-compose.yml` using named volumes and Swarm-compatible services.
+Built-in templates use the Dokploy-compatible layout documented in
+[`docs/template-repositories.md`](docs/template-repositories.md):
+
+```text
+internal/templates/builtin/blueprints/<template-id>/
+  meta.json
+  template.toml
+  docker-compose.yml
+```
+
+Keep images on stable release tags, declare generated secrets in
+`template.toml`, add a health check where the product supports one, and persist
+state in a named volume or an explicitly declared database service. Templates
+must compile under the safe Swarm profile; privileged containers, Docker socket
+mounts, host paths, direct published ports, and external networks are rejected.
 
 The metadata `id` must be a lowercase slug containing only letters, digits,
 dots, underscores, or hyphens. The `(id, version)` pair must be unique across
 the catalog. Validation fails the entire contribution when any blueprint is
-invalid; a valid sibling cannot hide a broken template.
+invalid; a valid sibling cannot hide a broken template. Declare HTTP exposure
+through `[[config.domains]]`; every domain must name a Compose service.
 
-Run these checks before opening a pull request:
+Validate both built-in and example catalogs before opening a pull request:
 
 ```sh
-go test ./internal/templates
 go run ./cmd/dockyard validate-dokploy-templates internal/templates/builtin
-go test ./...
+go run ./cmd/dockyard validate-dokploy-templates examples/template-repository
+go test ./internal/templates
 ```
 
-With a local Docker daemon in Swarm mode, run `make test-templates` to exercise
-the complete template API and deployment path for the PostgreSQL and Redis
-smoke products.
+If the product supports materially different persistence modes, submit each as
+a separate template so operators can review its backup and placement behavior
+explicitly.
 
-Templates must not request privileged mode, custom namespaces or runtimes,
-device access, direct published ports, external networks or volumes, custom
-volume drivers, controller-local files, the Docker socket, host bind mounts,
-or undeclared credentials. Declare HTTP exposure through `[[config.domains]]`;
-each domain must name a service present in the Compose file. Dockyard attaches
-only routed services to its shared ingress network. Prefer
-versioned image tags in development and publish the digest tested for a
-release.
-
-Organizations that do not need a built-in template can publish their own
-catalog repository using the layout in `docs/template-repositories.md`, then
-register its GitHub URL in the Templates screen.
+With a local Docker daemon in Swarm mode, `make test-templates` exercises the
+complete API and deployment path. Organizations can also publish their own
+catalog with this layout and register its GitHub URL from the Templates screen.

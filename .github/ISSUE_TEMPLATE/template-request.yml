@@ -1,38 +1,102 @@
-name: Template request
-description: Suggest a product for the built-in Docker Compose catalog
-title: "template: "
-labels: [template]
+name: Suggest a template
+description: Propose a Docker Compose product for the built-in Orka catalog.
+title: "[Template]: "
+labels:
+  - template
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping grow the catalog. Templates use Docker Compose and
+        must be safe to run on Docker Swarm. Please link upstream documentation
+        instead of including credentials or other private information.
+
   - type: input
-    id: project
+    id: product
+    attributes:
+      label: Product name
+      placeholder: "Example: BarkTrace"
+    validations:
+      required: true
+
+  - type: input
+    id: upstream
     attributes:
       label: Upstream project
-      description: Link to the official project and container image documentation.
-    validations: {required: true}
+      description: Canonical source repository or product website.
+      placeholder: https://github.com/owner/project
+    validations:
+      required: true
+
   - type: input
-    id: images
+    id: image
     attributes:
-      label: Container images
-      description: List the official image names and tested versions or digests.
-    validations: {required: true}
+      label: Container image
+      description: Prefer a public image with a stable version tag.
+      placeholder: "ghcr.io/owner/project:1.2.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: database
+    attributes:
+      label: Database or storage
+      description: Select the primary persistence mode the first template should support.
+      options:
+        - No persistent storage
+        - SQLite or local volume
+        - PostgreSQL
+        - MySQL or MariaDB
+        - MongoDB
+        - Redis or Valkey
+        - Another external service
+    validations:
+      required: true
+
   - type: textarea
-    id: topology
+    id: compose
     attributes:
-      label: Compose topology
-      description: Describe services, ports, named volumes, health checks, and dependencies.
-    validations: {required: true}
+      label: Official Compose example
+      description: Link the upstream Compose file or paste a minimal public example. Do not include real secrets.
+      placeholder: https://github.com/owner/project/blob/main/docker-compose.yml
+    validations:
+      required: true
+
   - type: textarea
     id: configuration
     attributes:
-      label: Configuration and secrets
-      description: List operator inputs and which values must be generated and encrypted.
-    validations: {required: true}
-  - type: checkboxes
-    id: safety
+      label: Required configuration
+      description: List required environment variables, ports, volumes, health checks, and any initialization or migration command.
+      placeholder: |
+        - HTTP port: 3000
+        - Persistent volume: /app/data
+        - Required secret: APP_SECRET
+        - Health endpoint: /health
+    validations:
+      required: true
+
+  - type: textarea
+    id: swarm
     attributes:
-      label: Swarm safety
+      label: Swarm considerations
+      description: Note privileged mode, host mounts, Docker socket access, direct published ports, custom networks, or single-node storage requirements.
+      placeholder: Uses one local volume and should remain pinned to its storage node.
+    validations:
+      required: true
+
+  - type: textarea
+    id: variants
+    attributes:
+      label: Requested variants
+      description: Optional variants such as SQLite and PostgreSQL, CPU and GPU, or bundled and external Redis.
+      placeholder: One SQLite template and one PostgreSQL template.
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Submission checks
       options:
-        - label: The template does not require privileged mode, custom namespaces/runtimes, device access, direct published ports, external networks or volumes, custom volume drivers, host bind mounts, or the Docker socket.
+        - label: I linked public documentation and did not include credentials or private data.
           required: true
-        - label: I have identified an upstream health check or readiness probe.
+        - label: I searched existing templates and open template requests for this product.
           required: true
