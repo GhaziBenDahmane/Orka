@@ -200,6 +200,11 @@ func auditorHTTPClient(client *http.Client) *http.Client {
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 	secured := *client
+	if secured.Transport == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		secured.Transport = transport
+	}
 	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("AI auditor redirects are disabled")
 	}

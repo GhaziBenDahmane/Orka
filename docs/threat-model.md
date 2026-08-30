@@ -185,8 +185,10 @@ included strings are marked untrusted, model output is size/count/schema
 bounded, and deterministic findings are persisted before a model call. The
 auditor role cannot deploy, read credentials, invoke Docker, or remediate a
 finding. Auditor control-plane and model requests refuse redirects so neither
-bearer token can be forwarded to a substituted endpoint. 9Router and Hermes
-remain outside the control-plane trust boundary.
+bearer token can be forwarded to a substituted endpoint, and the built-in
+client ignores ambient proxy variables so those credentials are not routed
+through an unintended intermediary. 9Router and Hermes remain outside the
+control-plane trust boundary.
 
 The snapshot uses explicit allowlisted projections rather than serializing
 normal API records. Free-form project descriptions, placement selectors,

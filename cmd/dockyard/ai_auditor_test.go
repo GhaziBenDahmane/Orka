@@ -359,6 +359,27 @@ func TestNormalizedAuditorEndpoint(t *testing.T) {
 	}
 }
 
+func TestAuditorHTTPClientDisablesAmbientProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.example.test:8080")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:8080")
+	client := auditorHTTPClient(nil)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("auditor transport=%T, want *http.Transport", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("auditor transport retained ambient proxy resolution")
+	}
+	if client.Timeout != 2*time.Minute {
+		t.Fatalf("auditor timeout=%s", client.Timeout)
+	}
+	original := &http.Client{Transport: http.DefaultTransport, Timeout: time.Second}
+	secured := auditorHTTPClient(original)
+	if secured.Transport != original.Transport || secured == original || original.CheckRedirect != nil {
+		t.Fatal("explicit transport was replaced or caller client was mutated")
+	}
+}
+
 func TestPerformAIAuditRefusesCredentialBearingRedirects(t *testing.T) {
 	t.Run("control plane", func(t *testing.T) {
 		redirectedRequests := 0

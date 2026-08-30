@@ -310,3 +310,8 @@ image provenance, mutable deployed images are reported without exposing image
 identities, the durable run and audit trail complete, and the auditor token is
 denied access to normal workload APIs. A production release must still
 exercise its configured external model gateway and credentials.
+
+The built-in auditor does not inherit `HTTP_PROXY`, `HTTPS_PROXY`, or
+`NO_PROXY`; its control-plane and model bearer credentials travel only to the
+validated configured endpoints. Use explicit network routing rather than an
+ambient process proxy for these services.
