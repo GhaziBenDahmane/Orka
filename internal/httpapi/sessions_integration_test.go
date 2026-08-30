@@ -168,11 +168,24 @@ func TestLocalPasswordChangeIsAtomicAndRevokesOtherSessions(t *testing.T) {
 	if _, hash, err := db.PasswordLogin(ctx, userID.String()+"@example.test"); err != nil || !auth.VerifyPassword(hash, newPassword) || auth.VerifyPassword(hash, oldPassword) {
 		t.Fatalf("password hash was not rotated safely: err=%v", err)
 	}
+	if status, body := scopedAPIRequest(t, server.URL+"/v1/auth/login", "", organizationID, http.MethodPost, map[string]string{"email": userID.String() + "@example.test", "password": oldPassword}); status != http.StatusUnauthorized {
+		t.Fatalf("old password login status=%d body=%s", status, body)
+	}
+	if status, body := scopedAPIRequest(t, server.URL+"/v1/auth/login", "", organizationID, http.MethodPost, map[string]string{"email": userID.String() + "@example.test", "password": newPassword}); status != http.StatusOK || !strings.Contains(string(body), `"token":`) {
+		t.Fatalf("new password login status=%d body=%s", status, body)
+	}
 	var auditCount, revoked int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*),COALESCE(max((metadata->>'revokedSessions')::integer),0) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action='auth.password_change'`, organizationID, userID).Scan(&auditCount, &revoked); err != nil {
 		t.Fatal(err)
 	}
 	if auditCount != 1 || revoked != 2 {
 		t.Fatalf("password audit count=%d revoked=%d", auditCount, revoked)
+	}
+	var loginAuditCount int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action='auth.local.login' AND resource_type='user'`, organizationID, userID).Scan(&loginAuditCount); err != nil {
+		t.Fatal(err)
+	}
+	if loginAuditCount != 1 {
+		t.Fatalf("local login audit count=%d", loginAuditCount)
 	}
 }

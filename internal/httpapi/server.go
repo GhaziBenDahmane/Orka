@@ -660,6 +660,7 @@ func (s *Server) swarmNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var in struct {
 		Email        string `json:"email"`
 		Password     string `json:"password"`
@@ -692,7 +693,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, p.UserID, nil, "local")
+	token, err := s.newSession(r, p.UserID, nil, "local", hash, map[string]any{"bootstrap": true})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
@@ -702,6 +703,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var in struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -740,8 +742,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "sso_required", "this account must sign in through its identity provider")
 		return
 	}
-	token, err := s.newSession(r, userID, nil, "local")
+	token, err := s.newSession(r, userID, nil, "local", hash, nil)
 	if err != nil {
+		if errors.Is(err, store.ErrAuthenticationStateChanged) {
+			writeError(w, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
+			return
+		}
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
@@ -762,7 +768,7 @@ func (s *Server) allowAuthenticationAttempt(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
-func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *uuid.UUID, method string) (string, error) {
+func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *uuid.UUID, method, expectedPasswordHash string, metadata any) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -771,7 +777,7 @@ func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *u
 	if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
 		ipAddress = host
 	}
-	if _, err = s.Store.CreateSessionWithMetadata(r.Context(), userID, organizationID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128)); err != nil {
+	if _, err = s.Store.CreateSessionWithAudit(r.Context(), userID, organizationID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, expectedPasswordHash, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128), r.RemoteAddr, metadata); err != nil {
 		return "", err
 	}
 	return token, nil

@@ -46,7 +46,9 @@ service-account revocation. Mandatory-SSO policy and OIDC/SAML provider state
 changes serialize on the organization row, preventing sequential or concurrent
 operations from disabling the final enabled provider. The AI baseline reports
 a critical lockout finding if legacy or manually altered state violates that
-invariant.
+invariant. Each local, OIDC, or SAML session is issued atomically with its tenant
+audit event; unscoped local logins append evidence to every organization the
+identity can enter, while federated sessions remain bound to one tenant.
 
 The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,

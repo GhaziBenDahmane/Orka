@@ -349,12 +349,11 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, userID, &provider.OrganizationID, "oidc")
+	token, err := s.newSession(r, userID, &provider.OrganizationID, "oidc", "", map[string]any{"providerId": provider.ID})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
-	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeLoginSuccess(w, r, token)
 }
 

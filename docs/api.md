@@ -64,7 +64,11 @@ fails closed if the authenticated session cannot be deleted; it never
 reports success while leaving the bearer token active. Service accounts do not
 have interactive sessions and receive `403` from all session-management
 routes, including logout. Logout, individual revocation, and bulk revocation
-are recorded in the tenant audit chain.
+are recorded in the tenant audit chain. Each local, OIDC, or SAML session is
+issued atomically with its login event, so a usable session cannot exist
+without durable tenant audit evidence. An unscoped local login is recorded in every
+organization that identity can enter; a federated login remains IdP-tenant
+scoped.
 | GET | `/v1/members` | List organization members, roles, status, and SCIM ownership |
 | PATCH | `/v1/members/{userID}` | Change a manually managed organization membership role |
 | DELETE | `/v1/members/{userID}` | Remove a manually managed member and their scoped grants |

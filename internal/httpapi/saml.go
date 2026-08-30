@@ -534,12 +534,11 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, userID, &provider.OrganizationID, "saml")
+	token, err := s.newSession(r, userID, &provider.OrganizationID, "saml", "", map[string]any{"providerId": provider.ID})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
-	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.saml.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeLoginSuccess(w, r, token)
 }
 
