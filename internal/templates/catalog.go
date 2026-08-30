@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -25,6 +28,32 @@ type metadata struct {
 	Description string `json:"description"`
 }
 
+var templateMetadataIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+
+func parseTemplateMetadata(data []byte) (metadata, error) {
+	var item metadata
+	if err := json.Unmarshal(data, &item); err != nil {
+		return metadata{}, fmt.Errorf("parse meta.json: %w", err)
+	}
+	item.ID = strings.TrimSpace(item.ID)
+	item.Name = strings.TrimSpace(item.Name)
+	item.Version = strings.TrimSpace(item.Version)
+	item.Description = strings.TrimSpace(item.Description)
+	if !templateMetadataIDPattern.MatchString(item.ID) {
+		return metadata{}, errors.New("meta.json id must be a lowercase template slug of at most 128 characters")
+	}
+	if item.Version == "" || len(item.Version) > 128 {
+		return metadata{}, errors.New("meta.json version must contain between 1 and 128 characters")
+	}
+	if item.Name == "" || len(item.Name) > 200 {
+		return metadata{}, errors.New("meta.json name must contain between 1 and 200 characters")
+	}
+	if len(item.Description) > 4096 {
+		return metadata{}, errors.New("meta.json description must not exceed 4096 characters")
+	}
+	return item, nil
+}
+
 func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (ImportReport, error) {
 	entries, err := os.ReadDir(filepath.Join(root, "blueprints"))
 	if err != nil {
@@ -32,6 +61,7 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	report := ImportReport{Failed: map[string]string{}}
+	identities := map[string]string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -42,11 +72,17 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		var meta metadata
-		if readErr = json.Unmarshal(metaBytes, &meta); readErr != nil {
-			report.Failed[entry.Name()] = readErr.Error()
+		meta, metadataErr := parseTemplateMetadata(metaBytes)
+		if metadataErr != nil {
+			report.Failed[entry.Name()] = metadataErr.Error()
 			continue
 		}
+		identity := meta.ID + "\x00" + meta.Version
+		if previous, duplicate := identities[identity]; duplicate {
+			report.Failed[entry.Name()] = fmt.Sprintf("duplicates template key and version from %s", previous)
+			continue
+		}
+		identities[identity] = entry.Name()
 		tomlBytes, readErr := os.ReadFile(filepath.Join(path, "template.toml"))
 		if readErr != nil {
 			report.Failed[entry.Name()] = readErr.Error()
@@ -70,8 +106,8 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 		}
 		report.Imported++
 	}
-	if report.Imported == 0 && len(report.Failed) > 0 {
-		return report, fmt.Errorf("no templates imported")
+	if len(report.Failed) > 0 {
+		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
 	}
 	return report, nil
 }
@@ -99,9 +135,9 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		var meta metadata
-		if readErr = json.Unmarshal(metaBytes, &meta); readErr != nil {
-			report.Failed[entry.Name()] = readErr.Error()
+		meta, metadataErr := parseTemplateMetadata(metaBytes)
+		if metadataErr != nil {
+			report.Failed[entry.Name()] = metadataErr.Error()
 			continue
 		}
 		tomlBytes, readErr := os.ReadFile(filepath.Join(path, "template.toml"))
@@ -116,10 +152,6 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 		}
 		if _, readErr = ParseDokploy(tomlBytes); readErr != nil {
 			report.Failed[entry.Name()] = readErr.Error()
-			continue
-		}
-		if meta.ID == "" || meta.Version == "" || meta.Name == "" {
-			report.Failed[entry.Name()] = "meta.json requires id, version, and name"
 			continue
 		}
 		provenance := map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef}
@@ -154,11 +186,29 @@ func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport
 		return ImportReport{}, err
 	}
 	report := ImportReport{Failed: map[string]string{}}
+	identities := map[string]string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		instance, loadErr := LoadDokployDirectory(filepath.Join(root, "blueprints", entry.Name()), "example.invalid")
+		blueprint := filepath.Join(root, "blueprints", entry.Name())
+		metaBytes, loadErr := os.ReadFile(filepath.Join(blueprint, "meta.json"))
+		var meta metadata
+		if loadErr == nil {
+			meta, loadErr = parseTemplateMetadata(metaBytes)
+		}
+		if loadErr == nil {
+			identity := meta.ID + "\x00" + meta.Version
+			if previous, duplicate := identities[identity]; duplicate {
+				loadErr = fmt.Errorf("duplicates template key and version from %s", previous)
+			} else {
+				identities[identity] = entry.Name()
+			}
+		}
+		var instance Instance
+		if loadErr == nil {
+			instance, loadErr = LoadDokployDirectory(blueprint, "example.invalid")
+		}
 		if loadErr == nil {
 			for _, domain := range instance.Domains {
 				_, loadErr = PortNumber(domain.Port)
@@ -176,8 +226,11 @@ func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport
 			report.Imported++
 		}
 	}
-	if report.Imported == 0 && len(report.Failed) > 0 {
-		return report, fmt.Errorf("no valid templates")
+	if len(report.Failed) > 0 {
+		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
+	}
+	if report.Imported == 0 {
+		return report, fmt.Errorf("catalog contains no templates")
 	}
 	return report, nil
 }

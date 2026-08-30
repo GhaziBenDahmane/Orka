@@ -25,6 +25,7 @@ func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	report := ImportReport{Failed: map[string]string{}}
+	identities := map[string]string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -35,11 +36,17 @@ func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, err
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		var meta metadata
-		if readErr = json.Unmarshal(metaBytes, &meta); readErr != nil {
-			report.Failed[entry.Name()] = readErr.Error()
+		meta, metadataErr := parseTemplateMetadata(metaBytes)
+		if metadataErr != nil {
+			report.Failed[entry.Name()] = metadataErr.Error()
 			continue
 		}
+		identity := meta.ID + "\x00" + meta.Version
+		if previous, duplicate := identities[identity]; duplicate {
+			report.Failed[entry.Name()] = fmt.Sprintf("duplicates template key and version from %s", previous)
+			continue
+		}
+		identities[identity] = entry.Name()
 		tomlBytes, readErr := fs.ReadFile(builtinCatalog, path.Join(root, "template.toml"))
 		if readErr != nil {
 			report.Failed[entry.Name()] = readErr.Error()
@@ -77,12 +84,29 @@ func ValidateBuiltinCatalog(compiler deploy.Compiler) (ImportReport, error) {
 		return ImportReport{}, err
 	}
 	report := ImportReport{Failed: map[string]string{}}
+	identities := map[string]string{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		root := path.Join("builtin/blueprints", entry.Name())
-		tomlBytes, readErr := fs.ReadFile(builtinCatalog, path.Join(root, "template.toml"))
+		metaBytes, readErr := fs.ReadFile(builtinCatalog, path.Join(root, "meta.json"))
+		var meta metadata
+		if readErr == nil {
+			meta, readErr = parseTemplateMetadata(metaBytes)
+		}
+		if readErr == nil {
+			identity := meta.ID + "\x00" + meta.Version
+			if previous, duplicate := identities[identity]; duplicate {
+				readErr = fmt.Errorf("duplicates template key and version from %s", previous)
+			} else {
+				identities[identity] = entry.Name()
+			}
+		}
+		var tomlBytes []byte
+		if readErr == nil {
+			tomlBytes, readErr = fs.ReadFile(builtinCatalog, path.Join(root, "template.toml"))
+		}
 		if readErr != nil {
 			report.Failed[entry.Name()] = readErr.Error()
 			continue

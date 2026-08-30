@@ -2,9 +2,10 @@
 
 ## Suggest or publish a template
 
-Use the **Template request** GitHub issue form to suggest software for the
-built-in catalog. A request should identify the upstream project, container
-images, exposed ports, persistent data, required secrets, and health check.
+Use the public [Template request](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml)
+GitHub form to suggest software for the built-in catalog. A request should
+identify the upstream project, container images, exposed ports, persistent
+data, required secrets, and health check.
 
 To contribute an implementation, add a Dokploy-compatible blueprint under
 `internal/templates/builtin/blueprints/<slug>` with:
@@ -12,6 +13,11 @@ To contribute an implementation, add a Dokploy-compatible blueprint under
 - `meta.json` containing `id`, `name`, `version`, and `description`;
 - `template.toml` declaring every configurable value and generated secret;
 - `docker-compose.yml` using named volumes and Swarm-compatible services.
+
+The metadata `id` must be a lowercase slug containing only letters, digits,
+dots, underscores, or hyphens. The `(id, version)` pair must be unique across
+the catalog. Validation fails the entire contribution when any blueprint is
+invalid; a valid sibling cannot hide a broken template.
 
 Run these checks before opening a pull request:
 

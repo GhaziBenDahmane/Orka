@@ -99,8 +99,8 @@ or a value from `300` through `604800`.
 Deleting a repository also removes its catalog entries. Existing services keep
 their immutable Compose revision and template provenance snapshot.
 
-The controller seeds PostgreSQL, Redis, 9Router, and BarkTrace SQLite/PostgreSQL templates
-at startup. To suggest another built-in product, use
-`.github/ISSUE_TEMPLATE/template-request.yml`; to contribute it directly,
-follow `CONTRIBUTING.md` and add a validated blueprint under
+The controller seeds PostgreSQL, Redis, 9Router, and BarkTrace
+SQLite/PostgreSQL templates at startup. To suggest another built-in product,
+use the public [Template request](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml)
+form; to contribute it directly, follow `CONTRIBUTING.md` and add a validated blueprint under
 `internal/templates/builtin/blueprints`.
