@@ -387,6 +387,8 @@ until an administrator retries them.
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup); revisions cannot remove a named volume while its backup policy exists, and deletion rejects active deployment, migration, backup, or restore work |
 | PUT | `/v1/services/{id}/environment` | Move a non-database service to another environment on the same Swarm; both environments require developer access, while active operations, deleting parents, target quotas, and cross-cluster moves fail closed |
+| GET/PUT | `/v1/services/{id}/variables` | List configured variable names without values, or atomically add/rotate encrypted values; mutations create a new revision and reject active deployments |
+| DELETE | `/v1/services/{id}/variables/{name}` | Delete one encrypted runtime variable without revealing any stored value |
 | GET/POST | `/v1/tags` | List reusable organization-scoped tags or create one as an administrator |
 | GET/PUT/DELETE | `/v1/tags/{id}` | Read or administratively rename/recolor/delete a tag; deletion removes all assignments |
 | GET/PUT | `/v1/projects/{id}/tags` | Read or atomically replace a project's complete tag set (maximum 32) |

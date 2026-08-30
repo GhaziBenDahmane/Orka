@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -308,6 +309,25 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodGet, "/v1/services/" + args[1], nil, nil
+	case "service-variables":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/variables", nil, nil
+	case "set-service-variables":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/services/" + args[1] + "/variables", input, err
+	case "delete-service-variable":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(args[2]) {
+			return "", "", nil, errors.New("variable name must match [A-Za-z_][A-Za-z0-9_]*")
+		}
+		return http.MethodDelete, "/v1/services/" + args[1] + "/variables/" + args[2], nil, nil
 	case "tags":
 		return http.MethodGet, "/v1/tags", nil, require(1)
 	case "tag":

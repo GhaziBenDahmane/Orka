@@ -4074,6 +4074,77 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/variables:
+    get:
+      operationId: get_v1_services_serviceID_variables
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      operationId: put_v1_services_serviceID_variables
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/variables/{name}:
+    delete:
+      operationId: delete_v1_services_serviceID_variables_name
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/services/{serviceID}/volume-backup-policies:
     get:
       operationId: get_v1_services_serviceID_volume_backup_policies
