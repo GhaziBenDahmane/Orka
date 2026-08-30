@@ -266,6 +266,11 @@ separately from users in the audit log. Prometheus exposes the remaining
 lifetime of each enabled account's current token using immutable organization
 and account IDs so operators can rotate consuming secrets before expiry.
 Non-revoked SCIM tokens expose the same seven-day operational expiry signal.
+CI deployment-hook tokens follow the same bounded-expiry model, record their
+last successful use, and expose expiry metrics keyed only by immutable
+organization, service, and token IDs. Resource-finalizer metrics report active,
+failed, and missing deletion jobs plus oldest deletion age without exporting
+job payloads or failure text.
 Audit exports are ordered by immutable event ID. Each response includes
 `X-Content-SHA256` for offline verification and `X-Next-After-ID` for resumable
 pagination. The default retention is 365 days and is enforced even before an

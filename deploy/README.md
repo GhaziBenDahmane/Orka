@@ -225,7 +225,10 @@ the configured active agent CA, optional previous agent CA, and server
 certificate; warning alerts begin seven days before expiry. Enabled service-account credentials expose their current token
 expiry by immutable account ID and role; warning alerts begin seven days before
 expiry and become critical once automation or an AI auditor can no longer
-authenticate. Non-revoked SCIM tokens have equivalent expiry gauges and alerts
+authenticate. Non-revoked deploy-hook credentials expose expiry by immutable
+service and token IDs, while deletion finalizer metrics distinguish active,
+failed, and missing work and alert after fifteen minutes without convergence.
+Non-revoked SCIM tokens have equivalent expiry gauges and alerts
 so directory provisioning does not stop silently. Enabled SAML providers expose
 separate service-provider and identity-provider trust expiries; alerts begin
 thirty days before expiry and also detect malformed or not-yet-valid rollover

@@ -94,6 +94,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	staleCluster := uuid.New()
 	missingCluster := uuid.New()
 	upgradeID := uuid.New()
+	deployTokenID, finalizerClusterID := uuid.New(), uuid.New()
 	auditorA := uuid.New()
 	auditorB := uuid.New()
 	scimToken := uuid.New()
@@ -114,6 +115,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Metrics project','metrics-project')`, []any{projectID, organizationA}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Metrics environment','metrics-environment')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Metrics service','metrics-service',$3,'services: {}')`, []any{serviceID, environmentID, "metrics-" + serviceID.String()}},
+		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,expires_at) VALUES($1,$2,$3,'metrics-deploy-hook',now()+interval '1 day')`, []any{deployTokenID, serviceID, []byte("metrics-deploy-token-" + deployTokenID.String())}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'Metrics destination','https://s3.example.test','backups','encrypted')`, []any{destinationID, organizationA}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'uploads',$3,3600,7,true,true,now()+interval '1 hour')`, []any{volumePolicyID, serviceID, destinationID}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'cache',$3,3600,7,true,true,now()+interval '1 hour')`, []any{missingVolumePolicyID, serviceID, destinationID}},
@@ -137,6 +139,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,certificate_serial,certificate_not_after,pending_certificate_serial,pending_certificate_not_after,pending_certificate_created_at) VALUES($1,$2,'Shared A','shared','active',now(),'current',now()+interval '1 hour','pending',now()+interval '7 days',now()-interval '10 minutes')`, []any{currentCluster, organizationA}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Shared B','shared','active',now()-interval '10 minutes')`, []any{staleCluster, organizationB}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,agent_update_state) VALUES($1,$2,'Never connected','never-connected','draining',NULL,'rollback_completed')`, []any{missingCluster, organizationB}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,deletion_requested_at) VALUES($1,$2,'Deleting','deleting','disabled',now()-interval '20 minutes')`, []any{finalizerClusterID, organizationA}},
+		{`INSERT INTO jobs(id,kind,payload,status,last_error,finished_at) VALUES($1,'delete.cluster',$2,'failed','metrics-finalizer-error',now()-interval '10 minutes')`, []any{uuid.New(), `{"clusterId":"` + finalizerClusterID.String() + `"}`}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,target_image,created_at,run_after) VALUES($1,$2,'agent.upgrade','encrypted','verifying',$3,now()-interval '20 minutes',now()-interval '5 minutes')`, []any{upgradeID, currentCluster, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
 	}
 	for _, statement := range statements {
@@ -160,6 +164,20 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		}
 	}
 	metrics := recorder.Body.String()
+	for _, metric := range []string{"dockyard_deploy_token_expiry_seconds", "dockyard_resource_finalizers", "dockyard_resource_finalizer_oldest_age_seconds"} {
+		if !strings.Contains(metrics, "# HELP "+metric) {
+			t.Errorf("missing metric family %s", metric)
+		}
+	}
+	for _, expected := range []string{
+		`dockyard_deploy_token_expiry_seconds{organization="` + organizationA.String() + `",service="` + serviceID.String() + `",token="` + deployTokenID.String() + `"}`,
+		`dockyard_resource_finalizers{organization="` + organizationA.String() + `",kind="cluster",state="failed"} 1`,
+		`dockyard_resource_finalizer_oldest_age_seconds{organization="` + organizationA.String() + `",kind="cluster"}`,
+	} {
+		if !strings.Contains(metrics, expected) {
+			t.Errorf("missing %q in metrics output", expected)
+		}
+	}
 	for _, expected := range []string{
 		`dockyard_cluster_heartbeat_age_seconds{organization="` + organizationA.String() + `",cluster="shared"}`,
 		`dockyard_cluster_heartbeat_age_seconds{organization="` + organizationB.String() + `",cluster="shared"}`,
@@ -302,6 +320,28 @@ func TestPrometheusAlertsCoverServiceAccountExpiry(t *testing.T) {
 		"expr: dockyard_service_account_token_expiry_seconds > 0 and dockyard_service_account_token_expiry_seconds < 604800",
 		"alert: DockyardServiceAccountTokenExpired",
 		"expr: dockyard_service_account_token_expiry_seconds <= 0",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverDeployTokensAndFinalizers(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardDeployTokenExpiring",
+		"expr: dockyard_deploy_token_expiry_seconds > 0 and dockyard_deploy_token_expiry_seconds < 604800",
+		"alert: DockyardDeployTokenExpired",
+		"expr: dockyard_deploy_token_expiry_seconds <= 0",
+		"alert: DockyardResourceFinalizerRequiresIntervention",
+		`expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
+		"alert: DockyardResourceFinalizerStalled",
+		`expr: dockyard_resource_finalizer_oldest_age_seconds > 900 unless on (organization, kind) dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

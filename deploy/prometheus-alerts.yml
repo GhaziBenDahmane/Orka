@@ -282,6 +282,41 @@ groups:
           summary: A Dockyard service-account token expired
           description: Service account {{ $labels.account }} ({{ $labels.role }}) can no longer authenticate; rotate its token or disable the identity.
 
+      - alert: DockyardDeployTokenExpiring
+        expr: dockyard_deploy_token_expiry_seconds > 0 and dockyard_deploy_token_expiry_seconds < 604800
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard deployment-hook token is approaching expiry
+          description: Deploy token {{ $labels.token }} for service {{ $labels.service }} expires in less than seven days; replace the CI secret and revoke the old credential.
+
+      - alert: DockyardDeployTokenExpired
+        expr: dockyard_deploy_token_expiry_seconds <= 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard deployment-hook token expired
+          description: Deploy token {{ $labels.token }} can no longer trigger service {{ $labels.service }} and should be revoked after its CI consumer is updated.
+
+      - alert: DockyardResourceFinalizerRequiresIntervention
+        expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard resource deletion cannot make progress
+          description: Organization {{ $labels.organization }} has {{ $value }} {{ $labels.kind }} deletion(s) with a failed or missing finalizer job.
+
+      - alert: DockyardResourceFinalizerStalled
+        expr: dockyard_resource_finalizer_oldest_age_seconds > 900 unless on (organization, kind) dockyard_resource_finalizers{state=~"failed|missing"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard resource deletion is stalled
+          description: Organization {{ $labels.organization }} has a {{ $labels.kind }} deletion pending for more than fifteen minutes.
+
       - alert: DockyardSCIMTokenExpiring
         expr: dockyard_scim_token_expiry_seconds > 0 and dockyard_scim_token_expiry_seconds < 604800
         for: 15m
