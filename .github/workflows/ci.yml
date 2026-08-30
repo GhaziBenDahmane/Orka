@@ -85,6 +85,7 @@ jobs:
           NINEROUTER_IMAGE: example/9router@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
           HEADROOM_IMAGE: example/headroom@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
           DOCKYARD_AI_MODEL: provider/model
+          DOCKYARD_CONTROL_PLANE_URL: https://dockyard.example.com
         run: |
           scripts/ci/check-image-digests.sh build
           scripts/ci/check-image-digests.sh controller

@@ -13,13 +13,15 @@ type deploymentManifest struct {
 	Services map[string]struct {
 		Command     []string          `yaml:"command"`
 		Environment map[string]string `yaml:"environment"`
+		Networks    []string          `yaml:"networks"`
 		Secrets     []any             `yaml:"secrets"`
 		Ports       []any             `yaml:"ports"`
 		Healthcheck struct {
 			Test []string `yaml:"test"`
 		} `yaml:"healthcheck"`
 		Deploy struct {
-			Replicas     int `yaml:"replicas"`
+			Replicas     int               `yaml:"replicas"`
+			Labels       map[string]string `yaml:"labels"`
 			UpdateConfig struct {
 				Order         string `yaml:"order"`
 				FailureAction string `yaml:"failure_action"`
@@ -111,6 +113,29 @@ func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	port, ok := controller.Ports[0].(map[string]any)
 	if len(controller.Ports) != 1 || !ok || port["target"] != 8444 || port["published"] != 8444 || port["mode"] != "ingress" {
 		t.Fatalf("agent mTLS listener is not published through Swarm ingress: %#v", controller.Ports)
+	}
+}
+
+func TestControllerIngressUsesIsolatedTrustedProxyNetwork(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/swarm.yml")
+	controller := manifest.Services["dockyard"]
+	proxy := manifest.Services["traefik"]
+	if !slices.Contains(controller.Networks, "edge-control") || slices.Contains(controller.Networks, "dockyard-public") {
+		t.Fatalf("controller networks are not isolated from tenant ingress: %v", controller.Networks)
+	}
+	if !slices.Contains(proxy.Networks, "edge-control") || !slices.Contains(proxy.Networks, "dockyard-public") {
+		t.Fatalf("Traefik does not bridge isolated and public networks: %v", proxy.Networks)
+	}
+	if controller.Deploy.Labels["traefik.docker.network"] != "dockyard-edge-control" || controller.Environment["DOCKYARD_TRUSTED_PROXY_CIDRS"] == "" {
+		t.Fatalf("controller proxy trust is incomplete: labels=%v environment=%v", controller.Deploy.Labels, controller.Environment)
+	}
+
+	auditors, err := os.ReadFile("../../deploy/ai-auditors.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(auditors), "networks: [dockyard-public") || strings.Contains(string(auditors), "http://dockyard:8080") {
+		t.Fatal("AI auditor bypasses isolated public HTTPS ingress")
 	}
 }
 

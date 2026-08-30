@@ -52,13 +52,15 @@ type Server struct {
 	AgentCAKey                 []byte
 	AgentCertificateTTL        time.Duration
 	ReadinessCheck             func(context.Context) error
+	TrustedProxyCIDRs          []*net.IPNet
 }
 
 type contextKey string
 
 const (
-	principalKey contextKey = "principal"
-	requestIDKey contextKey = "request-id"
+	principalKey      contextKey = "principal"
+	requestIDKey      contextKey = "request-id"
+	forwardedHTTPSKey contextKey = "forwarded-https"
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -240,7 +242,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/deployments/{deploymentID}/cancel", s.requireResourceRole("developer", "deployment", "deploymentID", http.HandlerFunc(s.cancelDeployment)))
 	mux.Handle("GET /", webui.Handler())
 	instrumented := otelhttp.NewHandler(s.middleware(mux), "dockyard.http")
-	return s.requestIDMiddleware(instrumented)
+	return s.requestIDMiddleware(s.trustedProxyMiddleware(instrumented))
 }
 
 func (s *Server) middleware(next http.Handler) http.Handler {
@@ -256,7 +258,8 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/scim/") || r.URL.Path == "/metrics" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			w.Header().Set("Cache-Control", "no-store")
 		}
-		if r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		forwardedHTTPS, _ := r.Context().Value(forwardedHTTPSKey).(bool)
+		if r.TLS != nil || forwardedHTTPS {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		defer func() {
@@ -275,6 +278,64 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(recorder, r)
 	})
+}
+
+func (s *Server) trustedProxyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		peer := remoteIPAddress(r.RemoteAddr)
+		if peer == nil || !s.trustedProxy(peer) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ctx := r.Context()
+		protoParts := strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")
+		if len(protoParts) > 0 && strings.EqualFold(strings.TrimSpace(protoParts[len(protoParts)-1]), "https") {
+			ctx = context.WithValue(ctx, forwardedHTTPSKey, true)
+		}
+		forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+		if len(forwarded) <= 32 && !(len(forwarded) == 1 && strings.TrimSpace(forwarded[0]) == "") {
+			addresses := make([]net.IP, 0, len(forwarded))
+			for _, raw := range forwarded {
+				address := net.ParseIP(strings.TrimSpace(raw))
+				if address == nil {
+					addresses = nil
+					break
+				}
+				addresses = append(addresses, address)
+			}
+			if len(addresses) > 0 {
+				client := addresses[0]
+				for i := len(addresses) - 1; i >= 0; i-- {
+					if !s.trustedProxy(addresses[i]) {
+						client = addresses[i]
+						break
+					}
+				}
+				r = r.Clone(ctx)
+				r.RemoteAddr = client.String()
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func (s *Server) trustedProxy(address net.IP) bool {
+	for _, network := range s.TrustedProxyCIDRs {
+		if network != nil && network.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteIPAddress(remoteAddress string) net.IP {
+	host, _, err := net.SplitHostPort(remoteAddress)
+	if err == nil {
+		return net.ParseIP(host)
+	}
+	return net.ParseIP(remoteAddress)
 }
 
 func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {

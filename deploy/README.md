@@ -87,6 +87,14 @@ DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
   docker stack deploy -c deploy/swarm.yml dockyard
 ```
 
+The controller is not attached to `dockyard-public`. The stack creates a
+dedicated encrypted `dockyard-edge-control` network between Traefik and the
+controller, using `DOCKYARD_EDGE_SUBNET` (default `10.255.250.0/24`) as both
+its IPAM subnet and trusted-proxy CIDR. Choose a non-overlapping subnet before
+deployment when that default conflicts with existing infrastructure. AI
+auditors reach the controller through its public HTTPS URL rather than joining
+the tenant routing network.
+
 The controller is constrained to a manager because it uses the manager Docker
 API to deploy stacks. The outbound mTLS agent described below keeps the same
 Swarm adapter while removing direct control-plane access to remote sockets.

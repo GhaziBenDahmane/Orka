@@ -24,7 +24,7 @@ services:
     image: ${DOCKYARD_IMAGE:?set a digest-pinned Dockyard image}
     command: ["ai-auditor"]
     environment:
-      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:-http://dockyard:8080}
+      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:?set the public HTTPS Dockyard URL}
       DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_auditor_token
       DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
       DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
@@ -34,7 +34,7 @@ services:
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
-    networks: [dockyard-public, ai-control]
+    networks: [ai-control]
     read_only: true
     deploy:
       replicas: 1
@@ -46,7 +46,7 @@ services:
     image: ${DOCKYARD_IMAGE:?set a digest-pinned Dockyard image}
     command: ["ai-auditor"]
     environment:
-      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:-http://dockyard:8080}
+      DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:?set the public HTTPS Dockyard URL}
       DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_auditor_token
       DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
       DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
@@ -56,7 +56,7 @@ services:
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
-    networks: [dockyard-public, ai-control]
+    networks: [ai-control]
     read_only: true
     deploy:
       replicas: 1
@@ -68,7 +68,6 @@ secrets:
   dockyard_ai_auditor_token: {external: true}
   dockyard_ai_api_key: {external: true}
 networks:
-  dockyard-public: {external: true}
   ai-control:
     driver: overlay
     driver_opts:

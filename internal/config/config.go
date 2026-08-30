@@ -44,6 +44,7 @@ type Config struct {
 	AgentServerCertFile        string
 	AgentServerKeyFile         string
 	DatabaseDriverDirectory    string
+	TrustedProxyCIDRs          []*net.IPNet
 }
 
 var swarmNetworkName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
@@ -117,6 +118,10 @@ func Load() (Config, error) {
 	traefikNetwork := strings.TrimSpace(env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"))
 	if !swarmNetworkName.MatchString(traefikNetwork) {
 		return Config{}, errors.New("DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters")
+	}
+	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("DOCKYARD_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return Config{}, err
 	}
 	agentCACertificate, err := secretEnv("DOCKYARD_AGENT_CA_CERT")
 	if err != nil {
@@ -214,7 +219,28 @@ func Load() (Config, error) {
 		AgentServerCertFile:        agentServerCertFile,
 		AgentServerKeyFile:         agentServerKeyFile,
 		DatabaseDriverDirectory:    driverDirectory,
+		TrustedProxyCIDRs:          trustedProxyCIDRs,
 	}, nil
+}
+
+func parseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > 32 {
+		return nil, errors.New("DOCKYARD_TRUSTED_PROXY_CIDRS may contain at most 32 networks")
+	}
+	networks := make([]*net.IPNet, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		_, network, parseErr := net.ParseCIDR(value)
+		if parseErr != nil {
+			return nil, fmt.Errorf("DOCKYARD_TRUSTED_PROXY_CIDRS contains invalid CIDR %q", value)
+		}
+		networks = append(networks, network)
+	}
+	return networks, nil
 }
 
 func loopbackHostname(host string) bool {

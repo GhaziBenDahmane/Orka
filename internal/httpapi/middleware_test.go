@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,7 +40,7 @@ func TestHandlerSetsSecurityHeadersOnAPIAndConsole(t *testing.T) {
 	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, route := range []string{"/v1/projects", "/"} {
 		request := httptest.NewRequest(http.MethodGet, route, nil)
-		request.Header.Set("X-Forwarded-Proto", "https")
+		request.TLS = &tls.ConnectionState{}
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, request)
 		for _, header := range []string{
@@ -89,8 +91,10 @@ func TestInternalErrorsDoNotLeakDetails(t *testing.T) {
 }
 
 func TestAgentHandlerAppliesAPIProtectionBeforeCertificateAuthentication(t *testing.T) {
-	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_, trusted, _ := net.ParseCIDR("192.0.2.0/24")
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), TrustedProxyCIDRs: []*net.IPNet{trusted}}
 	request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", strings.NewReader(`{}`))
+	request.Header.Set("X-Forwarded-Proto", "https")
 	response := httptest.NewRecorder()
 	server.AgentHandler().ServeHTTP(response, request)
 
@@ -100,10 +104,44 @@ func TestAgentHandlerAppliesAPIProtectionBeforeCertificateAuthentication(t *test
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("agent API cache policy=%q, want no-store", response.Header().Get("Cache-Control"))
 	}
+	if response.Header().Get("Strict-Transport-Security") != "" {
+		t.Fatal("agent API trusted a proxy header on the direct mTLS listener")
+	}
 	for _, header := range []string{"Content-Security-Policy", "X-Content-Type-Options", "X-Frame-Options", "X-Request-ID"} {
 		if response.Header().Get(header) == "" {
 			t.Errorf("agent API response is missing %s", header)
 		}
+	}
+}
+
+func TestTrustedProxyMiddlewareCanonicalizesForwardedClient(t *testing.T) {
+	_, trusted, _ := net.ParseCIDR("10.255.250.0/24")
+	server := &Server{TrustedProxyCIDRs: []*net.IPNet{trusted}}
+	tests := []struct {
+		name, remote, forwarded, proto, wantRemote string
+		wantHTTPS                                  bool
+	}{
+		{name: "trusted proxy chain", remote: "10.255.250.2:4321", forwarded: "198.51.100.7, 10.255.250.3", proto: "http, https", wantRemote: "198.51.100.7", wantHTTPS: true},
+		{name: "untrusted peer", remote: "203.0.113.8:4321", forwarded: "198.51.100.9", proto: "https", wantRemote: "203.0.113.8:4321"},
+		{name: "malformed chain", remote: "10.255.250.2:4321", forwarded: "198.51.100.9, invalid", proto: "http", wantRemote: "10.255.250.2:4321"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotRemote string
+			var gotHTTPS bool
+			handler := server.trustedProxyMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				gotRemote = r.RemoteAddr
+				gotHTTPS, _ = r.Context().Value(forwardedHTTPSKey).(bool)
+			}))
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request.RemoteAddr = test.remote
+			request.Header.Set("X-Forwarded-For", test.forwarded)
+			request.Header.Set("X-Forwarded-Proto", test.proto)
+			handler.ServeHTTP(httptest.NewRecorder(), request)
+			if gotRemote != test.wantRemote || gotHTTPS != test.wantHTTPS {
+				t.Fatalf("remote=%q https=%t, want remote=%q https=%t", gotRemote, gotHTTPS, test.wantRemote, test.wantHTTPS)
+			}
+		})
 	}
 }
 

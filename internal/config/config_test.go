@@ -7,6 +7,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,24 @@ func TestLoadValidatesTraefikNetwork(t *testing.T) {
 	t.Setenv("DOCKYARD_TRAEFIK_NETWORK", "tenant_public.network")
 	if cfg, err := Load(); err != nil || cfg.TraefikNetwork != "tenant_public.network" {
 		t.Fatalf("network=%q error=%v", cfg.TraefikNetwork, err)
+	}
+}
+
+func TestLoadValidatesTrustedProxyNetworks(t *testing.T) {
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_TRUSTED_PROXY_CIDRS", "10.255.250.0/24, 2001:db8::/64")
+	cfg, err := Load()
+	if err != nil || len(cfg.TrustedProxyCIDRs) != 2 || !cfg.TrustedProxyCIDRs[0].Contains(net.ParseIP("10.255.250.42")) || !cfg.TrustedProxyCIDRs[1].Contains(net.ParseIP("2001:db8::1")) {
+		t.Fatalf("trusted proxies=%v error=%v", cfg.TrustedProxyCIDRs, err)
+	}
+	for _, value := range []string{"not-a-network", "10.0.0.1", strings.Repeat("10.0.0.0/8,", 33)} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_TRUSTED_PROXY_CIDRS", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_TRUSTED_PROXY_CIDRS") {
+				t.Fatalf("error=%v", err)
+			}
+		})
 	}
 }
 

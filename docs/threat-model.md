@@ -49,6 +49,13 @@ and bounded-cardinality request metrics. Both listeners bound header size and
 header, request, response, and idle durations. Agent authentication still runs
 before any command or heartbeat handler.
 
+The packaged Swarm topology isolates controller ingress from tenant-routed
+services on a dedicated encrypted Traefik edge network. The public API accepts
+forwarding headers only when the immediate peer belongs to an explicitly
+configured trusted-proxy CIDR, walks proxy chains from right to left, and
+ignores malformed chains. This preserves per-client authentication throttling
+and audit attribution without allowing direct clients to spoof either value.
+
 ### Credential disclosure
 
 Passwords use Argon2id and bearer credentials are stored as SHA-256 digests.

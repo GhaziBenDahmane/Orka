@@ -75,6 +75,10 @@ allowed to finish before deletion can begin.
   require unsafe-workload mode.
 - Host cgroup, kernel, ulimit, storage, lifecycle-hook, model-runner, and generic
   resource directives are also reserved for explicit unsafe workloads.
+- Traefik reaches the controller over a dedicated encrypted edge network that
+  is not shared with routed tenant workloads. Forwarded client addresses and
+  HTTPS state are accepted only from explicitly configured proxy CIDRs; the
+  direct mTLS agent listener never trusts forwarding headers.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

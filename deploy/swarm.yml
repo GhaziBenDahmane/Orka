@@ -36,6 +36,7 @@ services:
       DOCKYARD_DATABASE_URL_FILE: /run/secrets/dockyard_database_url
       DOCKYARD_MASTER_KEY_FILE: /run/secrets/dockyard_master_key
       DOCKYARD_TRAEFIK_NETWORK: dockyard-public
+      DOCKYARD_TRUSTED_PROXY_CIDRS: ${DOCKYARD_EDGE_SUBNET:-10.255.250.0/24}
       DOCKYARD_PUBLIC_URL: https://${DOCKYARD_HOST}
       DOCKYARD_BACKUP_DIRECTORY: /var/lib/dockyard/backups
       DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT: ${DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -45,7 +46,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/dockyard/backups:/var/lib/dockyard/backups
-    networks: [control, dockyard-public]
+    networks: [control, edge-control]
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/readyz"]
       interval: 10s
@@ -74,7 +75,7 @@ services:
         traefik.http.routers.dockyard.tls: "true"
         traefik.http.routers.dockyard.tls.certresolver: letsencrypt
         traefik.http.services.dockyard.loadbalancer.server.port: "8080"
-        traefik.docker.network: dockyard-public
+        traefik.docker.network: dockyard-edge-control
 
   traefik:
     image: ${TRAEFIK_IMAGE:?set TRAEFIK_IMAGE to an immutable digest}
@@ -94,7 +95,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-data:/data
-    networks: [dockyard-public]
+    networks: [dockyard-public, edge-control]
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 10s
@@ -122,6 +123,14 @@ networks:
     driver: overlay
     driver_opts:
       encrypted: ""
+  edge-control:
+    name: dockyard-edge-control
+    driver: overlay
+    driver_opts:
+      encrypted: ""
+    ipam:
+      config:
+        - subnet: ${DOCKYARD_EDGE_SUBNET:-10.255.250.0/24}
   dockyard-public: {external: true}
 volumes:
   postgres-data: {}
