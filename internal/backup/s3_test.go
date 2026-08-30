@@ -28,6 +28,13 @@ func TestS3ConfigurationAndObjectKey(t *testing.T) {
 		{Endpoint: "https://example.test/path", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "s"},
 		{Endpoint: "http://example.test", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "s"},
 		{Endpoint: "http://example.test", Bucket: "", AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: strings.Repeat("b", maxS3BucketBytes+1), UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Region: "bad region", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: strings.Repeat("p", maxS3PrefixBytes+1), UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: "tenant\\escape", UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", UseTLS: true, AccessKey: strings.Repeat("a", maxS3AccessKeyBytes+1), SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "secret\nvalue"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "s", SessionToken: strings.Repeat("t", maxS3SessionTokenBytes+1)},
 	} {
 		if _, err = NewS3(config); err == nil {
 			t.Fatalf("expected invalid config rejection: %#v", config)

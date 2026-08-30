@@ -36,8 +36,22 @@ type S3 struct {
 }
 
 var s3HostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
+var s3RegionPattern = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
+
+const (
+	maxS3EndpointBytes     = 2048
+	maxS3RegionBytes       = 128
+	maxS3BucketBytes       = 255
+	maxS3PrefixBytes       = 1024
+	maxS3AccessKeyBytes    = 1024
+	maxS3SecretKeyBytes    = 16 << 10
+	maxS3SessionTokenBytes = 16 << 10
+)
 
 func NewS3(config S3Config) (*S3, error) {
+	if len(config.Endpoint) == 0 || len(config.Endpoint) > maxS3EndpointBytes || config.Endpoint != strings.TrimSpace(config.Endpoint) {
+		return nil, errors.New("S3 endpoint is empty or exceeds its supported limit")
+	}
 	parsed, err := url.Parse(config.Endpoint)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || !validS3EndpointHost(parsed) || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.Path != "" && parsed.Path != "/" {
 		return nil, errors.New("S3 endpoint must be an HTTP(S) origin without a path")
@@ -45,8 +59,8 @@ func NewS3(config S3Config) (*S3, error) {
 	if config.UseTLS && parsed.Scheme != "https" || !config.UseTLS && parsed.Scheme != "http" {
 		return nil, errors.New("S3 endpoint scheme does not match useTls")
 	}
-	if strings.TrimSpace(config.Bucket) == "" || strings.Contains(config.Prefix, "..") || config.AccessKey == "" || config.SecretKey == "" {
-		return nil, errors.New("invalid S3 bucket or prefix")
+	if len(config.Region) > maxS3RegionBytes || !s3RegionPattern.MatchString(config.Region) || len(config.Bucket) == 0 || len(config.Bucket) > maxS3BucketBytes || config.Bucket != strings.TrimSpace(config.Bucket) || len(config.Prefix) > maxS3PrefixBytes || strings.Contains(config.Prefix, "..") || strings.ContainsAny(config.Prefix, "\\\x00\r\n") || len(config.AccessKey) == 0 || len(config.AccessKey) > maxS3AccessKeyBytes || len(config.SecretKey) == 0 || len(config.SecretKey) > maxS3SecretKeyBytes || len(config.SessionToken) > maxS3SessionTokenBytes || strings.ContainsAny(config.AccessKey+config.SecretKey+config.SessionToken, "\x00\r\n") {
+		return nil, errors.New("invalid or oversized S3 destination configuration")
 	}
 	client, err := minio.New(parsed.Host, &minio.Options{Creds: credentials.NewStaticV4(config.AccessKey, config.SecretKey, config.SessionToken), Secure: config.UseTLS, Region: config.Region, Transport: config.Transport})
 	if err != nil {

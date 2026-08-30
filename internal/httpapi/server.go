@@ -1368,12 +1368,20 @@ type backupDestinationInput struct {
 	SessionToken string `json:"sessionToken"`
 }
 
+const maxBackupDestinationNameBytes = 120
+
+func normalizedBackupDestinationName(raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	return name, name != "" && len(name) <= maxBackupDestinationNameBytes && !strings.ContainsAny(name, "\x00\r\n")
+}
+
 func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request) {
 	var in backupDestinationInput
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || in.AccessKey == "" || in.SecretKey == "" {
+	name, validName := normalizedBackupDestinationName(in.Name)
+	if !validName || in.AccessKey == "" || in.SecretKey == "" {
 		writeError(w, 400, "invalid_destination", "name, accessKey, and secretKey are required")
 		return
 	}
@@ -1396,7 +1404,7 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateBackupDestination(r.Context(), store.BackupDestination{ID: destinationID, OrganizationID: p.OrganizationID, Name: strings.TrimSpace(in.Name), Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	item, err := s.Store.CreateBackupDestination(r.Context(), store.BackupDestination{ID: destinationID, OrganizationID: p.OrganizationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1415,7 +1423,8 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || in.AccessKey == "" || in.SecretKey == "" {
+	name, validName := normalizedBackupDestinationName(in.Name)
+	if !validName || in.AccessKey == "" || in.SecretKey == "" {
 		writeError(w, http.StatusBadRequest, "invalid_destination", "name, accessKey, and secretKey are required")
 		return
 	}
@@ -1441,7 +1450,7 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 		s.writeInternalError(w, r, http.StatusInternalServerError, "encryption_failed", "backup destination credentials could not be encrypted", err)
 		return
 	}
-	item, err := s.Store.UpdateBackupDestination(r.Context(), p.OrganizationID, store.BackupDestination{ID: destinationID, Name: strings.TrimSpace(in.Name), Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	item, err := s.Store.UpdateBackupDestination(r.Context(), p.OrganizationID, store.BackupDestination{ID: destinationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
 	if err != nil {
 		writeStoreError(w, err)
 		return
