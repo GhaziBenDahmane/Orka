@@ -80,7 +80,9 @@ DOCKYARD_GOPROXY=https://proxy.example.com \
 ```
 
 The console is available at `http://localhost:8080/`. Its production assets are
-embedded in the Go binary. Run `make web` after changing files under `web/`.
+embedded in the Go binary. Every interactive user can inspect active device
+sessions and revoke individual or all other sessions from the Account page.
+Run `make web` after changing files under `web/`.
 
 Run `make test-templates` to start an isolated controller and instantiate the
 built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL

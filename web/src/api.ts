@@ -6,6 +6,7 @@ export type Principal = {
   role: "viewer" | "developer" | "admin" | "owner";
 };
 export type Role = Principal["role"];
+export type SessionInfo = { id: string; organizationId?: string; authMethod: string; userAgent: string; ipAddress: string; expiresAt: string; createdAt: string; lastSeenAt: string; current: boolean };
 
 export type Project = { id: string; name: string; slug: string; description: string };
 export type Environment = { id: string; projectId: string; name: string; slug: string; clusterId?: string; placementSelector?: Record<string, string>; minimumNodes?: number; minimumNanoCpus?: number; minimumMemoryBytes?: number };
@@ -95,6 +96,9 @@ export const api = {
   login: (email: string, password: string) => request<{ token: string }>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
   me: () => request<Principal>("/v1/me"),
+  sessions: () => request<Envelope<SessionInfo>>("/v1/sessions"),
+  revokeSession: (sessionId: string) => request<void>(`/v1/sessions/${sessionId}`, { method: "DELETE" }),
+  revokeOtherSessions: () => request<{ revoked: number }>("/v1/sessions/revoke-others", { method: "POST", body: "{}" }),
   effectiveRole: (resourceType: string, resourceId: string) => request<{ role: Role }>(`/v1/authorization/effective-role?resourceType=${encodeURIComponent(resourceType)}&resourceId=${encodeURIComponent(resourceId)}`),
   discoverOIDC: (email: string) => request<Envelope<{ id: string; name: string }>>(`/v1/auth/sso/discover?email=${encodeURIComponent(email)}`),
   discoverSAML: (email: string) => request<Envelope<{ id: string; name: string }>>(`/v1/auth/saml/discover?email=${encodeURIComponent(email)}`),

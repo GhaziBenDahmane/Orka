@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, ClusterCommand, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, Environment, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceVolume, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, ClusterCommand, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, Environment, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceVolume, SessionInfo, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -110,7 +110,7 @@ function Login({ onLogin, invitationToken, clearInvitation }: { onLogin: (princi
   </main>;
 }
 
-type View = "workloads" | "templates" | "databases" | "clusters" | "governance" | "ai" | "audit" | "notifications" | "settings";
+type View = "workloads" | "templates" | "databases" | "clusters" | "governance" | "ai" | "audit" | "notifications" | "settings" | "account";
 
 function Console({ principal, onLogout }: { principal: Principal; onLogout: () => void }) {
   const [view, setView] = useState<View>("workloads");
@@ -173,6 +173,7 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
         {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "audit"} onClick={() => setView("audit")} icon="≡">Audit</Nav>}
         {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "notifications"} onClick={() => setView("notifications")} icon="◌">Notifications</Nav>}
         {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "settings"} onClick={() => setView("settings")} icon="⚙">Settings</Nav>}
+        <Nav active={view === "account"} onClick={() => setView("account")} icon="◎">Account</Nav>
       </nav>
       <div className="account"><div className="avatar">{principal.email.slice(0, 1).toUpperCase()}</div><div><strong>{principal.email}</strong><small>{principal.role}</small></div><button className="icon-button" onClick={logout} title="Sign out">↪</button></div>
     </aside>
@@ -189,12 +190,46 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
       {view === "audit" && <Audit flash={flash} setError={setError} />}
       {view === "notifications" && <Notifications flash={flash} setError={setError} />}
       {view === "settings" && <Settings flash={flash} setError={setError} />}
+      {view === "account" && <Account principal={principal} onSessionRevoked={onLogout} flash={flash} setError={setError} />}
     </main>
   </div>;
 }
 
 function Nav({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: string; children: string }) {
   return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span>{children}</button>;
+}
+
+function Account({ principal, onSessionRevoked, flash, setError }: { principal: Principal; onSessionRevoked: () => void; flash: (s: string) => void; setError: (s: string) => void }) {
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => setSessions((await api.sessions()).items), []);
+  useEffect(() => { void refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
+
+  async function revoke(item: SessionInfo) {
+    if (!window.confirm(item.current ? "Revoke this session and sign out now?" : "Revoke this device session?")) return;
+    setBusy(true);
+    try {
+      await api.revokeSession(item.id);
+      if (item.current) { onSessionRevoked(); return; }
+      await refresh();
+      flash("Device session revoked");
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  async function revokeOthers() {
+    if (!window.confirm("Revoke every other active session for this account?")) return;
+    setBusy(true);
+    try {
+      const result = await api.revokeOtherSessions();
+      await refresh();
+      flash(`${result.revoked} other session${result.revoked === 1 ? "" : "s"} revoked`);
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  return <div className="account-layout">
+    <section className="card settings-card account-profile"><p className="eyebrow">Signed-in identity</p><h2>{principal.email}</h2><p className="muted">{principal.organization}</p><dl><div><dt>Organization role</dt><dd>{principal.role}</dd></div><div><dt>User ID</dt><dd><code>{principal.userId}</code></dd></div></dl></section>
+    <section className="card settings-card account-sessions"><div className="card-head"><div><p className="eyebrow">Security</p><h2>Device sessions</h2><p className="muted">Review where your account is signed in and revoke access you no longer recognize.</p></div><div className="actions"><button type="button" disabled={busy} onClick={() => void refresh().catch(reason => setError(message(reason)))}>Refresh</button><button type="button" className="danger-button" disabled={busy || sessions.filter(item => !item.current).length === 0} onClick={() => void revokeOthers()}>Revoke all others</button></div></div><div className="admin-items session-list">{sessions.map(item => <article key={item.id}><div><strong>{item.current ? "This device" : item.userAgent || "Unknown device"}</strong><small>{item.current && item.userAgent ? `${item.userAgent} · ` : ""}{item.authMethod.toUpperCase()} · {item.ipAddress || "unknown address"}</small><small>Last active {new Date(item.lastSeenAt).toLocaleString()} · expires {new Date(item.expiresAt).toLocaleString()}</small></div><Status value={item.current ? "current" : "active"} /><button type="button" className="danger-button" disabled={busy} onClick={() => void revoke(item)}>{item.current ? "Sign out" : "Revoke"}</button></article>)}{!sessions.length && <p className="muted">No active sessions were returned.</p>}</div></section>
+  </div>;
 }
 
 type WorkloadProps = {
