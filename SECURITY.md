@@ -65,6 +65,10 @@ only for a dedicated, isolated cluster whose workloads are fully trusted.
 - SCIM tokens expire after at most 365 days (90 days by default). Inventory
   their metadata through the administration API, rotate them before expiry,
   and revoke superseded credentials immediately.
+- Rotate SAML service-provider signing keys with the two-phase API: publish the
+  replacement certificate, refresh the IdP from Dockyard metadata, then promote
+  it. Promotion invalidates in-flight SAML requests; never replace the encrypted
+  active key directly in PostgreSQL.
 
 ## Backup and disaster recovery
 

@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"encoding/xml"
 	"errors"
@@ -216,6 +218,107 @@ func (s *Server) enableSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) beginSAMLCertificateRotation(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid provider id")
+		return
+	}
+	p := principal(r)
+	provider, err := s.Store.GetOrganizationSAMLProvider(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_, certificatePEM, privateKeyPEM, err := newSAMLCertificate(provider.Name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "certificate_failed", "could not generate SAML service-provider certificate")
+		return
+	}
+	notAfter, err := auth.SAMLServiceProviderCertificateExpiry(string(certificatePEM), time.Now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "certificate_failed", "generated SAML certificate is invalid")
+		return
+	}
+	encryptedKey, err := s.Box.Encrypt(privateKeyPEM, "saml-private-key:"+id.String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encryption_failed", err.Error())
+		return
+	}
+	if err = s.Store.BeginSAMLCertificateRotation(r.Context(), p.OrganizationID, id, string(certificatePEM), encryptedKey, notAfter); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	provider, err = s.Store.GetOrganizationSAMLProvider(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	metadata, parseErr := samlsp.ParseMetadata([]byte(provider.IDPMetadata))
+	if parseErr == nil {
+		setSAMLCertificateStatus(&provider, metadata, time.Now())
+	}
+	s.Store.Audit(r.Context(), &p, "sso.saml.certificate_rotation.begin", "saml_provider", id.String(), r.RemoteAddr, map[string]any{"notAfter": notAfter})
+	writeJSON(w, http.StatusCreated, provider)
+}
+
+func (s *Server) promoteSAMLCertificateRotation(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid provider id")
+		return
+	}
+	var in struct {
+		Confirm string `json:"confirm"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	p := principal(r)
+	provider, err := s.Store.GetOrganizationSAMLProvider(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if in.Confirm != provider.Name {
+		writeError(w, http.StatusBadRequest, "confirmation_required", "confirm must exactly match the SAML provider name")
+		return
+	}
+	if provider.PendingCertificatePEM == "" {
+		writeError(w, http.StatusConflict, "rotation_not_pending", "this SAML provider has no pending certificate rotation")
+		return
+	}
+	if _, err = auth.SAMLServiceProviderCertificateExpiry(provider.PendingCertificatePEM, time.Now()); err != nil {
+		writeError(w, http.StatusConflict, "invalid_saml_certificate", "the pending SAML certificate is no longer valid")
+		return
+	}
+	if _, _, err = s.samlSigningMaterial(id, provider.PendingCertificatePEM, provider.PendingEncryptedPrivateKey); err != nil {
+		writeError(w, http.StatusConflict, "invalid_saml_certificate", "the pending SAML certificate and private key do not match")
+		return
+	}
+	if err = s.Store.PromoteSAMLCertificateRotation(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.saml.certificate_rotation.promote", "saml_provider", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) cancelSAMLCertificateRotation(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("providerID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid provider id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.CancelSAMLCertificateRotation(r.Context(), p.OrganizationID, id); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "sso.saml.certificate_rotation.cancel", "saml_provider", id.String(), r.RemoteAddr, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) discoverSAML(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
 	parts := strings.Split(email, "@")
@@ -248,12 +351,21 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	data, err := xml.MarshalIndent(sp.Metadata(), "", "  ")
+	metadata := sp.Metadata()
+	if provider.PendingCertificatePEM != "" {
+		block, _ := pem.Decode([]byte(provider.PendingCertificatePEM))
+		if block == nil || block.Type != "CERTIFICATE" {
+			writeError(w, http.StatusInternalServerError, "metadata_failed", "pending SAML certificate is invalid")
+			return
+		}
+		pending := saml.KeyDescriptor{Use: "signing", KeyInfo: saml.KeyInfo{X509Data: saml.X509Data{X509Certificates: []saml.X509Certificate{{Data: base64.StdEncoding.EncodeToString(block.Bytes)}}}}}
+		metadata.SPSSODescriptors[0].KeyDescriptors = append(metadata.SPSSODescriptors[0].KeyDescriptors, pending)
+	}
+	data, err := xml.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		writeError(w, 500, "metadata_failed", "could not generate service-provider metadata")
 		return
 	}
-	_ = provider
 	w.Header().Set("Content-Type", "application/samlmetadata+xml")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(append([]byte(xml.Header), data...))
@@ -405,34 +517,53 @@ func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.S
 	if err = setSAMLCertificateStatus(&provider, idpMetadata, time.Now()); err != nil {
 		return store.SAMLProvider{}, nil, err
 	}
-	certificateBlock, _ := pem.Decode([]byte(provider.CertificatePEM))
-	if certificateBlock == nil || certificateBlock.Type != "CERTIFICATE" {
-		return store.SAMLProvider{}, nil, errors.New("invalid SAML certificate")
-	}
-	certificate, err := x509.ParseCertificate(certificateBlock.Bytes)
+	certificate, signer, err := s.samlSigningMaterial(provider.ID, provider.CertificatePEM, provider.EncryptedPrivateKey)
 	if err != nil {
 		return store.SAMLProvider{}, nil, err
-	}
-	privateKeyPEM, err := s.Box.Decrypt(provider.EncryptedPrivateKey, "saml-private-key:"+provider.ID.String())
-	if err != nil {
-		return store.SAMLProvider{}, nil, err
-	}
-	privateKeyBlock, _ := pem.Decode(privateKeyPEM)
-	if privateKeyBlock == nil || privateKeyBlock.Type != "PRIVATE KEY" {
-		return store.SAMLProvider{}, nil, errors.New("invalid SAML private key")
-	}
-	key, err := x509.ParsePKCS8PrivateKey(privateKeyBlock.Bytes)
-	if err != nil {
-		return store.SAMLProvider{}, nil, err
-	}
-	signer, ok := key.(crypto.Signer)
-	if !ok {
-		return store.SAMLProvider{}, nil, errors.New("SAML private key cannot sign")
 	}
 	base := strings.TrimRight(s.PublicURL, "/") + "/v1/auth/saml/" + provider.ID.String()
 	metadataURL, _ := url.Parse(base + "/metadata")
 	acsURL, _ := url.Parse(base + "/acs")
 	return provider, &saml.ServiceProvider{EntityID: metadataURL.String(), Key: signer, Certificate: certificate, MetadataURL: *metadataURL, AcsURL: *acsURL, IDPMetadata: idpMetadata, AuthnNameIDFormat: saml.PersistentNameIDFormat, SignatureMethod: dsig.RSASHA256SignatureMethod, AllowIDPInitiated: provider.AllowIDPInitiated, DefaultRedirectURI: strings.TrimRight(s.PublicURL, "/")}, nil
+}
+
+func (s *Server) samlSigningMaterial(providerID uuid.UUID, certificatePEM, encryptedPrivateKey string) (*x509.Certificate, crypto.Signer, error) {
+	certificateBlock, _ := pem.Decode([]byte(certificatePEM))
+	if certificateBlock == nil || certificateBlock.Type != "CERTIFICATE" {
+		return nil, nil, errors.New("invalid SAML certificate")
+	}
+	certificate, err := x509.ParseCertificate(certificateBlock.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	privateKeyPEM, err := s.Box.Decrypt(encryptedPrivateKey, "saml-private-key:"+providerID.String())
+	if err != nil {
+		return nil, nil, err
+	}
+	privateKeyBlock, _ := pem.Decode(privateKeyPEM)
+	if privateKeyBlock == nil || privateKeyBlock.Type != "PRIVATE KEY" {
+		return nil, nil, errors.New("invalid SAML private key")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(privateKeyBlock.Bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		return nil, nil, errors.New("SAML private key cannot sign")
+	}
+	certificateKey, err := x509.MarshalPKIXPublicKey(certificate.PublicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	signerKey, err := x509.MarshalPKIXPublicKey(signer.Public())
+	if err != nil {
+		return nil, nil, err
+	}
+	if !bytes.Equal(certificateKey, signerKey) {
+		return nil, nil, errors.New("SAML certificate and private key do not match")
+	}
+	return certificate, signer, nil
 }
 
 func samlAttribute(assertion *saml.Assertion, name string) string {

@@ -76,9 +76,10 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	now := time.Now().UTC()
 	organizationID, databaseID, clusterID, repositoryID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	staleHeartbeat, expiringCertificate := now.Add(-3*time.Minute), now.Add(6*24*time.Hour)
+	stalledSAMLRotation := now.Add(-8 * 24 * time.Hour)
 	snapshot := store.AIAuditSnapshot{
 		Organization:    organizationID,
-		IdentityPosture: store.AIAuditIdentityPosture{},
+		IdentityPosture: store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation},
 		MigrationPosture: []store.AIAuditMigrationPosture{{
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
@@ -94,13 +95,13 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	for _, finding := range findings {
 		titles[finding.Title] = true
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
 		if !titles[title] {
 			t.Errorf("missing deterministic finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 12 {
-		t.Fatalf("findings=%d, want 12: %#v", len(findings), findings)
+	if len(findings) != 13 {
+		t.Fatalf("findings=%d, want 13: %#v", len(findings), findings)
 	}
 }
 

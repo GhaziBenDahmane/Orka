@@ -46,7 +46,8 @@ keys make it a privileged service.
   transfer credentials never enter the snapshot.
 - Identity posture is aggregate-only: active and disabled membership counts by
   role, active local/OIDC/SAML sessions, active and soon-expiring service
-  accounts, auditor accounts, and active SCIM token count/age. User identities,
+  accounts, auditor accounts, active SCIM token count/age, and pending SAML
+  certificate rotation count/age. User identities,
   session metadata, token hashes, and provider configuration remain excluded.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.

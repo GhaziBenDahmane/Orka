@@ -111,6 +111,8 @@ type AIAuditIdentityPosture struct {
 	ActiveAuditorServiceAccounts    int64      `json:"activeAuditorServiceAccounts"`
 	ActiveSCIMTokens                int64      `json:"activeScimTokens"`
 	OldestActiveSCIMTokenCreatedAt  *time.Time `json:"oldestActiveScimTokenCreatedAt,omitempty"`
+	PendingSAMLCertificateRotations int64      `json:"pendingSamlCertificateRotations"`
+	OldestPendingSAMLRotationAt     *time.Time `json:"oldestPendingSamlRotationAt,omitempty"`
 }
 
 type AIAuditNotificationPosture struct {
@@ -377,7 +379,9 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now() AND token.expires_at<=now()+interval '7 days')),
 		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND account.role='auditor' AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
 		(SELECT count(*) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now()),
-		(SELECT min(created_at) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now())`, organizationID).Scan(
+		(SELECT min(created_at) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now()),
+		(SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND pending_certificate_created_at IS NOT NULL),
+		(SELECT min(pending_certificate_created_at) FROM saml_providers WHERE organization_id=$1 AND pending_certificate_created_at IS NOT NULL)`, organizationID).Scan(
 		&snapshot.IdentityPosture.RequireSSO,
 		&snapshot.IdentityPosture.EnabledOIDCProviders,
 		&snapshot.IdentityPosture.EnabledSAMLProviders,
@@ -396,6 +400,8 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		&snapshot.IdentityPosture.ActiveAuditorServiceAccounts,
 		&snapshot.IdentityPosture.ActiveSCIMTokens,
 		&snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt,
+		&snapshot.IdentityPosture.PendingSAMLCertificateRotations,
+		&snapshot.IdentityPosture.OldestPendingSAMLRotationAt,
 	)
 	if err != nil {
 		return err

@@ -129,6 +129,20 @@ func TestSAMLProviderCreationMetadataAndStart(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_private_key FROM saml_providers WHERE id=$1`, provider.ID).Scan(&preservedKey); err != nil || preservedKey != encryptedKey {
 		t.Fatalf("SAML update replaced the SP key: %v", err)
 	}
+	rotationURL := server.URL + "/v1/sso/saml-providers/" + provider.ID.String() + "/certificate-rotation"
+	req, _ = http.NewRequest(http.MethodPost, rotationURL, bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated || !bytes.Contains(data, []byte(`"pendingCertificateNotAfter"`)) || strings.Contains(string(data), "PRIVATE KEY") {
+		t.Fatalf("begin SAML certificate rotation status=%d body=%s", response.StatusCode, data)
+	}
 
 	response, err = http.Get(server.URL + "/v1/auth/saml/" + provider.ID.String() + "/metadata")
 	if err != nil {
@@ -142,6 +156,65 @@ func TestSAMLProviderCreationMetadataAndStart(t *testing.T) {
 	spMetadata, err := samlsp.ParseMetadata(data)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var signingCertificates int
+	for _, descriptor := range spMetadata.SPSSODescriptors[0].KeyDescriptors {
+		if descriptor.Use == "signing" {
+			signingCertificates += len(descriptor.KeyInfo.X509Data.X509Certificates)
+		}
+	}
+	if signingCertificates != 2 {
+		t.Fatalf("pending rotation metadata signing certificates=%d, want 2", signingCertificates)
+	}
+	promoteURL := rotationURL + "/promote"
+	req, _ = http.NewRequest(http.MethodPost, promoteURL, bytes.NewReader([]byte(`{"confirm":"wrong"}`)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unconfirmed SAML certificate promotion status=%d, want 400", response.StatusCode)
+	}
+	promoteBody, _ := json.Marshal(map[string]string{"confirm": provider.Name})
+	req, _ = http.NewRequest(http.MethodPost, promoteURL, bytes.NewReader(promoteBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("promote SAML certificate status=%d, want 204", response.StatusCode)
+	}
+	var promotedKey string
+	var pendingCertificate *string
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_private_key,pending_certificate_pem FROM saml_providers WHERE id=$1`, provider.ID).Scan(&promotedKey, &pendingCertificate); err != nil || promotedKey == encryptedKey || pendingCertificate != nil {
+		t.Fatalf("promoted SAML key unchanged or pending state retained: pending=%v err=%v", pendingCertificate, err)
+	}
+	response, err = http.Get(server.URL + "/v1/auth/saml/" + provider.ID.String() + "/metadata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	spMetadata, err = samlsp.ParseMetadata(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingCertificates = 0
+	for _, descriptor := range spMetadata.SPSSODescriptors[0].KeyDescriptors {
+		if descriptor.Use == "signing" {
+			signingCertificates += len(descriptor.KeyInfo.X509Data.X509Certificates)
+		}
+	}
+	if signingCertificates != 1 {
+		t.Fatalf("promoted metadata signing certificates=%d, want 1", signingCertificates)
 	}
 	idp.ServiceProviderProvider = fixedServiceProviderMetadata{metadata: spMetadata}
 

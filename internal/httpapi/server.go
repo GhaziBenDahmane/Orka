@@ -144,6 +144,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/sso/saml-providers", s.requireRole("admin", http.HandlerFunc(s.listSAMLProviders)))
 	mux.Handle("PUT /v1/sso/saml-providers/{providerID}", s.requireRole("admin", http.HandlerFunc(s.updateSAMLProvider)))
 	mux.Handle("POST /v1/sso/saml-providers/{providerID}/enable", s.requireRole("admin", http.HandlerFunc(s.enableSAMLProvider)))
+	mux.Handle("POST /v1/sso/saml-providers/{providerID}/certificate-rotation", s.requireRole("admin", http.HandlerFunc(s.beginSAMLCertificateRotation)))
+	mux.Handle("POST /v1/sso/saml-providers/{providerID}/certificate-rotation/promote", s.requireRole("admin", http.HandlerFunc(s.promoteSAMLCertificateRotation)))
+	mux.Handle("DELETE /v1/sso/saml-providers/{providerID}/certificate-rotation", s.requireRole("admin", http.HandlerFunc(s.cancelSAMLCertificateRotation)))
 	mux.Handle("DELETE /v1/sso/saml-providers/{providerID}", s.requireRole("admin", http.HandlerFunc(s.deleteSAMLProvider)))
 	mux.Handle("GET /v1/scim/tokens", s.requireRole("admin", http.HandlerFunc(s.listSCIMTokens)))
 	mux.Handle("POST /v1/scim/tokens", s.requireRole("admin", http.HandlerFunc(s.createSCIMToken)))
@@ -2391,6 +2394,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrUserDisabled) {
 		writeError(w, http.StatusConflict, "user_disabled", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrSAMLCertificateRotationPending) {
+		writeError(w, http.StatusConflict, "saml_certificate_rotation_pending", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrMaintenance) {

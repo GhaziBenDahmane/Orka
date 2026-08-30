@@ -140,6 +140,9 @@ links for every item below.
   callback replay rejection. Its SAML flow imports the generated SP metadata into Keycloak and
   verifies a signed AuthnRequest, signed responses, SP- and IdP-initiated login,
   JIT provisioning, session authentication, and assertion replay rejection.
+  Exercise two-phase SAML SP certificate rollover against each configured
+  provider: publish the replacement, refresh IdP metadata, prove the old key
+  remains active before promotion, promote, and verify a new login.
   Run the equivalent flow against Entra ID, Okta, and Google Workspace, and
   verify tenant isolation with users from two organizations.
 - Rotate the agent listener certificate and CA secrets in a staging controller

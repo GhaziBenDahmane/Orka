@@ -108,7 +108,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -217,6 +217,8 @@ func TestPrometheusAlertsCoverSAMLCertificateHealth(t *testing.T) {
 		"expr: dockyard_saml_certificate_expiry_seconds <= 0",
 		"alert: DockyardSAMLCertificateInvalid",
 		"expr: dockyard_saml_certificate_valid == 0 unless on (organization, provider, kind) dockyard_saml_certificate_expiry_seconds <= 0",
+		"alert: DockyardSAMLCertificateRotationStalled",
+		"expr: dockyard_saml_certificate_rotation_pending_age_seconds > 604800",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

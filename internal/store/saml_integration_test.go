@@ -58,6 +58,38 @@ func TestSAMLProviderStateReplayAndJITIsolation(t *testing.T) {
 	if err = db.DisableSAMLProvider(ctx, orgID, otherProvider.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant disable error = %v, want not found", err)
 	}
+	rotationExpiry := time.Now().Add(365 * 24 * time.Hour)
+	if err = db.BeginSAMLCertificateRotation(ctx, orgID, provider.ID, "replacement-certificate", "replacement-key", rotationExpiry); err != nil {
+		t.Fatalf("begin certificate rotation: %v", err)
+	}
+	if err = db.BeginSAMLCertificateRotation(ctx, orgID, provider.ID, "overwritten-certificate", "overwritten-key", rotationExpiry); !errors.Is(err, ErrSAMLCertificateRotationPending) {
+		t.Fatalf("replace pending certificate error=%v, want pending", err)
+	}
+	rotating, err := db.GetOrganizationSAMLProvider(ctx, orgID, provider.ID)
+	if err != nil || rotating.PendingCertificatePEM != "replacement-certificate" || rotating.PendingCertificateNotAfter == nil {
+		t.Fatalf("pending certificate rotation=%#v err=%v", rotating, err)
+	}
+	if err = db.CancelSAMLCertificateRotation(ctx, otherOrgID, provider.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant rotation cancellation error=%v, want not found", err)
+	}
+	if err = db.CreateSAMLState(ctx, []byte("rotation-state"), provider.ID, "rotation-request"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.PromoteSAMLCertificateRotation(ctx, orgID, provider.ID); err != nil {
+		t.Fatalf("promote certificate rotation: %v", err)
+	}
+	var activeCertificate, activeKey string
+	var pendingCertificate *string
+	var pendingStates int
+	if err = db.Pool.QueryRow(ctx, `SELECT certificate_pem,encrypted_private_key,pending_certificate_pem,(SELECT count(*) FROM saml_states WHERE provider_id=$1) FROM saml_providers WHERE id=$1`, provider.ID).Scan(&activeCertificate, &activeKey, &pendingCertificate, &pendingStates); err != nil || activeCertificate != "replacement-certificate" || activeKey != "replacement-key" || pendingCertificate != nil || pendingStates != 0 {
+		t.Fatalf("promoted certificate=%q key=%q pending=%v states=%d err=%v", activeCertificate, activeKey, pendingCertificate, pendingStates, err)
+	}
+	if err = db.BeginSAMLCertificateRotation(ctx, orgID, provider.ID, "cancelled-certificate", "cancelled-key", rotationExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CancelSAMLCertificateRotation(ctx, orgID, provider.ID); err != nil {
+		t.Fatalf("cancel certificate rotation: %v", err)
+	}
 
 	state := []byte("opaque-state-hash")
 	if err = db.CreateSAMLState(ctx, state, provider.ID, "request-1"); err != nil {

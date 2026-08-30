@@ -28,6 +28,7 @@ var ErrOwnerRequired = errors.New("organization owner role is required")
 var ErrAlreadyMember = errors.New("user is already an organization member")
 var ErrPasswordRequired = errors.New("a password is required for a new local account")
 var ErrUserDisabled = errors.New("user account is disabled")
+var ErrSAMLCertificateRotationPending = errors.New("a SAML certificate rotation is already pending")
 
 type Store struct {
 	Pool                 *pgxpool.Pool
@@ -196,21 +197,25 @@ type OIDCProvider struct {
 }
 
 type SAMLProvider struct {
-	ID                         uuid.UUID  `json:"id"`
-	OrganizationID             uuid.UUID  `json:"organizationId"`
-	Name                       string     `json:"name"`
-	IDPMetadata                string     `json:"-"`
-	CertificatePEM             string     `json:"-"`
-	EncryptedPrivateKey        string     `json:"-"`
-	Domains                    []string   `json:"domains"`
-	EmailAttribute             string     `json:"emailAttribute"`
-	NameAttribute              string     `json:"nameAttribute"`
-	DefaultRole                string     `json:"defaultRole"`
-	AllowIDPInitiated          bool       `json:"allowIdpInitiated"`
-	Enabled                    bool       `json:"enabled"`
-	SPCertificateNotAfter      *time.Time `json:"spCertificateNotAfter,omitempty"`
-	IDPCertificateNotAfter     *time.Time `json:"idpCertificateNotAfter,omitempty"`
-	CertificateConfigurationOK bool       `json:"certificateConfigurationOk"`
+	ID                          uuid.UUID  `json:"id"`
+	OrganizationID              uuid.UUID  `json:"organizationId"`
+	Name                        string     `json:"name"`
+	IDPMetadata                 string     `json:"-"`
+	CertificatePEM              string     `json:"-"`
+	EncryptedPrivateKey         string     `json:"-"`
+	PendingCertificatePEM       string     `json:"-"`
+	PendingEncryptedPrivateKey  string     `json:"-"`
+	Domains                     []string   `json:"domains"`
+	EmailAttribute              string     `json:"emailAttribute"`
+	NameAttribute               string     `json:"nameAttribute"`
+	DefaultRole                 string     `json:"defaultRole"`
+	AllowIDPInitiated           bool       `json:"allowIdpInitiated"`
+	Enabled                     bool       `json:"enabled"`
+	SPCertificateNotAfter       *time.Time `json:"spCertificateNotAfter,omitempty"`
+	IDPCertificateNotAfter      *time.Time `json:"idpCertificateNotAfter,omitempty"`
+	CertificateConfigurationOK  bool       `json:"certificateConfigurationOk"`
+	PendingCertificateNotAfter  *time.Time `json:"pendingCertificateNotAfter,omitempty"`
+	PendingCertificateCreatedAt *time.Time `json:"pendingCertificateCreatedAt,omitempty"`
 }
 
 type DatabaseBackup struct {
@@ -2044,7 +2049,7 @@ func (s *Store) UpdateSAMLProvider(ctx context.Context, organizationID uuid.UUID
 		return SAMLProvider{}, err
 	}
 	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err = tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -2059,7 +2064,7 @@ func (s *Store) UpdateSAMLProvider(ctx context.Context, organizationID uuid.UUID
 
 func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider, error) {
 	var p SAMLProvider
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,COALESCE(pending_certificate_pem,''),COALESCE(pending_encrypted_private_key,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.PendingCertificatePEM, &p.PendingEncryptedPrivateKey, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -2068,7 +2073,7 @@ func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider
 
 func (s *Store) GetOrganizationSAMLProvider(ctx context.Context, organizationID, id uuid.UUID) (SAMLProvider, error) {
 	var p SAMLProvider
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,COALESCE(pending_certificate_pem,''),COALESCE(pending_encrypted_private_key,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.PendingCertificatePEM, &p.PendingEncryptedPrivateKey, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -2076,7 +2081,7 @@ func (s *Store) GetOrganizationSAMLProvider(ctx context.Context, organizationID,
 }
 
 func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID) ([]SAMLProvider, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -2084,12 +2089,57 @@ func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID)
 	items := []SAMLProvider{}
 	for rows.Next() {
 		var p SAMLProvider
-		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
+		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
 			return nil, err
 		}
 		items = append(items, p)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) BeginSAMLCertificateRotation(ctx context.Context, organizationID, id uuid.UUID, certificatePEM, encryptedPrivateKey string, notAfter time.Time) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET pending_certificate_pem=$3,pending_encrypted_private_key=$4,pending_certificate_not_after=$5,pending_certificate_created_at=now() WHERE id=$1 AND organization_id=$2 AND enabled AND pending_certificate_pem IS NULL`, id, organizationID, certificatePEM, encryptedPrivateKey, notAfter)
+	if err != nil || tag.RowsAffected() > 0 {
+		return err
+	}
+	var pending bool
+	if err = s.Pool.QueryRow(ctx, `SELECT pending_certificate_pem IS NOT NULL FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&pending); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if pending {
+		return ErrSAMLCertificateRotationPending
+	}
+	return ErrNotFound
+}
+
+func (s *Store) PromoteSAMLCertificateRotation(ctx context.Context, organizationID, id uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE saml_providers SET certificate_pem=pending_certificate_pem,encrypted_private_key=pending_encrypted_private_key,pending_certificate_pem=NULL,pending_encrypted_private_key=NULL,pending_certificate_not_after=NULL,pending_certificate_created_at=NULL WHERE id=$1 AND organization_id=$2 AND pending_certificate_pem IS NOT NULL`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM saml_states WHERE provider_id=$1`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelSAMLCertificateRotation(ctx context.Context, organizationID, id uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET pending_certificate_pem=NULL,pending_encrypted_private_key=NULL,pending_certificate_not_after=NULL,pending_certificate_created_at=NULL WHERE id=$1 AND organization_id=$2 AND pending_certificate_pem IS NOT NULL`, id, organizationID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
 }
 
 func (s *Store) DiscoverSAML(ctx context.Context, domain string) ([]SAMLProvider, error) {

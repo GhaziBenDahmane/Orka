@@ -116,7 +116,10 @@ deactivation state are tenant-bound, and shared global identities cannot be
 mutated across organizations. Scheduled real-provider conformance exercises
 both OIDC and SAML against TLS-enabled Keycloak, including signed
 metadata-derived SAML configuration, SP- and IdP-initiated login, and replay
-rejection.
+rejection. SAML service-provider signing keys use a two-phase rollover that
+publishes the replacement certificate before an explicit, key-verified
+promotion; certificate and metadata expiry are visible in the console,
+Prometheus, and the AI audit posture.
 
 - External write-once audit archives use S3 Object Lock COMPLIANCE retention,
   hash-chained manifests, durable retries, delivery inspection, failure

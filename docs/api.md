@@ -69,6 +69,8 @@ deployments, backups, restores, restore drills, and operation durations.
 | GET/POST | `/v1/sso/saml-providers` | List or configure SAML identity providers |
 | PUT | `/v1/sso/saml-providers/{id}` | Refresh IdP metadata and mappings while preserving the SP key and entity ID |
 | POST | `/v1/sso/saml-providers/{id}/enable` | Re-enable a disabled SAML provider |
+| POST/DELETE | `/v1/sso/saml-providers/{id}/certificate-rotation` | Publish or cancel a pending SP signing certificate |
+| POST | `/v1/sso/saml-providers/{id}/certificate-rotation/promote` | Promote the published certificate after the IdP imports it |
 | GET | `/v1/auth/saml/discover?email=…` | Discover SAML providers by email domain |
 | GET | `/v1/auth/saml/{providerID}/metadata` | Download signed-request SP metadata |
 | GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |
@@ -203,6 +205,13 @@ trust expiry. Metadata updates reject expired, malformed, or not-yet-valid
 signing material while accepting normal rollover metadata with multiple signing
 certificates. Prometheus alerts thirty days before either trust boundary
 expires.
+SP signing-certificate rotation is two phase. Starting a rotation generates an
+encrypted replacement key and adds only its signing certificate to the public
+SP metadata while authentication requests continue using the active key. After
+the IdP has refreshed that metadata, promote the replacement by sending the
+provider name as `confirm`. Promotion atomically switches the key, removes the
+pending certificate, and invalidates in-flight SAML requests. A pending rotation
+can instead be cancelled without changing the active key.
 Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
 Once enabled, local-password sessions cannot access that organization except
 for its owner break-glass account.

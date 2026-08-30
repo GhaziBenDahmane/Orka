@@ -252,3 +252,12 @@ groups:
         annotations:
           summary: A Dockyard SAML certificate configuration is unusable
           description: SAML provider {{ $labels.provider }} {{ $labels.kind }} certificate material is malformed or not currently valid.
+
+      - alert: DockyardSAMLCertificateRotationStalled
+        expr: dockyard_saml_certificate_rotation_pending_age_seconds > 604800
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard SAML certificate rotation is stalled
+          description: SAML provider {{ $labels.provider }} has published a replacement signing certificate for more than seven days without promotion or cancellation.
