@@ -113,8 +113,8 @@ are recorded in the tenant audit chain.
 | POST | `/v1/agent/commands/{id}/lease` | Renew a command lease using its fencing ID |
 | POST | `/v1/agent/commands/{id}/complete` | Store a fenced command result |
 | POST | `/v1/agent/rotate` | Issue a pending short-lived certificate; first successful authentication promotes it and revokes the old serial |
-| GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
-| GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
+| GET/POST/PUT/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
+| GET/POST/PUT/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 | GET | `/scim/v2/Schemas…`, `/scim/v2/ResourceTypes…` | Public SCIM schema and resource-type discovery |
 
 SCIM user resources are bound to the organization that provisioned them.
@@ -134,7 +134,10 @@ not fail solely because they include optional schema fields.
 User PATCH supports explicit paths and the standard pathless `replace` object
 for `userName`, `displayName`, `externalId`, and `active`; shared global
 identities cannot have tenant-owned profile fields changed across organizations.
-Successful SCIM user and group creates, patches, and deletes are recorded in
+User and group `PUT` requests perform full resource replacement, including
+group membership reconciliation, while preserving a group's internal role when
+the identity provider omits that Orka-specific attribute.
+Successful SCIM user and group creates, replacements, patches, and deletes are recorded in
 the tenant audit log without copying profile fields or bearer credentials.
 Deactivation removes access but retains that binding, so identity providers can
 query and reactivate an inactive user. A tenant cannot PATCH a global user ID

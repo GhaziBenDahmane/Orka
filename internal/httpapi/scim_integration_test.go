@@ -100,6 +100,17 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if updatedUser["userName"] != updatedUserName || updatedUser["displayName"] != "Updated Member" || updatedUser["externalId"] != updatedExternalUserID {
 		t.Fatalf("pathless SCIM patch was not persisted: %#v", updatedUser)
 	}
+	replacedExternalUserID := "replaced-" + externalUserID
+	replacedUserName := "replaced-" + orgID.String() + "@example.test"
+	replacedUser := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPut, map[string]any{
+		"schemas":    []string{scimUserSchema, "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"},
+		"externalId": replacedExternalUserID, "userName": replacedUserName, "displayName": "Replaced Member", "active": true,
+		"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": map[string]string{"department": "Operations"},
+	}, http.StatusOK)
+	if replacedUser["id"] != memberID || replacedUser["userName"] != replacedUserName || replacedUser["displayName"] != "Replaced Member" || replacedUser["externalId"] != replacedExternalUserID || replacedUser["active"] != true {
+		t.Fatalf("SCIM user replacement was not persisted: %#v", replacedUser)
+	}
+	updatedExternalUserID = replacedExternalUserID
 	externalMatch = doSCIMRequest(t, server.URL+`/scim/v2/Users?filter=externalId%20eq%20%22`+updatedExternalUserID+`%22`, token, http.MethodGet, nil, http.StatusOK)
 	if externalMatch["totalResults"] != float64(1) {
 		t.Fatalf("updated externalId cannot be resolved: %#v", externalMatch)
@@ -115,6 +126,7 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	// attached by PATCH.
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Compromised"}}}, http.StatusNotFound)
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": true}}}, http.StatusNotFound)
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPut, map[string]any{"userName": "compromised@example.test", "active": true}, http.StatusNotFound)
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": strings.Repeat("x", 121)}}}, http.StatusBadRequest)
 	var otherName string
 	var attached bool
@@ -143,6 +155,15 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, memberID).Scan(&role); err != nil || role != "admin" {
 		t.Fatalf("group role = %q, err = %v", role, err)
 	}
+	replacedGroupExternalID := "replaced-" + groupExternalID
+	replacedGroup := doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPut, map[string]any{
+		"schemas": []string{scimGroupSchema}, "externalId": replacedGroupExternalID, "displayName": "Platform Engineering",
+		"members": []map[string]string{{"value": memberID}},
+	}, http.StatusOK)
+	if replacedGroup["externalId"] != replacedGroupExternalID || replacedGroup["displayName"] != "Platform Engineering" || replacedGroup["role"] != "admin" || len(replacedGroup["members"].([]any)) != 1 {
+		t.Fatalf("SCIM group replacement was not persisted: %#v", replacedGroup)
+	}
+	groupExternalID = replacedGroupExternalID
 	updatedGroupExternalID := "updated-" + groupExternalID
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "externalId", "value": updatedGroupExternalID}}}, http.StatusNoContent)
 	groupMatch = doSCIMRequest(t, server.URL+`/scim/v2/Groups?filter=externalId%20eq%20%22`+updatedGroupExternalID+`%22`, token, http.MethodGet, nil, http.StatusOK)
@@ -170,24 +191,25 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Cross-tenant rename"}}}, http.StatusConflict)
 	var memberName string
-	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, memberID).Scan(&memberName); err != nil || memberName != "Updated Member" {
+	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, memberID).Scan(&memberName); err != nil || memberName != "Replaced Member" {
 		t.Fatalf("shared display name = %q, err = %v", memberName, err)
 	}
 
 	// Inactive SCIM resources retain their organization-scoped binding so the
 	// identity provider can query and reactivate them without a global lookup.
-	inactive := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "inactive-" + orgID.String() + "@example.test", "displayName": "Inactive", "active": false}, http.StatusCreated)
+	inactiveUserName := "inactive-" + orgID.String() + "@example.test"
+	inactive := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": inactiveUserName, "displayName": "Inactive", "active": false}, http.StatusCreated)
 	inactiveID := inactive["id"].(string)
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, inactiveID) })
 	loaded := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusOK)
 	if active, _ := loaded["active"].(bool); active {
 		t.Fatal("new inactive SCIM user is active")
 	}
-	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": true}}}, http.StatusNoContent)
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPut, map[string]any{"userName": inactiveUserName, "displayName": "Inactive", "active": true}, http.StatusOK)
 	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)`, orgID, inactiveID).Scan(&attached); err != nil || !attached {
 		t.Fatalf("inactive user reactivated = %v, err = %v", attached, err)
 	}
-	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": false}}}, http.StatusNoContent)
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPut, map[string]any{"userName": inactiveUserName, "displayName": "Inactive", "active": false}, http.StatusOK)
 	loaded = doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusOK)
 	if active, _ := loaded["active"].(bool); active {
 		t.Fatal("deprovisioned SCIM user is active")
@@ -202,8 +224,8 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
 
 	var scimAuditEvents int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.patch','scim.user.delete','scim.group.create','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 12 {
-		t.Fatalf("SCIM audit event count=%d, want 12, err=%v", scimAuditEvents, err)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 14 {
+		t.Fatalf("SCIM audit event count=%d, want 14, err=%v", scimAuditEvents, err)
 	}
 }
 

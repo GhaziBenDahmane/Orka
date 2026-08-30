@@ -184,6 +184,8 @@ func (s *Server) scimGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		scimJSON(w, 200, item)
+	case http.MethodPut:
+		s.replaceSCIMGroup(w, r, orgID, id)
 	case http.MethodPatch:
 		s.patchSCIMGroup(w, r, orgID, id)
 	case http.MethodDelete:
@@ -191,6 +193,83 @@ func (s *Server) scimGroup(w http.ResponseWriter, r *http.Request) {
 	default:
 		scimError(w, 405, "method not allowed")
 	}
+}
+
+func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, groupID uuid.UUID) {
+	var in scimGroupInput
+	if !decodeSCIM(w, r, &in) {
+		return
+	}
+	var validName bool
+	in.DisplayName, validName = canonicalDisplayName(in.DisplayName)
+	in.ExternalID = strings.TrimSpace(in.ExternalID)
+	if !validName || in.DisplayName == "" {
+		scimError(w, http.StatusBadRequest, "displayName must be non-empty and no longer than 120 bytes")
+		return
+	}
+	if len(in.ExternalID) > 1024 {
+		scimError(w, http.StatusBadRequest, "externalId must not exceed 1024 bytes")
+		return
+	}
+	if len(in.Members) > scimMaxGroupMembers {
+		scimError(w, http.StatusBadRequest, "group membership exceeds 1000 users")
+		return
+	}
+
+	tx, err := s.Store.Pool.Begin(r.Context())
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var currentRole string
+	if err = tx.QueryRow(r.Context(), `SELECT role FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&currentRole); errors.Is(err, pgx.ErrNoRows) {
+		scimError(w, http.StatusNotFound, "group not found")
+		return
+	} else if err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	role := currentRole
+	if in.Role != "" {
+		if !validSCIMRole(in.Role) {
+			scimError(w, http.StatusBadRequest, "role must be admin, developer, or viewer")
+			return
+		}
+		role = in.Role
+	}
+	var externalID any
+	if in.ExternalID != "" {
+		externalID = in.ExternalID
+	}
+	_, err = tx.Exec(r.Context(), `UPDATE scim_groups SET external_id=$3,display_name=$4,role=$5,updated_at=now() WHERE id=$1 AND organization_id=$2`, groupID, orgID, externalID, in.DisplayName, role)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		scimError(w, http.StatusConflict, "group displayName or externalId is already in use")
+		return
+	}
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "group cannot be replaced")
+		return
+	}
+	if err = replaceSCIMMembers(r.Context(), tx, orgID, groupID, in.Members); err != nil {
+		scimError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.replace", "scim_group", groupID.String(), r.RemoteAddr, map[string]any{"role": role, "memberCount": len(in.Members)}); err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	item, err := s.loadSCIMGroup(r.Context(), orgID, groupID)
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "replaced group could not be loaded")
+		return
+	}
+	scimJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, groupID uuid.UUID) {

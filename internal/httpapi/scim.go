@@ -418,12 +418,126 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(204)
+	case http.MethodPut:
+		s.replaceSCIMUser(w, r, orgID, userID, role)
 	case http.MethodPatch:
 		s.patchSCIMUser(w, r, orgID, userID, role)
 	default:
 		scimError(w, 405, "method not allowed")
 	}
 }
+
+func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, userID uuid.UUID, fallbackRole string) {
+	var in scimUserInput
+	if !decodeSCIM(w, r, &in) {
+		return
+	}
+	email, _, validEmail := canonicalEmail(in.UserName)
+	if !validEmail {
+		scimError(w, http.StatusBadRequest, "userName must be an email address")
+		return
+	}
+	var validDisplayName bool
+	in.DisplayName, validDisplayName = canonicalDisplayName(in.DisplayName)
+	if !validDisplayName {
+		scimError(w, http.StatusBadRequest, "displayName must not exceed 120 bytes")
+		return
+	}
+	in.ExternalID = strings.TrimSpace(in.ExternalID)
+	if len(in.ExternalID) > 1024 {
+		scimError(w, http.StatusBadRequest, "externalId must not exceed 1024 bytes")
+		return
+	}
+
+	tx, err := s.Store.Pool.Begin(r.Context())
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var currentEmail, currentDisplayName string
+	var currentRole *string
+	var currentActive, shared bool
+	err = tx.QueryRow(r.Context(), `SELECT u.email,u.display_name,
+		(SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2),
+		EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2),
+		(EXISTS(SELECT 1 FROM memberships WHERE user_id=$2 AND organization_id<>$1)
+			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE user_id=$2 AND organization_id<>$1))
+		FROM users u WHERE u.id=$2 AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
+			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2))
+		FOR UPDATE OF u`, orgID, userID).Scan(&currentEmail, &currentDisplayName, &currentRole, &currentActive, &shared)
+	if errors.Is(err, pgx.ErrNoRows) {
+		scimError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	active := currentActive
+	if in.Active != nil {
+		active = *in.Active
+	}
+	if !active && currentRole != nil && *currentRole == "owner" {
+		scimError(w, http.StatusConflict, "organization owners cannot be deprovisioned through SCIM")
+		return
+	}
+	if shared && email != currentEmail {
+		scimError(w, http.StatusConflict, "userName is shared with another organization")
+		return
+	}
+	if shared && in.DisplayName != currentDisplayName {
+		scimError(w, http.StatusConflict, "displayName is shared with another organization")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err == nil {
+		_, err = tx.Exec(r.Context(), `UPDATE users SET email=$2,display_name=$3 WHERE id=$1`, userID, email, in.DisplayName)
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		scimError(w, http.StatusConflict, "userName is already in use")
+		return
+	}
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "profile cannot be replaced")
+		return
+	}
+	var externalID any
+	if in.ExternalID != "" {
+		externalID = in.ExternalID
+	}
+	_, err = tx.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id)
+		VALUES($1,$2,$3,$4) ON CONFLICT(organization_id,user_id) DO UPDATE SET external_id=excluded.external_id`, orgID, userID, fallbackRole, externalID)
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		scimError(w, http.StatusConflict, "externalId is already assigned in this organization")
+		return
+	}
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "externalId cannot be replaced")
+		return
+	}
+	if active {
+		_, err = tx.Exec(r.Context(), `INSERT INTO memberships(organization_id,user_id,role)
+			SELECT organization_id,user_id,default_role FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2
+			ON CONFLICT(organization_id,user_id) DO UPDATE SET role=CASE WHEN memberships.role='owner' THEN 'owner' ELSE excluded.role END`, orgID, userID)
+	} else if _, err = tx.Exec(r.Context(), `DELETE FROM scim_group_members gm USING scim_groups g WHERE gm.group_id=g.id AND g.organization_id=$1 AND gm.user_id=$2`, orgID, userID); err == nil {
+		_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+	}
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, "membership cannot be replaced")
+		return
+	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.user.replace", "user", userID.String(), r.RemoteAddr, map[string]any{"active": active}); err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	scimJSON(w, http.StatusOK, makeSCIMUser(userID, in.ExternalID, email, in.DisplayName, active, s.PublicURL))
+}
+
 func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, userID uuid.UUID, role string) {
 	var in struct {
 		Schemas    []string                 `json:"schemas"`

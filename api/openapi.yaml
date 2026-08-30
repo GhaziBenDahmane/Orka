@@ -188,6 +188,38 @@ paths:
             application/scim+json:
               schema:
                 $ref: '#/components/schemas/SCIMError'
+    put:
+      operationId: put_scim_v2_Groups_groupID
+      tags: [scim]
+      security:
+        - scimBearer: []
+      parameters:
+        - name: groupID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/scim+json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
+        default:
+          description: Structured API error
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMError'
   /scim/v2/ResourceTypes:
     get:
       operationId: get_scim_v2_ResourceTypes
@@ -397,6 +429,38 @@ paths:
                 $ref: '#/components/schemas/SCIMError'
     patch:
       operationId: patch_scim_v2_Users_userID
+      tags: [scim]
+      security:
+        - scimBearer: []
+      parameters:
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/scim+json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
+        default:
+          description: Structured API error
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMError'
+    put:
+      operationId: put_scim_v2_Users_userID
       tags: [scim]
       security:
         - scimBearer: []
