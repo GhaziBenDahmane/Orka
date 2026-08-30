@@ -128,8 +128,13 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	// A token can never attach a user from another organization to its group.
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"displayName": "Cross tenant", "members": []map[string]string{{"value": otherUserID.String()}}}, http.StatusBadRequest)
 
-	group := doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"externalId": uuid.NewString(), "displayName": "Engineering", "role": "admin", "members": []map[string]string{{"value": memberID}}}, http.StatusCreated)
+	groupExternalID := "directory-group-" + uuid.NewString()
+	group := doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"externalId": groupExternalID, "displayName": "Engineering", "role": "admin", "members": []map[string]string{{"value": memberID}}}, http.StatusCreated)
 	groupID := group["id"].(string)
+	groupMatch := doSCIMRequest(t, server.URL+`/scim/v2/Groups?filter=externalId%20eq%20%22`+groupExternalID+`%22`, token, http.MethodGet, nil, http.StatusOK)
+	if groupMatch["totalResults"] != float64(1) || len(groupMatch["Resources"].([]any)) != 1 {
+		t.Fatalf("unexpected group externalId filter response: %#v", groupMatch)
+	}
 	groupCount := doSCIMRequest(t, server.URL+"/scim/v2/Groups?count=0", token, http.MethodGet, nil, http.StatusOK)
 	if groupCount["totalResults"] != float64(1) || groupCount["itemsPerPage"] != float64(0) || len(groupCount["Resources"].([]any)) != 0 {
 		t.Fatalf("unexpected group count response: %#v", groupCount)
@@ -138,7 +143,14 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, memberID).Scan(&role); err != nil || role != "admin" {
 		t.Fatalf("group role = %q, err = %v", role, err)
 	}
+	updatedGroupExternalID := "updated-" + groupExternalID
+	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "externalId", "value": updatedGroupExternalID}}}, http.StatusNoContent)
+	groupMatch = doSCIMRequest(t, server.URL+`/scim/v2/Groups?filter=externalId%20eq%20%22`+updatedGroupExternalID+`%22`, token, http.MethodGet, nil, http.StatusOK)
+	if groupMatch["totalResults"] != float64(1) {
+		t.Fatalf("updated group externalId cannot be resolved: %#v", groupMatch)
+	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "role", "value": "developer"}}}, http.StatusNoContent)
+	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": strings.Repeat("x", 121)}}}, http.StatusBadRequest)
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, memberID).Scan(&role); err != nil || role != "developer" {
 		t.Fatalf("updated group role = %q, err = %v", role, err)
 	}
@@ -190,8 +202,8 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
 
 	var scimAuditEvents int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.patch','scim.user.delete','scim.group.create','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 11 {
-		t.Fatalf("SCIM audit event count=%d, want 11, err=%v", scimAuditEvents, err)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.patch','scim.user.delete','scim.group.create','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 12 {
+		t.Fatalf("SCIM audit event count=%d, want 12, err=%v", scimAuditEvents, err)
 	}
 }
 

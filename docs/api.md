@@ -124,6 +124,9 @@ User and group collection reads support the SCIM `filter`, one-based
 return the full matching `totalResults` independently of the current page.
 User `externalId` values are preserved, unique within an organization, and can
 be resolved with an `externalId eq` filter for stable directory correlation.
+Group `displayName` and `externalId` filters are supported as well; group names
+are limited to 120 bytes, external IDs to 1024 bytes, and each membership
+mutation to 1000 users.
 SCIM create requests accept extension attributes within the normal bounded request body;
 unsupported attributes are ignored so standard Entra and Okta user payloads do
 not fail solely because they include optional schema fields.

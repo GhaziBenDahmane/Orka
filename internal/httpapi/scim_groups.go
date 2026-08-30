@@ -11,9 +11,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
+const scimMaxGroupMembers = 1000
 
 type scimMember struct {
 	Value   string `json:"value"`
@@ -62,13 +64,17 @@ func (s *Server) listSCIMGroups(w http.ResponseWriter, r *http.Request, orgID uu
 	from := ` FROM scim_groups WHERE organization_id=$1`
 	args := []any{orgID}
 	if filter := r.URL.Query().Get("filter"); filter != "" {
-		match := regexp.MustCompile(`(?i)^displayName\s+eq\s+"([^"]+)"$`).FindStringSubmatch(filter)
-		if len(match) != 2 {
-			scimError(w, 400, "only displayName eq filters are supported")
+		match := regexp.MustCompile(`(?i)^(displayName|externalId)\s+eq\s+"([^"]+)"$`).FindStringSubmatch(filter)
+		if len(match) != 3 {
+			scimError(w, 400, "only displayName eq and externalId eq filters are supported")
 			return
 		}
-		from += ` AND display_name=$2`
-		args = append(args, match[1])
+		if strings.EqualFold(match[1], "displayName") {
+			from += ` AND display_name=$2`
+		} else {
+			from += ` AND external_id=$2`
+		}
+		args = append(args, match[2])
 	}
 	var total int
 	if err = s.Store.Pool.QueryRow(r.Context(), `SELECT count(*)`+from, args...).Scan(&total); err != nil {
@@ -110,12 +116,22 @@ func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID u
 	if !decodeSCIM(w, r, &in) {
 		return
 	}
-	in.DisplayName = strings.TrimSpace(in.DisplayName)
+	var validName bool
+	in.DisplayName, validName = canonicalDisplayName(in.DisplayName)
+	in.ExternalID = strings.TrimSpace(in.ExternalID)
 	if in.Role == "" {
 		in.Role = "viewer"
 	}
-	if in.DisplayName == "" || !validSCIMRole(in.Role) {
+	if !validName || in.DisplayName == "" || !validSCIMRole(in.Role) {
 		scimError(w, 400, "displayName and a valid role are required")
+		return
+	}
+	if len(in.ExternalID) > 1024 {
+		scimError(w, 400, "externalId must not exceed 1024 bytes")
+		return
+	}
+	if len(in.Members) > scimMaxGroupMembers {
+		scimError(w, 400, "group membership exceeds 1000 users")
 		return
 	}
 	tx, err := s.Store.Pool.Begin(r.Context())
@@ -207,13 +223,46 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 		path := strings.TrimSpace(op.Path)
 		if strings.EqualFold(path, "displayName") && strings.EqualFold(op.Op, "replace") {
 			var name string
-			if json.Unmarshal(op.Value, &name) != nil || strings.TrimSpace(name) == "" {
-				scimError(w, 400, "displayName must be a non-empty string")
+			var validName bool
+			if json.Unmarshal(op.Value, &name) != nil {
+				scimError(w, 400, "displayName must be a string")
 				return
 			}
-			_, err = tx.Exec(r.Context(), `UPDATE scim_groups SET display_name=$3,updated_at=now() WHERE id=$1 AND organization_id=$2`, groupID, orgID, strings.TrimSpace(name))
+			name, validName = canonicalDisplayName(name)
+			if !validName || name == "" {
+				scimError(w, 400, "displayName must be non-empty and no longer than 120 bytes")
+				return
+			}
+			_, err = tx.Exec(r.Context(), `UPDATE scim_groups SET display_name=$3,updated_at=now() WHERE id=$1 AND organization_id=$2`, groupID, orgID, name)
 			if err != nil {
 				scimError(w, 409, "displayName is already in use")
+				return
+			}
+			continue
+		}
+		if strings.EqualFold(path, "externalId") && strings.EqualFold(op.Op, "replace") {
+			var externalID string
+			if json.Unmarshal(op.Value, &externalID) != nil {
+				scimError(w, 400, "externalId must be a string")
+				return
+			}
+			externalID = strings.TrimSpace(externalID)
+			if len(externalID) > 1024 {
+				scimError(w, 400, "externalId must not exceed 1024 bytes")
+				return
+			}
+			var storedExternalID any
+			if externalID != "" {
+				storedExternalID = externalID
+			}
+			_, err = tx.Exec(r.Context(), `UPDATE scim_groups SET external_id=$3,updated_at=now() WHERE id=$1 AND organization_id=$2`, groupID, orgID, storedExternalID)
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				scimError(w, 409, "externalId is already assigned in this organization")
+				return
+			}
+			if err != nil {
+				scimError(w, 500, "externalId cannot be updated")
 				return
 			}
 			continue
@@ -292,6 +341,9 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 func decodeSCIMMembers(raw json.RawMessage) ([]scimMember, error) {
 	var members []scimMember
 	if err := json.Unmarshal(raw, &members); err == nil {
+		if len(members) > scimMaxGroupMembers {
+			return nil, errors.New("group membership exceeds 1000 users")
+		}
 		return members, nil
 	}
 	var wrapper struct {
@@ -299,6 +351,9 @@ func decodeSCIMMembers(raw json.RawMessage) ([]scimMember, error) {
 	}
 	if err := json.Unmarshal(raw, &wrapper); err != nil || wrapper.Members == nil {
 		return nil, errors.New("members value must be an array")
+	}
+	if len(wrapper.Members) > scimMaxGroupMembers {
+		return nil, errors.New("group membership exceeds 1000 users")
 	}
 	return wrapper.Members, nil
 }

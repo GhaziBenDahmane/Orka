@@ -113,3 +113,14 @@ func TestNormalizeSCIMUserPatchOperations(t *testing.T) {
 		t.Fatal("unsupported pathless attribute was accepted")
 	}
 }
+
+func TestDecodeSCIMMembersEnforcesBatchLimit(t *testing.T) {
+	members := make([]scimMember, scimMaxGroupMembers+1)
+	encoded, err := json.Marshal(members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = decodeSCIMMembers(encoded); err == nil {
+		t.Fatal("oversized SCIM member batch was accepted")
+	}
+}
