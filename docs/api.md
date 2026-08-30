@@ -401,6 +401,11 @@ until an administrator retries them.
 | DELETE | `/v1/webhooks/{id}` | Disable a provider webhook integration |
 | POST | `/v1/hooks/provider/{id}` | Verify a provider push event and deploy |
 
+Operations that need running containers—database backup/restore/migration and
+named-volume backup/restore—return `409 service_stopped` while their owning
+service is stopped. Scheduled policies remain due and resume after the service
+is started; their schedule is not silently advanced while stopped.
+
 Organization owners and administrators manage scoped grants. A project grant
 is inherited by all of its environments, while a more privileged environment
 grant applies within that environment. Scoped roles elevate a member's

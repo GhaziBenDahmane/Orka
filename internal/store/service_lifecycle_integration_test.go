@@ -14,6 +14,8 @@ func TestServiceStopStartIntentAndReconciliationFencing(t *testing.T) {
 	}
 	db := &Store{Pool: pool}
 	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	databaseID, databaseBackupID := uuid.New(), uuid.New()
+	destinationID, volumePolicyID, volumeBackupID := uuid.New(), uuid.New(), uuid.New()
 	stackName := "lifecycle-" + serviceID.String()
 	statements := []struct {
 		query string
@@ -22,8 +24,13 @@ func TestServiceStopStartIntentAndReconciliationFencing(t *testing.T) {
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Lifecycle intent',$2)`, []any{organizationID, "lifecycle-intent-" + organizationID.String()}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
-		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'API','api',$3,'services: {api: {image: nginx}}')`, []any{serviceID, environmentID, stackName}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml) VALUES($1,$2,'API','api',$3,'node1','services: {api: {image: nginx, volumes: [data:/data]}}\nvolumes: {data: {}}')`, []any{serviceID, environmentID, stackName}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,status,trigger,finished_at) VALUES($1,$2,1,'services: {api: {image: nginx}}','services: {api: {image: nginx@sha256:test}}','succeeded','manual',now())`, []any{uuid.New(), serviceID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,status) VALUES($1,$2,'Postgres','postgres','postgres','17',$3,'encrypted','running')`, []any{databaseID, environmentID, serviceID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,finished_at) VALUES($1,$2,'succeeded','native',now())`, []any{databaseBackupID, databaseID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'S3','https://s3.example.test','backups','encrypted')`, []any{destinationID, organizationID}},
+		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'data',$3,900,7,true,true,now())`, []any{volumePolicyID, serviceID, destinationID}},
+		{`INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,finished_at) VALUES($1,$2,$3,'data','node1',$4,true,'succeeded',now())`, []any{volumeBackupID, volumePolicyID, serviceID, destinationID}},
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -48,6 +55,21 @@ func TestServiceStopStartIntentAndReconciliationFencing(t *testing.T) {
 	service, _, err := db.GetComposeService(ctx, organizationID, serviceID)
 	if err != nil || service.DesiredState != "stopped" {
 		t.Fatalf("service desired state=%q err=%v", service.DesiredState, err)
+	}
+	if _, err = db.QueueDatabaseBackup(ctx, organizationID, databaseID, uuid.Nil, nil); !errors.Is(err, ErrServiceStopped) {
+		t.Fatalf("database backup on stopped service error=%v", err)
+	}
+	if _, err = db.QueueDatabaseRestore(ctx, organizationID, databaseBackupID, uuid.Nil, "postgres"); !errors.Is(err, ErrServiceStopped) {
+		t.Fatalf("database restore on stopped service error=%v", err)
+	}
+	if _, err = db.QueueDatabaseMigration(ctx, organizationID, DatabaseMigration{DatabaseInstanceID: databaseID, SourceKind: "external", SourceID: "source", SourceEngine: "postgres", SourceVersion: "17", SourceHost: "source.internal"}); !errors.Is(err, ErrServiceStopped) {
+		t.Fatalf("database migration on stopped service error=%v", err)
+	}
+	if _, err = db.QueueVolumeBackup(ctx, organizationID, serviceID, "data", uuid.Nil); !errors.Is(err, ErrServiceStopped) {
+		t.Fatalf("volume backup on stopped service error=%v", err)
+	}
+	if _, err = db.QueueVolumeRestore(ctx, organizationID, volumeBackupID, uuid.Nil, "api"); !errors.Is(err, ErrServiceStopped) {
+		t.Fatalf("volume restore on stopped service error=%v", err)
 	}
 	candidates, err := db.ListReconciliationCandidates(ctx, 10)
 	if err != nil || len(candidates) != 0 {

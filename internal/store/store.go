@@ -21,6 +21,7 @@ var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
 var ErrDeploymentActive = errors.New("service has a queued or running deployment")
 var ErrServiceAlreadyRunning = errors.New("service is already intended to run")
+var ErrServiceStopped = errors.New("service is stopped")
 var ErrDeleting = errors.New("resource is being deleted")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
@@ -1869,6 +1870,9 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	if err = lockDatabaseServiceForOperation(ctx, tx, databaseID, composeServiceID); err != nil {
 		return DatabaseBackup{}, err
 	}
+	if err = requireDatabaseServiceRunning(ctx, tx, composeServiceID); err != nil {
+		return DatabaseBackup{}, err
+	}
 	var active bool
 	if err = tx.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM database_backups WHERE database_instance_id=$1 AND status IN ('queued','running'))
@@ -2089,6 +2093,9 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	if err = lockDatabaseServiceForOperation(ctx, tx, backupDatabaseID, composeServiceID); err != nil {
 		return DatabaseRestore{}, err
 	}
+	if err = requireDatabaseServiceRunning(ctx, tx, composeServiceID); err != nil {
+		return DatabaseRestore{}, err
+	}
 	if status != "succeeded" {
 		return DatabaseRestore{}, errors.New("backup is not restorable")
 	}
@@ -2136,6 +2143,20 @@ func lockDatabaseServiceForOperation(ctx context.Context, tx pgx.Tx, databaseID 
 	}
 	if !parentsActive {
 		return ErrDeleting
+	}
+	return nil
+}
+
+func requireDatabaseServiceRunning(ctx context.Context, tx pgx.Tx, composeServiceID *uuid.UUID) error {
+	if composeServiceID == nil {
+		return nil
+	}
+	var desiredState string
+	if err := tx.QueryRow(ctx, `SELECT desired_state FROM compose_services WHERE id=$1`, *composeServiceID).Scan(&desiredState); err != nil {
+		return err
+	}
+	if desiredState != "running" {
+		return ErrServiceStopped
 	}
 	return nil
 }

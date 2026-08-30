@@ -278,7 +278,7 @@ func (w *Worker) enqueueDueVolumeBackup(ctx context.Context) error {
 	err = tx.QueryRow(ctx, `SELECT policy.id,policy.compose_service_id,policy.volume_name,policy.destination_id,policy.interval_seconds,policy.retention_count,service.storage_node_id,policy.quiesce
 		FROM volume_backup_policies policy
 		JOIN compose_services service ON service.id=policy.compose_service_id
-		WHERE policy.enabled AND policy.next_run_at<=now() AND service.storage_node_id<>'' AND service.deletion_requested_at IS NULL
+		WHERE policy.enabled AND policy.next_run_at<=now() AND service.storage_node_id<>'' AND service.deletion_requested_at IS NULL AND service.desired_state='running'
 			AND NOT EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name AND backup.status IN ('queued','running'))
 			AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.resource_key='service:' || service.id::text AND job.kind='backup.volume' AND job.status IN ('pending','running'))
 		ORDER BY policy.next_run_at FOR UPDATE OF policy,service SKIP LOCKED LIMIT 1`).Scan(&policyID, &serviceID, &volumeName, &destinationID, &intervalSeconds, &retentionCount, &nodeID, &quiesce)
@@ -376,7 +376,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 		JOIN projects project ON project.id=environment.project_id
 		WHERE policy.enabled AND policy.next_run_at<=now() AND (NOT $1 OR policy.destination_id IS NOT NULL)
 			AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL
-			AND (database.compose_service_id IS NULL OR EXISTS(SELECT 1 FROM compose_services service WHERE service.id=database.compose_service_id AND service.deletion_requested_at IS NULL))
+			AND (database.compose_service_id IS NULL OR EXISTS(SELECT 1 FROM compose_services service WHERE service.id=database.compose_service_id AND service.deletion_requested_at IS NULL AND service.desired_state='running'))
 			AND NOT EXISTS(SELECT 1 FROM database_backups backup WHERE backup.database_instance_id=database.id AND backup.status IN ('queued','running'))
 			AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.resource_key='database:' || database.id::text AND job.kind='backup.database' AND job.status IN ('pending','running'))
 		ORDER BY policy.next_run_at FOR UPDATE OF policy,database SKIP LOCKED LIMIT 1`, w.Store.RequireRemoteBackups).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID, &verifyRestore, &composeServiceID)
@@ -388,7 +388,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	}
 	if composeServiceID != nil {
 		var lockedServiceID uuid.UUID
-		if err = tx.QueryRow(ctx, `SELECT id FROM compose_services WHERE id=$1 AND deletion_requested_at IS NULL FOR UPDATE`, *composeServiceID).Scan(&lockedServiceID); errors.Is(err, pgx.ErrNoRows) {
+		if err = tx.QueryRow(ctx, `SELECT id FROM compose_services WHERE id=$1 AND deletion_requested_at IS NULL AND desired_state='running' FOR UPDATE`, *composeServiceID).Scan(&lockedServiceID); errors.Is(err, pgx.ErrNoRows) {
 			return store.ErrNotFound
 		} else if err != nil {
 			return err

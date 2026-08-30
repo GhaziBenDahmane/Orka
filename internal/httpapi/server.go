@@ -3059,6 +3059,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "service_already_running", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrServiceStopped) {
+		writeError(w, http.StatusConflict, "service_stopped", "start the service before running this operation")
+		return
+	}
 	if errors.Is(err, store.ErrBusy) {
 		writeError(w, http.StatusConflict, "resource_not_empty", "delete child resources first")
 		return

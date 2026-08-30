@@ -93,6 +93,8 @@ links for every item below.
   repair, and emits `service.stop.failed` after retry exhaustion. Verify start,
   deploy hooks, manual deploy, and rollback restore `running` intent and are
   serialized behind any in-flight stop job.
+  Confirm manual and scheduled database/named-volume data operations cannot be
+  admitted after stopped intent commits and resume normally after start.
 - `make test-agent-certificate-conformance` serves the agent API over a real
   TLS 1.3 listener that requires CA-verified client certificates. It proves
   two-phase replacement issuance, continued use of the old identity before

@@ -12,6 +12,43 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestBackupSchedulersSkipStoppedServices(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	databaseServiceID, databaseID, databasePolicyID := uuid.New(), uuid.New(), uuid.New()
+	volumeServiceID, volumePolicyID, destinationID := uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Stopped backups',$2)`, []any{organizationID, "stopped-backups-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,desired_state,compose_yaml) VALUES($1,$2,'Database','database',$3,'stopped','services: {}')`, []any{databaseServiceID, environmentID, "stopped-db-" + databaseServiceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17',$3,'ciphertext')`, []any{databaseID, environmentID, databaseServiceID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,storage_node_id,desired_state,compose_yaml) VALUES($1,$2,'App','app',$3,'node1','stopped','services: {}')`, []any{volumeServiceID, environmentID, "stopped-volume-" + volumeServiceID.String()}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'S3','https://s3.example.test','backups',true,'encrypted')`, []any{destinationID, organizationID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id) VALUES($1,$2,900,7,true,'2000-01-01',$3)`, []any{databasePolicyID, databaseID, destinationID}},
+		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'uploads',$3,900,7,true,true,'2000-01-01')`, []any{volumePolicyID, volumeServiceID, destinationID}},
+	}
+	for _, statement := range statements {
+		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worker := &Worker{Store: db}
+	if err := worker.enqueueDueBackup(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("database scheduler error=%v, want ErrNotFound", err)
+	}
+	if err := worker.enqueueDueVolumeBackup(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("volume scheduler error=%v, want ErrNotFound", err)
+	}
+	var backups int
+	if err := db.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM database_backups WHERE database_instance_id=$1)+(SELECT count(*) FROM volume_backups WHERE compose_service_id=$2)`, databaseID, volumeServiceID).Scan(&backups); err != nil || backups != 0 {
+		t.Fatalf("stopped service backups=%d err=%v", backups, err)
+	}
+}
+
 func TestBackupSchedulersDoNotQueueBehindActiveBackups(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {

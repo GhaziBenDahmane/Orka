@@ -32,7 +32,9 @@ other service operation. Start (and any explicit deploy, rollback, or verified
 webhook deployment) atomically restores `running` while queuing a deployment
 of the selected immutable snapshot. Job leases fence local and remote removal
 completion, and stopped services are excluded from reconciliation at both
-candidate selection and repair commit time.
+candidate selection and repair commit time. Manual and scheduled database or
+named-volume backup, restore, and migration admission locks the same service
+row and rejects stopped intent, preventing data jobs from racing stack removal.
 
 The leader-elected stack reconciler inspects every previously deployed stack
 once per minute through the same local-or-remote scheduler boundary. Missing or
