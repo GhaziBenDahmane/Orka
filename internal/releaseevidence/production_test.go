@@ -66,6 +66,21 @@ func TestProductionCertificationValidation(t *testing.T) {
 			gate.Evidence[0].URL += "?token=secret"
 			c.Gates[requiredProductionGates[0]] = gate
 		}, "credential-free"},
+		{"invalid URL host", func(c *ProductionCertification) {
+			gate := c.Gates[requiredProductionGates[0]]
+			gate.Evidence[0].URL = "https://bad_label.example.test/report"
+			c.Gates[requiredProductionGates[0]] = gate
+		}, "valid host"},
+		{"invalid URL port", func(c *ProductionCertification) {
+			gate := c.Gates[requiredProductionGates[0]]
+			gate.Evidence[0].URL = "https://evidence.example.test:65536/report"
+			c.Gates[requiredProductionGates[0]] = gate
+		}, "valid host"},
+		{"encoded URL path", func(c *ProductionCertification) {
+			gate := c.Gates[requiredProductionGates[0]]
+			gate.Evidence[0].URL = "https://evidence.example.test/reports%2fhidden.json"
+			c.Gates[requiredProductionGates[0]] = gate
+		}, "canonical"},
 		{"invalid hash", func(c *ProductionCertification) {
 			gate := c.Gates[requiredProductionGates[0]]
 			gate.Evidence[0].SHA256 = "ABC"

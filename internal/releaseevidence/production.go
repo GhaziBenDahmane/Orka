@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 )
 
 const ProductionCertificationSchema = 1
@@ -142,8 +144,8 @@ func validateProductionGate(name string, gate ProductionGate, certifiedAt time.T
 			return err
 		}
 		parsed, err := url.Parse(record.URL)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || len(record.URL) > 2048 {
-			return fmt.Errorf("gate %q evidence %d URL must be a credential-free HTTPS URL without query or fragment", name, index)
+		if err != nil || record.URL != strings.TrimSpace(record.URL) || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.RawPath != "" || len(record.URL) > 2048 || !netpolicy.ValidURLHost(parsed) {
+			return fmt.Errorf("gate %q evidence %d URL must be a canonical credential-free HTTPS URL with a valid host and port and without query or fragment", name, index)
 		}
 		if !hashPattern.MatchString(record.SHA256) {
 			return fmt.Errorf("gate %q evidence %d sha256 must be 64 lowercase hexadecimal characters", name, index)
