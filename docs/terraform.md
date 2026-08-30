@@ -11,6 +11,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_source_credential`
 - `dockyard_backup_destination`
 - `dockyard_backup_policy`
+- `dockyard_volume_backup_policy`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
 optional `DOCKYARD_ORGANIZATION_ID` selects an organization for owners with
@@ -35,6 +36,12 @@ between Swarms.
 `dockyard_backup_policy` manages the single native-backup policy associated
 with a database. Its import ID is the database UUID (not the policy UUID), for
 example `terraform import dockyard_backup_policy.primary DATABASE_UUID`.
+`dockyard_volume_backup_policy` manages one named volume on a Compose service.
+Its import ID is `SERVICE_UUID/VOLUME_NAME`, for example
+`terraform import dockyard_volume_backup_policy.uploads SERVICE_UUID/uploads`.
+The service must declare and mount the volume, and must have a resolvable Swarm
+storage node. Set `quiesce = true` unless the application has a separately
+validated crash-consistent backup mechanism.
 Backup destinations verify bucket access during creation. Access keys, secret
 keys, and optional session tokens are sensitive and are never returned by the
 API, so the provider retains them from configuration in state.

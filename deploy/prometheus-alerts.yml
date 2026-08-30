@@ -97,6 +97,24 @@ groups:
           summary: No successful Dockyard database backup in 24 hours
           description: Review backup policies, queue health, and remote storage availability.
 
+      - alert: DockyardVolumeBackupOverdue
+        expr: dockyard_volume_backup_overdue == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: A named-volume backup is overdue
+          description: Service {{ $labels.service }} volume {{ $labels.volume }} has no successful encrypted backup within twice its configured interval.
+
+      - alert: DockyardVolumeRestoreRehearsalOverdue
+        expr: dockyard_volume_restore_rehearsal_overdue == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A named-volume restore rehearsal is overdue
+          description: Service {{ $labels.service }} volume {{ $labels.volume }} has no successful restore rehearsal within twice its configured interval (minimum 24 hours).
+
       - alert: DockyardRestoreDrillOverdue
         expr: dockyard_restore_drill_overdue == 1
         for: 15m

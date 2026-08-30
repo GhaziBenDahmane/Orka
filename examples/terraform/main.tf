@@ -10,6 +10,16 @@ provider "dockyard" {
   # Prefer DOCKYARD_URL and DOCKYARD_TOKEN in automation.
 }
 
+variable "backup_access_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "backup_secret_key" {
+  type      = string
+  sensitive = true
+}
+
 resource "dockyard_project" "example" {
   name        = "Example"
   description = "Managed by OpenTofu or Terraform"
@@ -31,9 +41,34 @@ resource "dockyard_service" "whoami" {
     services:
       web:
         image: traefik/whoami:v1.11
+        volumes:
+          - uploads:/data
         deploy:
           replicas: 1
+    volumes:
+      uploads: {}
   YAML
+}
+
+resource "dockyard_backup_destination" "primary" {
+  name       = "Primary backups"
+  endpoint   = "https://s3.example.com"
+  region     = "eu-west-1"
+  bucket     = "example-backups"
+  prefix     = "orka"
+  use_tls    = true
+  access_key = var.backup_access_key
+  secret_key = var.backup_secret_key
+}
+
+resource "dockyard_volume_backup_policy" "uploads" {
+  service_id       = dockyard_service.whoami.id
+  volume_name      = "uploads"
+  destination_id   = dockyard_backup_destination.primary.id
+  interval_seconds = 21600
+  retention_count  = 28
+  quiesce          = true
+  enabled          = true
 }
 
 resource "dockyard_route" "whoami" {
