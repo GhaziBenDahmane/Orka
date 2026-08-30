@@ -32,9 +32,28 @@ func TestGitHubArchiveURL(t *testing.T) {
 	if got != "https://codeload.github.com/acme/catalog/tar.gz/main" {
 		t.Fatalf("url=%q", got)
 	}
-	for _, invalid := range []string{"http://github.com/acme/catalog", "https://evil.test/acme/catalog", "https://github.com/acme/catalog/extra", "https://user@github.com/acme/catalog", "https://github.com/acme/catalog?x=1"} {
+	for _, invalid := range []string{"http://github.com/acme/catalog", "https://evil.test/acme/catalog", "https://github.com/acme/catalog/extra", "https://user@github.com/acme/catalog", "https://github.com/acme/catalog?x=1", "https://github.com/./catalog", "https://github.com/acme/..", "https://github.com/" + strings.Repeat("o", maxGitHubOwnerBytes+1) + "/catalog", "https://github.com/acme/" + strings.Repeat("r", maxGitHubRepositoryBytes+1)} {
 		if _, err := GitHubArchiveURL(invalid, "main"); err == nil {
 			t.Errorf("accepted %q", invalid)
+		}
+	}
+	for _, ref := range []string{"", ".hidden", "feature..branch", "refs/heads/main.lock", "refs//heads/main", "feature branch", "feature~1", "feature^2", "feature:one", "feature?", "feature*", "feature[1", "feature\\one", "feature\nheader", strings.Repeat("r", 201)} {
+		if _, err := GitHubArchiveURL("https://github.com/acme/catalog", ref); err == nil {
+			t.Errorf("accepted invalid ref %q", ref)
+		}
+	}
+}
+
+func TestNormalizeCatalogPath(t *testing.T) {
+	for raw, want := range map[string]string{"": "", "/": "", "catalog": "catalog", "/catalog/blueprints/": "catalog/blueprints"} {
+		got, err := NormalizeCatalogPath(raw)
+		if err != nil || got != want {
+			t.Errorf("NormalizeCatalogPath(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{".", "..", "../catalog", "catalog/../other", "catalog//blueprints", `catalog\blueprints`, "catalog\x00blueprints", "catalog\nblueprints", strings.Repeat("a", maxCatalogPathBytes+1), strings.Repeat("a/", maxCatalogPathDepth) + "end"} {
+		if _, err := NormalizeCatalogPath(raw); err == nil {
+			t.Errorf("unsafe catalog path %q was accepted", raw)
 		}
 	}
 }
@@ -51,6 +70,31 @@ func TestFetchCatalogArchiveUsesBearerToken(t *testing.T) {
 	}
 	if authorization != "Bearer private-token" || accept != "application/vnd.github+json" {
 		t.Fatalf("authorization=%q accept=%q", authorization, accept)
+	}
+}
+
+func TestFetchCatalogArchiveRejectsUnsafeToken(t *testing.T) {
+	for _, token := range []string{"secret\nheader", strings.Repeat("t", maxGitHubTokenBytes+1)} {
+		if root, cleanup, err := fetchCatalogArchive(context.Background(), nil, "https://codeload.github.com/acme/catalog/tar.gz/main", token); err == nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			t.Fatalf("unsafe token produced archive root %q", root)
+		}
+	}
+}
+
+func TestCatalogHTTPClientDisablesAmbientProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:8080")
+	client := catalogHTTPClient(nil)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("catalog transport = %#v; ambient proxy was retained", client.Transport)
+	}
+	original := &http.Client{Transport: http.DefaultTransport}
+	secured := catalogHTTPClient(original)
+	if secured == original || secured.Transport != original.Transport || original.CheckRedirect != nil {
+		t.Fatal("explicit client transport was replaced or caller client was mutated")
 	}
 }
 

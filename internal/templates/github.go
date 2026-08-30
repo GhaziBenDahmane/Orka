@@ -27,23 +27,49 @@ const maxCatalogFileBytes int64 = 4 << 20
 const maxCatalogEntries = 10000
 const maxCatalogPathBytes = 1024
 const maxCatalogPathDepth = 32
+const maxGitHubRepositoryURLBytes = 2048
+const maxGitHubOwnerBytes = 39
+const maxGitHubRepositoryBytes = 100
+const maxGitHubTokenBytes = 16 << 10
 
 var githubPart = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func GitHubArchiveURL(repositoryURL, gitRef string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(repositoryURL))
+	repositoryURL = strings.TrimSpace(repositoryURL)
+	if len(repositoryURL) > maxGitHubRepositoryURLBytes {
+		return "", errors.New("repositoryUrl is too long")
+	}
+	u, err := url.Parse(repositoryURL)
 	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") || u.Port() != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("repositoryUrl must be an https://github.com/owner/repository URL")
 	}
 	parts := strings.Split(strings.Trim(strings.TrimSuffix(u.Path, ".git"), "/"), "/")
-	if len(parts) != 2 || !githubPart.MatchString(parts[0]) || !githubPart.MatchString(parts[1]) {
+	if len(parts) != 2 || len(parts[0]) > maxGitHubOwnerBytes || len(parts[1]) > maxGitHubRepositoryBytes || parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." || !githubPart.MatchString(parts[0]) || !githubPart.MatchString(parts[1]) {
 		return "", errors.New("repositoryUrl must identify one GitHub owner and repository")
 	}
 	gitRef = strings.TrimSpace(gitRef)
-	if gitRef == "" || len(gitRef) > 200 || strings.ContainsAny(gitRef, "\\\x00") || strings.Contains(gitRef, "..") {
+	if !validGitHubRef(gitRef) {
 		return "", errors.New("gitRef is invalid")
 	}
 	return "https://codeload.github.com/" + parts[0] + "/" + parts[1] + "/tar.gz/" + url.PathEscape(gitRef), nil
+}
+
+func NormalizeCatalogPath(raw string) (string, error) {
+	candidate := strings.Trim(strings.TrimSpace(raw), "/")
+	if candidate == "" {
+		return "", nil
+	}
+	clean := path.Clean(candidate)
+	parts := strings.Split(clean, "/")
+	if clean != candidate || len(clean) > maxCatalogPathBytes || len(parts) > maxCatalogPathDepth || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(raw, "\\\x00\r\n") {
+		return "", errors.New("catalogPath must be a canonical relative path")
+	}
+	for _, part := range parts {
+		if len(part) == 0 || len(part) > 255 {
+			return "", errors.New("catalogPath contains an invalid segment")
+		}
+	}
+	return clean, nil
 }
 
 func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL, gitRef, token string) (string, func(), error) {
@@ -55,6 +81,9 @@ func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL,
 }
 
 func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, token string) (string, func(), error) {
+	if len(token) > maxGitHubTokenBytes || strings.ContainsAny(token, "\x00\r\n") {
+		return "", nil, errors.New("template repository token is invalid")
+	}
 	client = catalogHTTPClient(client)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL, nil)
 	if err != nil {
@@ -192,16 +221,32 @@ func catalogHTTPClient(client *http.Client) *http.Client {
 		client = &http.Client{Timeout: 45 * time.Second}
 	}
 	secured := *client
+	if secured.Transport == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		secured.Transport = transport
+	}
 	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("template repository redirects are disabled")
 	}
 	return &secured
 }
 
+func validGitHubRef(ref string) bool {
+	if ref == "" || len(ref) > 200 || ref == "@" || strings.HasPrefix(ref, ".") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, ".") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".lock") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.Contains(ref, "//") {
+		return false
+	}
+	return !strings.ContainsAny(ref, " ~^:?*[\\") && strings.IndexFunc(ref, func(char rune) bool { return char < 0x20 || char == 0x7f }) < 0
+}
+
 // VerifyRepositoryCatalog applies the repository's trust policy before any
 // catalog entries are imported. Supplying a key always enables verification;
 // requireSignature additionally prevents an accidentally unconfigured key.
 func VerifyRepositoryCatalog(repository store.TemplateRepository, root string) (string, error) {
+	catalogPath, err := NormalizeCatalogPath(repository.CatalogPath)
+	if err != nil {
+		return "", err
+	}
 	raw := strings.TrimSpace(repository.TrustedPublicKey)
 	if raw == "" {
 		if repository.RequireSignature {
@@ -213,7 +258,7 @@ func VerifyRepositoryCatalog(repository store.TemplateRepository, root string) (
 	if err != nil {
 		return "", fmt.Errorf("parse trusted catalog public key: %w", err)
 	}
-	catalogRoot := filepath.Join(root, filepath.FromSlash(repository.CatalogPath))
+	catalogRoot := filepath.Join(root, filepath.FromSlash(catalogPath))
 	if err = VerifyCatalog(catalogRoot, key); err != nil {
 		return "", fmt.Errorf("verify signed template repository: %w", err)
 	}
@@ -262,15 +307,14 @@ func repositoryToken(ctx context.Context, db *store.Store, box *cryptox.Box, rep
 	if err != nil {
 		return "", fmt.Errorf("load template repository credential: %w", err)
 	}
-	server := strings.ToLower(strings.TrimSpace(strings.Split(credential.Server, ":")[0]))
-	if credential.Kind != "git" || server != "github.com" {
+	if credential.Kind != "git" || !strings.EqualFold(strings.TrimSpace(credential.Server), "github.com") {
 		return "", errors.New("template repository credential is not a GitHub HTTPS token")
 	}
 	plain, err := box.DecryptResource(credential.EncryptedSecret, "source-credential", credential.ID.String(), "source-credential")
 	if err != nil {
 		return "", fmt.Errorf("decrypt template repository credential: %w", err)
 	}
-	if token := strings.TrimSpace(string(plain)); token != "" {
+	if token := strings.TrimSpace(string(plain)); token != "" && len(token) <= maxGitHubTokenBytes && !strings.ContainsAny(token, "\x00\r\n") {
 		return token, nil
 	}
 	return "", errors.New("template repository credential is empty")

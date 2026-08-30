@@ -139,7 +139,11 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 // keys by repository slug. This keeps identically named templates from multiple
 // repositories independent and makes their provenance explicit.
 func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository store.TemplateRepository, root string) (ImportReport, error) {
-	blueprints := filepath.Join(root, filepath.FromSlash(repository.CatalogPath), "blueprints")
+	catalogPath, err := NormalizeCatalogPath(repository.CatalogPath)
+	if err != nil {
+		return ImportReport{}, err
+	}
+	blueprints := filepath.Join(root, filepath.FromSlash(catalogPath), "blueprints")
 	entries, err := os.ReadDir(blueprints)
 	if err != nil {
 		return ImportReport{}, err

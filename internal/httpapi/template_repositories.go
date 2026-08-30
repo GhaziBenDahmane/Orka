@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path"
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
@@ -13,6 +12,8 @@ import (
 	"github.com/bendahma/dokploy-go/internal/templates"
 	"github.com/google/uuid"
 )
+
+const maxTemplateRepositoryNameBytes = 120
 
 func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -29,12 +30,8 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 	if in.GitRef == "" {
 		in.GitRef = "main"
 	}
-	in.CatalogPath = strings.Trim(strings.TrimSpace(in.CatalogPath), "/")
-	cleanPath := path.Clean(in.CatalogPath)
-	if cleanPath == "." {
-		cleanPath = ""
-	}
-	if in.Name == "" || !slugPattern.MatchString(in.Slug) || cleanPath == ".." || strings.HasPrefix(cleanPath, "../") {
+	cleanPath, pathErr := templates.NormalizeCatalogPath(in.CatalogPath)
+	if in.Name == "" || len(in.Name) > maxTemplateRepositoryNameBytes || strings.ContainsAny(in.Name, "\x00\r\n") || !slugPattern.MatchString(in.Slug) || pathErr != nil {
 		writeError(w, 400, "invalid_template_repository", "name, slug, and a safe relative catalogPath are required")
 		return
 	}
@@ -152,8 +149,7 @@ func (s *Server) templateRepositoryCredential(ctx context.Context, organizationI
 	if err != nil {
 		return nil, errors.New("credentialId must reference an organization credential")
 	}
-	server := strings.ToLower(strings.TrimSpace(strings.Split(credential.Server, ":")[0]))
-	if credential.Kind != "git" || server != "github.com" {
+	if credential.Kind != "git" || !strings.EqualFold(strings.TrimSpace(credential.Server), "github.com") {
 		return nil, errors.New("credentialId must reference a GitHub HTTPS token credential")
 	}
 	return &id, nil
