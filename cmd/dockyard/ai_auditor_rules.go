@@ -35,6 +35,20 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	if snapshot.IdentityPosture.ActiveSCIMTokens > 0 && snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt != nil && now.Sub(*snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt) > 180*24*time.Hour {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Long-lived SCIM credential requires rotation", Description: "The oldest active SCIM token is more than 180 days old.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeScimTokens": snapshot.IdentityPosture.ActiveSCIMTokens, "oldestCreatedAt": snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.UTC().Format(time.RFC3339)}, Remediation: "Issue a replacement SCIM token, update the identity provider, verify synchronization, and revoke the old token."})
 	}
+	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
+	for _, engine := range snapshot.DatabaseEngines {
+		databaseEngines[engine.Name] = engine
+	}
+	if len(databaseEngines) > 0 {
+		for _, managedDatabase := range snapshot.Databases {
+			engine, registered := databaseEngines[managedDatabase.Engine]
+			if !registered {
+				add(modelFinding{Severity: "high", Category: "backup", Title: "Database engine is unavailable", Description: "A managed database references an engine that is no longer registered with the controller.", ResourceType: "database", ResourceID: managedDatabase.ID.String(), Evidence: map[string]any{"engine": managedDatabase.Engine, "version": managedDatabase.Version}, Remediation: "Restore the exact trusted driver used by this database before attempting deployment, backup, restore, or migration operations."})
+			} else if !engine.BackupCapable {
+				add(modelFinding{Severity: "high", Category: "backup", Title: "Database engine has no recovery support", Description: "The registered driver cannot produce verified native backup and restore plans for this managed database.", ResourceType: "database", ResourceID: managedDatabase.ID.String(), Evidence: map[string]any{"engine": engine.Name, "version": managedDatabase.Version, "driverSource": engine.Source}, Remediation: "Install a trusted backup-capable driver or migrate this database to an engine with verified recovery support."})
+			}
+		}
+	}
 	for _, migration := range snapshot.MigrationPosture {
 		if migration.Unresolved > 0 {
 			add(modelFinding{Severity: "high", Category: "migration", Title: "Dokploy migration has unresolved resources", Description: "The persisted parity manifest contains resources that were not imported and still require explicit conversion or acknowledgement.", ResourceType: "dokploy_migration", ResourceID: migration.SourceOrganizationID, Evidence: map[string]any{"resources": migration.Resources, "imported": migration.Imported, "unresolved": migration.Unresolved}, Remediation: "Resolve each migration blocker and rerun verify-dokploy-import without blanket bypasses."})
@@ -45,6 +59,9 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	}
 	for _, backup := range snapshot.BackupPosture {
 		resourceID := backup.DatabaseID.String()
+		if engine, registered := databaseEngines[backup.Engine]; len(databaseEngines) > 0 && (!registered || !engine.BackupCapable) {
+			continue
+		}
 		if !backup.PolicyConfigured {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database has no backup policy", Description: "The managed database has no scheduled recovery policy.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "status": backup.Status}, Remediation: "Configure and enable a retained backup policy to durable storage."})
 			continue

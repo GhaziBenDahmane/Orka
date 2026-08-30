@@ -17,6 +17,7 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
@@ -67,7 +68,7 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	}
 	agentCAFingerprint, _ := agentpki.CertificateFingerprint(agentCA)
 	previousAgentCAFingerprint, _ := agentpki.CertificateFingerprint(previousAgentCA)
-	server := httptest.NewServer((&Server{Store: db, Box: box, PublicURL: "https://dockyard.example.test", SessionTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AgentCACertificate: agentCA, AgentPreviousCACertificate: previousAgentCA}).Handler())
+	server := httptest.NewServer((&Server{Store: db, Box: box, Databases: database.NewRegistry(), PublicURL: "https://dockyard.example.test", SessionTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), AgentCACertificate: agentCA, AgentPreviousCACertificate: previousAgentCA}).Handler())
 	defer server.Close()
 	do := func(method, path, token string, body []byte) (*http.Response, []byte) {
 		req, requestErr := http.NewRequest(method, server.URL+path, bytes.NewReader(body))
@@ -158,6 +159,9 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	var snapshot store.AIAuditSnapshot
 	if err = json.Unmarshal(data, &snapshot); err != nil || !snapshot.AgentCAPosture.Configured || !snapshot.AgentCAPosture.RolloverActive || snapshot.AgentCAPosture.ActiveFingerprint != agentCAFingerprint || snapshot.AgentCAPosture.PreviousFingerprint != previousAgentCAFingerprint {
 		t.Fatalf("auditor agent CA posture=%#v err=%v", snapshot.AgentCAPosture, err)
+	}
+	if len(snapshot.DatabaseEngines) < 10 || snapshot.DatabaseEngines[0].Name == "" || snapshot.DatabaseEngines[0].DefaultVersion == "" || snapshot.DatabaseEngines[0].Source != "built-in" {
+		t.Fatalf("auditor database engine posture=%#v", snapshot.DatabaseEngines)
 	}
 	response, data = do(http.MethodPost, "/v1/ai/audit-runs", auditor.Token, []byte(`{"agentName":"test-auditor","model":"test"}`))
 	if response.StatusCode != http.StatusCreated {

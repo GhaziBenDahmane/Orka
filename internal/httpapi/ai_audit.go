@@ -30,6 +30,14 @@ func (s *Server) aiAuditSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	if s.Databases != nil {
+		for _, engine := range s.Databases.Engines() {
+			snapshot.DatabaseEngines = append(snapshot.DatabaseEngines, store.AIAuditDatabaseEngineInfo{
+				Name: engine.Name, DefaultVersion: engine.DefaultVersion, Source: engine.Source,
+				BackupCapable: engine.BackupCapable, BackupExtension: engine.BackupExtension,
+			})
+		}
+	}
 	if len(s.AgentCACertificate) != 0 {
 		activeFingerprint, fingerprintErr := agentpki.CertificateFingerprint(s.AgentCACertificate)
 		if fingerprintErr != nil {

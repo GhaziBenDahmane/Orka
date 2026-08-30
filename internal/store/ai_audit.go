@@ -22,6 +22,7 @@ type AIAuditSnapshot struct {
 	Services             []ComposeService                `json:"services"`
 	Routes               []Route                         `json:"routes"`
 	Databases            []DatabaseInstance              `json:"databases"`
+	DatabaseEngines      []AIAuditDatabaseEngineInfo     `json:"databaseEngines"`
 	Clusters             []Cluster                       `json:"clusters"`
 	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
@@ -84,6 +85,14 @@ type AIAuditBackupPosture struct {
 	LastBackupAt           *time.Time `json:"lastBackupAt,omitempty"`
 	LastRestoreDrillStatus string     `json:"lastRestoreDrillStatus,omitempty"`
 	LastRestoreDrillAt     *time.Time `json:"lastRestoreDrillAt,omitempty"`
+}
+
+type AIAuditDatabaseEngineInfo struct {
+	Name            string `json:"name"`
+	DefaultVersion  string `json:"defaultVersion"`
+	Source          string `json:"source"`
+	BackupCapable   bool   `json:"backupCapable"`
+	BackupExtension string `json:"backupExtension"`
 }
 
 type AIAuditAgentUpgradePosture struct {
@@ -167,7 +176,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err

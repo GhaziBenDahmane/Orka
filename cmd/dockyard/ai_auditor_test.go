@@ -227,6 +227,34 @@ func TestDeterministicAuditDetectsTemplateRepositoryFreshness(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
+	now := time.Now().UTC()
+	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		DatabaseEngines:     []store.AIAuditDatabaseEngineInfo{{Name: "postgres", Source: "built-in", BackupCapable: true, BackupExtension: "dump"}, {Name: "custom", Source: "external"}},
+		Databases:           []store.DatabaseInstance{{ID: unsupportedID, Engine: "custom", Version: "1"}, {ID: missingID, Engine: "removed", Version: "2"}, {ID: protectedID, Engine: "postgres", Version: "17"}},
+		BackupPosture:       []store.AIAuditBackupPosture{{DatabaseID: unsupportedID, Engine: "custom"}, {DatabaseID: missingID, Engine: "removed"}, {DatabaseID: protectedID, Engine: "postgres"}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]int{}
+	resources := map[string]bool{}
+	for _, finding := range findings {
+		titles[finding.Title]++
+		resources[finding.ResourceID] = true
+	}
+	if titles["Database engine has no recovery support"] != 1 || titles["Database engine is unavailable"] != 1 || titles["Database has no backup policy"] != 1 {
+		t.Fatalf("database engine findings=%#v", findings)
+	}
+	for _, id := range []uuid.UUID{unsupportedID, missingID, protectedID} {
+		if !resources[id.String()] {
+			t.Errorf("database %s has no finding", id)
+		}
+	}
+}
+
 func TestDeterministicAuditAcceptsClusterOnActiveCertificateAuthority(t *testing.T) {
 	now := time.Now().UTC()
 	snapshot := store.AIAuditSnapshot{
@@ -264,7 +292,7 @@ func TestPerformAIAuditPreservesBaselineWhenModelFails(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"identityPosture":     map[string]any{"requireSso": true, "activeOwners": 1},
 				"migrationPosture":    []map[string]any{{"sourceOrganizationId": "legacy", "resources": 2, "imported": 1, "unresolved": 1}},
-				"notificationPosture": []map[string]any{{"enabled": true, "events": []string{"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed"}}},
+				"notificationPosture": []map[string]any{{"enabled": true, "events": []string{"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical"}}},
 			})
 		case r.URL.Path == "/v1/ai/audit-runs":
 			w.WriteHeader(http.StatusCreated)
