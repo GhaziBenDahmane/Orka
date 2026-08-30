@@ -1,10 +1,15 @@
 package httpapi
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/store"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 func TestCredentialMatchesRepository(t *testing.T) {
@@ -17,7 +22,8 @@ func TestCredentialMatchesRepository(t *testing.T) {
 		want        bool
 	}{
 		{store.SourceCredential{Kind: "git", Server: "git.example.test:8443"}, httpsRepository, "git", "", true},
-		{store.SourceCredential{Kind: "git-ssh", Server: "git.example.test"}, sshRepository, "git-ssh", "", true},
+		{store.SourceCredential{Kind: "git-ssh", Server: "git.example.test:2222"}, sshRepository, "git-ssh", "", true},
+		{store.SourceCredential{Kind: "git-ssh", Server: "git.example.test"}, sshRepository, "git-ssh", "", false},
 		{store.SourceCredential{Kind: "git", Server: "github.com"}, mustParseSourceURL(t, "https://github.com/acme/app.git"), "git", "github.com", true},
 		{store.SourceCredential{Kind: "git", Server: "github.com:443"}, mustParseSourceURL(t, "https://github.com/acme/app.git"), "git", "github.com", false},
 		{store.SourceCredential{Kind: "registry", Server: "git.example.test"}, httpsRepository, "git", "", false},
@@ -37,4 +43,38 @@ func mustParseSourceURL(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+func TestValidKnownHostsBindsParsedKeysToExactAuthority(t *testing.T) {
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyText := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+	if !validKnownHosts("git.example.test", "git.example.test "+keyText) {
+		t.Fatal("exact default-port host key was rejected")
+	}
+	if !validKnownHosts("git.example.test:2222", "[git.example.test]:2222 "+keyText) {
+		t.Fatal("exact non-default-port host key was rejected")
+	}
+	hashed := knownhosts.HashHostname("[git.example.test]:2222")
+	if !validKnownHosts("git.example.test:2222", hashed+" "+keyText) {
+		t.Fatal("matching hashed host key was rejected")
+	}
+	for _, contents := range []string{
+		"git.example.test " + keyText,
+		"[git.example.test]:2022 " + keyText,
+		knownhosts.HashHostname("[other.example.test]:2222") + " " + keyText,
+		"*.example.test " + keyText,
+		"@revoked [git.example.test]:2222 " + keyText,
+		"[git.example.test]:2222 ssh-ed25519 invalid",
+	} {
+		if validKnownHosts("git.example.test:2222", contents) {
+			t.Errorf("mismatched or invalid known-hosts entry was accepted: %q", contents)
+		}
+	}
 }

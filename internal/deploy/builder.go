@@ -157,9 +157,9 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if err != nil {
 		return "", "", err
 	}
-	credentialHost := gitCredentialServerHost(credentials.Git.Server)
-	if credentials.Git.Secret != "" && (credentialHost == "" || !strings.EqualFold(repo.Hostname(), credentialHost)) {
-		return "", "", fmt.Errorf("Git credential server does not match repository host")
+	credentialAuthority := gitCredentialServerAuthority(credentials.Git.Server)
+	if credentials.Git.Secret != "" && (credentialAuthority == "" || !strings.EqualFold(repo.Host, credentialAuthority)) {
+		return "", "", fmt.Errorf("Git credential server does not match repository authority")
 	}
 	resolvedAddresses := []string(nil)
 	if b.EgressPolicy != nil {
@@ -289,12 +289,12 @@ func validGitRef(ref string) bool {
 	return strings.IndexFunc(ref, func(char rune) bool { return char < 0x20 || char == 0x7f }) < 0
 }
 
-func gitCredentialServerHost(server string) string {
+func gitCredentialServerAuthority(server string) string {
 	endpoint, err := url.Parse("https://" + strings.TrimSpace(server))
 	if err != nil || !netpolicy.ValidURLHost(endpoint) || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" {
 		return ""
 	}
-	return strings.ToLower(endpoint.Hostname())
+	return strings.ToLower(endpoint.Host)
 }
 
 func (b Builder) maxWorkspaceBytes() int64 {

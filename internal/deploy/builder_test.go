@@ -172,6 +172,14 @@ func TestBuildRejectsCredentialHostMismatchBeforeClone(t *testing.T) {
 	}
 }
 
+func TestBuildRejectsCredentialPortMismatchBeforeClone(t *testing.T) {
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test:8443/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
+	_, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: Credential{Kind: "git", Server: "git.example.test:9443", Username: "robot", Secret: "secret"}})
+	if err == nil || !strings.Contains(err.Error(), "authority") {
+		t.Fatalf("expected authority mismatch, got %v", err)
+	}
+}
+
 func TestValidateGitSourceRejectsUnsafeURLsAndRefs(t *testing.T) {
 	for _, repository := range []string{
 		"http://git.example.test/acme/app.git",

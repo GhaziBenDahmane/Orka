@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -36,6 +38,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type Server struct {
@@ -2290,7 +2293,7 @@ func credentialMatchesRepository(credential store.SourceCredential, repository *
 		return false
 	}
 	server, err := normalizeCredentialServer(strings.ToLower(strings.TrimSpace(credential.Server)))
-	if err != nil || !strings.EqualFold(credentialServerHostname(server), repository.Hostname()) {
+	if err != nil || !strings.EqualFold(server, repository.Host) {
 		return false
 	}
 	if fixedAuthority != "" {
@@ -2440,29 +2443,45 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 }
 
 func validKnownHosts(server, contents string) bool {
-	host := credentialServerHostname(server)
+	target := knownhosts.Normalize(server)
 	for _, line := range strings.Split(contents, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		index := 0
-		if len(fields) > 0 && strings.HasPrefix(fields[0], "@") {
-			index = 1
-		}
-		if len(fields) < index+3 {
+		marker, hosts, _, _, rest, err := ssh.ParseKnownHosts([]byte(line))
+		if err != nil || len(strings.TrimSpace(string(rest))) != 0 || marker == "revoked" {
 			continue
 		}
-		hosts := strings.ToLower(fields[index])
-		if !strings.HasPrefix(hosts, "|1|") && !contains(strings.Split(hosts, ","), host) && !strings.Contains(hosts, "["+host+"]:") {
-			continue
-		}
-		if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.Join(fields[index+1:], " "))); err == nil {
-			return true
+		for _, host := range hosts {
+			if knownHostMatches(host, target) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func knownHostMatches(pattern, target string) bool {
+	if strings.EqualFold(pattern, target) {
+		return true
+	}
+	parts := strings.Split(pattern, "|")
+	if len(parts) != 4 || parts[0] != "" || parts[1] != "1" {
+		return false
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil || len(salt) == 0 {
+		return false
+	}
+	want, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil || len(want) != sha1.Size {
+		return false
+	}
+	// OpenSSH's version-1 hashed-host format is fixed to HMAC-SHA1.
+	mac := hmac.New(sha1.New, salt)
+	_, _ = mac.Write([]byte(target))
+	return hmac.Equal(mac.Sum(nil), want)
 }
 
 func (s *Server) listSourceCredentials(w http.ResponseWriter, r *http.Request) {
