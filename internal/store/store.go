@@ -148,6 +148,7 @@ type DatabaseInstance struct {
 	Version          string         `json:"version"`
 	DriverSource     string         `json:"driverSource"`
 	DriverDigest     string         `json:"driverArtifactDigest,omitempty"`
+	StorageNodeID    string         `json:"storageNodeId,omitempty"`
 	ComposeServiceID uuid.UUID      `json:"composeServiceId"`
 	Config           map[string]any `json:"config"`
 	Status           string         `json:"status"`
@@ -1717,7 +1718,7 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 
 func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (DatabaseInstance, error) {
 	var item DatabaseInstance
-	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
@@ -1727,7 +1728,22 @@ func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (
 var (
 	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
 	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
+	ErrDatabaseStorageNodeMismatch    = errors.New("database storage node does not match the managed database")
 )
+
+// BindDatabaseStorageNode makes the first successful placement durable and
+// verifies subsequent workers selected the same node. A database is never
+// silently moved to an empty node-local Docker volume.
+func (s *Store) BindDatabaseStorageNode(ctx context.Context, id uuid.UUID, nodeID string) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE database_instances SET storage_node_id=$2,updated_at=now() WHERE id=$1 AND (storage_node_id='' OR storage_node_id=$2)`, id, nodeID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrDatabaseStorageNodeMismatch
+	}
+	return nil
+}
 
 // BindDatabaseDriverIdentity atomically upgrades a legacy unbound database or
 // verifies that another controller already bound it to the same driver. This
@@ -1751,7 +1767,7 @@ func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Prin
 	}
 	defer tx.Rollback(ctx)
 	var item DatabaseInstance
-	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
@@ -1791,7 +1807,7 @@ func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Prin
 }
 
 func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID uuid.UUID) ([]DatabaseInstance, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.environment_id=$1 AND p.organization_id=$2 ORDER BY d.name`, environmentID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.environment_id=$1 AND p.organization_id=$2 ORDER BY d.name`, environmentID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1799,7 +1815,7 @@ func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID
 	items := []DatabaseInstance{}
 	for rows.Next() {
 		var item DatabaseInstance
-		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

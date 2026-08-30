@@ -129,6 +129,12 @@ key. Artifacts carry encrypted and plaintext checksums, retention is applied
 only after successful writes, and destructive restores require explicit
 confirmation. A backup is not considered production evidence until its native
 engine restore and application-level data checks succeed.
+Managed databases backed by Docker's node-local volume driver persist their
+first storage-node assignment and receive a platform-owned `node.id` placement
+constraint on every deployment. Legacy stacks are adopted only when all
+running tasks resolve unambiguously to one node. Loss of that node therefore
+causes visible unavailability rather than an apparently healthy database with
+empty replacement storage.
 
 ### AI prompt injection and unsafe autonomy
 

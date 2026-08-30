@@ -16,6 +16,7 @@ var safeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var safeHostname = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var safeCertificateResolver = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 var safeVolumeSource = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
+var safeNodeID = regexp.MustCompile(`^[a-z0-9]{1,64}$`)
 var safeLogSize = regexp.MustCompile(`^([1-9][0-9]*)([kKmMgG]?)$`)
 
 const maxSafeTasksPerStack = 100
@@ -140,6 +141,138 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		return "", fmt.Errorf("render compose yaml: %w", err)
 	}
 	return string(out), nil
+}
+
+// PinNamedVolumes constrains every service using a named volume to one Swarm
+// node. Docker's local volume driver creates an unrelated empty volume when a
+// task moves to another node, so managed databases must fail unavailable
+// instead of silently starting with empty storage.
+func PinNamedVolumes(source, nodeID string) (string, bool, error) {
+	if !safeNodeID.MatchString(nodeID) {
+		return "", false, errors.New("invalid Swarm storage node ID")
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+		return "", false, fmt.Errorf("parse compose yaml: %w", err)
+	}
+	services, ok := stringMap(doc["services"])
+	if !ok {
+		return "", false, errors.New("compose document must define services")
+	}
+	pinned := false
+	for name, raw := range services {
+		service, ok := stringMap(raw)
+		if !ok || !usesNamedVolume(service["volumes"]) {
+			continue
+		}
+		deploy, ok := stringMap(service["deploy"])
+		if service["deploy"] != nil && !ok {
+			return "", false, fmt.Errorf("service %q deploy must be an object", name)
+		}
+		if deploy == nil {
+			deploy = map[string]any{}
+		}
+		placement, ok := stringMap(deploy["placement"])
+		if deploy["placement"] != nil && !ok {
+			return "", false, fmt.Errorf("service %q deploy.placement must be an object", name)
+		}
+		if placement == nil {
+			placement = map[string]any{}
+		}
+		constraints, err := stringList(placement["constraints"])
+		if err != nil {
+			return "", false, fmt.Errorf("service %q deploy.placement.constraints must be a string list", name)
+		}
+		hasStorageNodeConstraint := false
+		for _, constraint := range constraints {
+			normalized := strings.ReplaceAll(strings.TrimSpace(constraint), " ", "")
+			if strings.HasPrefix(normalized, "node.hostname==") {
+				return "", false, fmt.Errorf("service %q requests a platform-managed storage-node constraint", name)
+			}
+			if strings.HasPrefix(normalized, "node.id==") {
+				if strings.TrimPrefix(normalized, "node.id==") != nodeID {
+					return "", false, fmt.Errorf("service %q storage-node constraint conflicts with its persisted assignment", name)
+				}
+				hasStorageNodeConstraint = true
+			}
+		}
+		if !hasStorageNodeConstraint {
+			constraints = append(constraints, "node.id == "+nodeID)
+		}
+		placement["constraints"] = constraints
+		deploy["placement"] = placement
+		service["deploy"] = deploy
+		services[name] = service
+		pinned = true
+	}
+	if !pinned {
+		return source, false, nil
+	}
+	doc["services"] = services
+	out, err := yaml.Marshal(doc)
+	return string(out), true, err
+}
+
+func HasNamedVolumes(source string) (bool, error) {
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
+		return false, fmt.Errorf("parse compose yaml: %w", err)
+	}
+	services, ok := stringMap(doc["services"])
+	if !ok {
+		return false, errors.New("compose document must define services")
+	}
+	for _, raw := range services {
+		service, ok := stringMap(raw)
+		if ok && usesNamedVolume(service["volumes"]) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func usesNamedVolume(raw any) bool {
+	volumes, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	for _, rawVolume := range volumes {
+		if spec, ok := stringMap(rawVolume); ok {
+			kind, _ := spec["type"].(string)
+			source, _ := spec["source"].(string)
+			if kind == "volume" && source != "" {
+				return true
+			}
+			continue
+		}
+		volume, ok := rawVolume.(string)
+		if ok && strings.Contains(volume, ":") && !strings.HasPrefix(volume, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+func stringList(raw any) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		if stringsValue, valid := raw.([]string); valid {
+			return append([]string(nil), stringsValue...), nil
+		}
+		return nil, errors.New("not a list")
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			return nil, errors.New("non-string item")
+		}
+		result = append(result, text)
+	}
+	return result, nil
 }
 
 func safeServiceReplicas(name string, service map[string]any) (int, error) {

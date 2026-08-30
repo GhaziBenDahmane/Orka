@@ -38,6 +38,14 @@ type fakeScheduler struct {
 	transfer           *deploy.DatabaseTransferJob
 	status             deploy.StackStatus
 	containerCalls     int
+	storageNode        string
+}
+
+func (f *fakeScheduler) ResolveStorageNode(context.Context, string) (string, error) {
+	if f.storageNode == "" {
+		return "node-a", nil
+	}
+	return f.storageNode, nil
 }
 
 func TestValidateAgentEndpointsRequireHTTPSOrigins(t *testing.T) {
@@ -454,6 +462,14 @@ func TestExecuteStackStatusCommand(t *testing.T) {
 	var got deploy.StackStatus
 	if err = json.Unmarshal([]byte(output), &got); err != nil || got.Services != want.Services || len(got.Degraded) != 1 || got.Degraded[0] != "demo_web" {
 		t.Fatalf("status=%#v output=%q err=%v", got, output, err)
+	}
+}
+
+func TestExecuteStorageNodeCommand(t *testing.T) {
+	client := &Client{swarm: &fakeScheduler{storageNode: "node-persisted"}}
+	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.storage-node", Payload: []byte(`{"stackName":"database"}`)})
+	if err != nil || output != "node-persisted" {
+		t.Fatalf("output=%q err=%v", output, err)
 	}
 }
 

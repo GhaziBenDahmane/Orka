@@ -107,3 +107,47 @@ func TestDatabaseDriverIdentityBindsAtomically(t *testing.T) {
 		t.Fatalf("rebind audit count=%d err=%v", auditCount, err)
 	}
 }
+
+func TestDatabaseStorageNodeBindsAtomically(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID, projectID, environmentID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Storage placement',$2)`, []any{organizationID, "storage-placement-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Environment','environment')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Data','data','postgres','17','encrypted')`, []any{databaseID, environmentID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	if err = db.BindDatabaseStorageNode(ctx, databaseID, "nodea"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.BindDatabaseStorageNode(ctx, databaseID, "nodea"); err != nil {
+		t.Fatalf("idempotent bind: %v", err)
+	}
+	if err = db.BindDatabaseStorageNode(ctx, databaseID, "nodeb"); !errors.Is(err, ErrDatabaseStorageNodeMismatch) {
+		t.Fatalf("mismatched bind error=%v", err)
+	}
+	item, err := db.GetDatabase(ctx, organizationID, databaseID)
+	if err != nil || item.StorageNodeID != "nodea" {
+		t.Fatalf("database=%#v err=%v", item, err)
+	}
+}

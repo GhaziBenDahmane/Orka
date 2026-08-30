@@ -547,6 +547,12 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		nodes, err := c.swarm.Nodes(ctx)
 		encoded, _ := json.Marshal(nodes)
 		return string(encoded), err
+	case "swarm.storage-node":
+		resolver, ok := c.swarm.(deploy.StorageNodeResolver)
+		if !ok {
+			return "", errors.New("scheduler does not support storage-node resolution")
+		}
+		return resolver.ResolveStorageNode(ctx, payload.StackName)
 	case "container.run":
 		return c.swarm.RunContainerJob(ctx, payload.Network, payload.Image, "", payload.Environment, payload.Command)
 	case "database.utility":

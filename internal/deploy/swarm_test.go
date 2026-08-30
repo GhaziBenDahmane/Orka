@@ -116,6 +116,57 @@ func TestEnsureReadyRejectsUnsafeExistingNetwork(t *testing.T) {
 	}
 }
 
+func TestResolveStorageNodeDiscoversExistingOrChoosesDeterministically(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+if [ "$1" = service ] && [ "$2" = ls ]; then
+  if [ "${STACK_EMPTY:-}" = true ]; then exit 0; fi
+  echo 'database_db'
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = ps ]; then echo 'worker-b'; exit 0; fi
+if [ "$1" = node ] && [ "$2" = ls ]; then
+	  printf '%s\n' '{"ID":"nodeb","Hostname":"worker-b","Status":"Ready","Availability":"Active"}' '{"ID":"nodea","Hostname":"worker-a","Status":"Ready","Availability":"Active"}'
+  exit 0
+fi
+if [ "$1" = node ] && [ "$2" = inspect ]; then echo '{"NanoCPUs":1,"MemoryBytes":1}'; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	swarm := Swarm{DockerBin: docker}
+	if node, err := swarm.ResolveStorageNode(context.Background(), "database"); err != nil || node != "nodeb" {
+		t.Fatalf("existing node=%q err=%v", node, err)
+	}
+	t.Setenv("STACK_EMPTY", "true")
+	if node, err := swarm.ResolveStorageNode(context.Background(), "database"); err != nil || node != "nodea" {
+		t.Fatalf("selected node=%q err=%v", node, err)
+	}
+}
+
+func TestResolveStorageNodeRejectsAmbiguousExistingStack(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+if [ "$1" = service ] && [ "$2" = ls ]; then echo 'database_db'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = ps ]; then printf '%s\n' worker-a worker-b; exit 0; fi
+if [ "$1" = node ] && [ "$2" = ls ]; then
+	  printf '%s\n' '{"ID":"nodea","Hostname":"worker-a","Status":"Ready","Availability":"Active"}' '{"ID":"nodeb","Hostname":"worker-b","Status":"Ready","Availability":"Active"}'
+  exit 0
+fi
+if [ "$1" = node ] && [ "$2" = inspect ]; then echo '{"NanoCPUs":1,"MemoryBytes":1}'; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Swarm{DockerBin: docker}).ResolveStorageNode(context.Background(), "database"); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("ambiguous stack error=%v", err)
+	}
+}
+
 func TestStatusReportsMissingHealthyAndDegradedStacks(t *testing.T) {
 	directory := t.TempDir()
 	docker := filepath.Join(directory, "docker")

@@ -57,6 +57,10 @@ func (s RemoteSwarm) Nodes(ctx context.Context) ([]Node, error) {
 	return nodes, json.Unmarshal([]byte(output), &nodes)
 }
 
+func (s RemoteSwarm) ResolveStorageNode(ctx context.Context, stackName string) (string, error) {
+	return s.run(ctx, "swarm.storage-node", map[string]string{"stackName": stackName})
+}
+
 func (s RemoteSwarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {
 	if mountSource != "" {
 		return "", errors.New("remote container jobs cannot mount controller paths")

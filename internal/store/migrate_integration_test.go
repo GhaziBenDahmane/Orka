@@ -88,6 +88,37 @@ func TestMigrateFreshInstallIsCompleteAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateFrom080AddsFailClosedDatabaseStoragePlacement(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "080_database_driver_identity.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Storage migration',$2)`, []any{organizationID, "storage-migration-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Environment','environment')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17','encrypted')`, []any{databaseID, environmentID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var storageNode string
+	if err := pool.QueryRow(ctx, `SELECT storage_node_id FROM database_instances WHERE id=$1`, databaseID).Scan(&storageNode); err != nil || storageNode != "" {
+		t.Fatalf("legacy storage node=%q err=%v", storageNode, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE database_instances SET storage_node_id='../unsafe' WHERE id=$1`, databaseID); err == nil {
+		t.Fatal("unsafe storage node ID was accepted")
+	}
+}
+
 func TestMigrateUpgradeFrom073AddsTwoPhaseAgentCertificateRotation(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "073_cluster_command_history_index.sql"); err != nil {

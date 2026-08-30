@@ -86,6 +86,11 @@ recovery evidence remains.
   revisions without rotating generated credentials.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
+- Managed databases using Docker's local volume driver are durably assigned to
+  one Swarm node on first deployment. Existing stacks are discovered only when
+  their running tasks resolve to one node; every deployment, rollback, and
+  reconciliation snapshot is then constrained to that node so node loss fails
+  unavailable instead of silently creating empty storage elsewhere.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch engine-specific backup/restore, streaming checksums,
   interval policies, retention, and opt-in isolated restore drills.

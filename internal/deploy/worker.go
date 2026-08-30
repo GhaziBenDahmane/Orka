@@ -648,6 +648,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		}
 	}
 	if err == nil {
+		compiled, err = w.pinManagedDatabaseStorage(ctx, serviceID, stack, compiled, clusterID)
+	}
+	if err == nil {
 		if snapshotErr := w.Store.SetDeploymentEffectiveComposeForJob(ctx, j.ID, j.LeaseID, id, compiled); snapshotErr != nil {
 			err = snapshotErr
 		}
@@ -660,6 +663,44 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		w.markDeployment(ctx, j, id, "failed", buildOutput, err)
 	}
 	return err
+}
+
+func (w *Worker) pinManagedDatabaseStorage(ctx context.Context, serviceID uuid.UUID, stack, compose string, clusterID *uuid.UUID) (string, error) {
+	var databaseID uuid.UUID
+	var storageNodeID string
+	err := w.Store.Pool.QueryRow(ctx, `SELECT id,storage_node_id FROM database_instances WHERE compose_service_id=$1`, serviceID).Scan(&databaseID, &storageNodeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return compose, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	hasVolumes, err := HasNamedVolumes(compose)
+	if err != nil {
+		return "", err
+	}
+	if !hasVolumes {
+		return compose, nil
+	}
+	if storageNodeID == "" {
+		resolver, ok := w.scheduler(clusterID).(StorageNodeResolver)
+		if !ok {
+			return "", errors.New("scheduler does not support durable database placement")
+		}
+		storageNodeID, err = resolver.ResolveStorageNode(ctx, stack)
+		storageNodeID = strings.TrimSpace(storageNodeID)
+		if err != nil {
+			return "", fmt.Errorf("resolve database storage node: %w", err)
+		}
+		if err = w.Store.BindDatabaseStorageNode(ctx, databaseID, storageNodeID); err != nil {
+			return "", fmt.Errorf("bind database storage node: %w", err)
+		}
+	}
+	pinned, _, err := PinNamedVolumes(compose, storageNodeID)
+	if err != nil {
+		return "", fmt.Errorf("pin database storage: %w", err)
+	}
+	return pinned, nil
 }
 
 func (w *Worker) deleteComposeService(ctx context.Context, j job) error {

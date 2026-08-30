@@ -337,6 +337,59 @@ volumes:
 	}
 }
 
+func TestPinNamedVolumesAddsStorageNodeConstraint(t *testing.T) {
+	source := `services:
+  database:
+    image: postgres:17
+    volumes:
+      - data:/var/lib/postgresql/data
+    deploy:
+      placement:
+        constraints: [node.labels.region == eu]
+  metrics:
+    image: exporter:1
+volumes:
+  data: {}
+`
+	pinned, found, err := PinNamedVolumes(source, "abc123")
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if !strings.Contains(pinned, "node.id == abc123") || !strings.Contains(pinned, "node.labels.region == eu") {
+		t.Fatalf("storage placement was not preserved and pinned:\n%s", pinned)
+	}
+	if strings.Count(pinned, "node.id == abc123") != 1 {
+		t.Fatalf("unexpected storage-node constraint count:\n%s", pinned)
+	}
+	withoutVolumes, found, err := PinNamedVolumes("services:\n  app:\n    image: nginx\n", "abc123")
+	if err != nil || found || withoutVolumes == "" {
+		t.Fatalf("volume-free compose found=%v err=%v output=%q", found, err, withoutVolumes)
+	}
+}
+
+func TestPinNamedVolumesIsIdempotentForPersistedStorageNode(t *testing.T) {
+	source := "services:\n  database:\n    image: postgres:17\n    volumes: [data:/data]\n    deploy:\n      placement:\n        constraints: ['node.id == abc123']\nvolumes:\n  data: {}\n"
+	pinned, found, err := PinNamedVolumes(source, "abc123")
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if strings.Count(pinned, "node.id == abc123") != 1 {
+		t.Fatalf("storage-node constraint was duplicated:\n%s", pinned)
+	}
+}
+
+func TestPinNamedVolumesRejectsConflictingStorageNodeConstraint(t *testing.T) {
+	for _, constraint := range []string{"node.id == attacker", "node.hostname==worker-1"} {
+		source := "services:\n  database:\n    image: postgres:17\n    volumes: [data:/data]\n    deploy:\n      placement:\n        constraints: ['" + constraint + "']\nvolumes:\n  data: {}\n"
+		if _, _, err := PinNamedVolumes(source, "abc123"); err == nil {
+			t.Fatalf("constraint %q err=%v", constraint, err)
+		}
+	}
+	if _, _, err := PinNamedVolumes("services: {db: {image: postgres, volumes: [data:/data]}}", "../node"); err == nil {
+		t.Fatal("unsafe node ID was accepted")
+	}
+}
+
 func TestCompileSafeModeReservesPlatformNetworkForRoutes(t *testing.T) {
 	tests := map[string]string{
 		"declared external": `services:

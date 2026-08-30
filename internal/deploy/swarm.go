@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,7 +50,13 @@ type StackInspector interface {
 	Status(context.Context, string) (StackStatus, error)
 }
 
+type StorageNodeResolver interface {
+	ResolveStorageNode(context.Context, string) (string, error)
+}
+
 var _ Scheduler = Swarm{}
+
+var safeRuntimeServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 type Node struct {
 	ID            string `json:"id"`
@@ -304,6 +311,64 @@ func (s Swarm) Nodes(ctx context.Context) ([]Node, error) {
 		items[index].NanoCPUs, items[index].MemoryBytes = resources.NanoCPUs, resources.MemoryBytes
 	}
 	return items, nil
+}
+
+// ResolveStorageNode returns the node already hosting a stack, or chooses a
+// deterministic ready node before its first deployment. Existing multi-node
+// stacks are rejected because their node-local volumes are ambiguous.
+func (s Swarm) ResolveStorageNode(ctx context.Context, stackName string) (string, error) {
+	if !safeName.MatchString(stackName) {
+		return "", errors.New("invalid stack name")
+	}
+	servicesOutput, err := s.run(ctx, "service", "ls", "--filter", "label=com.docker.stack.namespace="+stackName, "--format", "{{.Name}}")
+	if err != nil {
+		return "", err
+	}
+	nodes, err := s.Nodes(ctx)
+	if err != nil {
+		return "", err
+	}
+	byHostname := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		byHostname[node.Hostname] = node.ID
+	}
+	services := strings.Fields(servicesOutput)
+	if len(services) > 0 {
+		assigned := map[string]bool{}
+		for _, service := range services {
+			if !safeRuntimeServiceName.MatchString(service) {
+				return "", fmt.Errorf("invalid service name returned for stack %q", stackName)
+			}
+			output, inspectErr := s.run(ctx, "service", "ps", "--filter", "desired-state=running", "--format", "{{.Node}}", service)
+			if inspectErr != nil {
+				return "", inspectErr
+			}
+			for _, hostname := range strings.Fields(output) {
+				nodeID := byHostname[hostname]
+				if nodeID == "" {
+					return "", fmt.Errorf("stack %q runs on unknown node %q", stackName, hostname)
+				}
+				assigned[nodeID] = true
+			}
+		}
+		if len(assigned) != 1 {
+			return "", fmt.Errorf("stack %q must have running tasks on exactly one storage node", stackName)
+		}
+		for nodeID := range assigned {
+			return nodeID, nil
+		}
+	}
+	candidates := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if strings.EqualFold(node.Status, "ready") && strings.EqualFold(node.Availability, "active") && safeNodeID.MatchString(node.ID) {
+			candidates = append(candidates, node.ID)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", errors.New("no ready active Swarm node is available for database storage")
+	}
+	sort.Strings(candidates)
+	return candidates[0], nil
 }
 
 func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {
