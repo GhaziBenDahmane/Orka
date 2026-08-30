@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,13 @@ func TestHandlerSetsSecurityHeadersOnAPIAndConsole(t *testing.T) {
 			if response.Header().Get(header) == "" {
 				t.Errorf("%s: missing %s", route, header)
 			}
+		}
+		csp := response.Header().Get("Content-Security-Policy")
+		if route == "/" && (!strings.Contains(csp, "script-src 'self'") || !strings.Contains(csp, "style-src 'self'")) {
+			t.Errorf("console CSP blocks embedded assets: %q", csp)
+		}
+		if route == "/v1/projects" && (!strings.Contains(csp, "default-src 'none'") || response.Header().Get("Cache-Control") != "no-store") {
+			t.Errorf("API response is not locked down: CSP=%q cache=%q", csp, response.Header().Get("Cache-Control"))
 		}
 	}
 }
