@@ -52,6 +52,7 @@ var masterKeyEncryptedColumns = []encryptedColumnSpec{
 	{table: "database_backups", column: "encrypted_data_key", idColumn: "id", contextColumn: "id", contextKind: "backup-data-key"},
 	{table: "database_instances", column: "encrypted_credentials", idColumn: "id", contextColumn: "id", contextKind: "database-credentials", legacyContext: "database-credentials"},
 	{table: "database_migrations", column: "encrypted_source_config", idColumn: "id", contextColumn: "id", contextKind: "database-migration-source"},
+	{table: "deployments", column: "encrypted_registry_credential", idColumn: "id", contextColumn: "registry_credential_id", contextKind: "source-credential", legacyContext: "source-credential"},
 	{table: "notification_endpoints", column: "encrypted_secret", idColumn: "id", contextColumn: "id", contextKind: "notification-secret"},
 	{table: "notification_endpoints", column: "encrypted_url", idColumn: "id", contextColumn: "id", contextKind: "notification-url"},
 	{table: "oidc_providers", column: "encrypted_client_secret", idColumn: "id", contextColumn: "id", contextKind: "oidc-client-secret"},

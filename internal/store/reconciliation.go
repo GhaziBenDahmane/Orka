@@ -129,9 +129,11 @@ func (s *Store) RecordReconciliation(ctx context.Context, candidate Reconciliati
 
 	var revision int64
 	var compose, encrypted string
-	err = tx.QueryRow(ctx, `SELECT d.revision,d.effective_compose,d.env_snapshot
+	var registryCredentialID *uuid.UUID
+	var registryServer, registryUsername, encryptedRegistryCredential string
+	err = tx.QueryRow(ctx, `SELECT d.revision,d.effective_compose,d.env_snapshot,d.registry_credential_id,d.registry_credential_server,d.registry_credential_username,d.encrypted_registry_credential
 		FROM deployments d WHERE d.compose_service_id=$1 AND d.status='succeeded'
-		ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, candidate.ServiceID).Scan(&revision, &compose, &encrypted)
+		ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, candidate.ServiceID).Scan(&revision, &compose, &encrypted, &registryCredentialID, &registryServer, &registryUsername, &encryptedRegistryCredential)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}
@@ -146,8 +148,8 @@ func (s *Store) RecordReconciliation(ctx context.Context, candidate Reconciliati
 		return nil, tx.Commit(ctx)
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: candidate.ServiceID, Revision: revision, Status: "queued", Trigger: "reconcile"}
-	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger)
-		VALUES($1,$2,$3,$4,$4,$5,'queued','reconcile') ON CONFLICT DO NOTHING RETURNING created_at`, d.ID, d.ComposeServiceID, d.Revision, compose, encrypted).Scan(&d.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,registry_credential_id,registry_credential_server,registry_credential_username,encrypted_registry_credential)
+		VALUES($1,$2,$3,$4,$4,$5,'queued','reconcile',$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING created_at`, d.ID, d.ComposeServiceID, d.Revision, compose, encrypted, registryCredentialID, registryServer, registryUsername, encryptedRegistryCredential).Scan(&d.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}

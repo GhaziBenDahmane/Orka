@@ -741,7 +741,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		var gitCredentialID, registryCredentialID *uuid.UUID
 		var gitKind, gitServer, gitUser, gitSecret, registryServer, registryUser, registrySecret string
 		var encryptedArchive *string
-		sourceErr := w.Store.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.source_type,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_type,a.builder_image,a.output_directory,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.updated_at,gc.id,COALESCE(gc.kind,''),COALESCE(gc.server,''),COALESCE(gc.username,''),COALESCE(gc.encrypted_secret,''),rc.id,COALESCE(rc.server,''),COALESCE(rc.username,''),COALESCE(rc.encrypted_secret,''),x.encrypted_archive FROM application_sources a JOIN deployments d ON d.compose_service_id=a.compose_service_id LEFT JOIN source_credentials gc ON gc.id=a.git_credential_id LEFT JOIN source_credentials rc ON rc.id=a.registry_credential_id LEFT JOIN application_artifacts x ON x.compose_service_id=a.compose_service_id WHERE d.id=$1`, id).Scan(&source.ComposeServiceID, &source.SourceType, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildType, &source.BuilderImage, &source.OutputDirectory, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.UpdatedAt, &gitCredentialID, &gitKind, &gitServer, &gitUser, &gitSecret, &registryCredentialID, &registryServer, &registryUser, &registrySecret, &encryptedArchive)
+		sourceErr := w.Store.Pool.QueryRow(ctx, `SELECT a.compose_service_id,a.source_type,a.repository_url,a.git_ref,a.context_directory,a.dockerfile,a.build_type,a.builder_image,a.output_directory,a.build_target,a.enable_submodules,a.encrypted_build_config,a.target_service,a.registry_image,a.updated_at,gc.id,COALESCE(gc.kind,''),COALESCE(gc.server,''),COALESCE(gc.username,''),COALESCE(gc.encrypted_secret,''),d.registry_credential_id,d.registry_credential_server,d.registry_credential_username,d.encrypted_registry_credential,x.encrypted_archive FROM application_sources a JOIN deployments d ON d.compose_service_id=a.compose_service_id LEFT JOIN source_credentials gc ON gc.id=a.git_credential_id LEFT JOIN application_artifacts x ON x.compose_service_id=a.compose_service_id WHERE d.id=$1`, id).Scan(&source.ComposeServiceID, &source.SourceType, &source.RepositoryURL, &source.GitRef, &source.ContextDirectory, &source.Dockerfile, &source.BuildType, &source.BuilderImage, &source.OutputDirectory, &source.BuildTarget, &source.EnableSubmodules, &source.EncryptedBuildConfig, &source.TargetService, &source.RegistryImage, &source.UpdatedAt, &gitCredentialID, &gitKind, &gitServer, &gitUser, &gitSecret, &registryCredentialID, &registryServer, &registryUser, &registrySecret, &encryptedArchive)
 		if sourceErr == nil {
 			if source.EncryptedBuildConfig != "" {
 				plain, decryptErr := w.Box.Decrypt(source.EncryptedBuildConfig, "application-build-config:"+source.ComposeServiceID.String())
@@ -837,18 +837,14 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 }
 
 func (w *Worker) registryCredentialForDeployment(ctx context.Context, deploymentID uuid.UUID) (*Credential, error) {
-	var id uuid.UUID
+	var id *uuid.UUID
 	var server, username, encrypted string
-	err := w.Store.Pool.QueryRow(ctx, `SELECT credential.id,credential.server,credential.username,credential.encrypted_secret
-		FROM deployments deployment
-		JOIN application_sources source ON source.compose_service_id=deployment.compose_service_id
-		JOIN source_credentials credential ON credential.id=source.registry_credential_id
-		WHERE deployment.id=$1`, deploymentID).Scan(&id, &server, &username, &encrypted)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
+	err := w.Store.Pool.QueryRow(ctx, `SELECT registry_credential_id,registry_credential_server,registry_credential_username,encrypted_registry_credential FROM deployments WHERE id=$1`, deploymentID).Scan(&id, &server, &username, &encrypted)
 	if err != nil {
 		return nil, err
+	}
+	if id == nil {
+		return nil, nil
 	}
 	plain, err := w.Box.DecryptResource(encrypted, "source-credential", id.String(), "source-credential")
 	if err != nil {

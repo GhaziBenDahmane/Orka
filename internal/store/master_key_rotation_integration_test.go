@@ -230,7 +230,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'service','service',$3,'services: {}')`, []any{serviceID, environmentID, "rotation-" + serviceID.String()}},
-		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','queued','test')`, []any{deploymentID, serviceID}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger,registry_credential_id,registry_credential_server,registry_credential_username,encrypted_registry_credential) VALUES($1,$2,1,'services: {}','queued','test',$3,'registry.example.test','robot','pending')`, []any{deploymentID, serviceID, credentialID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials) VALUES($1,$2,'database','database','postgres','17',$3,'')`, []any{databaseID, environmentID, serviceID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format) VALUES($1,$2,'queued','native')`, []any{backupID, databaseID}},
 		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret) VALUES($1,$2,'oidc','https://id.example.test','client','')`, []any{providerID, organizationID}},
@@ -257,7 +257,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 	ids := map[string]uuid.UUID{
 		"application_artifacts": serviceID, "application_sources": serviceID, "backup_destinations": destinationID,
 		"cluster_commands": commandID, "commit_status_deliveries": deliveryID, "compose_services": serviceID,
-		"database_backups": backupID, "database_instances": databaseID, "database_migrations": migrationID,
+		"database_backups": backupID, "database_instances": databaseID, "database_migrations": migrationID, "deployments": deploymentID,
 		"notification_endpoints": notificationID, "oidc_providers": providerID, "saml_providers": providerID,
 		"source_credentials": credentialID, "template_instances": serviceID, "template_repositories": repositoryID,
 		"volume_backups": volumeBackupID, "webhook_integrations": webhookID,
@@ -266,7 +266,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 	for index, spec := range masterKeyEncryptedColumns {
 		id := ids[spec.table]
 		contextID := id.String()
-		if spec.table == "commit_status_deliveries" {
+		if spec.table == "commit_status_deliveries" || spec.table == "deployments" {
 			contextID = credentialID.String()
 		}
 		plaintext := "secret-" + spec.table + "-" + spec.column

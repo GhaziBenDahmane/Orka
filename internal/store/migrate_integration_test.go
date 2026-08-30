@@ -432,7 +432,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -566,6 +566,42 @@ func TestMigrateUpgradeFrom067AddsAuthenticationRateLimits(t *testing.T) {
 	var exists bool
 	if err := pool.QueryRow(ctx, `SELECT to_regclass('auth_rate_limits') IS NOT NULL`).Scan(&exists); err != nil || !exists {
 		t.Fatalf("authentication rate-limit table missing: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestMigrateDeploymentRegistryCredentialSnapshots(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "097_volume_policy_retirement_indexes.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	credentialID, deploymentID := uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'registry snapshot',$2)`, []any{organizationID, "registry-snapshot-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'app','app',$3,'services: {}')`, []any{serviceID, environmentID, "registry-snapshot-" + serviceID.String()}},
+		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,'registry','registry','registry.example.test','robot','ciphertext')`, []any{credentialID, organizationID}},
+		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://github.com/acme/app','web','registry.example.test/acme/app',$2)`, []any{serviceID, credentialID}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','succeeded','manual')`, []any{deploymentID, serviceID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var gotID *uuid.UUID
+	var server, username, encrypted string
+	if err := pool.QueryRow(ctx, `SELECT registry_credential_id,registry_credential_server,registry_credential_username,encrypted_registry_credential FROM deployments WHERE id=$1`, deploymentID).Scan(&gotID, &server, &username, &encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if gotID == nil || *gotID != credentialID || server != "registry.example.test" || username != "robot" || encrypted != "ciphertext" {
+		t.Fatalf("credential snapshot id=%v server=%q username=%q encrypted=%q", gotID, server, username, encrypted)
 	}
 }
 

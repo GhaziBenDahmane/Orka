@@ -1397,6 +1397,9 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	if err != nil {
 		return Deployment{}, err
 	}
+	if err = snapshotDeploymentRegistryCredentialTx(ctx, tx, d.ID, serviceID); err != nil {
+		return Deployment{}, err
+	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
@@ -1405,6 +1408,22 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 		return Deployment{}, err
 	}
 	return d, nil
+}
+
+// snapshotDeploymentRegistryCredentialTx retains the exact encrypted registry
+// credential selected while the service is locked. Rollback and reconciliation
+// can then replay an immutable image snapshot even if the mutable application
+// source is changed or its credential is later deleted.
+func snapshotDeploymentRegistryCredentialTx(ctx context.Context, tx pgx.Tx, deploymentID, serviceID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `UPDATE deployments deployment
+		SET registry_credential_id=credential.id,
+			registry_credential_server=credential.server,
+			registry_credential_username=credential.username,
+			encrypted_registry_credential=credential.encrypted_secret
+		FROM application_sources source
+		JOIN source_credentials credential ON credential.id=source.registry_credential_id AND credential.kind='registry'
+		WHERE deployment.id=$1 AND source.compose_service_id=$2`, deploymentID, serviceID)
+	return err
 }
 
 func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, serviceID uuid.UUID, deleteVolumes ...bool) error {
@@ -1643,6 +1662,9 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: provider + "-webhook", CommitSHA: commitSHA}
 	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,commit_sha) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, revision, compose, environment, d.Trigger, commitSHA).Scan(&d.CreatedAt); err != nil {
+		return Deployment{}, err
+	}
+	if err = snapshotDeploymentRegistryCredentialTx(ctx, tx, d.ID, serviceID); err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
@@ -1985,6 +2007,9 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger) VALUES($1,$2,$3,$4,$5,'queued','webhook') RETURNING created_at`, d.ID, serviceID, revision, compose, env).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
 	}
+	if err = snapshotDeploymentRegistryCredentialTx(ctx, tx, d.ID, serviceID); err != nil {
+		return Deployment{}, err
+	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
@@ -2039,7 +2064,9 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	var desiredCompose, effectiveCompose, encrypted string
-	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.effective_compose,d.env_snapshot FROM deployments d WHERE d.compose_service_id=$1 AND d.status='succeeded' AND d.effective_compose<>'' ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, serviceID).Scan(&desiredCompose, &effectiveCompose, &encrypted)
+	var registryCredentialID *uuid.UUID
+	var registryServer, registryUsername, encryptedRegistryCredential string
+	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.effective_compose,d.env_snapshot,d.registry_credential_id,d.registry_credential_server,d.registry_credential_username,d.encrypted_registry_credential FROM deployments d WHERE d.compose_service_id=$1 AND d.status='succeeded' AND d.effective_compose<>'' ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, serviceID).Scan(&desiredCompose, &effectiveCompose, &encrypted, &registryCredentialID, &registryServer, &registryUsername, &encryptedRegistryCredential)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrRollbackUnavailable
 	}
@@ -2054,7 +2081,7 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "rollback"}
-	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$4,$5,'queued','rollback',$6) RETURNING created_at`, d.ID, serviceID, revision, effectiveCompose, encrypted, nullableUUID(actorID)).Scan(&d.CreatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,actor_user_id,registry_credential_id,registry_credential_server,registry_credential_username,encrypted_registry_credential) VALUES($1,$2,$3,$4,$4,$5,'queued','rollback',$6,$7,$8,$9,$10) RETURNING created_at`, d.ID, serviceID, revision, effectiveCompose, encrypted, nullableUUID(actorID), registryCredentialID, registryServer, registryUsername, encryptedRegistryCredential).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})

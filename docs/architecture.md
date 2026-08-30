@@ -118,7 +118,11 @@ Private build-registry credentials are scoped to the configured registry host.
 After a successful push, the scheduler supplies them to `docker stack deploy
 --with-registry-auth` through a temporary mode-0700 Docker configuration. For a
 remote Swarm the credential travels only inside the encrypted, fenced command
-payload and is materialized by the outbound agent for that deployment.
+payload and is materialized by the outbound agent for that deployment. Each
+deployment retains an encrypted copy of the selected registry credential and
+its exact authority. Rollback and reconciliation copy that snapshot instead of
+consulting the mutable application source, so credential rotation or deletion
+cannot silently change the authentication identity of an immutable replay.
 
 Remote agent identities use short-lived X.509 client certificates issued from
 a dedicated Dockyard CA. Enrollment accepts a proof-of-possession CSR, ignores

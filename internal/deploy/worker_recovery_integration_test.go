@@ -391,7 +391,7 @@ func TestRollbackDeploymentReplaysImmutableSnapshotWithoutRebuild(t *testing.T) 
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'app','app',$3,'services: {web: {image: moving-source}}')`, []any{serviceID, environmentID, "rollback-worker-" + serviceID.String()}},
 		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,'registry','private registry','registry.example','robot',$3)`, []any{credentialID, organizationID, encryptedCredential}},
 		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://invalid.example/repository','web','registry.example/private/app',$2)`, []any{serviceID, credentialID}},
-		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,finished_at) VALUES($1,$2,1,'services: {web: {image: moving-old-tag}}',$3,'','succeeded','manual',now())`, []any{uuid.New(), serviceID, effective}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,finished_at,registry_credential_id,registry_credential_server,registry_credential_username,encrypted_registry_credential) VALUES($1,$2,1,'services: {web: {image: moving-old-tag}}',$3,'','succeeded','manual',now(),$4,'registry.example','robot',$5)`, []any{uuid.New(), serviceID, effective, credentialID, encryptedCredential}},
 	}
 	for _, statement := range statements {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -400,6 +400,9 @@ func TestRollbackDeploymentReplaysImmutableSnapshotWithoutRebuild(t *testing.T) 
 	}
 	rollback, err := db.QueueRollback(ctx, organizationID, serviceID, uuid.Nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DeleteSourceCredential(ctx, organizationID, credentialID); err != nil {
 		t.Fatal(err)
 	}
 	worker := &Worker{Store: db, Box: box, ID: "rollback-test"}
