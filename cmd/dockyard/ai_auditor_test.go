@@ -370,6 +370,25 @@ func TestDeterministicAuditDetectsPlaintextPublicRoutes(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsWorkloadImageProvenanceGaps(t *testing.T) {
+	invalidID, mutableID, incompleteID, healthyID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		WorkloadPosture: []store.AIAuditWorkloadPosture{
+			{ServiceID: invalidID},
+			{ServiceID: mutableID, DefinitionParseable: true, ContainerCount: 2, MutableImages: 1, DigestPinnedImages: 1},
+			{ServiceID: incompleteID, DefinitionParseable: true, ContainerCount: 1, MissingImageOrBuild: 1},
+			{ServiceID: healthyID, DefinitionParseable: true, ContainerCount: 2, DigestPinnedImages: 1, BuildOnlyServices: 1},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 3 || findings[0].Title != "Workload definition cannot be audited" || findings[0].ResourceID != invalidID.String() || findings[1].Title != "Workload uses mutable container images" || findings[1].ResourceID != mutableID.String() || findings[2].Title != "Workload services lack an image or build source" || findings[2].ResourceID != incompleteID.String() {
+		t.Fatalf("workload findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

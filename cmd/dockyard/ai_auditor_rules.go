@@ -87,6 +87,18 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "medium", Category: "network", Title: "Public route permits plaintext HTTP", Description: "A Traefik ingress route accepts traffic without transport encryption.", ResourceType: "route", ResourceID: route.ID.String(), Evidence: map[string]any{"serviceId": route.ComposeServiceID.String(), "host": route.Host, "pathPrefix": route.PathPrefix, "targetPort": route.TargetPort}, Remediation: "Enable TLS with a configured certificate resolver, redeploy the service, and redirect or retire the plaintext endpoint."})
 		}
 	}
+	for _, workload := range snapshot.WorkloadPosture {
+		if !workload.DefinitionParseable {
+			add(modelFinding{Severity: "high", Category: "deployment", Title: "Workload definition cannot be audited", Description: "The stored Compose definition cannot be parsed into a service inventory.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"definitionParseable": false}, Remediation: "Repair and validate the Compose definition before attempting another deployment."})
+			continue
+		}
+		if workload.MutableImages > 0 {
+			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Workload uses mutable container images", Description: "One or more Compose services reference an image without an immutable SHA-256 digest.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"containerCount": workload.ContainerCount, "mutableImages": workload.MutableImages, "digestPinnedImages": workload.DigestPinnedImages, "buildOnlyServices": workload.BuildOnlyServices}, Remediation: "Resolve and record immutable repository@sha256:digest references for prebuilt images, then deploy a new revision."})
+		}
+		if workload.MissingImageOrBuild > 0 {
+			add(modelFinding{Severity: "high", Category: "deployment", Title: "Workload services lack an image or build source", Description: "One or more Compose services cannot identify a container image or build input.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"containerCount": workload.ContainerCount, "missingImageOrBuild": workload.MissingImageOrBuild}, Remediation: "Configure an image or supported build source for every Compose service and validate the resulting revision."})
+		}
+	}
 	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
 	unusableDatabaseDrivers := make(map[uuid.UUID]bool)
 	for _, engine := range snapshot.DatabaseEngines {

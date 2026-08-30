@@ -29,6 +29,11 @@ keys make it a privileged service.
   viewer/developer/admin rank and therefore cannot invoke normal resource APIs.
 - `GET /v1/ai/audit-snapshot` excludes Compose content, environment values,
   database config, credentials, backup payloads, and secret material.
+- Compose image provenance is reduced to per-workload counts: total
+  containers, digest-pinned images, mutable image references, build-only
+  services, and services missing both image and build input. Image names,
+  registry paths, build contexts, commands, labels, and all other Compose
+  values remain excluded.
 - The snapshot includes per-database backup policy and restore-drill posture,
   the installed database-driver catalog with default versions, built-in or
   external provenance, executable SHA-256 digest, and backup capability,
@@ -97,7 +102,8 @@ keys make it a privileged service.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing, disabled, or overdue backups and restore drills,
   active maintenance scopes, near-capacity quotas, missing owners, disabled
-  mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats, expiring agent certificates,
+  mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,
+  expiring agent certificates,
   expiring service-account and stale SCIM credentials, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
   notification coverage gaps, unavailable, unbound, mismatched, or
@@ -106,7 +112,8 @@ keys make it a privileged service.
   incomplete Dokploy migrations. It also reports a missing immutable audit
   archive, a failed latest archive delivery, or tenant events left unarchived
   for more than five minutes, along with public routes that permit plaintext
-  HTTP. These findings survive a model gateway
+  HTTP, malformed workload definitions, mutable image references, and services
+  without an image or build source. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and

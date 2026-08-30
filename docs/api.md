@@ -196,6 +196,10 @@ Enabled SAML providers expose only an opaque provider ID, certificate
 configuration validity, and SP/IdP expiry timestamps; certificates, keys,
 metadata, names, and domains remain excluded. Invalid/expired trust is a high
 severity baseline finding, while expiry inside thirty days is medium severity.
+Compose definitions are summarized as image-provenance counts per workload;
+image names, registry paths, build contexts, commands, labels, and environment
+values are not returned. The baseline reports malformed definitions, mutable
+image references, and services missing both an image and a build source.
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a

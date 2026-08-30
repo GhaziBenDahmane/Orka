@@ -4,17 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"gopkg.in/yaml.v3"
 )
 
 const MaxAIAuditFindingsPerRun = 100
 
 var ErrAIAuditFindingLimit = errors.New("AI audit run finding limit reached")
+
+var aiAuditDigestImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 type AIAuditSnapshot struct {
 	GeneratedAt          time.Time                       `json:"generatedAt"`
@@ -31,6 +36,7 @@ type AIAuditSnapshot struct {
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
 	VolumeBackupPosture  []AIAuditVolumeBackupPosture    `json:"volumeBackupPosture"`
 	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
+	WorkloadPosture      []AIAuditWorkloadPosture        `json:"workloadPosture"`
 	AuditLogPosture      AIAuditLogPosture               `json:"auditLogPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	SAMLPosture          []AIAuditSAMLProviderPosture    `json:"samlPosture"`
@@ -121,6 +127,16 @@ type AIAuditResourcePolicyPosture struct {
 	CurrentServices     int       `json:"currentServices"`
 	CurrentDatabases    int       `json:"currentDatabases"`
 	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+type AIAuditWorkloadPosture struct {
+	ServiceID           uuid.UUID `json:"serviceId"`
+	DefinitionParseable bool      `json:"definitionParseable"`
+	ContainerCount      int       `json:"containerCount"`
+	DigestPinnedImages  int       `json:"digestPinnedImages"`
+	MutableImages       int       `json:"mutableImages"`
+	BuildOnlyServices   int       `json:"buildOnlyServices"`
+	MissingImageOrBuild int       `json:"missingImageOrBuild"`
 }
 
 type AIAuditLogPosture struct {
@@ -240,7 +256,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -259,10 +275,11 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 			}
 			snapshot.Services = append(snapshot.Services, services...)
 			for _, service := range services {
-				_, routes, routeErr := s.GetComposeService(ctx, organizationID, service.ID)
+				detailed, routes, routeErr := s.GetComposeService(ctx, organizationID, service.ID)
 				if routeErr != nil {
 					return snapshot, routeErr
 				}
+				snapshot.WorkloadPosture = append(snapshot.WorkloadPosture, analyzeAIAuditWorkload(detailed.ID, detailed.ComposeYAML))
 				snapshot.Routes = append(snapshot.Routes, routes...)
 			}
 			databases, databaseErr := s.ListDatabases(ctx, organizationID, environment.ID)
@@ -323,6 +340,42 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	return snapshot, nil
+}
+
+func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWorkloadPosture {
+	posture := AIAuditWorkloadPosture{ServiceID: serviceID}
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(composeYAML), &document); err != nil {
+		return posture
+	}
+	services, ok := document["services"].(map[string]any)
+	if !ok || len(services) == 0 {
+		return posture
+	}
+	for _, raw := range services {
+		service, valid := raw.(map[string]any)
+		if !valid {
+			return posture
+		}
+		posture.ContainerCount++
+		if image, exists := service["image"]; exists {
+			imageName, valid := image.(string)
+			if !valid || strings.TrimSpace(imageName) == "" {
+				return posture
+			}
+			if aiAuditDigestImage.MatchString(strings.TrimSpace(imageName)) {
+				posture.DigestPinnedImages++
+			} else {
+				posture.MutableImages++
+			}
+		} else if _, builds := service["build"]; builds {
+			posture.BuildOnlyServices++
+		} else {
+			posture.MissingImageOrBuild++
+		}
+	}
+	posture.DefinitionParseable = true
+	return posture
 }
 
 func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
