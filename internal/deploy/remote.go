@@ -173,6 +173,9 @@ func ValidateRemoteArtifactJob(job RemoteArtifactJob) error {
 	if _, exists := job.Files[job.ArtifactName]; exists {
 		return errors.New("utility file conflicts with artifact name")
 	}
+	if job.Mode == "download" && (job.SizeBytes <= 0 || len(job.SHA256) != 64 || len(job.PlaintextSHA256) != 64) {
+		return errors.New("artifact download requires checksums and size")
+	}
 	return database.ValidateUtilityPlan(database.BackupPlan{Image: job.Image, Command: job.Command, Environment: job.Environment, Files: job.Files})
 }
 

@@ -124,7 +124,7 @@ func TestArtifactTransferEnforcesPrivateEgressPolicy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("artifact")) }))
 	defer server.Close()
 	blockedPath := filepath.Join(t.TempDir(), "blocked")
-	if err := transfer(context.Background(), http.MethodGet, server.URL, blockedPath, &netpolicy.Policy{}); err == nil || !strings.Contains(err.Error(), "egress policy blocks") {
+	if err := transfer(context.Background(), http.MethodGet, server.URL, blockedPath, int64(len("artifact")), &netpolicy.Policy{}); err == nil || !strings.Contains(err.Error(), "egress policy blocks") {
 		t.Fatalf("private artifact transfer error=%v", err)
 	}
 	allowed, err := netpolicy.ParseAllowedCIDRs("127.0.0.0/8")
@@ -132,12 +132,78 @@ func TestArtifactTransferEnforcesPrivateEgressPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowedPath := filepath.Join(t.TempDir(), "allowed")
-	if err = transfer(context.Background(), http.MethodGet, server.URL, allowedPath, &netpolicy.Policy{Allowed: allowed}); err != nil {
+	if err = transfer(context.Background(), http.MethodGet, server.URL, allowedPath, int64(len("artifact")), &netpolicy.Policy{Allowed: allowed}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(allowedPath)
 	if err != nil || string(data) != "artifact" {
 		t.Fatalf("artifact=%q error=%v", data, err)
+	}
+}
+
+func TestArtifactDownloadEnforcesExpectedSizeAndCleansPartialFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		serve       func(http.ResponseWriter)
+		expected    int64
+		wantErr     string
+		wantContent string
+	}{
+		{name: "exact", expected: 8, wantContent: "artifact", serve: func(w http.ResponseWriter) { _, _ = w.Write([]byte("artifact")) }},
+		{name: "content length mismatch", expected: 7, wantErr: "content length mismatch", serve: func(w http.ResponseWriter) { _, _ = w.Write([]byte("artifact")) }},
+		{name: "oversized chunked", expected: 7, wantErr: "size mismatch", serve: func(w http.ResponseWriter) {
+			w.(http.Flusher).Flush()
+			_, _ = w.Write([]byte("artifact"))
+		}},
+		{name: "truncated chunked", expected: 9, wantErr: "size mismatch", serve: func(w http.ResponseWriter) {
+			w.(http.Flusher).Flush()
+			_, _ = w.Write([]byte("artifact"))
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { test.serve(w) }))
+			defer server.Close()
+			path := filepath.Join(t.TempDir(), "artifact.enc")
+			err := transfer(context.Background(), http.MethodGet, server.URL, path, test.expected, nil)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("error=%v, want %q", err, test.wantErr)
+				}
+				if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("partial artifact remains: %v", statErr)
+				}
+				return
+			}
+			content, readErr := os.ReadFile(path)
+			if err != nil || readErr != nil || string(content) != test.wantContent {
+				t.Fatalf("error=%v read=%v content=%q", err, readErr, content)
+			}
+		})
+	}
+}
+
+func TestArtifactUploadSendsVerifiedContentLength(t *testing.T) {
+	var contentLength int64
+	var content []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentLength = r.ContentLength
+		content, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "artifact.enc")
+	if err := os.WriteFile(path, []byte("artifact"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := transfer(context.Background(), http.MethodPut, server.URL, path, 8, nil); err != nil {
+		t.Fatal(err)
+	}
+	if contentLength != 8 || string(content) != "artifact" {
+		t.Fatalf("content length=%d content=%q", contentLength, content)
+	}
+	if err := transfer(context.Background(), http.MethodPut, server.URL, path, 7, nil); err == nil || !strings.Contains(err.Error(), "upload size mismatch") {
+		t.Fatalf("mismatched upload error=%v", err)
 	}
 }
 
@@ -610,6 +676,7 @@ func TestExecuteArtifactJobEncryptsUploadAndDecryptsDownload(t *testing.T) {
 	download.Mode = "download"
 	download.SHA256 = result.SHA256
 	download.PlaintextSHA256 = result.PlaintextSHA256
+	download.SizeBytes = result.SizeBytes
 	payload, _ = json.Marshal(download)
 	client.swarm = &fakeScheduler{wantArtifact: plaintxt}
 	if _, err = client.executeCommand(context.Background(), command{Kind: "database.utility", Payload: payload}); err != nil {

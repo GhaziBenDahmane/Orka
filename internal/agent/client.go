@@ -810,7 +810,7 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 	plainPath := filepath.Join(directory, job.ArtifactName)
 	encryptedPath := plainPath + ".enc"
 	if job.Mode == "download" {
-		if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath, c.cfg.EgressPolicy); err != nil {
+		if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath, job.SizeBytes, c.cfg.EgressPolicy); err != nil {
 			return "", err
 		}
 		if sum, size, hashErr := fileHash(encryptedPath); hashErr != nil || sum != job.SHA256 || (job.SizeBytes > 0 && size != job.SizeBytes) {
@@ -843,7 +843,7 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 			result.SHA256, result.SizeBytes, err = fileHash(encryptedPath)
 		}
 		if err == nil {
-			err = transfer(ctx, http.MethodPut, job.TransferURL, encryptedPath, c.cfg.EgressPolicy)
+			err = transfer(ctx, http.MethodPut, job.TransferURL, encryptedPath, result.SizeBytes, c.cfg.EgressPolicy)
 		}
 		if err != nil {
 			return output, err
@@ -853,7 +853,10 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 	return string(encoded), err
 }
 
-func transfer(ctx context.Context, method, rawURL, filename string, policy *netpolicy.Policy) error {
+func transfer(ctx context.Context, method, rawURL, filename string, expectedSize int64, policy *netpolicy.Policy) error {
+	if expectedSize <= 0 {
+		return errors.New("artifact transfer requires a positive expected size")
+	}
 	var body io.ReadCloser
 	if method == http.MethodPut {
 		file, err := os.Open(filename)
@@ -875,7 +878,11 @@ func transfer(ctx context.Context, method, rawURL, filename string, policy *netp
 			_ = body.Close()
 			return statErr
 		}
-		req.ContentLength = info.Size()
+		if info.Size() != expectedSize {
+			_ = body.Close()
+			return errors.New("artifact upload size mismatch")
+		}
+		req.ContentLength = expectedSize
 		defer body.Close()
 	}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("artifact redirects are disabled") }}
@@ -892,16 +899,31 @@ func transfer(ctx context.Context, method, rawURL, filename string, policy *netp
 		return fmt.Errorf("artifact transfer returned HTTP %d", response.StatusCode)
 	}
 	if method == http.MethodGet {
+		if response.ContentLength >= 0 && response.ContentLength != expectedSize {
+			return errors.New("artifact download content length mismatch")
+		}
 		file, createErr := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if createErr != nil {
 			return createErr
 		}
-		_, copyErr := io.Copy(file, response.Body)
+		keep := false
+		defer func() {
+			if !keep {
+				_ = os.Remove(filename)
+			}
+		}()
+		written, copyErr := io.Copy(file, io.LimitReader(response.Body, expectedSize+1))
 		closeErr := file.Close()
 		if copyErr != nil {
 			return copyErr
 		}
-		return closeErr
+		if closeErr != nil {
+			return closeErr
+		}
+		if written != expectedSize {
+			return errors.New("artifact download size mismatch")
+		}
+		keep = true
 	}
 	return nil
 }
