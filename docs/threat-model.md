@@ -20,7 +20,7 @@ new mutations instead of weakening authentication or silently skipping checks.
 
 | Boundary | Trusted material | Untrusted input | Required control |
 |---|---|---|---|
-| Public API and console | session/service-account hashes, RBAC policy | HTTP bodies, identifiers, forwarded metadata | authentication, tenant-scoped queries, bounded decoding, rate limits, security headers, non-cacheable API responses |
+| Public API and console | session/service-account hashes, RBAC policy | HTTP bodies, identifiers, forwarded metadata, server responses consumed by operator tools | authentication, tenant-scoped queries, bounded request/response handling, rate limits, security headers, non-cacheable API responses |
 | Global metrics | dedicated operator-token hash | scrape requests | separate fail-closed bearer authentication with no tenant-token fallback |
 | SSO and SCIM | provider configuration, SP keys, SCIM token hashes | discovery documents, assertions, claims, directory writes | exact issuer/audience/domain checks, HTTPS-only OIDC and SAML endpoints, redirect-free and response-bounded OIDC requests, PKCE/nonce/state, XML signatures, replay protection, tenant binding |
 | PostgreSQL | desired state, encrypted secrets, audit chain, job fences | concurrent controller/worker transactions | TLS in HA, migrations, row/tenant predicates, transactional state changes, leases and fencing |

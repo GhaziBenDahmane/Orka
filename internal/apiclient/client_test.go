@@ -51,3 +51,36 @@ func TestClientRejectsHostOverride(t *testing.T) {
 		t.Fatal("expected absolute API path rejection")
 	}
 }
+
+func TestClientBoundsSuccessfulResponses(t *testing.T) {
+	t.Run("content length", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "32")
+			_, _ = io.WriteString(w, strings.Repeat("x", 32))
+		}))
+		defer server.Close()
+		client, _ := New(server.URL, "", "")
+		client.MaxResponseBytes = 16
+		var output strings.Builder
+		err := client.Do(context.Background(), http.MethodGet, "/large", nil, &output)
+		if !errors.Is(err, ErrResponseTooLarge) || output.Len() != 0 {
+			t.Fatalf("error=%v output bytes=%d", err, output.Len())
+		}
+	})
+	t.Run("chunked", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			flusher := w.(http.Flusher)
+			_, _ = io.WriteString(w, strings.Repeat("x", 12))
+			flusher.Flush()
+			_, _ = io.WriteString(w, strings.Repeat("y", 12))
+		}))
+		defer server.Close()
+		client, _ := New(server.URL, "", "")
+		client.MaxResponseBytes = 16
+		var output strings.Builder
+		err := client.Do(context.Background(), http.MethodGet, "/large", nil, &output)
+		if !errors.Is(err, ErrResponseTooLarge) || output.Len() != 17 {
+			t.Fatalf("error=%v output bytes=%d", err, output.Len())
+		}
+	})
+}

@@ -72,7 +72,7 @@ are recorded in the tenant audit chain.
 | POST | `/v1/service-accounts/{id}/rotate` | Revoke old tokens and issue a replacement |
 | DELETE | `/v1/service-accounts/{id}` | Disable an automation identity |
 | GET | `/v1/audit-events?beforeId=…&limit=…` | Read a descending audit page |
-| GET | `/v1/audit-events/export?afterId=…&limit=…` | Export ascending NDJSON with integrity headers |
+| GET | `/v1/audit-events/export?afterId=…&limit=…` | Export ascending NDJSON with integrity headers; responses are capped at 32 MiB and larger ranges must be paged with `afterId` |
 | GET/PUT | `/v1/audit-retention` | Read or set the 30–3650 day retention policy |
 | GET/POST | `/v1/audit-archives` | List or configure S3 Object Lock audit archives |
 | GET/DELETE | `/v1/audit-archives/{id}` | Inspect or disable an archive without deleting retained objects |

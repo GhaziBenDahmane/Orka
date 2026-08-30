@@ -18,6 +18,10 @@ import (
 	"github.com/google/uuid"
 )
 
+const maxAuditExportBytes = 32 << 20
+
+var errAuditExportTooLarge = errors.New("audit export exceeds response limit")
+
 func auditPage(r *http.Request, ascending bool) (int64, int, error) {
 	cursorName := "beforeId"
 	if ascending {
@@ -178,15 +182,16 @@ func (s *Server) exportAuditEvents(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	var payload bytes.Buffer
-	encoder := json.NewEncoder(&payload)
-	for _, item := range items {
-		if err = encoder.Encode(item); err != nil {
-			s.writeInternalError(w, r, 500, "export_failed", "audit export could not be encoded", err)
-			return
-		}
+	payload, err := encodeAuditExport(items, maxAuditExportBytes)
+	if errors.Is(err, errAuditExportTooLarge) {
+		writeError(w, http.StatusRequestEntityTooLarge, "export_too_large", "audit export exceeds 32 MiB; request a smaller limit and continue with afterId")
+		return
 	}
-	digest := sha256.Sum256(payload.Bytes())
+	if err != nil {
+		s.writeInternalError(w, r, 500, "export_failed", "audit export could not be encoded", err)
+		return
+	}
+	digest := sha256.Sum256(payload)
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Content-Disposition", `attachment; filename="dockyard-audit.ndjson"`)
 	w.Header().Set("X-Content-SHA256", hex.EncodeToString(digest[:]))
@@ -194,7 +199,23 @@ func (s *Server) exportAuditEvents(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Next-After-ID", strconv.FormatInt(items[len(items)-1].ID, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(payload.Bytes())
+	_, _ = w.Write(payload)
+}
+
+func encodeAuditExport(items []store.AuditEvent, limit int) ([]byte, error) {
+	var payload bytes.Buffer
+	for _, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		if len(encoded)+1 > limit-payload.Len() {
+			return nil, errAuditExportTooLarge
+		}
+		_, _ = payload.Write(encoded)
+		_ = payload.WriteByte('\n')
+	}
+	return payload.Bytes(), nil
 }
 
 func (s *Server) getAuditRetention(w http.ResponseWriter, r *http.Request) {

@@ -14,11 +14,16 @@ import (
 )
 
 type Client struct {
-	BaseURL        *url.URL
-	Token          string
-	OrganizationID string
-	HTTPClient     *http.Client
+	BaseURL          *url.URL
+	Token            string
+	OrganizationID   string
+	HTTPClient       *http.Client
+	MaxResponseBytes int64
 }
+
+const DefaultMaxResponseBytes int64 = 32 << 20
+
+var ErrResponseTooLarge = errors.New("Dockyard API response exceeds configured limit")
 
 type APIError struct {
 	Status  int
@@ -41,7 +46,7 @@ func New(rawURL, token, organizationID string) (*Client, error) {
 	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
 		return nil, errors.New("unencrypted HTTP is only allowed for a loopback Dockyard URL")
 	}
-	return &Client{BaseURL: parsed, Token: strings.TrimSpace(token), OrganizationID: strings.TrimSpace(organizationID), HTTPClient: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("API redirects are disabled") }}}, nil
+	return &Client{BaseURL: parsed, Token: strings.TrimSpace(token), OrganizationID: strings.TrimSpace(organizationID), HTTPClient: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("API redirects are disabled") }}, MaxResponseBytes: DefaultMaxResponseBytes}, nil
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, input any, output io.Writer) error {
@@ -88,10 +93,22 @@ func (c *Client) Do(ctx context.Context, method, path string, input any, output 
 		_ = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&envelope)
 		return &APIError{Status: response.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message}
 	}
-	if output == nil || response.StatusCode == http.StatusNoContent {
-		_, _ = io.Copy(io.Discard, response.Body)
-		return nil
+	limit := c.MaxResponseBytes
+	if limit <= 0 {
+		limit = DefaultMaxResponseBytes
 	}
-	_, err = io.Copy(output, response.Body)
-	return err
+	if response.ContentLength > limit {
+		return fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, limit)
+	}
+	if output == nil || response.StatusCode == http.StatusNoContent {
+		output = io.Discard
+	}
+	written, err := io.Copy(output, io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		return err
+	}
+	if written > limit {
+		return fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, limit)
+	}
+	return nil
 }
