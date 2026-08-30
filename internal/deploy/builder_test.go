@@ -125,8 +125,8 @@ func TestSetServiceImage(t *testing.T) {
 
 func TestImageRegistry(t *testing.T) {
 	for image, want := range map[string]string{"postgres": "docker.io", "library/postgres": "docker.io", "ghcr.io/acme/api": "ghcr.io", "localhost:5000/api": "localhost:5000"} {
-		if got := imageRegistry(image); got != want {
-			t.Errorf("imageRegistry(%q) = %q, want %q", image, got, want)
+		if got := RegistryHost(image); got != want {
+			t.Errorf("RegistryHost(%q) = %q, want %q", image, got, want)
 		}
 	}
 }

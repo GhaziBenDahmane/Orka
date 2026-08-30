@@ -2213,17 +2213,26 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		in.RepositoryURL, in.GitRef, in.EnableSubmodules, in.GitCredentialID = "", "", false, nil
 		in.StatusProvider, in.StatusCredentialID, in.StatusContext = "", nil, ""
 	}
+	var repository *url.URL
 	if in.SourceType == "git" {
-		if _, err = deploy.ValidateGitSource(in.RepositoryURL, in.GitRef); err != nil {
+		if repository, err = deploy.ValidateGitSource(in.RepositoryURL, in.GitRef); err != nil {
 			writeError(w, 400, "invalid_source", err.Error())
 			return
 		}
+	}
+	if err = deploy.ValidateRegistryImage(in.RegistryImage); err != nil {
+		writeError(w, 400, "invalid_source", err.Error())
+		return
 	}
 	if in.SourceType == "git" && ((in.StatusProvider == "") != (in.StatusCredentialID == nil) || (in.StatusProvider != "" && !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.StatusProvider)) || len(in.StatusContext) > 100 || !webhookBranchPattern.MatchString(in.StatusContext)) {
 		writeError(w, 400, "invalid_source_status", "status provider and Git token credential must be configured together with a valid context")
 		return
 	}
 	p := principal(r)
+	if err = s.validateApplicationCredentialBindings(r.Context(), p.OrganizationID, repository, in.RegistryImage, in.StatusProvider, in.GitCredentialID, in.RegistryCredentialID, in.StatusCredentialID); err != nil {
+		writeError(w, 400, "invalid_source_credential", err.Error())
+		return
+	}
 	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, SourceType: in.SourceType, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildType: in.BuildType, BuilderImage: in.BuilderImage, OutputDirectory: in.OutputDirectory, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
 	if err != nil {
 		writeStoreError(w, err)
@@ -2231,6 +2240,63 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "source.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"sourceType": in.SourceType, "repository": in.RepositoryURL, "ref": in.GitRef})
 	writeJSON(w, 200, item)
+}
+
+func (s *Server) validateApplicationCredentialBindings(ctx context.Context, organizationID uuid.UUID, repository *url.URL, registryImage, statusProvider string, gitCredentialID, registryCredentialID, statusCredentialID *uuid.UUID) error {
+	load := func(id *uuid.UUID) (store.SourceCredential, error) {
+		if id == nil {
+			return store.SourceCredential{}, nil
+		}
+		credential, err := s.Store.GetSourceCredential(ctx, organizationID, *id)
+		if err != nil {
+			return store.SourceCredential{}, errors.New("credential must reference an organization source credential")
+		}
+		return credential, nil
+	}
+	if gitCredentialID != nil {
+		credential, loadErr := load(gitCredentialID)
+		expectedKind := "git"
+		if repository != nil && repository.Scheme == "ssh" {
+			expectedKind = "git-ssh"
+		}
+		if loadErr != nil || repository == nil || !credentialMatchesRepository(credential, repository, expectedKind, "") {
+			return errors.New("Git credential kind and server must match the repository URL")
+		}
+	}
+	if registryCredentialID != nil {
+		credential, loadErr := load(registryCredentialID)
+		server, serverErr := normalizeCredentialServer(strings.ToLower(strings.TrimSpace(credential.Server)))
+		if loadErr != nil || serverErr != nil || credential.Kind != "registry" || !strings.EqualFold(server, deploy.RegistryHost(registryImage)) {
+			return errors.New("registry credential kind and server must match the image registry")
+		}
+	}
+	if statusCredentialID != nil {
+		credential, loadErr := load(statusCredentialID)
+		fixedAuthority := ""
+		if statusProvider == "github" {
+			fixedAuthority = "github.com"
+		} else if statusProvider == "bitbucket" {
+			fixedAuthority = "bitbucket.org"
+		}
+		if loadErr != nil || repository == nil || !credentialMatchesRepository(credential, repository, "git", fixedAuthority) {
+			return errors.New("status credential kind and server must match the repository provider")
+		}
+	}
+	return nil
+}
+
+func credentialMatchesRepository(credential store.SourceCredential, repository *url.URL, expectedKind, fixedAuthority string) bool {
+	if repository == nil || credential.Kind != expectedKind {
+		return false
+	}
+	server, err := normalizeCredentialServer(strings.ToLower(strings.TrimSpace(credential.Server)))
+	if err != nil || !strings.EqualFold(credentialServerHostname(server), repository.Hostname()) {
+		return false
+	}
+	if fixedAuthority != "" {
+		return strings.EqualFold(server, fixedAuthority) && strings.EqualFold(repository.Host, fixedAuthority)
+	}
+	return true
 }
 
 func (s *Server) upsertArtifactSource(w http.ResponseWriter, r *http.Request) {

@@ -365,10 +365,10 @@ func validateBuildSource(source *store.ApplicationSource, registryCredential Cre
 	if err := ValidateBuildMode(source.BuildType, source.OutputDirectory, source.BuildTarget, store.ApplicationBuildConfig{Arguments: source.BuildArguments, Secrets: source.BuildSecrets}); err != nil {
 		return err
 	}
-	if !registryImage.MatchString(source.RegistryImage) || strings.Contains(source.RegistryImage, "..") {
-		return errors.New("invalid registry image")
+	if err := ValidateRegistryImage(source.RegistryImage); err != nil {
+		return err
 	}
-	if registryCredential.Secret != "" && !strings.EqualFold(imageRegistry(source.RegistryImage), registryCredential.Server) {
+	if registryCredential.Secret != "" && !strings.EqualFold(RegistryHost(source.RegistryImage), registryCredential.Server) {
 		return errors.New("registry credential server does not match image registry")
 	}
 	if err := ValidateBuildpackBuilder(source.BuildType, source.BuilderImage); err != nil {
@@ -740,7 +740,14 @@ func writeDockerConfig(credential Credential) (string, error) {
 	return directory, nil
 }
 
-func imageRegistry(image string) string {
+func ValidateRegistryImage(image string) error {
+	if !registryImage.MatchString(image) || strings.Contains(image, "..") {
+		return errors.New("invalid registry image")
+	}
+	return nil
+}
+
+func RegistryHost(image string) string {
 	first, _, _ := strings.Cut(image, "/")
 	if strings.ContainsAny(first, ".:") || first == "localhost" {
 		return strings.ToLower(first)
