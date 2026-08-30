@@ -37,6 +37,7 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,status) VALUES($1,$2,'Database','database','postgres','17',$3,'encrypted','running')`, []any{databaseID, environmentID, serviceID}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'S3','https://s3.example.test','backups',true,'encrypted')`, []any{destinationID, organizationID}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'data',$3,3600,7,true,true,now()+interval '1 hour')`, []any{uuid.New(), serviceID, destinationID}},
+		{`INSERT INTO template_instances(compose_service_id,template_key,template_version,template_checksum,applied_compose_checksum,encrypted_variables,encrypted_overrides) VALUES($1,'test/database','1','checksum','applied','encrypted','encrypted')`, []any{serviceID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, []any{databaseBackupID, databaseID, destinationID}},
 		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded',now())`, []any{volumeBackupID, serviceID, destinationID}},
 	}
@@ -44,6 +45,10 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)
 		}
+	}
+	webhook, err := db.CreateWebhookIntegration(ctx, organizationID, WebhookIntegration{ComposeServiceID: serviceID, Name: "github", Provider: "github", Branch: "main", EncryptedSecret: "encrypted"})
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key IN ($1,$2) OR (kind='delete.compose' AND payload->>'serviceId'=$3)`, "service:"+serviceID.String(), "database:"+databaseID.String(), serviceID.String())
@@ -154,6 +159,22 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 	}
 	if _, err = db.QueueVolumeRestore(ctx, organizationID, volumeBackupID, userID, "database"); !errors.Is(err, ErrDeleting) {
 		t.Fatalf("volume restore after deletion request error=%v, want ErrDeleting", err)
+	}
+	if _, err = db.UpsertBackupPolicy(ctx, organizationID, databaseID, 3600, 7, true, true, &destinationID); !errors.Is(err, ErrDeleting) {
+		t.Fatalf("backup policy update after deletion request error=%v, want ErrDeleting", err)
+	}
+	if _, err = db.QueueWebhookDeployment(ctx, webhook.ID, uuid.NewString(), "abcdef0"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("webhook deployment after deletion request error=%v, want ErrNotFound", err)
+	}
+	if _, err = db.CreateWebhookIntegration(ctx, organizationID, WebhookIntegration{ComposeServiceID: serviceID, Name: "late", Provider: "github", Branch: "main", EncryptedSecret: "encrypted"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("webhook creation after deletion request error=%v, want ErrNotFound", err)
+	}
+	service, _, err := db.GetComposeService(ctx, organizationID, serviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = db.UpgradeTemplateService(ctx, organizationID, service.Revision, service, nil, TemplateInstance{TemplateKey: "test/database", TemplateVersion: "2", TemplateChecksum: "next", AppliedComposeChecksum: "next", EncryptedVariables: "encrypted", EncryptedOverrides: "encrypted"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("template upgrade after deletion request error=%v, want ErrNotFound", err)
 	}
 }
 

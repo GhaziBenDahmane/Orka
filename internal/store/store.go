@@ -1448,7 +1448,7 @@ func (s *Store) CreateWebhookIntegration(ctx context.Context, organizationID uui
 		item.ID = uuid.New()
 	}
 	err := s.Pool.QueryRow(ctx, `INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret)
-		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND p.organization_id=$7
+		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$7
 		RETURNING enabled,created_at,updated_at`, item.ID, item.ComposeServiceID, item.Name, item.Provider, item.Branch, item.EncryptedSecret, organizationID).Scan(&item.Enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WebhookIntegration{}, ErrNotFound
@@ -1503,7 +1503,7 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 	var serviceID, organizationID, projectID, environmentID uuid.UUID
 	var revision int64
 	var compose, environment, provider string
-	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider,p.organization_id,p.id,e.id FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.id=$1 AND i.enabled FOR UPDATE OF i,s`, integrationID).Scan(&serviceID, &revision, &compose, &environment, &provider, &organizationID, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider,p.organization_id,p.id,e.id FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.id=$1 AND i.enabled AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF i,s`, integrationID).Scan(&serviceID, &revision, &compose, &environment, &provider, &organizationID, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -1614,15 +1614,39 @@ func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, database
 	if s.RequireRemoteBackups && enabled && destinationID == nil {
 		return BackupPolicy{}, ErrRemoteBackupRequired
 	}
-	var item BackupPolicy
-	err := s.Pool.QueryRow(ctx, `INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore)
-		SELECT $1,d.id,$4,$5,$6,now()+($4::int * interval '1 second'),$7,$8 FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$2 AND p.organization_id=$3 AND ($7::uuid IS NULL OR EXISTS(SELECT 1 FROM backup_destinations bd WHERE bd.id=$7 AND bd.organization_id=$3))
-		ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,verify_restore=excluded.verify_restore,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN now()+(excluded.interval_seconds * interval '1 second') ELSE backup_policies.next_run_at END,updated_at=now()
-		RETURNING id,database_instance_id,interval_seconds,retention_count,enabled,verify_restore,destination_id,next_run_at,last_run_at,created_at,updated_at`, uuid.New(), databaseID, organizationID, intervalSeconds, retentionCount, enabled, destinationID, verifyRestore).Scan(&item.ID, &item.DatabaseInstanceID, &item.IntervalSeconds, &item.RetentionCount, &item.Enabled, &item.VerifyRestore, &item.DestinationID, &item.NextRunAt, &item.LastRunAt, &item.CreatedAt, &item.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return BackupPolicy{}, ErrNotFound
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return BackupPolicy{}, err
 	}
-	return item, err
+	defer tx.Rollback(ctx)
+	var lockedID uuid.UUID
+	var composeServiceID *uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT database.id,database.compose_service_id FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2 FOR UPDATE OF database`, databaseID, organizationID).Scan(&lockedID, &composeServiceID); errors.Is(err, pgx.ErrNoRows) {
+		return BackupPolicy{}, ErrNotFound
+	} else if err != nil {
+		return BackupPolicy{}, err
+	}
+	if err = lockDatabaseServiceForOperation(ctx, tx, composeServiceID); err != nil {
+		return BackupPolicy{}, err
+	}
+	if destinationID != nil {
+		var destinationAllowed bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`, *destinationID, organizationID).Scan(&destinationAllowed); err != nil {
+			return BackupPolicy{}, err
+		}
+		if !destinationAllowed {
+			return BackupPolicy{}, ErrNotFound
+		}
+	}
+	var item BackupPolicy
+	err = tx.QueryRow(ctx, `INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore)
+		VALUES($1,$2,$3,$4,$5,now()+($3::int * interval '1 second'),$6,$7)
+		ON CONFLICT(database_instance_id) DO UPDATE SET interval_seconds=excluded.interval_seconds,retention_count=excluded.retention_count,enabled=excluded.enabled,destination_id=excluded.destination_id,verify_restore=excluded.verify_restore,next_run_at=CASE WHEN backup_policies.enabled=false AND excluded.enabled=true THEN now()+(excluded.interval_seconds * interval '1 second') ELSE backup_policies.next_run_at END,updated_at=now()
+		RETURNING id,database_instance_id,interval_seconds,retention_count,enabled,verify_restore,destination_id,next_run_at,last_run_at,created_at,updated_at`, uuid.New(), databaseID, intervalSeconds, retentionCount, enabled, destinationID, verifyRestore).Scan(&item.ID, &item.DatabaseInstanceID, &item.IntervalSeconds, &item.RetentionCount, &item.Enabled, &item.VerifyRestore, &item.DestinationID, &item.NextRunAt, &item.LastRunAt, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return BackupPolicy{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) GetBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID) (BackupPolicy, error) {
@@ -2279,7 +2303,7 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 	}
 	defer tx.Rollback(ctx)
 	var projectID, environmentID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1 AND p.organization_id=$2 FOR UPDATE OF s,t`, service.ID, organizationID).Scan(&projectID, &environmentID); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s,t`, service.ID, organizationID).Scan(&projectID, &environmentID); errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrNotFound
 	} else if err != nil {
 		return ComposeService{}, nil, err
@@ -2290,7 +2314,7 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 	if err = ensureProtectedVolumesDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
 		return ComposeService{}, nil, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 AND deletion_requested_at IS NULL RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrBusy
 	}
