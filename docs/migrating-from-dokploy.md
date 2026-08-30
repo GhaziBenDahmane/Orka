@@ -13,6 +13,7 @@ dockyard migrate-dokploy \
   --source-organization 'dokploy-organization-id' \
   --target-organization 'dockyard-organization-uuid' \
   --registry-prefix 'registry.example.com/team/dockyard' \
+  --server-cluster 'dokploy-server-id=orka-cluster-uuid' \
   --dry-run=true
 ```
 
@@ -25,6 +26,15 @@ successfully once before running the first dry run.
 `--registry-prefix` is required only when the source contains convertible Git
 applications. Dockyard uses it as the destination repository prefix for images
 built from imported Dockerfiles.
+
+Repeat `--server-cluster SOURCE_SERVER_ID=TARGET_CLUSTER_UUID` for every
+Dokploy remote server used by an imported workload or network. Each target
+cluster must belong to the target organization. The importer assigns a
+homogeneous source environment and its managed networks to that Swarm. It
+fails closed when a remote server is unmapped, or when one Dokploy environment
+mixes the local server with a remote server or resolves to multiple target
+clusters; split that environment before migration instead of silently moving
+workloads to the wrong scheduler.
 
 The JSON report lists convertible projects, environments, Compose services,
 managed databases, routes, notifications, skipped resources, and manual
@@ -58,6 +68,10 @@ Imported automatically:
 
 - projects and environments;
 - organization tags and their project assignments;
+- local and mapped-remote managed networks, including overlay/bridge driver,
+  attachability, internal mode, IP families, MTU, IPAM, and compatible
+  application/database/Compose-service attachments; only overlay networks can
+  attach to Swarm services;
 - inline/raw Compose definitions;
 - Compose environment values when the source key is supplied;
 - Docker-image applications and HTTPS Git applications that use a Dockerfile,

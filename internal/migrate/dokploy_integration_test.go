@@ -86,7 +86,7 @@ volumes:
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.tag VALUES('tag1','Production','#22C55E','source-org'); INSERT INTO `+quotedSchema+`.project_tag VALUES('project-tag1','p1','tag1')`)
 	}
 	if err == nil {
-		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.network VALUES('network1','shared_backend','overlay',true,true,true,false,1450,'{"driver":"default","config":[{"subnet":"10.42.0.0/24","gateway":"10.42.0.1"}]}','source-org',NULL); UPDATE `+quotedSchema+`.compose SET "serviceNetworks"='[{"serviceName":"web","networkIds":["network1"],"detachDokployNetwork":false}]'; UPDATE `+quotedSchema+`.application SET "networkIds"=ARRAY['network1'] WHERE "applicationId"='a1'`)
+		_, err = destination.Pool.Exec(ctx, `ALTER TABLE `+quotedSchema+`.compose ADD COLUMN "serverId" text; ALTER TABLE `+quotedSchema+`.application ADD COLUMN "serverId" text; INSERT INTO `+quotedSchema+`.network VALUES('network1','shared_backend','overlay',true,true,true,false,1450,'{"driver":"default","config":[{"subnet":"10.42.0.0/24","gateway":"10.42.0.1"}]}','source-org','source-server-1'); UPDATE `+quotedSchema+`.compose SET "serviceNetworks"='[{"serviceName":"web","networkIds":["network1"],"detachDokployNetwork":false}]',"serverId"='source-server-1'; UPDATE `+quotedSchema+`.application SET "serverId"='source-server-1'; UPDATE `+quotedSchema+`.application SET "networkIds"=ARRAY['network1'] WHERE "applicationId"='a1'`)
 	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `
@@ -95,10 +95,16 @@ volumes:
 			INSERT INTO `+quotedSchema+`.mariadb VALUES('maria1','e1','Imported MariaDB','legacy-mariadb','legacydb','legacyuser','legacy-secret','legacy-root','mariadb:11','');
 			INSERT INTO `+quotedSchema+`.mongo VALUES('mongo1','e1','Imported MongoDB','legacy-mongo','legacyuser','legacy-secret','mongo:7','');
 			INSERT INTO `+quotedSchema+`.redis VALUES('redis1','e1','Imported Redis','legacy-redis','legacy-secret','redis:7','');
-			INSERT INTO `+quotedSchema+`.libsql VALUES('libsql1','e1','Imported libSQL','legacy-libsql','legacyuser','legacy-secret','ghcr.io/tursodatabase/libsql-server:v0.24.32','')`)
+			INSERT INTO `+quotedSchema+`.libsql VALUES('libsql1','e1','Imported libSQL','legacy-libsql','legacyuser','legacy-secret','ghcr.io/tursodatabase/libsql-server:v0.24.32','');
+			ALTER TABLE `+quotedSchema+`.postgres ADD COLUMN "serverId" text;
+			ALTER TABLE `+quotedSchema+`.mysql ADD COLUMN "serverId" text;
+			ALTER TABLE `+quotedSchema+`.mariadb ADD COLUMN "serverId" text;
+			ALTER TABLE `+quotedSchema+`.mongo ADD COLUMN "serverId" text;
+			ALTER TABLE `+quotedSchema+`.redis ADD COLUMN "serverId" text;
+			ALTER TABLE `+quotedSchema+`.libsql ADD COLUMN "serverId" text`)
 	}
 	if err == nil {
-		_, err = destination.Pool.Exec(ctx, `UPDATE `+quotedSchema+`.postgres SET "networkIds"=ARRAY['network1'] WHERE "postgresId"='pg1'`)
+		_, err = destination.Pool.Exec(ctx, `UPDATE `+quotedSchema+`.postgres SET "networkIds"=ARRAY['network1']; UPDATE `+quotedSchema+`.postgres SET "serverId"='source-server-1'; UPDATE `+quotedSchema+`.mysql SET "serverId"='source-server-1'; UPDATE `+quotedSchema+`.mariadb SET "serverId"='source-server-1'; UPDATE `+quotedSchema+`.mongo SET "serverId"='source-server-1'; UPDATE `+quotedSchema+`.redis SET "serverId"='source-server-1'; UPDATE `+quotedSchema+`.libsql SET "serverId"='source-server-1'`)
 	}
 	sourceKey := bytes.Repeat([]byte{3}, 32)
 	if err == nil {
@@ -126,8 +132,12 @@ volumes:
 		t.Fatal(err)
 	}
 	targetOrg := uuid.New()
+	targetCluster := uuid.New()
 	_, err = destination.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Migration Target',$2)`, targetOrg, "migration-"+targetOrg.String())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = destination.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Migration Cluster',$3,'active')`, targetCluster, targetOrg, "migration-"+targetCluster.String()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -138,7 +148,7 @@ volumes:
 	query := parsed.Query()
 	query.Set("options", "-csearch_path="+schema)
 	parsed.RawQuery = query.Encode()
-	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
+	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", ServerClusterMappings: map[string]uuid.UUID{"source-server-1": targetCluster}, DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
 	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 6 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 2 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 || report.Tags != 1 || report.ProjectTags != 1 || report.Networks != 1 || report.ServiceNetworks != 3 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
@@ -186,6 +196,10 @@ volumes:
 	}
 	if projects != 1 || services != 9 || routes != 2 || databases != 6 || applicationSources != 1 || backupDestinations != 3 || backupPolicies != 1 || volumeBackupPolicies != 1 || sourceCredentials != 1 || notifications != 1 || tags != 1 || projectTags != 1 || managedNetworks != 1 || serviceNetworks != 3 {
 		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications, tags, projectTags, managedNetworks, serviceNetworks)
+	}
+	var importedEnvironmentCluster, importedNetworkCluster uuid.UUID
+	if err = destination.Pool.QueryRow(ctx, `SELECT e.cluster_id,n.cluster_id FROM environments e CROSS JOIN managed_networks n WHERE e.id=$1 AND n.id=$2`, mappedID(options, "environment", "e1"), mappedID(options, "network", "network1")).Scan(&importedEnvironmentCluster, &importedNetworkCluster); err != nil || importedEnvironmentCluster != targetCluster || importedNetworkCluster != targetCluster {
+		t.Fatalf("remote placement environment=%s network=%s want=%s err=%v", importedEnvironmentCluster, importedNetworkCluster, targetCluster, err)
 	}
 	var importedInternalPath string
 	var importedStripPath, importedRouteEnabled bool

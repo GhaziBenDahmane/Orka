@@ -24,12 +24,13 @@ import (
 )
 
 type DokployOptions struct {
-	SourceURL            string
-	SourceOrganizationID string
-	TargetOrganizationID uuid.UUID
-	RegistryPrefix       string
-	DryRun               bool
-	EncryptionKeys       [][]byte
+	SourceURL             string
+	SourceOrganizationID  string
+	TargetOrganizationID  uuid.UUID
+	RegistryPrefix        string
+	ServerClusterMappings map[string]uuid.UUID
+	DryRun                bool
+	EncryptionKeys        [][]byte
 }
 
 type DokployReport struct {
@@ -65,8 +66,8 @@ type DokployResourceReport struct {
 type sourceProject struct{ id, name, description string }
 type sourceEnvironment struct{ id, projectID, name string }
 type sourceCompose struct {
-	id, environmentID, name, appName, compose, env string
-	networks                                       map[string][]string
+	id, environmentID, name, appName, compose, env, serverID string
+	networks                                                 map[string][]string
 }
 type sourceTag struct{ id, name, color string }
 type sourceProjectTag struct{ id, projectID, tagID string }
@@ -79,7 +80,7 @@ type sourceNetwork struct {
 type sourceDatabase struct {
 	id, environmentID, name, appName, engine                   string
 	databaseName, databaseUser, databasePassword, rootPassword string
-	dockerImage, env                                           string
+	dockerImage, env, serverID                                 string
 	networkIDs                                                 []string
 }
 
@@ -171,6 +172,14 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	if err != nil {
 		return report, err
 	}
+	databases, err := readDatabases(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	environmentClusters, err := resolveDokployEnvironmentClusters(ctx, destination, options, environments, services, applications, databases)
+	if err != nil {
+		return report, err
+	}
 	report.Projects, report.Environments, report.Services, report.Tags, report.ProjectTags, report.Networks = len(projects), len(environments), len(services), len(tags), len(projectTags), len(networks)
 	for _, item := range projects {
 		targetID := mappedID(options, "project", item.id)
@@ -178,7 +187,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	}
 	for _, item := range environments {
 		targetID := mappedID(options, "environment", item.id)
-		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "environment", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: map[string]any{"name": item.name, "projectId": item.projectID}})
+		metadata := map[string]any{"name": item.name, "projectId": item.projectID}
+		if clusterID := environmentClusters[item.id]; clusterID != nil {
+			metadata["clusterId"] = clusterID.String()
+		}
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "environment", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 	}
 	tagIDs := map[string]uuid.UUID{}
 	existingTagIDs := map[string]uuid.UUID{}
@@ -233,22 +246,27 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	}
 	networkIDs := map[string]uuid.UUID{}
 	networkDrivers := map[string]string{}
+	networkClusters := map[string]*uuid.UUID{}
 	existingNetworks, err := destination.ListManagedNetworks(ctx, options.TargetOrganizationID)
 	if err != nil {
 		return report, err
 	}
 	existingNetworksByName := map[string]store.ManagedNetwork{}
+	existingNetworksByID := map[uuid.UUID]store.ManagedNetwork{}
 	for _, item := range existingNetworks {
-		if item.ClusterID == nil {
-			existingNetworksByName[item.Name] = item
-		}
+		existingNetworksByName[managedNetworkScopeKey(item.ClusterID, item.Name)] = item
+		existingNetworksByID[item.ID] = item
 	}
 	for _, item := range networks {
 		metadata := map[string]any{"name": item.name, "driver": item.driver, "internal": item.internal, "attachable": item.attachable, "enableIpv4": item.enableIPv4, "enableIpv6": item.enableIPv6, "serverId": item.serverID}
-		if item.serverID != "" {
+		clusterID, mapped := mappedDokployServer(options, item.serverID)
+		if !mapped {
 			report.Skipped++
 			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "network", SourceID: item.id, Status: "skipped", Reason: "remote Dokploy server requires an explicit target cluster mapping", Metadata: metadata})
 			continue
+		}
+		if clusterID != nil {
+			metadata["clusterId"] = clusterID.String()
 		}
 		spec := deploy.ManagedNetworkSpec{ID: item.id, Name: item.name, Driver: item.driver, Internal: item.internal, Attachable: item.attachable, EnableIPv4: item.enableIPv4, EnableIPv6: item.enableIPv6, MTU: item.mtu}
 		for _, config := range item.ipam {
@@ -264,7 +282,12 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			continue
 		}
 		targetID := mappedID(options, "network", item.id)
-		if existing, exists := existingNetworksByName[item.name]; exists {
+		if existing, exists := existingNetworksByID[targetID]; exists && (!sameOptionalUUID(existing.ClusterID, clusterID) || existing.Name != item.name) {
+			report.Skipped++
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "network", SourceID: item.id, Status: "skipped", Reason: "previous import maps this network to a different target cluster or name", Metadata: metadata})
+			continue
+		}
+		if existing, exists := existingNetworksByName[managedNetworkScopeKey(clusterID, item.name)]; exists {
 			if !compatibleImportedNetwork(existing, item) {
 				report.Skipped++
 				report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "network", SourceID: item.id, Status: "skipped", Reason: "target network with the same name has different settings", Metadata: metadata})
@@ -273,10 +296,14 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			targetID = existing.ID
 		}
 		networkIDs[item.id], networkDrivers[item.id] = targetID, item.driver
+		networkClusters[item.id] = clusterID
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "network", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 	}
 	networkAssignments := []targetNetworkAssignment{}
-	addNetworkAssignment := func(sourceKind, parentSourceID string, serviceID uuid.UUID, sourceNetworkID string, serviceNames []string) {
+	addNetworkAssignment := func(sourceKind, parentSourceID, environmentID string, serviceID uuid.UUID, sourceNetworkID string, serviceNames []string) {
+		if serviceNames == nil {
+			serviceNames = []string{}
+		}
 		report.ServiceNetworks++
 		sourceID := parentSourceID + ":" + sourceNetworkID
 		networkID, valid := networkIDs[sourceNetworkID]
@@ -286,6 +313,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "service_network", SourceID: sourceKind + ":" + sourceID, Status: "skipped", Reason: "network was not imported as an attachable Swarm overlay", Metadata: metadata})
 			return
 		}
+		if !sameOptionalUUID(networkClusters[sourceNetworkID], environmentClusters[environmentID]) {
+			report.Skipped++
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "service_network", SourceID: sourceKind + ":" + sourceID, Status: "skipped", Reason: "network and workload resolve to different target clusters", Metadata: metadata})
+			return
+		}
 		networkAssignments = append(networkAssignments, targetNetworkAssignment{sourceID: sourceKind + ":" + sourceID, sourceKind: sourceKind, serviceID: serviceID, networkID: networkID, serviceNames: serviceNames})
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "service_network", SourceID: sourceKind + ":" + sourceID, TargetID: &networkID, Status: "imported", Metadata: metadata})
 	}
@@ -293,7 +325,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	validServices := map[string]bool{}
 	for _, service := range services {
 		targetID := mappedID(options, "compose", service.id)
-		metadata := map[string]any{"name": service.name, "environmentId": service.environmentID}
+		metadata := map[string]any{"name": service.name, "environmentId": service.environmentID, "serverId": service.serverID}
 		if strings.TrimSpace(service.compose) == "" {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("compose %s has no inline composeFile and was skipped", service.id))
@@ -310,7 +342,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose", SourceID: service.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 		for _, networkID := range sortedNetworkIDs(service.networks) {
 			serviceNames := service.networks[networkID]
-			addNetworkAssignment("compose", service.id, targetID, networkID, serviceNames)
+			addNetworkAssignment("compose", service.id, service.environmentID, targetID, networkID, serviceNames)
 		}
 		if strings.HasPrefix(service.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("compose %s has encrypted environment values; supply --encryption-key-file before import", service.id))
@@ -354,7 +386,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		targetID := prepared.serviceID
 		report.Resources = append(report.Resources, dokployApplicationReport(item, &targetID, "imported", ""))
 		for _, networkID := range item.NetworkIDs {
-			addNetworkAssignment("application", item.ID, targetID, networkID, nil)
+			addNetworkAssignment("application", item.ID, item.EnvironmentID, targetID, networkID, nil)
 		}
 		if strings.HasPrefix(item.Env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("application %s has encrypted environment values; supply --encryption-key-file before import", item.ID))
@@ -381,10 +413,6 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "application_route", SourceID: route.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 	}
 	report.Routes = len(filteredRoutes) + len(filteredApplicationRoutes)
-	databases, err := readDatabases(ctx, source, options.SourceOrganizationID)
-	if err != nil {
-		return report, err
-	}
 	report.Applications = len(applications)
 	report.Databases = len(databases)
 	backupDestinations, err := readBackupDestinations(ctx, source, options.SourceOrganizationID)
@@ -414,7 +442,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	validDatabases := map[string]bool{}
 	for _, item := range databases {
 		targetID := mappedID(options, "database:"+item.engine, item.id)
-		metadata := map[string]any{"name": item.name, "engine": item.engine, "environmentId": item.environmentID}
+		metadata := map[string]any{"name": item.name, "engine": item.engine, "environmentId": item.environmentID, "serverId": item.serverID}
 		_, renderErr := registry.Render(item.engine, database.Request{Name: migratedSlug(item.appName, mappedID(options, "database:"+item.engine, item.id)), Version: imageVersion(item.dockerImage, "latest"), Config: databaseConfig(item)})
 		if renderErr != nil {
 			report.Skipped++
@@ -425,7 +453,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		validDatabases[item.engine+":"+item.id] = true
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.engine + ":" + item.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
 		for _, networkID := range item.networkIDs {
-			addNetworkAssignment("database", item.engine+":"+item.id, mappedID(options, "database-service:"+item.engine, item.id), networkID, nil)
+			addNetworkAssignment("database", item.engine+":"+item.id, item.environmentID, mappedID(options, "database-service:"+item.engine, item.id), networkID, nil)
 		}
 		if strings.HasPrefix(item.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s has encrypted environment values; supply --encryption-key-file before import", item.engine, item.id))
@@ -640,15 +668,16 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if !valid {
 			continue
 		}
-		if existing, exists := existingNetworksByName[item.name]; exists && existing.ID == id {
+		clusterID, _ := mappedDokployServer(options, item.serverID)
+		if existing, exists := existingNetworksByName[managedNetworkScopeKey(clusterID, item.name)]; exists && existing.ID == id {
 			continue
 		}
 		ipam, marshalErr := json.Marshal(item.ipam)
 		if marshalErr != nil {
 			return report, marshalErr
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO managed_networks(id,organization_id,name,driver,internal,attachable,enable_ipv4,enable_ipv6,mtu,ipam,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'provisioning')
-			ON CONFLICT(id) DO UPDATE SET name=excluded.name,driver=excluded.driver,internal=excluded.internal,attachable=excluded.attachable,enable_ipv4=excluded.enable_ipv4,enable_ipv6=excluded.enable_ipv6,mtu=excluded.mtu,ipam=excluded.ipam,updated_at=now()`, id, options.TargetOrganizationID, item.name, item.driver, item.internal, item.attachable, item.enableIPv4, item.enableIPv6, item.mtu, ipam)
+		_, err = tx.Exec(ctx, `INSERT INTO managed_networks(id,organization_id,cluster_id,name,driver,internal,attachable,enable_ipv4,enable_ipv6,mtu,ipam,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'provisioning')
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,driver=excluded.driver,internal=excluded.internal,attachable=excluded.attachable,enable_ipv4=excluded.enable_ipv4,enable_ipv6=excluded.enable_ipv6,mtu=excluded.mtu,ipam=excluded.ipam,updated_at=now()`, id, options.TargetOrganizationID, clusterID, item.name, item.driver, item.internal, item.attachable, item.enableIPv4, item.enableIPv6, item.mtu, ipam)
 		if err != nil {
 			return report, fmt.Errorf("import network %s: %w", item.id, err)
 		}
@@ -659,7 +688,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	}
 	for _, item := range environments {
 		id, projectID := mappedID(options, "environment", item.id), mappedID(options, "project", item.projectID)
-		_, err = tx.Exec(ctx, `INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET name=excluded.name`, id, projectID, item.name, migratedSlug(item.name, id))
+		_, err = tx.Exec(ctx, `INSERT INTO environments(id,project_id,cluster_id,name,slug) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,cluster_id=excluded.cluster_id`, id, projectID, environmentClusters[item.id], item.name, migratedSlug(item.name, id))
 		if err != nil {
 			return report, fmt.Errorf("import environment %s: %w", item.id, err)
 		}
@@ -906,6 +935,92 @@ func databaseConfig(item sourceDatabase) map[string]any {
 	return map[string]any{"username": item.databaseUser, "password": item.databasePassword, "database": item.databaseName, "rootPassword": item.rootPassword, "image": item.dockerImage, "source": "dokploy", "sourceId": item.id}
 }
 
+func mappedDokployServer(options DokployOptions, sourceServerID string) (*uuid.UUID, bool) {
+	sourceServerID = strings.TrimSpace(sourceServerID)
+	if sourceServerID == "" {
+		return nil, true
+	}
+	clusterID, ok := options.ServerClusterMappings[sourceServerID]
+	if !ok || clusterID == uuid.Nil {
+		return nil, false
+	}
+	return &clusterID, true
+}
+
+func managedNetworkScopeKey(clusterID *uuid.UUID, name string) string {
+	if clusterID == nil {
+		return "local\x00" + name
+	}
+	return clusterID.String() + "\x00" + name
+}
+
+func sameOptionalUUID(left, right *uuid.UUID) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func resolveDokployEnvironmentClusters(ctx context.Context, destination *store.Store, options DokployOptions, environments []sourceEnvironment, services []sourceCompose, applications []sourceApplication, databases []sourceDatabase) (map[string]*uuid.UUID, error) {
+	knownClusters := map[uuid.UUID]bool{}
+	clusters, err := destination.ListClusters(ctx, options.TargetOrganizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list target clusters: %w", err)
+	}
+	for _, cluster := range clusters {
+		knownClusters[cluster.ID] = true
+	}
+	for sourceServerID, clusterID := range options.ServerClusterMappings {
+		if strings.TrimSpace(sourceServerID) == "" || clusterID == uuid.Nil {
+			return nil, errors.New("Dokploy server mappings require a non-empty source server ID and target cluster UUID")
+		}
+		if !knownClusters[clusterID] {
+			return nil, fmt.Errorf("Dokploy server %q maps to target cluster %s outside the target organization", sourceServerID, clusterID)
+		}
+	}
+	return resolveDokployEnvironmentPlacements(options, environments, services, applications, databases)
+}
+
+func resolveDokployEnvironmentPlacements(options DokployOptions, environments []sourceEnvironment, services []sourceCompose, applications []sourceApplication, databases []sourceDatabase) (map[string]*uuid.UUID, error) {
+	placements := make(map[string]*uuid.UUID, len(environments))
+	seen := make(map[string]bool, len(environments))
+	for _, environment := range environments {
+		seen[environment.id] = true
+	}
+	assign := func(environmentID, sourceServerID, sourceKind, sourceID string) error {
+		clusterID, mapped := mappedDokployServer(options, sourceServerID)
+		if !mapped {
+			return fmt.Errorf("%s %s uses unmapped remote Dokploy server %q; pass --server-cluster %s=TARGET_CLUSTER_UUID", sourceKind, sourceID, sourceServerID, sourceServerID)
+		}
+		if current, exists := placements[environmentID]; exists {
+			if !sameOptionalUUID(current, clusterID) {
+				return fmt.Errorf("Dokploy environment %s spans local and remote servers or multiple target clusters; split it before import", environmentID)
+			}
+			return nil
+		}
+		placements[environmentID] = clusterID
+		return nil
+	}
+	for _, service := range services {
+		if assignErr := assign(service.environmentID, service.serverID, "Compose service", service.id); assignErr != nil {
+			return nil, assignErr
+		}
+	}
+	for _, application := range applications {
+		if assignErr := assign(application.EnvironmentID, application.ServerID, "application", application.ID); assignErr != nil {
+			return nil, assignErr
+		}
+	}
+	for _, database := range databases {
+		if assignErr := assign(database.environmentID, database.serverID, database.engine+" database", database.id); assignErr != nil {
+			return nil, assignErr
+		}
+	}
+	for environmentID := range seen {
+		if _, exists := placements[environmentID]; !exists {
+			placements[environmentID] = nil
+		}
+	}
+	return placements, nil
+}
+
 func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceDatabase, error) {
 	items := []sourceDatabase{}
 	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
@@ -914,15 +1029,15 @@ func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceD
 		var query string
 		switch engine {
 		case "postgres":
-			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",d."databaseName",d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb) FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",d."databaseName",d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb),COALESCE(to_jsonb(d)->>'serverId','') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
 		case "mysql", "mariadb":
-			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",d."databaseName",d."databaseUser",d."databasePassword",d."rootPassword",d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb) FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",d."databaseName",d."databaseUser",d."databasePassword",d."rootPassword",d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb),COALESCE(to_jsonb(d)->>'serverId','') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
 		case "mongo":
-			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'admin',d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb) FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'admin',d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb),COALESCE(to_jsonb(d)->>'serverId','') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
 		case "redis":
-			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'0','',d.password,'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb) FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'0','',d.password,'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb),COALESCE(to_jsonb(d)->>'serverId','') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
 		case "libsql":
-			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'app',d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb) FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
+			query = fmt.Sprintf(`SELECT d.%s,d."environmentId",d.name,d."appName",'app',d."databaseUser",d."databasePassword",'',d."dockerImage",COALESCE(d.env,''),COALESCE(to_jsonb(d)->'networkIds','[]'::jsonb),COALESCE(to_jsonb(d)->>'serverId','') FROM %s d JOIN environment e ON e."environmentId"=d."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY d.%s`, idColumn, table, idColumn)
 		}
 		rows, err := db.Query(ctx, query, org)
 		if err != nil {
@@ -931,7 +1046,7 @@ func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceD
 		for rows.Next() {
 			item := sourceDatabase{engine: engine}
 			var networkIDs []byte
-			if err = rows.Scan(&item.id, &item.environmentID, &item.name, &item.appName, &item.databaseName, &item.databaseUser, &item.databasePassword, &item.rootPassword, &item.dockerImage, &item.env, &networkIDs); err != nil {
+			if err = rows.Scan(&item.id, &item.environmentID, &item.name, &item.appName, &item.databaseName, &item.databaseUser, &item.databasePassword, &item.rootPassword, &item.dockerImage, &item.env, &networkIDs, &item.serverID); err != nil {
 				rows.Close()
 				return nil, err
 			}
@@ -992,7 +1107,7 @@ func readEnvironments(ctx context.Context, db *pgxpool.Pool, org string) ([]sour
 	return items, rows.Err()
 }
 func readCompose(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceCompose, error) {
-	rows, err := db.Query(ctx, `SELECT c."composeId",c."environmentId",c.name,c."appName",c."composeFile",COALESCE(c.env,''),COALESCE(to_jsonb(c)->'serviceNetworks','[]'::jsonb) FROM compose c JOIN environment e ON e."environmentId"=c."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY c."composeId"`, org)
+	rows, err := db.Query(ctx, `SELECT c."composeId",c."environmentId",c.name,c."appName",c."composeFile",COALESCE(c.env,''),COALESCE(to_jsonb(c)->'serviceNetworks','[]'::jsonb),COALESCE(to_jsonb(c)->>'serverId','') FROM compose c JOIN environment e ON e."environmentId"=c."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 ORDER BY c."composeId"`, org)
 	if err != nil {
 		return nil, fmt.Errorf("read Dokploy compose services: %w", err)
 	}
@@ -1001,7 +1116,7 @@ func readCompose(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceCom
 	for rows.Next() {
 		var v sourceCompose
 		var raw []byte
-		if err = rows.Scan(&v.id, &v.environmentID, &v.name, &v.appName, &v.compose, &v.env, &raw); err != nil {
+		if err = rows.Scan(&v.id, &v.environmentID, &v.name, &v.appName, &v.compose, &v.env, &raw, &v.serverID); err != nil {
 			return nil, err
 		}
 		var attachments []struct {

@@ -189,6 +189,12 @@ durable provider build-status callbacks implemented.
   console. Assignment replacement is tenant-safe and atomic, the Dokploy
   importer preserves project assignments, and tag names are available to the
   redacted AI inventory.
+- Organization-scoped Docker networks can be provisioned durably on the local
+  or a remote Swarm, with encrypted overlay transport, bounded IPAM, ownership
+  labels, tenant-safe service assignments, CLI/console/Terraform management,
+  and deletion finalizers. Dokploy migration preserves local and explicitly
+  mapped remote networks plus per-Compose-service attachment scope, and fails
+  closed on ambiguous cross-server environments.
 
 Exit gate: end-to-end push-to-deploy, cancellation, rollback, alert, and
 disaster-recovery scenarios pass under load.

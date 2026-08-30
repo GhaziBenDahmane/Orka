@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -362,6 +363,8 @@ func migrateDokploy(arguments []string) error {
 	dryRun := flags.Bool("dry-run", true, "validate and report without writing")
 	keyFile := flags.String("encryption-key-file", "", "Dokploy exportEncryptionKeys file")
 	registryPrefix := flags.String("registry-prefix", "", "OCI registry repository prefix for imported Git applications")
+	serverClusters := serverClusterValues{}
+	flags.Var(&serverClusters, "server-cluster", "map a Dokploy server ID to an Orka cluster UUID as SOURCE_SERVER_ID=TARGET_CLUSTER_UUID (repeatable)")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -401,7 +404,7 @@ func migrateDokploy(arguments []string) error {
 	}
 	defer db.Pool.Close()
 	db.RequireRemoteBackups = cfg.RequireRemoteBackups
-	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, RegistryPrefix: *registryPrefix, DryRun: *dryRun, EncryptionKeys: keys})
+	report, err := dockyardmigrate.ImportDokploy(ctx, db, box, deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, RegistryPrefix: *registryPrefix, ServerClusterMappings: serverClusters, DryRun: *dryRun, EncryptionKeys: keys})
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
 }
@@ -521,6 +524,34 @@ func (values *stringValues) Set(value string) error {
 		return errors.New("acknowledgement must use kind:source-id")
 	}
 	*values = append(*values, value)
+	return nil
+}
+
+type serverClusterValues map[string]uuid.UUID
+
+func (values *serverClusterValues) String() string {
+	items := make([]string, 0, len(*values))
+	for source, target := range *values {
+		items = append(items, source+"="+target.String())
+	}
+	sort.Strings(items)
+	return strings.Join(items, ",")
+}
+
+func (values *serverClusterValues) Set(value string) error {
+	source, target, ok := strings.Cut(value, "=")
+	source, target = strings.TrimSpace(source), strings.TrimSpace(target)
+	if !ok || source == "" || target == "" {
+		return errors.New("server mapping must use SOURCE_SERVER_ID=TARGET_CLUSTER_UUID")
+	}
+	clusterID, err := uuid.Parse(target)
+	if err != nil || clusterID == uuid.Nil {
+		return errors.New("server mapping target must be a non-zero cluster UUID")
+	}
+	if existing, exists := (*values)[source]; exists && existing != clusterID {
+		return fmt.Errorf("Dokploy server %q is mapped more than once", source)
+	}
+	(*values)[source] = clusterID
 	return nil
 }
 

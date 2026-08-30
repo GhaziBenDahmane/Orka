@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestPlatformHTTPServerUsesBoundedTransportSettings(t *testing.T) {
@@ -15,6 +17,22 @@ func TestPlatformHTTPServerUsesBoundedTransportSettings(t *testing.T) {
 	server := newPlatformHTTPServer(":8080", handler, 35*time.Second)
 	if server.Handler == nil || server.ReadHeaderTimeout != 10*time.Second || server.ReadTimeout != 35*time.Second || server.WriteTimeout != 35*time.Second || server.IdleTimeout != 2*time.Minute || server.MaxHeaderBytes != 64<<10 {
 		t.Fatalf("unsafe HTTP server settings: %+v", server)
+	}
+}
+
+func TestServerClusterValues(t *testing.T) {
+	clusterID := uuid.New()
+	values := serverClusterValues{}
+	if err := values.Set(" source-server = " + clusterID.String()); err != nil || values["source-server"] != clusterID {
+		t.Fatalf("mapping=%#v err=%v", values, err)
+	}
+	if err := values.Set("source-server=" + clusterID.String()); err != nil {
+		t.Fatalf("idempotent mapping failed: %v", err)
+	}
+	for _, value := range []string{"", "missing-separator", "source=not-a-uuid", "source=00000000-0000-0000-0000-000000000000", "source-server=" + uuid.NewString()} {
+		if err := values.Set(value); err == nil {
+			t.Errorf("invalid mapping %q was accepted", value)
+		}
 	}
 }
 

@@ -52,6 +52,28 @@ func TestMappedIDsAreStableAndTargetScoped(t *testing.T) {
 	}
 }
 
+func TestResolveDokployEnvironmentPlacements(t *testing.T) {
+	clusterID := uuid.New()
+	options := DokployOptions{ServerClusterMappings: map[string]uuid.UUID{"remote-1": clusterID, "remote-2": clusterID}}
+	environments := []sourceEnvironment{{id: "remote"}, {id: "empty"}}
+	placements, err := resolveDokployEnvironmentPlacements(options, environments,
+		[]sourceCompose{{id: "compose", environmentID: "remote", serverID: "remote-1"}},
+		[]sourceApplication{{ID: "application", EnvironmentID: "remote", ServerID: "remote-2"}},
+		nil,
+	)
+	if err != nil || placements["remote"] == nil || *placements["remote"] != clusterID || placements["empty"] != nil {
+		t.Fatalf("placements=%#v err=%v", placements, err)
+	}
+	if _, err = resolveDokployEnvironmentPlacements(options, environments, []sourceCompose{{id: "compose", environmentID: "remote", serverID: "missing"}}, nil, nil); err == nil || !strings.Contains(err.Error(), "--server-cluster missing=") {
+		t.Fatalf("unmapped remote server error=%v", err)
+	}
+	if _, err = resolveDokployEnvironmentPlacements(options, environments,
+		[]sourceCompose{{id: "local", environmentID: "remote"}},
+		[]sourceApplication{{ID: "remote", EnvironmentID: "remote", ServerID: "remote-1"}}, nil); err == nil || !strings.Contains(err.Error(), "spans local and remote") {
+		t.Fatalf("mixed placement error=%v", err)
+	}
+}
+
 func TestPrepareGitApplicationRequiresRegistryPrefix(t *testing.T) {
 	item := sourceApplication{ID: "app1", AppName: "Web", Name: "Web", SourceType: "github", BuildType: "dockerfile", Owner: "acme", Repository: "web", Branch: "main", BuildPath: "/", DockerBuildStage: "runtime", EnableSubmodules: true, Replicas: 1}
 	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}

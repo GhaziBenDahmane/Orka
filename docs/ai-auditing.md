@@ -193,6 +193,9 @@ keys make it a privileged service.
   audits are surfaced even when a resource's latest individual state has
   recovered. Failed, missing, and stalled deletion finalizers are also surfaced
   even though deleting resources are excluded from active workload inventory.
+  Managed-network inventory includes Swarm scope and attached network names;
+  provisioning errors and stalled network deletion finalizers are surfaced
+  without exposing IPAM internals to the model.
   These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.

@@ -10,6 +10,8 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_tag`
 - `dockyard_project_tags`
 - `dockyard_service_tags`
+- `dockyard_network`
+- `dockyard_service_networks`
 - `dockyard_database`
 - `dockyard_source_credential`
 - `dockyard_backup_destination`
@@ -63,6 +65,14 @@ An environment may set `cluster_id` directly, or use `placement_selector`,
 capacity-aware placement. Placement inputs are immutable;
 changing them replaces the environment so workloads cannot silently move
 between Swarms.
+
+`dockyard_network` provisions an owned Docker bridge or encrypted overlay
+network on the local manager or the specified `cluster_id`. Network identity,
+scope, driver, IP families, MTU, and IPAM are replacement-oriented. Only a
+ready overlay network on the exact same Swarm as a service can be assigned.
+`dockyard_service_networks` owns the service's complete assignment set (up to
+16 network UUIDs), so declare at most one such resource per service. A network
+cannot be destroyed while any service still references it.
 
 `dockyard_backup_policy` manages the single native-backup policy associated
 with a database. Its import ID is the database UUID (not the policy UUID), for

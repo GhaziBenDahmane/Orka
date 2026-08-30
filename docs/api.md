@@ -136,6 +136,8 @@ enrollment details.
 | POST | `/v1/clusters/{id}/agent-upgrades` | Queue a digest-pinned rolling agent upgrade |
 | DELETE | `/v1/clusters/{id}/agent-upgrades/{commandId}` | Cancel an agent upgrade before execution starts |
 | GET | `/v1/clusters/{id}/commands/{commandID}` | Inspect redacted asynchronous command state |
+| GET/POST | `/v1/networks` | List or asynchronously provision local/remote managed Docker networks |
+| GET/DELETE | `/v1/networks/{networkID}` | Inspect provisioning state or queue safe deletion of an unassigned network |
 | POST | `/v1/agent/enroll` | Exchange a token and CSR for a client certificate |
 | POST | `/v1/agent/heartbeat` | Report agent and Swarm capacity over the mTLS listener |
 | GET | `/v1/agent/commands/next` | Lease the next encrypted-at-rest Swarm command over mTLS |
@@ -382,6 +384,7 @@ until an administrator retries them.
 | GET/PUT/DELETE | `/v1/tags/{id}` | Read or administratively rename/recolor/delete a tag; deletion removes all assignments |
 | GET/PUT | `/v1/projects/{id}/tags` | Read or atomically replace a project's complete tag set (maximum 32) |
 | GET/PUT | `/v1/services/{id}/tags` | Read or atomically replace a service's complete tag set (maximum 32) |
+| GET/PUT | `/v1/services/{id}/networks` | Read or atomically replace up to 16 ready overlay-network assignments on the service's Swarm |
 | PUT | `/v1/services/{id}/source` | Configure a Git or uploaded-ZIP application build, registry target, build mode, credentials, arguments, secrets, and submodules |
 | PUT | `/v1/services/{id}/artifact-source` | Upload or replace an encrypted ZIP source (25 MiB compressed / 250 MiB expanded limits) |
 | POST | `/v1/services/{id}/routes` | Add a Traefik route with optional path rewriting and regex redirect |

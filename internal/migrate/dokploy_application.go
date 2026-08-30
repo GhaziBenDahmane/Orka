@@ -74,6 +74,7 @@ type sourceApplication struct {
 	RegistryID        string   `json:"registryId"`
 	BuildRegistryID   string   `json:"buildRegistryId"`
 	NetworkIDs        []string `json:"networkIds"`
+	ServerID          string   `json:"serverId"`
 }
 
 type sourceApplicationRoute struct {
@@ -98,6 +99,7 @@ func dokployApplicationReport(item sourceApplication, targetID *uuid.UUID, statu
 		SourceKind: "application", SourceID: item.ID, TargetID: targetID, Status: status, Reason: reason,
 		Metadata: map[string]any{
 			"name": item.Name, "appName": item.AppName, "sourceType": item.SourceType, "buildType": item.BuildType,
+			"serverId":   item.ServerID,
 			"repository": repository, "branch": branch, "buildPath": buildPath, "dockerfile": item.Dockerfile, "herokuVersion": item.HerokuVersion,
 			"dockerContextPath": item.DockerContextPath, "dockerBuildStage": item.DockerBuildStage,
 			"hasBuildArgs": item.BuildArgs != "", "hasBuildSecrets": item.BuildSecrets != "", "enableSubmodules": item.EnableSubmodules,
