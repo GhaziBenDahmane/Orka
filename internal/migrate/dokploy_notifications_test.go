@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/google/uuid"
@@ -13,7 +14,7 @@ import (
 func TestPrepareNotificationRejectsUnsupportedProvider(t *testing.T) {
 	box, _ := cryptox.New(bytes.Repeat([]byte{1}, 32))
 	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
-	_, _, err := prepareNotification(box, options, sourceNotification{id: "n1", kind: "telegram", appBuildError: true})
+	_, _, err := prepareNotification(box, options, sourceNotification{id: "n1", name: "Alerts", kind: "telegram", appBuildError: true})
 	if err == nil || !strings.Contains(err.Error(), `notification type "telegram" is not supported`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -22,10 +23,38 @@ func TestPrepareNotificationRejectsUnsupportedProvider(t *testing.T) {
 func TestPrepareNotificationRequiresHTTPSWebhook(t *testing.T) {
 	box, _ := cryptox.New(bytes.Repeat([]byte{1}, 32))
 	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
-	for _, endpoint := range []string{"http://hooks.example.test/secret", "https://user:pass@hooks.example.test/secret", "not-a-url"} {
-		_, _, err := prepareNotification(box, options, sourceNotification{id: "n1", kind: "slack", webhookURL: endpoint, appBuildError: true})
+	for _, endpoint := range []string{"http://hooks.example.test/secret", "https://user:pass@hooks.example.test/secret", "not-a-url", " https://hooks.example.test/secret", "https://bad_label.example.test/secret", "https://hooks.example.test:0/secret", "https://hooks.example.test:65536/secret", "https://hooks.example.test/secret#fragment"} {
+		_, _, err := prepareNotification(box, options, sourceNotification{id: "n1", name: "Slack", kind: "slack", webhookURL: endpoint, appBuildError: true})
 		if err == nil || !strings.Contains(err.Error(), "Slack webhook must be an HTTPS URL") {
 			t.Fatalf("endpoint %q error = %v", endpoint, err)
+		}
+	}
+}
+
+func TestPrepareNotificationBoundsImportedConfiguration(t *testing.T) {
+	box, _ := cryptox.New(bytes.Repeat([]byte{1}, 32))
+	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
+	for _, item := range []sourceNotification{
+		{id: "n1", name: "Slack", kind: "slack", webhookURL: "https://hooks.example.test/" + strings.Repeat("a", maxMigratedNotificationURLBytes), appBuildError: true},
+		{id: "n2", name: "Mail", kind: "email", smtpServer: "bad_label.example.test", smtpPort: 587, fromAddress: "dockyard@example.test", toAddresses: []string{"ops@example.test"}, appBuildError: true},
+		{id: "n3", name: "Mail", kind: "email", smtpServer: "smtp.example.test", smtpPort: 587, smtpUsername: "mailer\nadmin", smtpPassword: "secret", fromAddress: "dockyard@example.test", toAddresses: []string{"ops@example.test"}, appBuildError: true},
+		{id: "n4", name: "Mail", kind: "email", smtpServer: "smtp.example.test", smtpPort: 587, fromAddress: "dockyard@example.test", toAddresses: []string{strings.Repeat("a", maxMigratedSMTPAddressBytes+1)}, appBuildError: true},
+	} {
+		if _, _, err := prepareNotification(box, options, item); err == nil {
+			t.Errorf("unsafe imported notification %#v was accepted", item)
+		}
+	}
+}
+
+func TestMigratedNotificationNameIsSafeAndBounded(t *testing.T) {
+	id := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	name, err := migratedNotificationName(strings.Repeat("é", 100), id)
+	if err != nil || len(name) > maxMigratedNotificationNameBytes || !strings.HasSuffix(name, " (Dokploy 11111111)") || !utf8.ValidString(name) {
+		t.Fatalf("migrated name %q has length %d: %v", name, len(name), err)
+	}
+	for _, value := range []string{"", "line\nbreak", "nul\x00byte"} {
+		if _, err = migratedNotificationName(value, id); err == nil {
+			t.Errorf("invalid migrated name %q was accepted", value)
 		}
 	}
 }
@@ -64,7 +93,7 @@ func TestPrepareSMTPNotificationEncryptsMaterial(t *testing.T) {
 func TestPrepareNotificationReportsUnmappedTriggers(t *testing.T) {
 	box, _ := cryptox.New(bytes.Repeat([]byte{3}, 32))
 	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
-	prepared, warnings, err := prepareNotification(box, options, sourceNotification{id: "n1", kind: "slack", webhookURL: "https://hooks.example.test/secret", appBuildError: true, appDeploy: true, dockerCleanup: true})
+	prepared, warnings, err := prepareNotification(box, options, sourceNotification{id: "n1", name: "Slack", kind: "slack", webhookURL: "https://hooks.example.test/secret", appBuildError: true, appDeploy: true, dockerCleanup: true})
 	if err != nil || len(prepared.events) != 1 || prepared.events[0] != "deployment.failed" || len(warnings) != 1 || !strings.Contains(warnings[0], "without a Dockyard equivalent") {
 		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
 	}
@@ -73,7 +102,7 @@ func TestPrepareNotificationReportsUnmappedTriggers(t *testing.T) {
 func TestPrepareNotificationMapsVolumeBackupFailure(t *testing.T) {
 	box, _ := cryptox.New(bytes.Repeat([]byte{5}, 32))
 	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.New()}
-	prepared, warnings, err := prepareNotification(box, options, sourceNotification{id: "n1", kind: "slack", webhookURL: "https://hooks.example.test/secret", volumeBackup: true})
+	prepared, warnings, err := prepareNotification(box, options, sourceNotification{id: "n1", name: "Slack", kind: "slack", webhookURL: "https://hooks.example.test/secret", volumeBackup: true})
 	if err != nil || len(warnings) != 0 || len(prepared.events) != 1 || prepared.events[0] != "backup.failed" {
 		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
 	}

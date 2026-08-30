@@ -631,9 +631,8 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 	}
 	for _, item := range preparedNotifications {
-		name := strings.TrimSpace(item.source.name) + " (Dokploy " + strings.Split(item.id.String(), "-")[0] + ")"
 		_, err = tx.Exec(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,true)
-			ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,encrypted_url=excluded.encrypted_url,encrypted_secret=excluded.encrypted_secret,events=excluded.events,enabled=true,updated_at=now()`, item.id, options.TargetOrganizationID, name, item.kind, item.encryptedURL, item.encryptedSecret, item.events)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,encrypted_url=excluded.encrypted_url,encrypted_secret=excluded.encrypted_secret,events=excluded.events,enabled=true,updated_at=now()`, item.id, options.TargetOrganizationID, item.name, item.kind, item.encryptedURL, item.encryptedSecret, item.events)
 		if err != nil {
 			return report, fmt.Errorf("import notification %s: %w", item.source.id, err)
 		}
