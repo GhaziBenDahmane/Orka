@@ -1195,6 +1195,10 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	if err = validateServiceVariables(in.Environment); err != nil {
+		writeError(w, 400, "invalid_variables", err.Error())
+		return
+	}
 	if in.Slug == "" {
 		in.Slug = slugify(in.Name)
 	}
@@ -2199,28 +2203,32 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	if in.Environment != nil {
+		if err = validateServiceVariables(in.Environment); err != nil {
+			writeError(w, 400, "invalid_variables", err.Error())
+			return
+		}
+	}
 	if _, err = s.Compiler.Compile(in.ComposeYAML, nil); err != nil {
 		writeError(w, 400, "invalid_compose", err.Error())
 		return
 	}
 	p := principal(r)
-	encrypted := ""
-	if in.Environment == nil {
-		existing, _, getErr := s.Store.GetComposeService(r.Context(), p.OrganizationID, id)
-		if getErr != nil {
-			writeStoreError(w, getErr)
-			return
-		}
-		encrypted = existing.EncryptedEnv
-	} else if len(in.Environment) > 0 {
+	var encrypted *string
+	if len(in.Environment) > 0 {
 		plain, _ := json.Marshal(in.Environment)
-		encrypted, err = s.Box.Encrypt(plain, composeEnvironmentContext(id))
+		value, encryptErr := s.Box.Encrypt(plain, composeEnvironmentContext(id))
+		err = encryptErr
 		if err != nil {
 			s.writeInternalError(w, r, 500, "encryption_failed", "service environment could not be encrypted", err)
 			return
 		}
+		encrypted = &value
+	} else if in.Environment != nil {
+		value := ""
+		encrypted = &value
 	}
-	item, err := s.Store.UpdateComposeService(r.Context(), p.OrganizationID, id, in.ComposeYAML, encrypted)
+	item, err := s.Store.UpdateComposeServiceConfiguration(r.Context(), p.OrganizationID, id, in.ComposeYAML, encrypted)
 	if err != nil {
 		writeStoreError(w, err)
 		return

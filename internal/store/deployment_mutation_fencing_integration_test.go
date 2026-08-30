@@ -43,6 +43,8 @@ func TestActiveDeploymentFencesMutableExecutionInputs(t *testing.T) {
 			t.Fatalf("%s during active deployment: got %v, want ErrDeploymentActive", name, err)
 		}
 	}
+	_, err = db.UpdateComposeService(ctx, organizationID, serviceID, "services: {web: {image: example/app:2}}", "changed")
+	assertActive("service update", err)
 	_, err = db.UpsertApplicationSource(ctx, organizationID, ApplicationSource{ComposeServiceID: serviceID, RepositoryURL: "https://github.com/acme/changed", TargetService: "web", RegistryImage: "registry.example.test/acme/app", GitCredentialID: &credentialID})
 	assertActive("source update", err)
 	_, err = db.UpsertApplicationArtifact(ctx, organizationID, ApplicationArtifact{ComposeServiceID: serviceID, EncryptedArchive: "changed", Filename: "changed.zip", SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CompressedSize: 7})

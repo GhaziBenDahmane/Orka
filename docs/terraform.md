@@ -46,6 +46,11 @@ children remain. Terraform's dependency graph destroys managed services first.
 Service deletion waits for Dockyard's asynchronous Swarm finalizer, so state is
 not removed until the stack and owned backup artifacts are gone.
 
+Service `environment` values are sensitive and never read back from Dockyard.
+The provider retains configured values in sensitive state, preserves existing
+server-side values when the attribute is unknown or omitted (including after
+import), and clears all values only when `environment = {}` is explicit.
+
 `dockyard_route` updates in place and supports `enabled`, `strip_path`,
 `internal_path`, `redirect_regex`, `redirect_replacement`, and
 `redirect_permanent`. Route changes become active with the service's next

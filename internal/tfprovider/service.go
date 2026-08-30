@@ -99,14 +99,16 @@ func (r *serviceResource) Update(ctx context.Context, request resource.UpdateReq
 	if response.Diagnostics.HasError() {
 		return
 	}
-	environment := map[string]string{}
+	body := map[string]any{"composeYaml": plan.ComposeYAML.ValueString()}
 	if !plan.Environment.IsNull() && !plan.Environment.IsUnknown() {
+		environment := map[string]string{}
 		response.Diagnostics.Append(plan.Environment.ElementsAs(ctx, &environment, false)...)
+		body["environment"] = environment
 	}
 	if response.Diagnostics.HasError() {
 		return
 	}
-	item, err := call[serviceResponse](ctx, r.client, http.MethodPatch, "/v1/services/"+plan.ID.ValueString(), map[string]any{"composeYaml": plan.ComposeYAML.ValueString(), "environment": environment})
+	item, err := call[serviceResponse](ctx, r.client, http.MethodPatch, "/v1/services/"+plan.ID.ValueString(), body)
 	if err != nil {
 		response.Diagnostics.AddError("Unable to update service", err.Error())
 		return

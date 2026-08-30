@@ -40,6 +40,22 @@ func validateServiceVariable(name, value string) error {
 	return nil
 }
 
+func validateServiceVariables(values map[string]string) error {
+	if len(values) > maxServiceVariables {
+		return errors.New("a service may contain at most 256 variables")
+	}
+	for name, value := range values {
+		if err := validateServiceVariable(name, value); err != nil {
+			return err
+		}
+	}
+	plain, err := json.Marshal(values)
+	if err != nil || len(plain) > maxServiceEnvironmentJSON {
+		return errors.New("the combined service environment exceeds 1 MiB")
+	}
+	return nil
+}
+
 func containsNUL(value string) bool {
 	for i := 0; i < len(value); i++ {
 		if value[i] == 0 {
@@ -115,11 +131,9 @@ func (s *Server) putServiceVariables(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_variables", "values must contain at least one variable")
 		return
 	}
-	for name, value := range input.Values {
-		if err = validateServiceVariable(name, value); err != nil {
-			writeError(w, 400, "invalid_variables", err.Error())
-			return
-		}
+	if err = validateServiceVariables(input.Values); err != nil {
+		writeError(w, 400, "invalid_variables", err.Error())
+		return
 	}
 	p := principal(r)
 	for attempt := 0; attempt < 3; attempt++ {

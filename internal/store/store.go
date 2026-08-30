@@ -1216,6 +1216,20 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 }
 
 func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uuid.UUID, composeYAML, encryptedEnv string) (ComposeService, error) {
+	return s.updateComposeService(ctx, organizationID, id, composeYAML, true, encryptedEnv)
+}
+
+// UpdateComposeServiceConfiguration preserves the encrypted environment when
+// encryptedEnv is nil. Preservation happens under the same row lock as the
+// Compose update so a concurrent variable rotation cannot be lost.
+func (s *Store) UpdateComposeServiceConfiguration(ctx context.Context, organizationID, id uuid.UUID, composeYAML string, encryptedEnv *string) (ComposeService, error) {
+	if encryptedEnv == nil {
+		return s.updateComposeService(ctx, organizationID, id, composeYAML, false, "")
+	}
+	return s.updateComposeService(ctx, organizationID, id, composeYAML, true, *encryptedEnv)
+}
+
+func (s *Store) updateComposeService(ctx context.Context, organizationID, id uuid.UUID, composeYAML string, replaceEnvironment bool, encryptedEnv string) (ComposeService, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ComposeService{}, err
@@ -1228,6 +1242,9 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ComposeService{}, err
 	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, id); err != nil {
+		return ComposeService{}, err
+	}
 	if err = ensureProtectedVolumesDeclared(ctx, tx, id, composeYAML); err != nil {
 		return ComposeService{}, err
 	}
@@ -1235,7 +1252,7 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 		return ComposeService{}, err
 	}
 	var service ComposeService
-	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.desired_state,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3,encrypted_env=CASE WHEN $4 THEN $5 ELSE s.encrypted_env END,revision=revision+1,updated_at=now() FROM environments e,projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.desired_state,s.created_at,s.updated_at`, id, organizationID, composeYAML, replaceEnvironment, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}

@@ -90,6 +90,14 @@ func TestServiceVariablesAreWriteOnlyEncryptedAndMutationFenced(t *testing.T) {
 	if err = json.Unmarshal(plain, &values); err != nil || values["EXISTING"] != "preserve-this-secret" || values["ROTATE_ME"] != secretMarker || values["ADDED"] != "added-secret" {
 		t.Fatalf("merged environment=%v err=%v", values, err)
 	}
+	status, response = scopedAPIRequest(t, server.URL+"/v1/services/"+serviceID.String(), token, organizationID, http.MethodPatch, map[string]any{"composeYaml": "services: {web: {image: nginx:stable}}"})
+	if status != http.StatusOK || bytes.Contains(response, []byte(secretMarker)) {
+		t.Fatalf("compose-only update status=%d body=%s", status, response)
+	}
+	var preservedEncrypted string
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env,revision FROM compose_services WHERE id=$1`, serviceID).Scan(&preservedEncrypted, &revision); err != nil || preservedEncrypted != encrypted || revision != 3 {
+		t.Fatalf("compose-only update did not preserve ciphertext: revision=%d preserved=%v err=%v", revision, preservedEncrypted == encrypted, err)
+	}
 	var auditMetadata string
 	if err = db.Pool.QueryRow(ctx, `SELECT metadata::text FROM audit_events WHERE organization_id=$1 AND action='service.variables.upsert' ORDER BY created_at DESC LIMIT 1`, organizationID).Scan(&auditMetadata); err != nil || strings.Contains(auditMetadata, secretMarker) || !strings.Contains(auditMetadata, "ROTATE_ME") {
 		t.Fatalf("audit metadata=%q err=%v", auditMetadata, err)
@@ -102,6 +110,10 @@ func TestServiceVariablesAreWriteOnlyEncryptedAndMutationFenced(t *testing.T) {
 	status, response = scopedAPIRequest(t, endpoint, token, organizationID, http.MethodPut, map[string]any{"values": map[string]string{"BLOCKED": "value"}})
 	if status != http.StatusConflict || !bytes.Contains(response, []byte(`"code":"deployment_active"`)) {
 		t.Fatalf("active deployment mutation status=%d body=%s", status, response)
+	}
+	status, response = scopedAPIRequest(t, server.URL+"/v1/services/"+serviceID.String(), token, organizationID, http.MethodPatch, map[string]any{"composeYaml": "services: {web: {image: nginx:alpine}}"})
+	if status != http.StatusConflict || !bytes.Contains(response, []byte(`"code":"deployment_active"`)) {
+		t.Fatalf("active deployment compose update status=%d body=%s", status, response)
 	}
 	if err = db.CancelDeployment(ctx, organizationID, deployment.ID); err != nil {
 		t.Fatal(err)
@@ -118,7 +130,7 @@ func TestServiceVariablesAreWriteOnlyEncryptedAndMutationFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	values = nil
-	if err = json.Unmarshal(plain, &values); err != nil || values["ROTATE_ME"] != "" || values["EXISTING"] == "" || revision != 3 {
+	if err = json.Unmarshal(plain, &values); err != nil || values["ROTATE_ME"] != "" || values["EXISTING"] == "" || revision != 4 {
 		t.Fatalf("environment after delete=%v revision=%d err=%v", values, revision, err)
 	}
 
@@ -144,5 +156,12 @@ func TestServiceVariableValidation(t *testing.T) {
 	}
 	if err := validateServiceVariable("VALID", strings.Repeat("x", maxServiceVariableValue+1)); err == nil {
 		t.Fatal("oversized variable value was accepted")
+	}
+	tooMany := make(map[string]string, maxServiceVariables+1)
+	for i := 0; i <= maxServiceVariables; i++ {
+		tooMany["VARIABLE_"+strings.Repeat("A", i/26)+string(rune('A'+i%26))] = "value"
+	}
+	if err := validateServiceVariables(tooMany); err == nil {
+		t.Fatal("too many service variables were accepted")
 	}
 }
