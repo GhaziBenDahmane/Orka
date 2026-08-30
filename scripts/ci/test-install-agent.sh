@@ -87,6 +87,26 @@ if grep -q '^network create' "$DOCKYARD_INSTALL_TEST_LOG"; then
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_TRAEFIK_NETWORK='shared_tenant.routing' \
+  "$root/scripts/install-agent.sh" >/dev/null
+grep -q '^service=edge_agent network=shared_tenant.routing$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^network create --driver overlay --opt encrypted --attachable shared_tenant.routing$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+for unsafe_network in 'Public' '-public' '.public' 'public/network' 'bad network' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_TRAEFIK_NETWORK="$unsafe_network" \
+    "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "agent installer accepted unsafe Traefik network name: $unsafe_network" >&2
+    exit 1
+  fi
+  grep -q 'DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe agent network name mutated Docker state: $unsafe_network" >&2
+    exit 1
+  fi
+done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_SECRET_EXISTS=true "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'agent installer accepted an existing token secret without explicit reuse' >&2
   exit 1

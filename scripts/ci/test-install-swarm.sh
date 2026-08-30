@@ -107,6 +107,26 @@ if grep -q '^network create' "$DOCKYARD_INSTALL_TEST_LOG"; then
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_TRAEFIK_NETWORK='shared_tenant.routing' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q '^network inspect shared_tenant.routing$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^network create --driver overlay --opt encrypted --attachable shared_tenant.routing$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+for unsafe_network in 'Public' '-public' '.public' 'public/network' 'bad network' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_TRAEFIK_NETWORK="$unsafe_network" \
+    "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe Traefik network name: $unsafe_network" >&2
+    exit 1
+  fi
+  grep -q 'DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe Traefik network name mutated Docker state: $unsafe_network" >&2
+    exit 1
+  fi
+done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 rm -f "$DOCKYARD_INSTALL_TEST_STATE"
 DOCKYARD_INSTALL_TEST_FLAP_ONCE=true DOCKYARD_INSTALL_STABILITY_SECONDS=3 \
   "$root/scripts/install-swarm.sh" | grep -q 'remained converged for 3s'

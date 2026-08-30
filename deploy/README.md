@@ -42,7 +42,7 @@ scripts/install-swarm.sh
 ```
 
 The installer rejects mutable image tags, non-manager nodes, unsafe or malformed
-DNS hostnames and ACME email addresses, loose secret-file permissions, malformed keys, and existing secrets unless reuse is explicitly
+DNS hostnames, ACME email addresses, and routing-network names, loose secret-file permissions, malformed keys, and existing secrets unless reuse is explicitly
 acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
 fully rendered stack before creating the overlay network or secrets, then
 waits for every service to hold its desired replica count continuously for 90
@@ -87,7 +87,10 @@ DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
   docker stack deploy -c deploy/swarm.yml dockyard
 ```
 
-The controller is not attached to `dockyard-public`. The stack creates a
+The controller is not attached to the tenant routing network selected by
+`DOCKYARD_TRAEFIK_NETWORK` (default `dockyard-public`). The installer creates
+or safely reuses that attachable encrypted overlay, and the stack passes the
+same name to both Dockyard and Traefik. The stack creates a
 dedicated encrypted `dockyard-edge-control` network between Traefik and the
 controller, using `DOCKYARD_EDGE_SUBNET` (default `10.255.250.0/24`) as both
 its IPAM subnet and trusted-proxy CIDR. Choose a non-overlapping subnet before
