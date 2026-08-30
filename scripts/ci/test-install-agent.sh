@@ -60,6 +60,14 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_CONTROL_PLANE_URL='https://127.0.0.1' DOCKYARD_AGENT_URL='https://[::1]:8444' \
+  DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" >/dev/null
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'IP-origin agent dry-run mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 "$root/scripts/install-agent.sh" | grep -q 'installed and remained converged'
 grep -q '^network create --driver overlay --opt encrypted --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_agent_enrollment_token $DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
@@ -148,6 +156,35 @@ if DOCKYARD_CONTROL_PLANE_URL='http://dockyard.example.test' "$root/scripts/inst
   exit 1
 fi
 grep -q 'DOCKYARD_CONTROL_PLANE_URL must be an https:// URL' "$temporary/err"
+
+for unsafe_origin in \
+  'https://dockyard.example.test/v1' \
+  'https://bad_label.example.test' \
+  'https://dockyard.example.test:' \
+  'https://dockyard.example.test:0' \
+  'https://dockyard.example.test:65536'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_CONTROL_PLANE_URL="$unsafe_origin" "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "agent installer accepted unsafe control-plane origin: $unsafe_origin" >&2
+    exit 1
+  fi
+  grep -q 'must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe control-plane origin mutated Docker state: $unsafe_origin" >&2
+    exit 1
+  fi
+done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_AGENT_URL='https://agents.example.test/mtls' "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted an agent API URL with a path' >&2
+  exit 1
+fi
+grep -q 'must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'unsafe agent API origin mutated Docker state' >&2
+  exit 1
+fi
 
 if DOCKYARD_IMAGE='example/dockyard:latest' "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'agent installer accepted a mutable image' >&2

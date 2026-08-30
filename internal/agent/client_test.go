@@ -64,12 +64,12 @@ func (f *fakeScheduler) ResolveVolumeNode(context.Context, string, string) (stri
 }
 
 func TestValidateAgentEndpointsRequireHTTPSOrigins(t *testing.T) {
-	for _, endpoint := range []string{"https://control.example.test", "https://agents.example.test:8444/"} {
+	for _, endpoint := range []string{"https://control.example.test", "https://agents.example.test:8444/", "https://127.0.0.1", "https://[::1]:8444"} {
 		if err := validateAgentEndpoint("test URL", endpoint); err != nil {
 			t.Fatalf("valid endpoint %q rejected: %v", endpoint, err)
 		}
 	}
-	for _, endpoint := range []string{"http://agents.example.test", "https://user@agents.example.test", "https://agents.example.test/path", "https://agents.example.test?token=value", "https://agents.example.test/#fragment", "//agents.example.test"} {
+	for _, endpoint := range []string{"http://agents.example.test", "https://user@agents.example.test", "https://agents.example.test/path", "https://agents.example.test?token=value", "https://agents.example.test/#fragment", "//agents.example.test", " https://agents.example.test", "https://bad_label.example.test", "https://-bad.example.test", "https://agents.example.test:", "https://agents.example.test:0", "https://agents.example.test:65536"} {
 		if err := validateAgentEndpoint("test URL", endpoint); err == nil {
 			t.Errorf("unsafe endpoint %q accepted", endpoint)
 		}

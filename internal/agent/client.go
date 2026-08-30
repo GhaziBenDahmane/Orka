@@ -17,12 +17,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,11 +108,33 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func validateAgentEndpoint(label, rawURL string) error {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" {
-		return fmt.Errorf("%s must be an HTTPS origin without credentials, path, query, or fragment", label)
+	trimmed := strings.TrimSpace(rawURL)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || rawURL != trimmed || parsed.Scheme != "https" || !validEndpointHostname(parsed.Hostname()) || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" || strings.HasSuffix(parsed.Host, ":") {
+		return fmt.Errorf("%s must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port", label)
+	}
+	if port := parsed.Port(); port != "" {
+		value, parseErr := strconv.Atoi(port)
+		if parseErr != nil || value < 1 || value > 65535 {
+			return fmt.Errorf("%s must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port", label)
+		}
 	}
 	return nil
+}
+
+func validEndpointHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || !endpointHostnameLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func rejectRedirect(*http.Request, []*http.Request) error {
@@ -604,7 +628,10 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 	}
 }
 
-var serviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+var (
+	serviceNamePattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	endpointHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
+)
 var digestImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (string, error) {
