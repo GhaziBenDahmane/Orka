@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -33,8 +34,8 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	issuer, err := url.Parse(in.Issuer)
-	if err != nil || issuer.Scheme != "https" || issuer.Host == "" {
+	issuer, err := normalizedOIDCIssuer(in.Issuer)
+	if err != nil {
 		writeError(w, 400, "invalid_issuer", "issuer must be an absolute HTTPS URL")
 		return
 	}
@@ -66,7 +67,7 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := principal(r)
-	provider, err := s.Store.CreateOIDCProvider(r.Context(), store.OIDCProvider{ID: id, OrganizationID: principal.OrganizationID, Name: in.Name, Issuer: strings.TrimRight(in.Issuer, "/"), ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
+	provider, err := s.Store.CreateOIDCProvider(r.Context(), store.OIDCProvider{ID: id, OrganizationID: principal.OrganizationID, Name: in.Name, Issuer: issuer, ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -97,8 +98,8 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	issuer, err := url.Parse(in.Issuer)
-	if err != nil || issuer.Scheme != "https" || issuer.Host == "" || in.Name == "" || in.ClientID == "" || len(in.Domains) == 0 {
+	issuer, err := normalizedOIDCIssuer(in.Issuer)
+	if err != nil || in.Name == "" || in.ClientID == "" || len(in.Domains) == 0 {
 		writeError(w, 400, "invalid_provider", "name, HTTPS issuer, client ID, and domains are required")
 		return
 	}
@@ -128,7 +129,7 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	provider, err := s.Store.UpdateOIDCProvider(r.Context(), p.OrganizationID, store.OIDCProvider{ID: id, Name: strings.TrimSpace(in.Name), Issuer: strings.TrimRight(in.Issuer, "/"), ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
+	provider, err := s.Store.UpdateOIDCProvider(r.Context(), p.OrganizationID, store.OIDCProvider{ID: id, Name: strings.TrimSpace(in.Name), Issuer: issuer, ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -201,6 +202,7 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	providerContext, cancel := context.WithTimeout(r.Context(), oidcRequestTimeout)
 	defer cancel()
+	providerContext = oidc.ClientContext(providerContext, s.oidcHTTPClient())
 	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
 		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery failed")
@@ -259,6 +261,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	providerContext, cancel := context.WithTimeout(r.Context(), oidcRequestTimeout)
 	defer cancel()
+	providerContext = oidc.ClientContext(providerContext, s.oidcHTTPClient())
 	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
 		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery failed")
@@ -314,6 +317,29 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})
 	writeLoginSuccess(w, r, token)
+}
+
+func normalizedOIDCIssuer(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	issuer, err := url.Parse(raw)
+	if err != nil || issuer.Scheme != "https" || issuer.Hostname() == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || issuer.Opaque != "" {
+		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
+	}
+	issuer.Path = strings.TrimRight(issuer.Path, "/")
+	issuer.RawPath = strings.TrimRight(issuer.RawPath, "/")
+	return issuer.String(), nil
+}
+
+func (s *Server) oidcHTTPClient() *http.Client {
+	client := s.OIDCHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: oidcRequestTimeout}
+	}
+	secured := *client
+	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("OIDC redirects are disabled")
+	}
+	return &secured
 }
 
 type oidcIdentityClaims struct {

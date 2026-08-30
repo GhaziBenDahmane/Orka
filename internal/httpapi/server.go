@@ -44,6 +44,7 @@ type Server struct {
 	SessionTTL                 time.Duration
 	Logger                     *slog.Logger
 	PublicURL                  string
+	OIDCHTTPClient             *http.Client
 	Metrics                    *observability.Metrics
 	AgentCACertificate         []byte
 	AgentPreviousCACertificate []byte
