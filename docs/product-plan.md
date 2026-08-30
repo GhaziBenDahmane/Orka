@@ -184,7 +184,10 @@ replacement's deployment or job result.
   ready/active/manager node counts plus active-node CPU and memory, all usable
   as placement constraints. Client-certificate rotation is two-phase: the
   existing serial remains valid until the replacement authenticates, while
-  pending-rotation age and certificate expiry are exported for alerting.
+  pending-rotation age and certificate expiry are exported for alerting. A
+  release-blocking real-TLS conformance test proves this transition over TLS
+  1.3, including rejection of superseded, wrong-cluster, untrusted, expired,
+  and mismatched-key identities and convergence of the rotation metrics.
 - Run multiple stateless controllers and workers; prove job fencing and leader
   election behavior under partitions. A scheduled disposable three-manager
   Swarm conformance test now proves leader replacement, replica convergence,

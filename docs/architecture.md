@@ -111,6 +111,14 @@ usage, validity window, and private key. Prometheus exposes fixed-label expiry
 gauges for the agent CA and server certificate so operators can rotate their
 Swarm secrets before either credential expires.
 
+The release gate exercises client-certificate rotation through a real TLS 1.3
+listener. It preserves the active serial while a replacement is pending,
+promotes only after the replacement heartbeat, rejects the old serial after
+promotion, and verifies the database-backed expiry and pending-age metrics.
+Production rotation of the listener certificate and CA secrets remains a
+separate staged operational procedure because it changes controller trust
+roots rather than an individual agent identity.
+
 Remote database utilities run on the target cluster. The controller grants a
 single-operation presigned S3 transfer URL and sends a per-backup encryption
 key only inside the encrypted mTLS command. Agents encrypt before upload and

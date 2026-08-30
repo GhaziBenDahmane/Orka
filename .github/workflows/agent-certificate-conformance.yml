@@ -1,0 +1,39 @@
+name: Agent certificate conformance
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "19 4 * * 1"
+permissions:
+  contents: read
+jobs:
+  agent-certificate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Exercise mTLS agent certificate rotation
+        run: make test-agent-certificate-conformance | tee agent-certificate-conformance.log
+      - name: Validate agent certificate evidence
+        run: |
+          jq -e --arg sourceCommit "$GITHUB_SHA" '
+            .sourceCommit == $sourceCommit and .status == "passed" and
+            .tlsVersion == "1.3" and .oldCertificateAuthenticated and
+            .replacementIssuedPending and .oldValidBeforeConfirmation and
+            .replacementPromotedOnHeartbeat and .oldRejectedAfterPromotion and
+            .wrongClusterRejected and .untrustedCARejected and
+            .expiredCertificateRejected and .mismatchedKeyRejected and
+            .pendingMetricsConverged and .invalidReplacementPreservesIdentity
+          ' agent-certificate-conformance.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: agent-certificate-conformance
+          path: |
+            agent-certificate-conformance.log
+            agent-certificate-conformance.json
+          if-no-files-found: error

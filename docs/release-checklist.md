@@ -67,6 +67,14 @@ links for every item below.
   capacity returns; and checks reconciliation data in Prometheus and the
   redacted AI audit snapshot. The release attaches
   `reconciliation-conformance.json`.
+- `make test-agent-certificate-conformance` serves the agent API over a real
+  TLS 1.3 listener that requires CA-verified client certificates. It proves
+  two-phase replacement issuance, continued use of the old identity before
+  confirmation, promotion by the replacement heartbeat, immediate rejection
+  of the superseded serial, and rejection of wrong-cluster, untrusted,
+  expired, and mismatched-key identities. It also verifies that active-expiry
+  and pending-rotation metrics converge, and attaches
+  `agent-certificate-conformance.json`.
 
 ## Staging gates
 
@@ -115,7 +123,9 @@ links for every item below.
 - Rotate the agent listener certificate and CA secrets in a staging controller
   rollout. Confirm startup rejects a mismatched or expired credential, the
   replacement listener accepts existing agents, and both control-plane expiry
-  gauges and seven-day alerts move to the new certificate deadlines.
+  gauges and seven-day alerts move to the new certificate deadlines. The
+  automated client-certificate conformance gate does not replace this
+  listener/CA secret-rotation exercise.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact
   storage into an isolated Swarm. Confirm audit-chain continuity.
 - Re-run the final non-dry-run Dokploy import, deploy the imported current
@@ -139,8 +149,9 @@ links for every item below.
   `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
-  `upgrade-conformance.json`, and `release-soak-evidence.json`; the same files
-  remain available as a workflow artifact. Upgrade evidence records the
+  `agent-certificate-conformance.json`, `upgrade-conformance.json`, and
+  `release-soak-evidence.json`; the same files remain available as a workflow
+  artifact. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence
   records the exact promoted digest, observation count, and automatic rollback

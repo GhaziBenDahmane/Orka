@@ -72,7 +72,7 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 		}
 		return directory, identity
 	}
-	rotationServer := func(t *testing.T, certificateCluster uuid.UUID) *httptest.Server {
+	rotationServer := func(t *testing.T, certificateCluster uuid.UUID, signerCertificate, signerKey []byte, issuedAt time.Time, mismatchKey bool) *httptest.Server {
 		t.Helper()
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var input struct {
@@ -83,7 +83,23 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			certificate, _, err := agentpki.SignAgentCSR(caPEM, caKey, []byte(input.CSR), certificateCluster, time.Now(), 7*24*time.Hour)
+			csr := []byte(input.CSR)
+			if mismatchKey {
+				key, keyErr := rsa.GenerateKey(rand.Reader, 2048)
+				if keyErr != nil {
+					t.Error(keyErr)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				request, requestErr := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "other-agent"}}, key)
+				if requestErr != nil {
+					t.Error(requestErr)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				csr = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: request})
+			}
+			certificate, _, err := agentpki.SignAgentCSR(signerCertificate, signerKey, csr, certificateCluster, issuedAt, 7*24*time.Hour)
 			if err != nil {
 				t.Error(err)
 				w.WriteHeader(http.StatusBadRequest)
@@ -94,7 +110,7 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 	}
 	t.Run("valid replacement", func(t *testing.T) {
 		directory, original := newState(t)
-		server := rotationServer(t, clusterID)
+		server := rotationServer(t, clusterID, caPEM, caKey, time.Now(), false)
 		defer server.Close()
 		if _, err := rotateIfNeeded(context.Background(), Config{StateDirectory: directory, AgentURL: server.URL}, server.Client()); err != nil {
 			t.Fatal(err)
@@ -109,7 +125,7 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 	})
 	t.Run("wrong cluster identity", func(t *testing.T) {
 		directory, original := newState(t)
-		server := rotationServer(t, uuid.New())
+		server := rotationServer(t, uuid.New(), caPEM, caKey, time.Now(), false)
 		defer server.Close()
 		current := server.Client()
 		preservedClient, err := rotateIfNeeded(context.Background(), Config{StateDirectory: directory, AgentURL: server.URL}, current)
@@ -123,6 +139,36 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 		if readErr != nil || !bytes.Equal(preserved, original) {
 			t.Fatalf("current identity changed after rejected rotation: err=%v", readErr)
 		}
+	})
+	assertRejected := func(t *testing.T, server *httptest.Server, want string) {
+		t.Helper()
+		defer server.Close()
+		directory, original := newState(t)
+		current := server.Client()
+		preservedClient, rotationErr := rotateIfNeeded(context.Background(), Config{StateDirectory: directory, AgentURL: server.URL}, current)
+		if rotationErr == nil || !strings.Contains(rotationErr.Error(), want) {
+			t.Fatalf("rotation error=%v, want substring %q", rotationErr, want)
+		}
+		if preservedClient != current {
+			t.Fatal("rotation failure did not preserve the working HTTP client")
+		}
+		preserved, readErr := os.ReadFile(filepath.Join(directory, "identity.pem"))
+		if readErr != nil || !bytes.Equal(preserved, original) {
+			t.Fatalf("current identity changed after rejected rotation: err=%v", readErr)
+		}
+	}
+	t.Run("untrusted authority", func(t *testing.T) {
+		untrustedCA, untrustedKey, caErr := agentpki.NewCA(now, 24*time.Hour)
+		if caErr != nil {
+			t.Fatal(caErr)
+		}
+		assertRejected(t, rotationServer(t, clusterID, untrustedCA, untrustedKey, time.Now(), false), "verify rotated agent certificate")
+	})
+	t.Run("expired replacement", func(t *testing.T) {
+		assertRejected(t, rotationServer(t, clusterID, caPEM, caKey, time.Now().Add(-8*24*time.Hour), false), "verify rotated agent certificate")
+	})
+	t.Run("mismatched private key", func(t *testing.T) {
+		assertRejected(t, rotationServer(t, clusterID, caPEM, caKey, time.Now(), true), "does not match the generated private key")
 	})
 }
 
