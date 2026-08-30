@@ -2143,6 +2143,8 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 	if in.GitRef == "" {
 		in.GitRef = "main"
 	}
+	in.RepositoryURL = strings.TrimSpace(in.RepositoryURL)
+	in.GitRef = strings.TrimSpace(in.GitRef)
 	if in.ContextDirectory == "" {
 		in.ContextDirectory = "."
 	}
@@ -2210,6 +2212,12 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		}
 		in.RepositoryURL, in.GitRef, in.EnableSubmodules, in.GitCredentialID = "", "", false, nil
 		in.StatusProvider, in.StatusCredentialID, in.StatusContext = "", nil, ""
+	}
+	if in.SourceType == "git" {
+		if _, err = deploy.ValidateGitSource(in.RepositoryURL, in.GitRef); err != nil {
+			writeError(w, 400, "invalid_source", err.Error())
+			return
+		}
 	}
 	if in.SourceType == "git" && ((in.StatusProvider == "") != (in.StatusCredentialID == nil) || (in.StatusProvider != "" && !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.StatusProvider)) || len(in.StatusContext) > 100 || !webhookBranchPattern.MatchString(in.StatusContext)) {
 		writeError(w, 400, "invalid_source_status", "status provider and Git token credential must be configured together with a valid context")

@@ -159,6 +159,35 @@ func TestBuildRejectsCredentialHostMismatchBeforeClone(t *testing.T) {
 	}
 }
 
+func TestValidateGitSourceRejectsUnsafeURLsAndRefs(t *testing.T) {
+	for _, repository := range []string{
+		"http://git.example.test/acme/app.git",
+		"https://user@git.example.test/acme/app.git",
+		"ssh://git:password@git.example.test/acme/app.git",
+		"https://bad_label.example.test/acme/app.git",
+		"https://git.example.test:0/acme/app.git",
+		"https://git.example.test/acme//app.git",
+		"https://git.example.test/acme/../app.git",
+		"https://git.example.test/%2e%2e/app.git",
+		"https://git.example.test",
+		" https://git.example.test/acme/app.git",
+	} {
+		if _, err := ValidateGitSource(repository, "main"); err == nil {
+			t.Errorf("unsafe repository URL %q was accepted", repository)
+		}
+	}
+	for _, ref := range []string{"", ".hidden", "feature..branch", "refs//heads/main", "branch.lock", "feature@{one", "feature branch"} {
+		if _, err := ValidateGitSource("https://git.example.test/acme/app.git", ref); err == nil {
+			t.Errorf("unsafe Git ref %q was accepted", ref)
+		}
+	}
+	for _, repository := range []string{"https://git.example.test/acme/app.git", "ssh://git@git.example.test:2222/acme/app.git"} {
+		if _, err := ValidateGitSource(repository, "refs/heads/main"); err != nil {
+			t.Errorf("valid repository %q was rejected: %v", repository, err)
+		}
+	}
+}
+
 func TestBuildRequiresPinnedSSHCredential(t *testing.T) {
 	source := store.ApplicationSource{RepositoryURL: "ssh://git@example.com/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
 	_, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: Credential{Kind: "git-ssh", Server: "example.com", Username: "git", Secret: "key"}})

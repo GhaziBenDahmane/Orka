@@ -91,7 +91,6 @@ type preparedApplication struct {
 }
 
 var migrationImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)
-var migrationGitRefPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
 
 func dokployApplicationReport(item sourceApplication, targetID *uuid.UUID, status, reason string) DokployResourceReport {
 	repository, branch, buildPath := applicationRepository(item)
@@ -265,12 +264,9 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 			return preparedApplication{}, warnings, errors.New("Git application requires a valid --registry-prefix")
 		}
 		repositoryURL, gitRef, contextDirectory := applicationRepository(item)
-		parsed, err := url.Parse(repositoryURL)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
-			return preparedApplication{}, warnings, errors.New("Git application repository must be an HTTPS URL without embedded credentials")
-		}
-		if !migrationGitRefPattern.MatchString(gitRef) {
-			return preparedApplication{}, warnings, errors.New("Git application has an invalid branch")
+		parsed, err := deploy.ValidateGitSource(repositoryURL, gitRef)
+		if err != nil || parsed.Scheme != "https" {
+			return preparedApplication{}, warnings, errors.New("Git application repository and branch are invalid; HTTPS without embedded credentials is required")
 		}
 		buildDirectory, err := cleanRepositoryPath(contextDirectory)
 		if err != nil {

@@ -17,13 +17,16 @@ func ValidateHTTPURL(raw string, maxBytes int) (*url.URL, error) {
 		return nil, errors.New("URL is empty, oversized, or contains surrounding whitespace or control characters")
 	}
 	endpoint, err := url.Parse(raw)
-	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" || !validURLHost(endpoint) {
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" || !ValidURLHost(endpoint) {
 		return nil, errors.New("URL must be an absolute HTTP(S) URL without credentials or a fragment and with a valid host and port")
 	}
 	return endpoint, nil
 }
 
-func validURLHost(endpoint *url.URL) bool {
+// ValidURLHost verifies DNS/IP syntax and an optional TCP port without doing
+// resolution. It is useful for non-HTTP URL schemes that share URL authority
+// syntax.
+func ValidURLHost(endpoint *url.URL) bool {
 	host := endpoint.Hostname()
 	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(host) == nil {
 		return false

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -44,6 +45,11 @@ var registryImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$`)
 var buildSettingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 var buildTargetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256:[a-f0-9]{64}$`)
+
+const (
+	maxGitRepositoryURLBytes  = 16 << 10
+	maxGitRepositoryPathBytes = 4 << 10
+)
 
 // ErrBuildWorkspaceLimit lets callers distinguish an operator-configured
 // safety-limit rejection from an ordinary build failure without parsing an
@@ -147,14 +153,12 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if err := validateBuildSource(&source, credentials.Registry); err != nil {
 		return "", "", err
 	}
-	repo, err := url.Parse(source.RepositoryURL)
-	if err != nil || (repo.Scheme != "https" && repo.Scheme != "ssh") || repo.Host == "" || repo.Scheme == "https" && repo.User != nil {
-		return "", "", fmt.Errorf("repository URL must use HTTPS or SSH")
+	repo, err := ValidateGitSource(source.RepositoryURL, source.GitRef)
+	if err != nil {
+		return "", "", err
 	}
-	if !safeRef.MatchString(source.GitRef) {
-		return "", "", fmt.Errorf("invalid git ref")
-	}
-	if credentials.Git.Secret != "" && !strings.EqualFold(repo.Hostname(), credentials.Git.Server) {
+	credentialHost := gitCredentialServerHost(credentials.Git.Server)
+	if credentials.Git.Secret != "" && (credentialHost == "" || !strings.EqualFold(repo.Hostname(), credentialHost)) {
 		return "", "", fmt.Errorf("Git credential server does not match repository host")
 	}
 	resolvedAddresses := []string(nil)
@@ -204,6 +208,9 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 			gitEnvironment["GIT_SSH_COMMAND"] += " -o HostName=" + strings.Trim(resolvedAddresses[0], "[]") + " -o HostKeyAlias=" + repo.Hostname()
 		}
 	} else if credentials.Git.Secret != "" {
+		if credentials.Git.Kind != "git" {
+			return "", "", errors.New("HTTPS repository requires a Git token credential")
+		}
 		askPass, createErr := writeAskPass()
 		if createErr != nil {
 			return "", "", createErr
@@ -240,6 +247,54 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		return "", output, fmt.Errorf("invalid build context: %w", err)
 	}
 	return b.buildWorkspace(ctx, source, deploymentID, credentials.Registry, contextPath, output)
+}
+
+func ValidateGitSource(repositoryURL, gitRef string) (*url.URL, error) {
+	if repositoryURL == "" || repositoryURL != strings.TrimSpace(repositoryURL) || len(repositoryURL) > maxGitRepositoryURLBytes || strings.ContainsAny(repositoryURL, "\x00\r\n") {
+		return nil, errors.New("repository URL must use HTTPS or SSH with a valid host and path")
+	}
+	repository, err := url.Parse(repositoryURL)
+	if err != nil || (repository.Scheme != "https" && repository.Scheme != "ssh") || !netpolicy.ValidURLHost(repository) || repository.RawQuery != "" || repository.Fragment != "" || repository.Opaque != "" || repository.RawPath != "" {
+		return nil, errors.New("repository URL must use HTTPS or SSH with a valid host and path")
+	}
+	if repository.Scheme == "https" && repository.User != nil {
+		return nil, errors.New("HTTPS repository URL cannot contain user information")
+	}
+	if repository.User != nil {
+		_, hasPassword := repository.User.Password()
+		if repository.User.Username() == "" || hasPassword {
+			return nil, errors.New("SSH repository URL cannot contain embedded credentials")
+		}
+	}
+	repositoryPath := strings.Trim(repository.Path, "/")
+	parts := strings.Split(repositoryPath, "/")
+	if repositoryPath == "" || len(repositoryPath) > maxGitRepositoryPathBytes || strings.Contains(repository.Path, "//") || strings.IndexFunc(repositoryPath, func(char rune) bool { return char < 0x20 || char == 0x7f }) >= 0 || path.Clean("/"+repositoryPath) != "/"+repositoryPath {
+		return nil, errors.New("repository URL must contain a canonical repository path")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || len(part) > 255 {
+			return nil, errors.New("repository URL contains an invalid path segment")
+		}
+	}
+	if !validGitRef(gitRef) {
+		return nil, errors.New("invalid git ref")
+	}
+	return repository, nil
+}
+
+func validGitRef(ref string) bool {
+	if !safeRef.MatchString(ref) || ref == "@" || strings.HasPrefix(ref, ".") || strings.HasSuffix(ref, ".") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".lock") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.Contains(ref, "//") {
+		return false
+	}
+	return strings.IndexFunc(ref, func(char rune) bool { return char < 0x20 || char == 0x7f }) < 0
+}
+
+func gitCredentialServerHost(server string) string {
+	endpoint, err := url.Parse("https://" + strings.TrimSpace(server))
+	if err != nil || !netpolicy.ValidURLHost(endpoint) || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" {
+		return ""
+	}
+	return strings.ToLower(endpoint.Hostname())
 }
 
 func (b Builder) maxWorkspaceBytes() int64 {
