@@ -13,6 +13,11 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-state:/var/lib/dockyard-agent
+    logging:
+      driver: local
+      options:
+        max-size: ${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}
+        max-file: ${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}
     deploy:
       replicas: 1
       resources:

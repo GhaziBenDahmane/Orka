@@ -9,6 +9,9 @@ services:
       HEADROOM_URL: http://headroom:8787
     volumes: [nine-router-data:/app/data]
     networks: [ai-control]
+    logging:
+      driver: local
+      options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
     deploy:
       replicas: 1
       resources:
@@ -19,6 +22,9 @@ services:
   headroom:
     image: ${HEADROOM_IMAGE:?set a digest-pinned Headroom image}
     networks: [ai-control]
+    logging:
+      driver: local
+      options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
     deploy:
       replicas: 1
       resources:
@@ -43,6 +49,9 @@ services:
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
     networks: [ai-control]
     read_only: true
+    logging:
+      driver: local
+      options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
     deploy:
       replicas: 1
       resources:
@@ -69,6 +78,9 @@ services:
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
     networks: [ai-control]
     read_only: true
+    logging:
+      driver: local
+      options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
     deploy:
       replicas: 1
       resources:

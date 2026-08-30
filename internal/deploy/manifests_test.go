@@ -16,6 +16,10 @@ type deploymentManifest struct {
 		Networks    []string          `yaml:"networks"`
 		Secrets     []any             `yaml:"secrets"`
 		Ports       []any             `yaml:"ports"`
+		Logging     struct {
+			Driver  string            `yaml:"driver"`
+			Options map[string]string `yaml:"options"`
+		} `yaml:"logging"`
 		Healthcheck struct {
 			Test []string `yaml:"test"`
 		} `yaml:"healthcheck"`
@@ -96,6 +100,22 @@ func TestProductionManifestsBoundLongRunningResources(t *testing.T) {
 			resources := manifest.Services[name].Deploy.Resources
 			if resources.Limits.CPUs == "" || resources.Limits.Memory == "" || resources.Reservations.CPUs == "" || resources.Reservations.Memory == "" {
 				t.Errorf("%s service %s has incomplete resource bounds: %#v", path, name, resources)
+			}
+		}
+	}
+}
+
+func TestProductionManifestsBoundLocalLogs(t *testing.T) {
+	for path, names := range map[string][]string{
+		"../../deploy/swarm.yml":       {"postgres", "dockyard", "traefik"},
+		"../../deploy/agent-swarm.yml": {"agent"},
+		"../../deploy/ai-auditors.yml": {"9router", "headroom", "security-auditor", "reliability-auditor"},
+	} {
+		manifest := readDeploymentManifest(t, path)
+		for _, name := range names {
+			logging := manifest.Services[name].Logging
+			if logging.Driver != "local" || logging.Options["max-size"] == "" || logging.Options["max-file"] == "" {
+				t.Errorf("%s service %s has unbounded local logs: %#v", path, name, logging)
 			}
 		}
 	}

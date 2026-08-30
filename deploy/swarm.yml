@@ -8,6 +8,11 @@ services:
     secrets: [dockyard_db_password]
     volumes: [postgres-data:/var/lib/postgresql/data]
     networks: [control]
+    logging:
+      driver: local
+      options:
+        max-size: ${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}
+        max-file: ${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready --username dockyard --dbname dockyard"]
       interval: 10s
@@ -55,6 +60,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/dockyard/backups:/var/lib/dockyard/backups
     networks: [control, edge-control]
+    logging:
+      driver: local
+      options:
+        max-size: ${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}
+        max-file: ${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/readyz"]
       interval: 10s
@@ -111,6 +121,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-data:/data
     networks: [dockyard-public, edge-control]
+    logging:
+      driver: local
+      options:
+        max-size: ${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}
+        max-file: ${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 10s

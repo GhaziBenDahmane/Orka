@@ -201,7 +201,9 @@ different named specialists remain independent.
 The overlay also applies configurable CPU and memory reservations and limits
 to 9Router, Headroom, and both auditor services. Override the corresponding
 `NINEROUTER_*`, `HEADROOM_*`, or `DOCKYARD_AI_AUDITOR_*` resource variables
-when capacity planning requires different bounds.
+when capacity planning requires different bounds. The shared
+`DOCKYARD_CONTAINER_LOG_MAX_SIZE` and `DOCKYARD_CONTAINER_LOG_MAX_FILES`
+variables bound local container-log retention across this overlay as well.
 After a failed run, the auditor retries after
 `DOCKYARD_AI_AUDIT_RETRY_INTERVAL` (five minutes by default, or the normal
 interval when it is shorter), doubles that delay after consecutive failures,

@@ -90,6 +90,11 @@ Defaults are `4.0` CPU/`4G` memory for the controller and remote agent,
 reservation defaults are `0.25`/`256M`, `0.25`/`256M`, and `0.10`/`64M`.
 The full variable prefixes are `DOCKYARD_CONTROLLER`, `DOCKYARD_AGENT`,
 `DOCKYARD_POSTGRES`, and `DOCKYARD_TRAEFIK`.
+All bundled services use Docker's bounded `local` logging driver with five
+20-MiB files by default. Set `DOCKYARD_CONTAINER_LOG_MAX_SIZE` and
+`DOCKYARD_CONTAINER_LOG_MAX_FILES` before rendering any platform, agent, or AI
+stack to tune retention consistently and prevent container logs from filling
+manager disks.
 This covers the bundled health-check start periods and retry windows, so a task
 that starts and then fails readiness—or silently returns to an older image—does
 not produce a false installation success. `DOCKYARD_INSTALL_STABILITY_SECONDS`
