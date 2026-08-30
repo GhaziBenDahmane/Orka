@@ -15,6 +15,19 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// knownMigrationRepairs are exact, one-way bridges for development builds
+// that applied a migration before its first committed form was finalized. A
+// repair must apply only the missing statements and then atomically advance the
+// recorded checksum to the embedded migration. Unknown mismatches still fail
+// closed.
+var knownMigrationRepairs = map[string]map[string]string{
+	"081_database_storage_node.sql": {
+		"9509f0a111e3f606030742a4f00231928635d097601394c4dcf4d57e4842d39f": `ALTER TABLE cluster_commands DROP CONSTRAINT cluster_commands_kind_check;
+ALTER TABLE cluster_commands ADD CONSTRAINT cluster_commands_kind_check
+    CHECK (kind IN ('swarm.deploy','swarm.remove','swarm.logs','swarm.nodes','swarm.storage-node','swarm.prune-volumes','container.run','database.utility','agent.upgrade','database.transfer'));`,
+	},
+}
+
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return migrateThrough(ctx, pool, "")
 }
@@ -60,7 +73,13 @@ func migrateThrough(ctx context.Context, pool *pgxpool.Pool, lastVersion string)
 					return fmt.Errorf("backfill migration checksum %s: %w", entry.Name(), err)
 				}
 			} else if recordedChecksum != checksum {
-				return fmt.Errorf("migration %s checksum mismatch: applied migration was modified", entry.Name())
+				repaired, repairErr := repairKnownMigration(ctx, conn, entry.Name(), recordedChecksum, checksum)
+				if repairErr != nil {
+					return repairErr
+				}
+				if !repaired {
+					return fmt.Errorf("migration %s checksum mismatch: applied migration was modified", entry.Name())
+				}
 			}
 			continue
 		}
@@ -83,4 +102,31 @@ func migrateThrough(ctx context.Context, pool *pgxpool.Pool, lastVersion string)
 		}
 	}
 	return nil
+}
+
+func repairKnownMigration(ctx context.Context, conn *pgxpool.Conn, version, recordedChecksum, currentChecksum string) (bool, error) {
+	repairs := knownMigrationRepairs[version]
+	repairSQL, ok := repairs[recordedChecksum]
+	if !ok {
+		return false, nil
+	}
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return true, fmt.Errorf("begin migration repair %s: %w", version, err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, repairSQL); err != nil {
+		return true, fmt.Errorf("repair migration %s: %w", version, err)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE schema_migrations SET checksum=$3 WHERE version=$1 AND checksum=$2`, version, recordedChecksum, currentChecksum)
+	if err != nil {
+		return true, fmt.Errorf("record migration repair %s: %w", version, err)
+	}
+	if tag.RowsAffected() != 1 {
+		return true, fmt.Errorf("record migration repair %s: migration state changed concurrently", version)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return true, fmt.Errorf("commit migration repair %s: %w", version, err)
+	}
+	return true, nil
 }

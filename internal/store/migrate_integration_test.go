@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -117,6 +118,42 @@ func TestMigrateFrom080AddsFailClosedDatabaseStoragePlacement(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `UPDATE database_instances SET storage_node_id='../unsafe' WHERE id=$1`, databaseID); err == nil {
 		t.Fatal("unsafe storage node ID was accepted")
+	}
+}
+
+func TestMigrateRepairsKnownPrecommitDatabaseStorageMigration(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "080_database_driver_identity.sql"); err != nil {
+		t.Fatal(err)
+	}
+	legacySQL := `ALTER TABLE database_instances
+    ADD COLUMN storage_node_id text NOT NULL DEFAULT ''
+        CHECK (storage_node_id = '' OR storage_node_id ~ '^[a-z0-9]{1,64}$');
+`
+	legacyChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(legacySQL)))
+	if legacyChecksum != "9509f0a111e3f606030742a4f00231928635d097601394c4dcf4d57e4842d39f" {
+		t.Fatalf("legacy fixture checksum=%s", legacyChecksum)
+	}
+	if _, err := pool.Exec(ctx, legacySQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations(version,checksum) VALUES('081_database_storage_node.sql',$1)`, legacyChecksum); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("repair known migration: %v", err)
+	}
+	currentSQL, err := migrations.ReadFile("migrations/081_database_storage_node.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantChecksum := fmt.Sprintf("%x", sha256.Sum256(currentSQL))
+	var recordedChecksum, constraint string
+	if err = pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version='081_database_storage_node.sql'`).Scan(&recordedChecksum); err != nil || recordedChecksum != wantChecksum {
+		t.Fatalf("repaired checksum=%q want=%q err=%v", recordedChecksum, wantChecksum, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='cluster_commands'::regclass AND conname='cluster_commands_kind_check'`).Scan(&constraint); err != nil || !strings.Contains(constraint, "swarm.storage-node") {
+		t.Fatalf("repaired command constraint=%q err=%v", constraint, err)
 	}
 }
 
