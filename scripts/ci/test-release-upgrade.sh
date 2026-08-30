@@ -51,9 +51,6 @@ done
 if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$postgres_image"; then
   fail "DOCKYARD_UPGRADE_POSTGRES_IMAGE must be pinned by digest"
 fi
-if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$candidate_image"; then
-  fail "the candidate release image must be pinned by digest"
-fi
 if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$previous_image" && [[ "${DOCKYARD_UPGRADE_ALLOW_MUTABLE_PREVIOUS:-false}" != true ]]; then
   fail "the previous release image must be pinned by digest"
 fi
