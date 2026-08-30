@@ -16,6 +16,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_oidc_provider`
 - `dockyard_saml_provider`
 - `dockyard_scim_token`
+- `dockyard_access_grant`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -93,6 +94,13 @@ Protect state, pass the token to the identity provider through a sensitive
 output or secret manager, and use `create_before_destroy` to overlap planned
 configuration replacements. SCIM tokens cannot be imported because the API
 never returns their bearer value.
+
+`dockyard_access_grant` manages an explicit `viewer`, `developer`, or `admin`
+role for one organization member at project or environment scope. Organization
+membership remains the lower access boundary, and inherited grants continue to
+apply normally. Import an existing grant as
+`project/PROJECT_UUID/USER_UUID` or
+`environment/ENVIRONMENT_UUID/USER_UUID`.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting

@@ -30,6 +30,11 @@ variable "saml_metadata_xml" {
   sensitive = true
 }
 
+variable "developer_user_id" {
+  type        = string
+  description = "Organization member UUID receiving project-scoped access"
+}
+
 resource "dockyard_project" "example" {
   name        = "Example"
   description = "Managed by OpenTofu or Terraform"
@@ -99,6 +104,13 @@ resource "dockyard_environment" "production" {
   minimum_nodes      = 3
   minimum_nano_cpus  = 8000000000
   minimum_memory_bytes = 17179869184
+}
+
+resource "dockyard_access_grant" "developer" {
+  scope_type = "project"
+  scope_id   = dockyard_project.example.id
+  user_id    = var.developer_user_id
+  role       = "developer"
 }
 
 resource "dockyard_service" "whoami" {

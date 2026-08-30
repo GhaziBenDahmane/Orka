@@ -168,6 +168,10 @@ as expiring `dockyard_scim_token` Terraform/OpenTofu resources. Use `-` instead
 of JSON to keep token configuration out of shell history; newly issued bearer
 tokens are returned only once.
 
+Organization member IDs are available through `members`. Project and
+environment grants have list, put, and delete CLI commands and can be managed
+declaratively with `dockyard_access_grant`.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

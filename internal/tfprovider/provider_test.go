@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 14 {
+	if len(instance.Resources(context.Background())) != 15 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -49,6 +49,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_scim_token") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_access_grant") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -169,6 +172,28 @@ func TestSCIMTokenSecretRetentionAndExpiry(t *testing.T) {
 	}
 	if _, err := validateSCIMTokenWindow(90, 7); err != nil {
 		t.Fatalf("valid SCIM token window rejected: %v", err)
+	}
+}
+
+func TestAccessGrantIdentityAndImport(t *testing.T) {
+	scopeID := "0cc565f8-6b40-4bd7-a6ff-f2f00d3b7ae4"
+	userID := "d8b11458-2a53-48fb-9e1f-140f536da253"
+	model := accessGrantModel{}
+	setAccessGrant(&model, accessGrantResponse{ScopeType: "project", ScopeID: scopeID, UserID: userID, Role: "developer", Email: "member@example.test", CreatedAt: "2026-08-30T12:00:00Z", UpdatedAt: "2026-08-30T12:00:00Z"})
+	if model.ID.ValueString() != "project/"+scopeID+"/"+userID || model.Role.ValueString() != "developer" || model.Email.ValueString() != "member@example.test" {
+		t.Fatalf("access grant state = %#v", model)
+	}
+	scopeType, parsedScopeID, parsedUserID, err := splitAccessGrantImportID(model.ID.ValueString())
+	if err != nil || scopeType != "project" || parsedScopeID != scopeID || parsedUserID != userID {
+		t.Fatalf("split access grant = %q %q %q %v", scopeType, parsedScopeID, parsedUserID, err)
+	}
+	for _, invalid := range []string{"", "service/" + scopeID + "/" + userID, "project/not-a-uuid/" + userID, "project/" + scopeID + "/not-a-uuid", "project/" + scopeID} {
+		if _, _, _, err = splitAccessGrantImportID(invalid); err == nil {
+			t.Errorf("splitAccessGrantImportID(%q) succeeded", invalid)
+		}
+	}
+	if !validAccessGrantRole("admin") || validAccessGrantRole("owner") {
+		t.Fatal("access grant role validation mismatch")
 	}
 }
 

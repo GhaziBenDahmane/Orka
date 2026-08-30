@@ -31,6 +31,13 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"scim-tokens"}, http.MethodGet, "/v1/scim/tokens"},
 		{[]string{"create-scim-token", `{}`}, http.MethodPost, "/v1/scim/tokens"},
 		{[]string{"revoke-scim-token", "token-id"}, http.MethodDelete, "/v1/scim/tokens/token-id"},
+		{[]string{"members"}, http.MethodGet, "/v1/members"},
+		{[]string{"project-grants", "project-id"}, http.MethodGet, "/v1/projects/project-id/grants"},
+		{[]string{"put-project-grant", "project-id", "user-id", `{}`}, http.MethodPut, "/v1/projects/project-id/grants/user-id"},
+		{[]string{"delete-project-grant", "project-id", "user-id"}, http.MethodDelete, "/v1/projects/project-id/grants/user-id"},
+		{[]string{"environment-grants", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/grants"},
+		{[]string{"put-environment-grant", "environment-id", "user-id", `{}`}, http.MethodPut, "/v1/environments/environment-id/grants/user-id"},
+		{[]string{"delete-environment-grant", "environment-id", "user-id"}, http.MethodDelete, "/v1/environments/environment-id/grants/user-id"},
 		{[]string{"saml-providers"}, http.MethodGet, "/v1/sso/saml-providers"},
 		{[]string{"create-saml-provider", `{}`}, http.MethodPost, "/v1/sso/saml-providers"},
 		{[]string{"update-saml-provider", "provider-id", `{}`}, http.MethodPut, "/v1/sso/saml-providers/provider-id"},
@@ -251,6 +258,16 @@ func TestSCIMTokenCommandBody(t *testing.T) {
 	token := input.(map[string]any)
 	if token["name"] != "Workforce" || token["expiresInDays"] != float64(90) {
 		t.Fatalf("SCIM token input=%#v", token)
+	}
+}
+
+func TestAccessGrantCommandBody(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"put-environment-grant", "environment-id", "user-id", "-"}, strings.NewReader(`{"role":"developer"}`))
+	if err != nil || method != http.MethodPut || path != "/v1/environments/environment-id/grants/user-id" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	if input.(map[string]any)["role"] != "developer" {
+		t.Fatalf("access grant input=%#v", input)
 	}
 }
 
