@@ -22,7 +22,7 @@ case "$1 $2" in
     if [ "${DOCKYARD_INSTALL_TEST_FAIL_SECRET:-false}" = true ]; then exit 1; fi ;;
   "network inspect")
     if [ "${DOCKYARD_INSTALL_TEST_NETWORK_EXISTS:-false}" = true ]; then
-      if [ "${3:-}" = --format ]; then printf '%s\n' "${DOCKYARD_INSTALL_TEST_NETWORK_OPTIONS:-{}}"; fi
+      if [ "${3:-}" = --format ]; then printf '%s\n' "${DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES:-bridge|local|false|{}}"; fi
       exit 0
     fi
     exit 1 ;;
@@ -67,19 +67,19 @@ if grep -q 'one-time-enrollment-token-value' "$DOCKYARD_INSTALL_TEST_LOG"; then
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
-if DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_OPTIONS='{}' \
+if DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='bridge|local|false|{}' \
   "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'agent installer accepted an unencrypted existing overlay network' >&2
   exit 1
 fi
-grep -q 'existing Docker network dockyard-public is not encrypted' "$temporary/err"
+grep -q 'existing Docker network dockyard-public must be an attachable encrypted Swarm overlay' "$temporary/err"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'unencrypted agent-network failure mutated Docker state' >&2
   exit 1
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
-DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_OPTIONS='{"encrypted":""}' \
+DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='overlay|swarm|true|{"encrypted":""}' \
   "$root/scripts/install-agent.sh" >/dev/null
 if grep -q '^network create' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'agent installer recreated an encrypted existing overlay network' >&2

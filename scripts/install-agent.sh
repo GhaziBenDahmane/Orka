@@ -81,8 +81,8 @@ docker stack config -c "$root/deploy/agent-swarm.yml" >/dev/null
 network_exists=false
 if docker network inspect "$network" >/dev/null 2>&1; then
   network_exists=true
-  network_options=$(docker network inspect --format '{{json .Options}}' "$network") || fail "could not inspect Docker network $network"
-  printf '%s\n' "$network_options" | grep -q '"encrypted"' || fail "existing Docker network $network is not encrypted; remove and recreate it with --opt encrypted"
+  network_properties=$(docker network inspect --format '{{.Driver}}|{{.Scope}}|{{.Attachable}}|{{json .Options}}' "$network") || fail "could not inspect Docker network $network"
+  printf '%s\n' "$network_properties" | grep -Eq '^overlay\|swarm\|true\|.*"encrypted"' || fail "existing Docker network $network must be an attachable encrypted Swarm overlay; remove and recreate it with --driver overlay --opt encrypted --attachable"
 fi
 if [ "$dry_run" = true ]; then
   echo "Preflight passed for agent stack $stack; no resources were changed."
