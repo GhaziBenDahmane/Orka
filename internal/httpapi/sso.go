@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ const (
 )
 
 var errOIDCResponseTooLarge = errors.New("OIDC response exceeds 4 MiB")
+var errOIDCEmailUnverified = errors.New("OIDC email claim is not verified")
+var ssoDomainPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
 
 func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -59,12 +62,10 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
 		return
 	}
-	for i, domain := range in.Domains {
-		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
-		if !strings.Contains(in.Domains[i], ".") {
-			writeError(w, 400, "invalid_domain", "valid email domains are required")
-			return
-		}
+	in.Domains, err = normalizeSSODomains(in.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_domain", err.Error())
+		return
 	}
 	id := uuid.New()
 	encrypted, err := s.Box.Encrypt([]byte(in.ClientSecret), "oidc-client-secret:"+id.String())
@@ -119,12 +120,10 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
 		return
 	}
-	for i, domain := range in.Domains {
-		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
-		if !strings.Contains(in.Domains[i], ".") {
-			writeError(w, 400, "invalid_domain", "valid email domains are required")
-			return
-		}
+	in.Domains, err = normalizeSSODomains(in.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_domain", err.Error())
+		return
 	}
 	encrypted := ""
 	if in.ClientSecret != "" {
@@ -306,12 +305,12 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_nonce", "identity token nonce does not match the login request")
 		return
 	}
-	if claims.EmailVerified != nil && !*claims.EmailVerified {
+	email, domain, err := claims.loginEmail()
+	if errors.Is(err, errOIDCEmailUnverified) {
 		writeError(w, 403, "email_unverified", "verified email is required")
 		return
 	}
-	email, domain, ok := claims.loginEmail()
-	if !ok {
+	if err != nil {
 		writeError(w, 401, "invalid_claims", "identity token lacks a valid email address")
 		return
 	}
@@ -433,11 +432,42 @@ type oidcIdentityClaims struct {
 // preferred_username for providers such as Microsoft Entra ID that commonly
 // omit email for workforce accounts. Both values still pass the same strict
 // address and organization-domain validation before JIT provisioning.
-func (claims oidcIdentityClaims) loginEmail() (string, string, bool) {
+func (claims oidcIdentityClaims) loginEmail() (string, string, error) {
 	if strings.TrimSpace(claims.Email) != "" {
-		return oidcEmail(claims.Email)
+		if claims.EmailVerified == nil || !*claims.EmailVerified {
+			return "", "", errOIDCEmailUnverified
+		}
+		email, domain, ok := oidcEmail(claims.Email)
+		if !ok {
+			return "", "", errors.New("OIDC email claim is invalid")
+		}
+		return email, domain, nil
 	}
-	return oidcEmail(claims.PreferredUsername)
+	email, domain, ok := oidcEmail(claims.PreferredUsername)
+	if !ok {
+		return "", "", errors.New("OIDC preferred_username claim is invalid")
+	}
+	return email, domain, nil
+}
+
+func normalizeSSODomains(domains []string) ([]string, error) {
+	if len(domains) == 0 || len(domains) > 100 {
+		return nil, errors.New("between 1 and 100 valid email domains are required")
+	}
+	normalized := make([]string, 0, len(domains))
+	seen := make(map[string]struct{}, len(domains))
+	for _, raw := range domains {
+		domain := strings.ToLower(strings.TrimSpace(raw))
+		if len(domain) > 253 || !ssoDomainPattern.MatchString(domain) {
+			return nil, errors.New("valid DNS email domains are required")
+		}
+		if _, duplicate := seen[domain]; duplicate {
+			continue
+		}
+		seen[domain] = struct{}{}
+		normalized = append(normalized, domain)
+	}
+	return normalized, nil
 }
 
 func (s *Server) setLoginStateCookie(w http.ResponseWriter, kind, state string, sameSite http.SameSite) error {

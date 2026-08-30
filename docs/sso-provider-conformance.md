@@ -11,9 +11,12 @@ The OIDC redirect URI is:
 https://dockyard.example.com/v1/auth/sso/callback
 ```
 
-Use `openid profile email` scopes. Dockyard uses the signed `email` claim, or
-the standard `preferred_username` claim when `email` is absent, and still
-requires the resulting address to match an allowed organization domain.
+Use `openid profile email` scopes. Dockyard accepts the signed `email` claim
+only when `email_verified` is explicitly true. When `email` is absent, it can
+use the standard signed `preferred_username` claim for providers such as Entra.
+The resulting address must match an allowed organization domain. Domain
+allowlists accept only normalized DNS names—never wildcards, ports, URL
+components, single-label names, or malformed labels.
 
 ## Microsoft Entra ID
 

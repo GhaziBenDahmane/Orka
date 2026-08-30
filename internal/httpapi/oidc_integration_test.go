@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,26 +140,40 @@ func TestOIDCEmailValidationRejectsMalformedClaims(t *testing.T) {
 }
 
 func TestOIDCIdentityClaimsUseProviderCompatibleEmail(t *testing.T) {
-	verified := true
+	verified, unverified := true, false
 	tests := []struct {
 		name       string
 		claims     oidcIdentityClaims
 		wantEmail  string
 		wantDomain string
-		wantOK     bool
+		wantError  error
 	}{
-		{name: "email", claims: oidcIdentityClaims{Email: "User@Example.Test", PreferredUsername: "other@example.test", EmailVerified: &verified}, wantEmail: "user@example.test", wantDomain: "example.test", wantOK: true},
-		{name: "entra preferred username", claims: oidcIdentityClaims{PreferredUsername: "User@Contoso.com"}, wantEmail: "user@contoso.com", wantDomain: "contoso.com", wantOK: true},
-		{name: "malformed email fails closed", claims: oidcIdentityClaims{Email: "not-an-email", PreferredUsername: "user@example.test"}, wantOK: false},
-		{name: "non-email username", claims: oidcIdentityClaims{PreferredUsername: "shortname"}, wantOK: false},
+		{name: "verified email", claims: oidcIdentityClaims{Email: "User@Example.Test", PreferredUsername: "other@example.test", EmailVerified: &verified}, wantEmail: "user@example.test", wantDomain: "example.test"},
+		{name: "email omits verification", claims: oidcIdentityClaims{Email: "user@example.test"}, wantError: errOIDCEmailUnverified},
+		{name: "email explicitly unverified", claims: oidcIdentityClaims{Email: "user@example.test", EmailVerified: &unverified}, wantError: errOIDCEmailUnverified},
+		{name: "entra preferred username", claims: oidcIdentityClaims{PreferredUsername: "User@Contoso.com"}, wantEmail: "user@contoso.com", wantDomain: "contoso.com"},
+		{name: "malformed email fails closed", claims: oidcIdentityClaims{Email: "not-an-email", PreferredUsername: "user@example.test", EmailVerified: &verified}, wantError: errors.New("invalid")},
+		{name: "non-email username", claims: oidcIdentityClaims{PreferredUsername: "shortname"}, wantError: errors.New("invalid")},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			email, domain, ok := test.claims.loginEmail()
-			if email != test.wantEmail || domain != test.wantDomain || ok != test.wantOK {
-				t.Fatalf("loginEmail() = %q, %q, %v; want %q, %q, %v", email, domain, ok, test.wantEmail, test.wantDomain, test.wantOK)
+			email, domain, err := test.claims.loginEmail()
+			if email != test.wantEmail || domain != test.wantDomain || (test.wantError == nil) != (err == nil) || errors.Is(test.wantError, errOIDCEmailUnverified) != errors.Is(err, errOIDCEmailUnverified) {
+				t.Fatalf("loginEmail() = %q, %q, %v; want %q, %q, %v", email, domain, err, test.wantEmail, test.wantDomain, test.wantError)
 			}
 		})
+	}
+}
+
+func TestNormalizeSSODomains(t *testing.T) {
+	got, err := normalizeSSODomains([]string{" Example.COM ", "example.com", "login.eu.example"})
+	if err != nil || len(got) != 2 || got[0] != "example.com" || got[1] != "login.eu.example" {
+		t.Fatalf("normalized domains=%v err=%v", got, err)
+	}
+	for _, domains := range [][]string{nil, {"localhost"}, {".example.com"}, {"example..com"}, {"-bad.example"}, {"bad_.example"}, {"example.com:443"}, {strings.Repeat("a", 254)}} {
+		if normalized, normalizeErr := normalizeSSODomains(domains); normalizeErr == nil {
+			t.Errorf("accepted invalid domains %q as %q", domains, normalized)
+		}
 	}
 }
 

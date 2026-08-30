@@ -73,12 +73,10 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_metadata", err.Error())
 		return
 	}
-	for i, domain := range in.Domains {
-		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
-		if !strings.Contains(in.Domains[i], ".") {
-			writeError(w, 400, "invalid_domain", "valid email domains are required")
-			return
-		}
+	in.Domains, err = normalizeSSODomains(in.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_domain", err.Error())
+		return
 	}
 	_, certificatePEM, privateKeyPEM, err := newSAMLCertificate(in.Name)
 	if err != nil {
@@ -160,12 +158,10 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
 		return
 	}
-	for i, domain := range in.Domains {
-		in.Domains[i] = strings.ToLower(strings.TrimSpace(domain))
-		if !strings.Contains(in.Domains[i], ".") {
-			writeError(w, 400, "invalid_domain", "valid email domains are required")
-			return
-		}
+	in.Domains, err = normalizeSSODomains(in.Domains)
+	if err != nil {
+		writeError(w, 400, "invalid_domain", err.Error())
+		return
 	}
 	p := principal(r)
 	provider, err := s.Store.UpdateSAMLProvider(r.Context(), p.OrganizationID, store.SAMLProvider{ID: id, Name: in.Name, IDPMetadata: in.MetadataXML, Domains: in.Domains, EmailAttribute: in.EmailAttribute, NameAttribute: in.NameAttribute, DefaultRole: in.DefaultRole, AllowIDPInitiated: in.AllowIDPInitiated})
