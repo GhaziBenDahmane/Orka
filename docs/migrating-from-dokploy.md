@@ -205,11 +205,13 @@ five minutes. Each database must also be running, and each PostgreSQL, MySQL,
 MariaDB, MongoDB, Redis, or libSQL database must have a successful Dokploy
 data-transfer record. Every enabled named-volume policy must be bound to its
 service's Swarm storage node and have a successful encrypted backup created
-after the final import. Trigger those backups explicitly if their next
-scheduled run falls outside the cutover window. Missing targets, stale or
-unhealthy stacks, incomplete backup evidence, and unconverted resources make
-the command exit non-zero. Allow the controller's one-minute reconciler to
-observe newly deployed stacks before running the final verification.
+after the final import. Every enabled imported database-backup policy likewise
+needs a successful encrypted remote backup created after that import. Trigger
+those backups explicitly if their next scheduled run falls outside the cutover
+window. Missing targets, stale or unhealthy stacks, incomplete backup evidence,
+and unconverted resources make the command exit non-zero. Allow the controller's
+one-minute reconciler to observe newly deployed stacks before running the final
+verification.
 
 Some source features deliberately require manual conversion. After completing
 and documenting one, acknowledge its exact parity key explicitly; the entry
