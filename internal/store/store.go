@@ -2566,3 +2566,15 @@ func (s *Store) AuditOrganization(ctx context.Context, organizationID uuid.UUID,
 	b, _ := json.Marshal(metadata)
 	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,NULL,$2,$3,$4,$5,$6)`, organizationID, action, resourceType, resourceID, remoteAddr, b)
 }
+
+// AuditOrganizationTx appends a system-initiated tenant audit event as part of
+// the caller's state transition. It is used when success must never be
+// reported unless both the mutation and its audit record commit together.
+func (s *Store) AuditOrganizationTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, action, resourceType, resourceID, remoteAddr string, metadata any) error {
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,NULL,$2,$3,$4,$5,$6)`, organizationID, action, resourceType, resourceID, remoteAddr, b)
+	return err
+}

@@ -303,6 +303,10 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		scimError(w, 500, "membership cannot be provisioned")
 		return
 	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.user.create", "user", userID.String(), r.RemoteAddr, map[string]any{"active": active}); err != nil {
+		scimError(w, 500, "create failed")
+		return
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		scimError(w, 500, "create failed")
 		return
@@ -363,6 +367,10 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
 		}
 		if err != nil {
+			scimError(w, 500, "delete failed")
+			return
+		}
+		if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.user.delete", "user", userID.String(), r.RemoteAddr, nil); err != nil {
 			scimError(w, 500, "delete failed")
 			return
 		}
@@ -465,6 +473,10 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 			scimError(w, 400, "unsupported patch path")
 			return
 		}
+	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.user.patch", "user", userID.String(), r.RemoteAddr, map[string]any{"operationCount": len(in.Operations)}); err != nil {
+		scimError(w, 500, "patch failed")
+		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		scimError(w, 500, "patch failed")

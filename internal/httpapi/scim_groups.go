@@ -137,6 +137,10 @@ func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID u
 		scimError(w, 400, err.Error())
 		return
 	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.create", "scim_group", id.String(), r.RemoteAddr, map[string]any{"role": in.Role, "memberCount": len(in.Members)}); err != nil {
+		scimError(w, 500, "create failed")
+		return
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		scimError(w, 500, "create failed")
 		return
@@ -274,6 +278,10 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 			return
 		}
 	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.patch", "scim_group", groupID.String(), r.RemoteAddr, map[string]any{"operationCount": len(in.Operations)}); err != nil {
+		scimError(w, 500, "patch failed")
+		return
+	}
 	if err = tx.Commit(r.Context()); err != nil {
 		scimError(w, 500, "patch failed")
 		return
@@ -317,6 +325,10 @@ func (s *Server) deleteSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, 
 			scimError(w, 500, "role reconciliation failed")
 			return
 		}
+	}
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.delete", "scim_group", groupID.String(), r.RemoteAddr, nil); err != nil {
+		scimError(w, 500, "delete failed")
+		return
 	}
 	if err = tx.Commit(r.Context()); err != nil {
 		scimError(w, 500, "delete failed")

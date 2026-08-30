@@ -161,6 +161,11 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 
 	// Organization owners remain outside SCIM deprovisioning authority.
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
+
+	var scimAuditEvents int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.patch','scim.user.delete','scim.group.create','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 9 {
+		t.Fatalf("SCIM audit event count=%d, want 9, err=%v", scimAuditEvents, err)
+	}
 }
 
 func doSCIMRequest(t *testing.T, url, token, method string, body any, wantStatus int) map[string]any {
