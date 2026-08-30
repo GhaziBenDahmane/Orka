@@ -169,7 +169,10 @@ agent upgrades, missed image-verification deadlines, and paused or rolled-back
 Swarm agent updates, plus expiring, expired, or stalled certificate rotations.
 The `dockyard_control_plane_certificate_expiry_seconds` gauges separately track
 the configured agent CA and server certificate; warning alerts begin seven days
-before expiry.
+before expiry. Enabled service-account credentials expose their current token
+expiry by immutable account ID and role; warning alerts begin seven days before
+expiry and become critical once automation or an AI auditor can no longer
+authenticate.
 Route those alerts through Alertmanager to the team's email, Slack, PagerDuty,
 or other incident receiver.
 

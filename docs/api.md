@@ -203,7 +203,9 @@ Once enabled, local-password sessions cannot access that organization except
 for its owner break-glass account.
 Service-account tokens are shown once, stored as hashes, expire within 365
 days, carry an organization role, support atomic rotation, and are attributed
-separately from users in the audit log.
+separately from users in the audit log. Prometheus exposes the remaining
+lifetime of each enabled account's current token using immutable organization
+and account IDs so operators can rotate consuming secrets before expiry.
 Audit exports are ordered by immutable event ID. Each response includes
 `X-Content-SHA256` for offline verification and `X-Next-After-ID` for resumable
 pagination. The default retention is 365 days; configured policies are pruned

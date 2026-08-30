@@ -192,3 +192,20 @@ groups:
         annotations:
           summary: A Dockyard control-plane certificate expired
           description: The {{ $labels.certificate }} certificate is expired and remote agent authentication is impaired.
+
+      - alert: DockyardServiceAccountTokenExpiring
+        expr: dockyard_service_account_token_expiry_seconds > 0 and dockyard_service_account_token_expiry_seconds < 604800
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard service-account token is approaching expiry
+          description: Service account {{ $labels.account }} ({{ $labels.role }}) expires in less than seven days; rotate its token and update the consuming secret.
+
+      - alert: DockyardServiceAccountTokenExpired
+        expr: dockyard_service_account_token_expiry_seconds <= 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A Dockyard service-account token expired
+          description: Service account {{ $labels.account }} ({{ $labels.role }}) can no longer authenticate; rotate its token or disable the identity.
