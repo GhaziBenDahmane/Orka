@@ -378,6 +378,9 @@ until an administrator retries them.
 | GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup); revisions cannot remove a named volume while its backup policy exists, and deletion rejects active deployment, migration, backup, or restore work |
+| GET/POST | `/v1/tags` | List reusable organization-scoped tags or create one as an administrator |
+| GET/PUT/DELETE | `/v1/tags/{id}` | Read or administratively rename/recolor/delete a tag; deletion removes all assignments |
+| GET/PUT | `/v1/services/{id}/tags` | Read or atomically replace a service's complete tag set (maximum 32) |
 | PUT | `/v1/services/{id}/source` | Configure a Git or uploaded-ZIP application build, registry target, build mode, credentials, arguments, secrets, and submodules |
 | PUT | `/v1/services/{id}/artifact-source` | Upload or replace an encrypted ZIP source (25 MiB compressed / 250 MiB expanded limits) |
 | POST | `/v1/services/{id}/routes` | Add a Traefik route with optional path rewriting and regex redirect |

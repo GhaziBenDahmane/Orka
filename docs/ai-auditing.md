@@ -36,6 +36,9 @@ keys make it a privileged service.
 - Core inventory, route, and workload-provenance projections use a fixed
   number of tenant-scoped queries rather than querying once per project,
   environment, or service, so audit database load scales with returned rows.
+- Service inventory includes organization-authored tag names for operational
+  grouping. Tag colors and assignment timestamps are excluded from the model
+  boundary.
 - Desired Compose and the latest successful effective runtime snapshot are
   reduced to per-workload counts: total containers, digest-pinned images,
   mutable image references, build-only services, and services missing both

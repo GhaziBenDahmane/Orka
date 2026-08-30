@@ -202,6 +202,7 @@ type ComposeService struct {
 	EncryptedEnv  string    `json:"-"`
 	Revision      int64     `json:"revision"`
 	DesiredState  string    `json:"desiredState"`
+	Tags          []Tag     `json:"tags"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
@@ -1146,6 +1147,7 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 	}
 	service.Revision = 1
 	service.DesiredState = "running"
+	service.Tags = []Tag{}
 	err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
@@ -1183,7 +1185,11 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 	if err != nil {
 		return ComposeService{}, err
 	}
-	return service, tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	service.Tags, err = s.ListServiceTags(ctx, organizationID, id)
+	return service, err
 }
 
 func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid.UUID, source ApplicationSource) (ApplicationSource, error) {
@@ -1367,6 +1373,10 @@ func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.U
 	if err != nil {
 		return ComposeService{}, nil, err
 	}
+	v.Tags, err = s.ListServiceTags(ctx, organizationID, id)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
 	rows, err := s.Pool.Query(ctx, `SELECT id,compose_service_id,service_name,host,path_prefix,internal_path,strip_path,NOT enabled,redirect_regex,redirect_replacement,redirect_permanent,target_port,tls,certificate_resolver,created_at,updated_at FROM routes WHERE compose_service_id=$1 ORDER BY host,path_prefix`, id)
 	if err != nil {
 		return ComposeService{}, nil, err
@@ -1398,7 +1408,37 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return items, nil
+	}
+	byID := make(map[uuid.UUID]*ComposeService, len(items))
+	serviceIDs := make([]uuid.UUID, 0, len(items))
+	for index := range items {
+		items[index].Tags = []Tag{}
+		byID[items[index].ID] = &items[index]
+		serviceIDs = append(serviceIDs, items[index].ID)
+	}
+	tagRows, err := s.Pool.Query(ctx, `SELECT st.compose_service_id,t.id,t.organization_id,t.name,t.color,t.created_at,t.updated_at
+		FROM compose_service_tags st JOIN tags t ON t.id=st.tag_id
+		WHERE st.compose_service_id=ANY($1::uuid[]) AND t.organization_id=$2 ORDER BY lower(t.name),t.id`, serviceIDs, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer tagRows.Close()
+	for tagRows.Next() {
+		var serviceID uuid.UUID
+		var tag Tag
+		if err = tagRows.Scan(&serviceID, &tag.ID, &tag.OrganizationID, &tag.Name, &tag.Color, &tag.CreatedAt, &tag.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if service := byID[serviceID]; service != nil {
+			service.Tags = append(service.Tags, tag)
+		}
+	}
+	return items, tagRows.Err()
 }
 
 func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route) (Route, error) {
@@ -2687,6 +2727,7 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 	}
 	service.Revision = 1
 	service.DesiredState = "running"
+	service.Tags = []Tag{}
 	if err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv).Scan(&service.CreatedAt, &service.UpdatedAt); err != nil {
 		return ComposeService{}, nil, err
 	}

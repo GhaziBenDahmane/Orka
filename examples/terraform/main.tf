@@ -204,6 +204,21 @@ resource "dockyard_service" "whoami" {
   YAML
 }
 
+resource "dockyard_tag" "production" {
+  name  = "Production"
+  color = "#DC2626"
+}
+
+resource "dockyard_tag" "frontend" {
+  name  = "Frontend"
+  color = "#2563EB"
+}
+
+resource "dockyard_service_tags" "whoami" {
+  service_id = dockyard_service.whoami.id
+  tag_ids     = [dockyard_tag.production.id, dockyard_tag.frontend.id]
+}
+
 resource "dockyard_deploy_token" "whoami_ci" {
   service_id        = dockyard_service.whoami.id
   name              = "Whoami CI"

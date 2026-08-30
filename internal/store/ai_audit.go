@@ -95,6 +95,7 @@ type AIAuditServiceInfo struct {
 	StorageNodeID string    `json:"storageNodeId,omitempty"`
 	Revision      int64     `json:"revision"`
 	DesiredState  string    `json:"desiredState"`
+	Tags          []string  `json:"tags"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
@@ -601,7 +602,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	rows.Close()
 
 	rows, err = s.Pool.Query(ctx, `SELECT service.id,service.environment_id,service.name,service.slug,service.stack_name,service.storage_node_id,
-		service.revision,service.desired_state,service.created_at,service.updated_at,service.compose_yaml,runtime.id IS NOT NULL,COALESCE(runtime.effective_compose,'')
+		service.revision,service.desired_state,ARRAY(SELECT tag.name FROM compose_service_tags assignment JOIN tags tag ON tag.id=assignment.tag_id WHERE assignment.compose_service_id=service.id ORDER BY lower(tag.name),tag.id),service.created_at,service.updated_at,service.compose_yaml,runtime.id IS NOT NULL,COALESCE(runtime.effective_compose,'')
 		FROM compose_services service
 		JOIN environments environment ON environment.id=service.environment_id
 		JOIN projects project ON project.id=environment.project_id
@@ -621,7 +622,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 		var item AIAuditServiceInfo
 		var composeYAML, runtimeCompose string
 		var successfulDeployment bool
-		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.DesiredState, &item.CreatedAt, &item.UpdatedAt, &composeYAML, &successfulDeployment, &runtimeCompose); err != nil {
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.DesiredState, &item.Tags, &item.CreatedAt, &item.UpdatedAt, &composeYAML, &successfulDeployment, &runtimeCompose); err != nil {
 			rows.Close()
 			return err
 		}
