@@ -133,20 +133,11 @@ func (s *Store) DeleteVolumeBackupPolicy(ctx context.Context, organizationID, se
 		return err
 	}
 	var busy bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(
-		SELECT 1
-		FROM volume_backups backup
-		LEFT JOIN jobs job ON job.kind='backup.volume' AND job.payload->>'backupId'=backup.id::text
-		WHERE backup.compose_service_id=$1 AND backup.volume_name=$2
-			AND (backup.status IN ('queued','running') OR job.status IN ('pending','running'))
-		UNION ALL
-		SELECT 1
-		FROM volume_restores restore
-		JOIN volume_backups backup ON backup.id=restore.volume_backup_id
-		LEFT JOIN jobs job ON job.kind='restore.volume' AND job.payload->>'restoreId'=restore.id::text
-		WHERE backup.compose_service_id=$1 AND backup.volume_name=$2
-			AND (restore.status IN ('queued','running') OR job.status IN ('pending','running'))
-	)`, serviceID, volumeName).Scan(&busy)
+	err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=$1 AND backup.volume_name=$2 AND backup.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=$1 AND backup.volume_name=$2 AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM jobs job JOIN volume_backups backup ON job.payload->>'backupId'=backup.id::text WHERE job.resource_key=$3 AND job.kind='backup.volume' AND job.status IN ('pending','running') AND backup.compose_service_id=$1 AND backup.volume_name=$2)
+		OR EXISTS(SELECT 1 FROM jobs job JOIN volume_restores restore ON job.payload->>'restoreId'=restore.id::text JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE job.resource_key=$3 AND job.kind='restore.volume' AND job.status IN ('pending','running') AND backup.compose_service_id=$1 AND backup.volume_name=$2)`, serviceID, volumeName, "service:"+serviceID.String()).Scan(&busy)
 	if err != nil {
 		return err
 	}
