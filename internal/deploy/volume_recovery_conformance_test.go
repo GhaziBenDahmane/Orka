@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 )
@@ -44,7 +45,7 @@ type volumeRecoveryEvidence struct {
 }
 
 func (e volumeRecoveryEvidence) validate() error {
-	if e.Status != "passed" || !pinnedRuntimeImage.MatchString(e.Image) || e.ArtifactBytes <= 0 || !artifactSHA256.MatchString(e.EncryptedSHA256) || !artifactSHA256.MatchString(e.PlaintextSHA256) || e.BackupSeconds < 0 || e.RTOSeconds < 0 {
+	if e.Status != "passed" || !ociref.IsDigestPinned(e.Image) || e.ArtifactBytes <= 0 || !artifactSHA256.MatchString(e.EncryptedSHA256) || !artifactSHA256.MatchString(e.PlaintextSHA256) || e.BackupSeconds < 0 || e.RTOSeconds < 0 {
 		return errors.New("invalid named-volume recovery evidence identity or measurements")
 	}
 	if !e.BackupQuiesced || !e.RestoreQuiesced || !e.EncryptedArtifactVerified || !e.CorruptionReplaced || !e.PermissionsVerified || !e.SymlinkVerified || !e.WorkloadResumed || !e.RestartVerified {
@@ -62,7 +63,7 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 		t.Skip("set DOCKYARD_TEST_VOLUME_RECOVERY=1 to run named-volume recovery conformance")
 	}
 	helperImage := strings.TrimSpace(os.Getenv("DOCKYARD_TEST_VOLUME_HELPER_IMAGE"))
-	if !pinnedRuntimeImage.MatchString(helperImage) {
+	if !ociref.IsDigestPinned(helperImage) {
 		t.Fatal("DOCKYARD_TEST_VOLUME_HELPER_IMAGE must be an immutable sha256 image reference")
 	}
 	if _, err := exec.LookPath("docker"); err != nil {

@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 )
 
-var pinnedRuntimeImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 var artifactSHA256 = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type VolumeArtifactJob struct {
@@ -70,7 +70,7 @@ func (s Swarm) RunVolumeArtifact(ctx context.Context, job VolumeArtifactJob) (re
 	if err != nil {
 		return result, fmt.Errorf("inspect volume helper image: %w", err)
 	}
-	if !pinnedRuntimeImage.MatchString(image) {
+	if !ociref.IsDigestPinned(image) {
 		return result, errors.New("volume artifact helper image is not pinned by sha256 digest")
 	}
 	var scaled map[string]int

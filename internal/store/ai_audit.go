@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,7 +23,6 @@ const MaxAIAuditFindingsPerRun = 100
 
 var ErrAIAuditFindingLimit = errors.New("AI audit run finding limit reached")
 
-var aiAuditDigestImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 var aiAuditGitCommit = regexp.MustCompile(`^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$`)
 
 type AIAuditSnapshot struct {
@@ -689,7 +689,7 @@ func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWork
 			if !valid || strings.TrimSpace(imageName) == "" {
 				return posture
 			}
-			if aiAuditDigestImage.MatchString(strings.TrimSpace(imageName)) {
+			if ociref.IsDigestPinned(strings.TrimSpace(imageName)) {
 				posture.DigestPinnedImages++
 			} else {
 				posture.MutableImages++

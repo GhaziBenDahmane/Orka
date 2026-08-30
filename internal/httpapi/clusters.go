@@ -10,7 +10,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,12 +19,11 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/observability"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
-
-var pinnedAgentImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 type clusterContextKey string
 
@@ -359,7 +357,7 @@ func (s *Server) upgradeClusterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Image = strings.TrimSpace(input.Image)
-	if !pinnedAgentImagePattern.MatchString(input.Image) {
+	if !ociref.IsDigestPinned(input.Image) {
 		writeError(w, http.StatusBadRequest, "invalid_image", "agent image must use repository@sha256:digest form")
 		return
 	}

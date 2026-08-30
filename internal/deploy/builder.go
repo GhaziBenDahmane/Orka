@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -41,10 +42,8 @@ type BuildCredentials struct {
 }
 
 var safeRef = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
-var registryPathComponent = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
 var buildSettingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 var buildTargetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256:[a-f0-9]{64}$`)
 
 const (
 	maxGitRepositoryURLBytes  = 16 << 10
@@ -143,7 +142,7 @@ func ValidateBuildpackBuilder(buildType, builder string) error {
 	if buildType != "buildpacks" && buildType != "heroku_buildpacks" {
 		return errors.New("custom builder images are only supported for buildpack builds")
 	}
-	if !pinnedImage.MatchString(builder) {
+	if !ociref.IsDigestPinned(builder) {
 		return errors.New("custom buildpack builder image must be pinned by sha256 digest")
 	}
 	return nil
@@ -465,7 +464,7 @@ func (b Builder) buildRailpack(ctx context.Context, contextPath, tag string, dep
 	if frontend == "" {
 		frontend = defaultRailpackFrontend
 	}
-	if !pinnedImage.MatchString(frontend) {
+	if !ociref.IsDigestPinned(frontend) {
 		return "", errors.New("Railpack frontend image must be pinned by sha256 digest")
 	}
 	plan, err := os.CreateTemp("", "dockyard-railpack-plan-*.json")
@@ -526,7 +525,7 @@ func (b Builder) buildBuildpacks(ctx context.Context, contextPath, tag, configur
 	if builder == "" {
 		builder = defaultBuilder
 	}
-	if !pinnedImage.MatchString(builder) {
+	if !ociref.IsDigestPinned(builder) {
 		return "", errors.New("buildpack builder image must be pinned by sha256 digest")
 	}
 	buildEnvironment := make(map[string]string, len(environment)+len(buildArguments))
@@ -588,7 +587,7 @@ func (b Builder) buildStatic(ctx context.Context, contextPath, outputDirectory, 
 	if image == "" {
 		image = defaultStaticImage
 	}
-	if !pinnedImage.MatchString(image) {
+	if !ociref.IsDigestPinned(image) {
 		return "", errors.New("static runtime image must be pinned by sha256 digest")
 	}
 	dockerfile, err := os.CreateTemp("", "dockyard-static-*.Dockerfile")
@@ -741,36 +740,18 @@ func writeDockerConfig(credential Credential) (string, error) {
 }
 
 func ValidateRegistryImage(image string) error {
-	if image == "" || image != strings.TrimSpace(image) || len(image) > 255 || strings.ContainsAny(image, "@\x00\r\n") {
+	if _, err := ociref.ParseRepository(image); err != nil {
 		return errors.New("invalid registry image")
-	}
-	registry, repository := splitRegistryImage(image)
-	if repository == "" {
-		return errors.New("invalid registry image")
-	}
-	endpoint, err := url.Parse("https://" + registry)
-	if err != nil || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" || !netpolicy.ValidURLHost(endpoint) {
-		return errors.New("invalid registry image")
-	}
-	for _, component := range strings.Split(repository, "/") {
-		if len(component) > 255 || !registryPathComponent.MatchString(component) {
-			return errors.New("invalid registry image")
-		}
 	}
 	return nil
 }
 
 func RegistryHost(image string) string {
-	registry, _ := splitRegistryImage(image)
-	return strings.ToLower(registry)
-}
-
-func splitRegistryImage(image string) (string, string) {
-	first, rest, hasSlash := strings.Cut(image, "/")
-	if hasSlash && (strings.ContainsAny(first, ".:") || strings.EqualFold(first, "localhost") || strings.HasPrefix(first, "[")) {
-		return first, rest
+	reference, err := ociref.ParseRepository(image)
+	if err != nil {
+		return ""
 	}
-	return "docker.io", image
+	return reference.Registry
 }
 func (b Builder) git() string {
 	if b.GitBin == "" {

@@ -32,6 +32,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/google/uuid"
 )
 
@@ -727,7 +728,7 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		encoded, _ := json.Marshal(result)
 		return string(encoded), err
 	case "agent.upgrade":
-		if !digestImagePattern.MatchString(payload.Image) {
+		if !ociref.IsDigestPinned(payload.Image) {
 			return "", errors.New("agent upgrade image must be pinned by sha256 digest")
 		}
 		output, err := boundedAgentCommandOutput(ctx, c.cfg.DockerBin, "service", "update", "--detach=true", "--update-order", "start-first", "--with-registry-auth", "--image", payload.Image, c.cfg.ServiceName)
@@ -741,7 +742,6 @@ var (
 	serviceNamePattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 	endpointHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
 )
-var digestImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 const maxAgentDockerOutputBytes = deploy.MaxRemoteCommandOutputBytes
 

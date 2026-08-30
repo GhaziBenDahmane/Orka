@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/database"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"gopkg.in/yaml.v3"
 )
 
@@ -235,7 +236,7 @@ func ApplyResolvedImages(compose string, images map[string]string) (string, erro
 		if !found {
 			image = original
 		}
-		if !pinnedImage.MatchString(image) {
+		if !ociref.IsDigestPinned(image) {
 			return "", fmt.Errorf("inspect deployed images: service %q image is not digest-pinned", name)
 		}
 		if image != original {
