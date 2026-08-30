@@ -127,13 +127,17 @@ User `externalId` values are preserved, unique within an organization, and can
 be resolved with an `externalId eq` filter for stable directory correlation.
 Group `displayName` and `externalId` filters are supported as well; group names
 are limited to 120 bytes, external IDs to 1024 bytes, and each membership
-mutation to 1000 users.
+mutation and resulting persisted group to 1000 users. Group mutations are
+serialized per group so concurrent additive patches cannot bypass that bound.
 SCIM create requests accept extension attributes within the normal bounded request body;
 unsupported attributes are ignored so standard Entra and Okta user payloads do
 not fail solely because they include optional schema fields.
 User PATCH supports explicit paths and the standard pathless `replace` object
 for `userName`, `displayName`, `externalId`, and `active`; shared global
 identities cannot have tenant-owned profile fields changed across organizations.
+Group PATCH likewise accepts pathless `replace` objects containing
+`displayName`, `externalId`, `role`, and `members`. PATCH requests are limited
+to 100 effective operations after pathless objects are expanded.
 User and group `PUT` requests perform full resource replacement, including
 group membership reconciliation, while preserving a group's internal role when
 the identity provider omits that Orka-specific attribute.

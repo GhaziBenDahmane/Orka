@@ -23,6 +23,7 @@ import (
 const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
 
 const scimMaxPageSize = 100
+const scimMaxPatchOperations = 100
 
 type scimUserResponse struct {
 	Schemas     []string          `json:"schemas"`
@@ -682,6 +683,9 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 }
 
 func normalizeSCIMUserPatchOperations(input []scimUserPatchOperation) ([]scimUserPatchOperation, error) {
+	if len(input) > scimMaxPatchOperations {
+		return nil, errors.New("patch request exceeds 100 operations")
+	}
 	result := make([]scimUserPatchOperation, 0, len(input))
 	for _, operation := range input {
 		if !strings.EqualFold(operation.Op, "replace") {
@@ -717,6 +721,9 @@ func normalizeSCIMUserPatchOperations(input []scimUserPatchOperation) ([]scimUse
 	}
 	if len(result) == 0 {
 		return nil, errors.New("at least one patch operation is required")
+	}
+	if len(result) > scimMaxPatchOperations {
+		return nil, errors.New("patch request exceeds 100 expanded operations")
 	}
 	return result, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -37,6 +38,12 @@ type scimGroupInput struct {
 	DisplayName string       `json:"displayName"`
 	Role        string       `json:"role"`
 	Members     []scimMember `json:"members"`
+}
+
+type scimGroupPatchOperation struct {
+	Op    string          `json:"op"`
+	Path  string          `json:"path"`
+	Value json.RawMessage `json:"value"`
 }
 
 func (s *Server) scimGroups(w http.ResponseWriter, r *http.Request) {
@@ -274,13 +281,14 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 
 func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, groupID uuid.UUID) {
 	var in struct {
-		Operations []struct {
-			Op    string          `json:"op"`
-			Path  string          `json:"path"`
-			Value json.RawMessage `json:"value"`
-		} `json:"Operations"`
+		Operations []scimGroupPatchOperation `json:"Operations"`
 	}
 	if !decodeSCIM(w, r, &in) {
+		return
+	}
+	operations, err := normalizeSCIMGroupPatchOperations(in.Operations)
+	if err != nil {
+		scimError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	tx, err := s.Store.Pool.Begin(r.Context())
@@ -289,16 +297,15 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var exists bool
-	if err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM scim_groups WHERE id=$1 AND organization_id=$2)`, groupID, orgID).Scan(&exists); err != nil {
+	var lockedGroupID uuid.UUID
+	if err = tx.QueryRow(r.Context(), `SELECT id FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&lockedGroupID); errors.Is(err, pgx.ErrNoRows) {
+		scimError(w, 404, "group not found")
+		return
+	} else if err != nil {
 		scimError(w, 500, "patch failed")
 		return
 	}
-	if !exists {
-		scimError(w, 404, "group not found")
-		return
-	}
-	for _, op := range in.Operations {
+	for _, op := range operations {
 		path := strings.TrimSpace(op.Path)
 		if strings.EqualFold(path, "displayName") && strings.EqualFold(op.Op, "replace") {
 			var name string
@@ -406,7 +413,7 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 			return
 		}
 	}
-	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.patch", "scim_group", groupID.String(), r.RemoteAddr, map[string]any{"operationCount": len(in.Operations)}); err != nil {
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.patch", "scim_group", groupID.String(), r.RemoteAddr, map[string]any{"operationCount": len(operations)}); err != nil {
 		scimError(w, 500, "patch failed")
 		return
 	}
@@ -415,6 +422,52 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func normalizeSCIMGroupPatchOperations(input []scimGroupPatchOperation) ([]scimGroupPatchOperation, error) {
+	if len(input) == 0 {
+		return nil, errors.New("at least one patch operation is required")
+	}
+	if len(input) > scimMaxPatchOperations {
+		return nil, errors.New("patch request exceeds 100 operations")
+	}
+	result := make([]scimGroupPatchOperation, 0, len(input))
+	for _, operation := range input {
+		operation.Path = strings.TrimSpace(operation.Path)
+		if operation.Path != "" {
+			result = append(result, operation)
+			continue
+		}
+		if !strings.EqualFold(operation.Op, "replace") {
+			return nil, errors.New("a pathless group operation must use replace")
+		}
+		var attributes map[string]json.RawMessage
+		if err := json.Unmarshal(operation.Value, &attributes); err != nil || len(attributes) == 0 {
+			return nil, errors.New("a pathless replace operation must contain attributes")
+		}
+		normalized := make(map[string]json.RawMessage, len(attributes))
+		for name, value := range attributes {
+			key := strings.ToLower(strings.TrimSpace(name))
+			switch key {
+			case "displayname", "externalid", "role", "members":
+			default:
+				return nil, fmt.Errorf("unsupported patch attribute %q", name)
+			}
+			if _, duplicate := normalized[key]; duplicate {
+				return nil, fmt.Errorf("duplicate patch attribute %q", name)
+			}
+			normalized[key] = value
+		}
+		for _, key := range []string{"displayname", "externalid", "role", "members"} {
+			if value, exists := normalized[key]; exists {
+				result = append(result, scimGroupPatchOperation{Op: "replace", Path: key, Value: value})
+			}
+		}
+	}
+	if len(result) > scimMaxPatchOperations {
+		return nil, errors.New("patch request exceeds 100 expanded operations")
+	}
+	return result, nil
 }
 
 func decodeSCIMMembers(raw json.RawMessage) ([]scimMember, error) {
@@ -534,6 +587,13 @@ func addSCIMMembers(ctx context.Context, tx pgx.Tx, orgID, groupID uuid.UUID, me
 		if err = reconcileSCIMRole(ctx, tx, orgID, userID); err != nil {
 			return err
 		}
+	}
+	var persistedCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM scim_group_members WHERE group_id=$1`, groupID).Scan(&persistedCount); err != nil {
+		return err
+	}
+	if persistedCount > scimMaxGroupMembers {
+		return errors.New("group membership exceeds 1000 users")
 	}
 	return nil
 }

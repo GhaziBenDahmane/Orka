@@ -165,12 +165,13 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	}
 	groupExternalID = replacedGroupExternalID
 	updatedGroupExternalID := "updated-" + groupExternalID
-	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "externalId", "value": updatedGroupExternalID}}}, http.StatusNoContent)
+	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "value": map[string]any{
+		"displayName": "Runtime Engineering", "externalId": updatedGroupExternalID, "role": "developer", "members": []map[string]string{{"value": memberID}},
+	}}}}, http.StatusNoContent)
 	groupMatch = doSCIMRequest(t, server.URL+`/scim/v2/Groups?filter=externalId%20eq%20%22`+updatedGroupExternalID+`%22`, token, http.MethodGet, nil, http.StatusOK)
 	if groupMatch["totalResults"] != float64(1) {
 		t.Fatalf("updated group externalId cannot be resolved: %#v", groupMatch)
 	}
-	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "role", "value": "developer"}}}, http.StatusNoContent)
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": strings.Repeat("x", 121)}}}, http.StatusBadRequest)
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, memberID).Scan(&role); err != nil || role != "developer" {
 		t.Fatalf("updated group role = %q, err = %v", role, err)
@@ -224,8 +225,73 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
 
 	var scimAuditEvents int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 14 {
-		t.Fatalf("SCIM audit event count=%d, want 14, err=%v", scimAuditEvents, err)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 13 {
+		t.Fatalf("SCIM audit event count=%d, want 13, err=%v", scimAuditEvents, err)
+	}
+}
+
+func TestSCIMGroupAddEnforcesPersistedMemberLimit(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	orgID, groupID := uuid.New(), uuid.New()
+	token := "group-limit-" + uuid.NewString()
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SCIM group limit',$2)`, orgID, "scim-group-limit-"+orgID.String()); err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash)
+			SELECT md5(($1::uuid)::text||':'||n::text)::uuid,n::text||'-'||($1::uuid)::text||'@scim-limit.example.test','!test'
+			FROM generate_series(1,$2) AS n`, orgID, scimMaxGroupMembers+1)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role)
+			SELECT $1::uuid,md5(($1::uuid)::text||':'||n::text)::uuid,'viewer' FROM generate_series(1,$2) AS n`, orgID, scimMaxGroupMembers+1)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO scim_groups(id,organization_id,display_name,role) VALUES($1,$2,'Bounded group','viewer')`, groupID, orgID)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO scim_group_members(group_id,user_id)
+			SELECT $1::uuid,md5(($2::uuid)::text||':'||n::text)::uuid FROM generate_series(1,$3) AS n`, groupID, orgID, scimMaxGroupMembers)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role) VALUES($1,$2,'group-limit',$3,'viewer')`, uuid.New(), orgID, cryptox.Digest(token))
+	}
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, orgID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE email LIKE $1`, "%-"+orgID.String()+"@scim-limit.example.test")
+	})
+
+	var extraUserID uuid.UUID
+	if err = db.Pool.QueryRow(ctx, `SELECT md5(($1::uuid)::text||':'||($2::int)::text)::uuid`, orgID, scimMaxGroupMembers+1).Scan(&extraUserID); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer((&Server{Store: db, PublicURL: "http://example.test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
+	defer server.Close()
+	doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID.String(), token, http.MethodPatch, map[string]any{
+		"Operations": []map[string]any{{"op": "add", "path": "members", "value": []map[string]string{{"value": extraUserID.String()}}}},
+	}, http.StatusBadRequest)
+	var persistedCount int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM scim_group_members WHERE group_id=$1`, groupID).Scan(&persistedCount); err != nil || persistedCount != scimMaxGroupMembers {
+		t.Fatalf("persisted group member count=%d, want %d, err=%v", persistedCount, scimMaxGroupMembers, err)
 	}
 }
 

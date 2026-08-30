@@ -112,6 +112,13 @@ func TestNormalizeSCIMUserPatchOperations(t *testing.T) {
 	if _, err = normalizeSCIMUserPatchOperations([]scimUserPatchOperation{{Op: "replace", Value: map[string]any{"unknown": "value"}}}); err == nil {
 		t.Fatal("unsupported pathless attribute was accepted")
 	}
+	tooManyUserOperations := make([]scimUserPatchOperation, scimMaxPatchOperations+1)
+	for index := range tooManyUserOperations {
+		tooManyUserOperations[index] = scimUserPatchOperation{Op: "replace", Path: "active", Value: true}
+	}
+	if _, err = normalizeSCIMUserPatchOperations(tooManyUserOperations); err == nil {
+		t.Fatal("oversized user patch operation list was accepted")
+	}
 }
 
 func TestDecodeSCIMMembersEnforcesBatchLimit(t *testing.T) {
@@ -122,5 +129,54 @@ func TestDecodeSCIMMembersEnforcesBatchLimit(t *testing.T) {
 	}
 	if _, err = decodeSCIMMembers(encoded); err == nil {
 		t.Fatal("oversized SCIM member batch was accepted")
+	}
+}
+
+func TestNormalizeSCIMGroupPatchOperationsExpandsPathlessReplace(t *testing.T) {
+	operations, err := normalizeSCIMGroupPatchOperations([]scimGroupPatchOperation{{
+		Op: "replace",
+		Value: json.RawMessage(`{
+			"members":[{"value":"00000000-0000-0000-0000-000000000001"}],
+			"externalId":"directory-group",
+			"displayName":"Platform",
+			"role":"developer"
+		}`),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"displayname", "externalid", "role", "members"}
+	if len(operations) != len(wantPaths) {
+		t.Fatalf("operation count=%d, want %d", len(operations), len(wantPaths))
+	}
+	for index, want := range wantPaths {
+		if operations[index].Path != want || operations[index].Op != "replace" {
+			t.Errorf("operation %d=%#v, want replace %s", index, operations[index], want)
+		}
+	}
+	for name, input := range map[string][]scimGroupPatchOperation{
+		"empty":        nil,
+		"pathless add": {{Op: "add", Value: json.RawMessage(`{"members":[]}`)}},
+		"unknown":      {{Op: "replace", Value: json.RawMessage(`{"unknown":true}`)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, normalizeErr := normalizeSCIMGroupPatchOperations(input); normalizeErr == nil {
+				t.Fatal("invalid group patch was accepted")
+			}
+		})
+	}
+	tooManyGroupOperations := make([]scimGroupPatchOperation, scimMaxPatchOperations+1)
+	for index := range tooManyGroupOperations {
+		tooManyGroupOperations[index] = scimGroupPatchOperation{Op: "replace", Path: "displayName", Value: json.RawMessage(`"Platform"`)}
+	}
+	if _, err = normalizeSCIMGroupPatchOperations(tooManyGroupOperations); err == nil {
+		t.Fatal("oversized group patch operation list was accepted")
+	}
+	expandedGroupOperations := make([]scimGroupPatchOperation, scimMaxPatchOperations/4+1)
+	for index := range expandedGroupOperations {
+		expandedGroupOperations[index] = scimGroupPatchOperation{Op: "replace", Value: json.RawMessage(`{"displayName":"Platform","externalId":"directory","role":"viewer","members":[]}`)}
+	}
+	if _, err = normalizeSCIMGroupPatchOperations(expandedGroupOperations); err == nil {
+		t.Fatal("oversized expanded group patch operation list was accepted")
 	}
 }
