@@ -13,6 +13,14 @@ func TestCommandRequestMappings(t *testing.T) {
 		path   string
 	}{
 		{[]string{"projects"}, http.MethodGet, "/v1/projects"},
+		{[]string{"service-accounts"}, http.MethodGet, "/v1/service-accounts"},
+		{[]string{"create-service-account", `{}`}, http.MethodPost, "/v1/service-accounts"},
+		{[]string{"rotate-service-account", "account-id", `{}`}, http.MethodPost, "/v1/service-accounts/account-id/rotate"},
+		{[]string{"disable-service-account", "account-id"}, http.MethodDelete, "/v1/service-accounts/account-id"},
+		{[]string{"ai-audit-runs"}, http.MethodGet, "/v1/ai/audit-runs"},
+		{[]string{"ai-audit-findings"}, http.MethodGet, "/v1/ai/audit-findings"},
+		{[]string{"ai-audit-run-findings", "run-id"}, http.MethodGet, "/v1/ai/audit-runs/run-id/findings"},
+		{[]string{"triage-ai-audit-finding", "finding-id", `{}`}, http.MethodPatch, "/v1/ai/audit-findings/finding-id"},
 		{[]string{"environments", "project-id"}, http.MethodGet, "/v1/projects/project-id/environments"},
 		{[]string{"deploy", "service-id"}, http.MethodPost, "/v1/services/service-id/deployments"},
 		{[]string{"database-engines"}, http.MethodGet, "/v1/database-engines"},
@@ -151,6 +159,25 @@ func TestTemplateRepositoryCommandBodies(t *testing.T) {
 	repository = input.(map[string]any)
 	if repository["requireSignature"] != true || repository["syncIntervalSeconds"] != float64(3600) {
 		t.Fatalf("repository input=%#v", repository)
+	}
+}
+
+func TestAIAuditAdministrationCommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-service-account", "-"}, strings.NewReader(`{"name":"security-auditor","role":"auditor","expiresInDays":30}`))
+	if err != nil || method != http.MethodPost || path != "/v1/service-accounts" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	account := input.(map[string]any)
+	if account["role"] != "auditor" || account["expiresInDays"] != float64(30) {
+		t.Fatalf("service account input=%#v", account)
+	}
+	method, path, input, err = commandRequest([]string{"triage-ai-audit-finding", "finding-id", `{"disposition":"acknowledged","note":"investigating"}`}, strings.NewReader(""))
+	if err != nil || method != http.MethodPatch || path != "/v1/ai/audit-findings/finding-id" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	triage := input.(map[string]any)
+	if triage["disposition"] != "acknowledged" || triage["note"] != "investigating" {
+		t.Fatalf("triage input=%#v", triage)
 	}
 }
 

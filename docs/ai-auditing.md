@@ -180,6 +180,23 @@ The 9Router service is deliberately not published outside the overlay network;
 perform initial provider setup through a temporary authenticated tunnel or a
 separately protected administration route.
 
+Before deploying the recurring services, validate the exact control-plane
+token, gateway, model, and network path with a single fail-fast run:
+
+```sh
+docker run --rm --read-only \
+  -e DOCKYARD_CONTROL_PLANE_URL \
+  -e DOCKYARD_AI_AUDITOR_TOKEN \
+  -e DOCKYARD_AI_BASE_URL \
+  -e DOCKYARD_AI_API_KEY \
+  -e DOCKYARD_AI_MODEL \
+  registry.example/dockyard@sha256:... ai-auditor --once
+```
+
+The command exits non-zero if snapshot retrieval, model inference, finding
+persistence, or run finalization fails. The default recurring mode continues
+to record failures and retries on its configured interval.
+
 ## Agent API lifecycle
 
 1. Fetch `GET /v1/ai/audit-snapshot`.
@@ -191,6 +208,14 @@ separately protected administration route.
 
 This contract lets Hermes or another agent replace the built-in runner without
 changing the platform boundary.
+
+Administrators can automate identity and finding lifecycle without raw HTTP:
+`dockyardctl create-service-account JSON` (use role `auditor`),
+`service-accounts`, `rotate-service-account ID JSON`,
+`disable-service-account ID`, `ai-audit-runs`, `ai-audit-findings`,
+`ai-audit-run-findings RUN_ID`, and `triage-ai-audit-finding FINDING_ID JSON`.
+Use `-` instead of JSON to keep one-time credentials and triage notes out of
+shell history.
 
 ## Operational visibility
 

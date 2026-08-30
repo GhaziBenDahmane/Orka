@@ -47,7 +47,7 @@ func main() {
 	case "agent":
 		err = runAgent()
 	case "ai-auditor":
-		err = runAIAuditor()
+		err = runAIAuditor(os.Args[2:])
 	case "import-dokploy-templates":
 		err = importTemplates(os.Args[2:])
 	case "sign-template-catalog":

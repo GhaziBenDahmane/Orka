@@ -148,6 +148,11 @@ Federated catalogs have dedicated `template-repositories`,
 `sync-template-repository ID`, webhook rotation/disable, and deletion commands.
 Creation and settings JSON can be read from standard input with `-`.
 
+AI operations have dedicated service-account, audit-run, current-finding, and
+finding-triage CLI commands. `dockyard ai-auditor --once` performs one
+fail-fast end-to-end audit to validate model and platform credentials before
+deploying the recurring Swarm auditor services.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

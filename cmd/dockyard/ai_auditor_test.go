@@ -73,6 +73,42 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 	}
 }
 
+func TestRunAIAuditorOnce(t *testing.T) {
+	completed := 0
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/ai/audit-snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{}, "identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}, "notificationPosture": fullyCoveredNotifications()})
+		case "/v1/ai/audit-runs":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
+		default:
+			if r.Method == http.MethodPatch {
+				completed++
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				w.WriteHeader(http.StatusCreated)
+			}
+		}
+	}))
+	defer platform.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"healthy","findings":[]}`}}}})
+	}))
+	defer model.Close()
+	t.Setenv("DOCKYARD_CONTROL_PLANE_URL", platform.URL)
+	t.Setenv("DOCKYARD_AI_AUDITOR_TOKEN", "auditor-token")
+	t.Setenv("DOCKYARD_AI_BASE_URL", model.URL+"/v1")
+	t.Setenv("DOCKYARD_AI_MODEL", "test-model")
+	t.Setenv("DOCKYARD_AI_AUDIT_TIMEOUT", "1m")
+	if err := runAIAuditor([]string{"--once"}); err != nil || completed != 1 {
+		t.Fatalf("one-shot audit completed=%d err=%v", completed, err)
+	}
+	if err := runAIAuditor([]string{"unexpected"}); err == nil || !strings.Contains(err.Error(), "usage:") {
+		t.Fatalf("unexpected arguments error=%v", err)
+	}
+}
+
 func TestNormalizedAuditorEndpoint(t *testing.T) {
 	for _, test := range []struct {
 		name      string

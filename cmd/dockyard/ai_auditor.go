@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -46,7 +47,13 @@ const (
 	maxAuditFindings           = store.MaxAIAuditFindingsPerRun
 )
 
-func runAIAuditor() error {
+func runAIAuditor(arguments []string) error {
+	flags := flag.NewFlagSet("ai-auditor", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	once := flags.Bool("once", false, "run one audit and exit with its result")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return errors.New("usage: dockyard ai-auditor [--once]")
+	}
 	interval, err := time.ParseDuration(envDefault("DOCKYARD_AI_AUDIT_INTERVAL", "24h"))
 	if err != nil || interval < time.Minute {
 		return errors.New("DOCKYARD_AI_AUDIT_INTERVAL must be at least one minute")
@@ -70,10 +77,16 @@ func runAIAuditor() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	client := auditorHTTPClient(nil)
-	for {
+	run := func() error {
 		runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		err = performAIAudit(runCtx, client, cfg)
-		cancel()
+		defer cancel()
+		return performAIAudit(runCtx, client, cfg)
+	}
+	if *once {
+		return run()
+	}
+	for {
+		err = run()
 		if err != nil {
 			slog.Error("AI audit failed", "error", err)
 		} else {
