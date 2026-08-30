@@ -174,9 +174,10 @@ of the documented recovery set.
 
 Controller startup also rejects ambiguous secret configuration: do not set a
 `DOCKYARD_*` secret value and its matching `DOCKYARD_*_FILE` variable at the
-same time. `DOCKYARD_PUBLIC_URL` must be an HTTPS origin without a path, query,
-fragment, or embedded credentials; plain HTTP is accepted only for loopback
-development. `DOCKYARD_TRAEFIK_NETWORK` must be a lowercase Docker network
+same time. `DOCKYARD_PUBLIC_URL` must be an HTTPS origin with a valid DNS/IP
+host and TCP port and without a path, query, fragment, or embedded credentials;
+plain HTTP is accepted only for loopback development.
+`DOCKYARD_TRAEFIK_NETWORK` must be a lowercase Docker network
 name of at most 63 characters, and `DOCKYARD_SESSION_TTL` must be between five
 minutes and 30 days. These checks run before database migrations or Docker
 operations.

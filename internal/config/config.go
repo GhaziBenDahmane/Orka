@@ -54,6 +54,7 @@ type Config struct {
 }
 
 var swarmNetworkName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
+var publicHostnameLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 
 func Load() (Config, error) {
 	ttl, err := time.ParseDuration(env("DOCKYARD_SESSION_TTL", "24h"))
@@ -118,14 +119,21 @@ func Load() (Config, error) {
 	if otlpEndpoint == "" {
 		otlpEndpoint = strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	}
-	publicURL := strings.TrimRight(strings.TrimSpace(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080")), "/")
+	publicURL := strings.TrimSpace(env("DOCKYARD_PUBLIC_URL", "http://localhost:8080"))
 	parsedPublicURL, err := url.Parse(publicURL)
-	if err != nil || (parsedPublicURL.Scheme != "http" && parsedPublicURL.Scheme != "https") || parsedPublicURL.Hostname() == "" || parsedPublicURL.User != nil || parsedPublicURL.RawQuery != "" || parsedPublicURL.Fragment != "" || (parsedPublicURL.Path != "" && parsedPublicURL.Path != "/") {
-		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must be an HTTP(S) origin without credentials, path, query, or fragment")
+	if err != nil || (parsedPublicURL.Scheme != "http" && parsedPublicURL.Scheme != "https") || !validPublicHostname(parsedPublicURL.Hostname()) || parsedPublicURL.User != nil || parsedPublicURL.RawQuery != "" || parsedPublicURL.Fragment != "" || (parsedPublicURL.Path != "" && parsedPublicURL.Path != "/") || strings.HasSuffix(parsedPublicURL.Host, ":") {
+		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must be an HTTP(S) origin without credentials, path, query, or fragment and with a valid host and port")
+	}
+	if port := parsedPublicURL.Port(); port != "" {
+		value, parseErr := strconv.Atoi(port)
+		if parseErr != nil || value < 1 || value > 65535 {
+			return Config{}, errors.New("DOCKYARD_PUBLIC_URL must be an HTTP(S) origin without credentials, path, query, or fragment and with a valid host and port")
+		}
 	}
 	if parsedPublicURL.Scheme != "https" && !loopbackHostname(parsedPublicURL.Hostname()) {
 		return Config{}, errors.New("DOCKYARD_PUBLIC_URL must use HTTPS except for loopback development")
 	}
+	publicURL = strings.TrimSuffix(publicURL, "/")
 	traefikNetwork := strings.TrimSpace(env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"))
 	if !swarmNetworkName.MatchString(traefikNetwork) {
 		return Config{}, errors.New("DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters")
@@ -320,6 +328,21 @@ func loopbackHostname(host string) bool {
 	}
 	address := net.ParseIP(host)
 	return address != nil && address.IsLoopback()
+}
+
+func validPublicHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || !publicHostnameLabel.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func secretEnv(key string) (string, error) {

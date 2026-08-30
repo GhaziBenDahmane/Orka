@@ -88,6 +88,9 @@ func TestLoadValidatesPublicOrigin(t *testing.T) {
 		"localhost:8080", "ftp://example.test", "https://user@example.test",
 		"https://example.test/path", "https://example.test?debug=true", "https://example.test/#fragment",
 		"http://example.test", "http://10.20.30.40:8080",
+		"https://bad_label.example.test", "https://-bad.example.test", "https://bad-.example.test",
+		"https://example.test.", "https://example.test:", "https://example.test:0", "https://example.test:65536",
+		"https://example.test//", "https://[not-an-ip]",
 	} {
 		t.Run(value, func(t *testing.T) {
 			setRequiredConfig(t)
@@ -102,6 +105,15 @@ func TestLoadValidatesPublicOrigin(t *testing.T) {
 	cfg, err := Load()
 	if err != nil || cfg.PublicURL != "https://dockyard.example.test" {
 		t.Fatalf("public URL=%q error=%v", cfg.PublicURL, err)
+	}
+	for _, value := range []string{"https://dockyard.example.test:8443", "https://127.0.0.1", "https://[2001:db8::1]:443"} {
+		t.Run("https_"+value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_PUBLIC_URL", value)
+			if _, err := Load(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 	for _, value := range []string{"http://localhost:8080", "http://dev.localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"} {
 		t.Run("loopback_"+value, func(t *testing.T) {
