@@ -138,6 +138,7 @@ enrollment details.
 | GET | `/v1/clusters/{id}/commands/{commandID}` | Inspect redacted asynchronous command state |
 | GET/POST | `/v1/networks` | List or asynchronously provision local/remote managed Docker networks |
 | GET/DELETE | `/v1/networks/{networkID}` | Inspect provisioning state or queue safe deletion of an unassigned network |
+| POST | `/v1/networks/{networkID}/retry` | Requeue a terminally failed create without changing network identity or configuration |
 | POST | `/v1/agent/enroll` | Exchange a token and CSR for a client certificate |
 | POST | `/v1/agent/heartbeat` | Report agent and Swarm capacity over the mTLS listener |
 | GET | `/v1/agent/commands/next` | Lease the next encrypted-at-rest Swarm command over mTLS |

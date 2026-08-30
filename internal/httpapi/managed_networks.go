@@ -102,6 +102,22 @@ func (s *Server) deleteManagedNetwork(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+func (s *Server) retryManagedNetwork(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("networkID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid network id")
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.RetryManagedNetworkProvisioning(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "network.create.retried", "managed_network", id.String(), r.RemoteAddr, nil)
+	writeJSON(w, http.StatusAccepted, item)
+}
+
 func (s *Server) listServiceNetworks(w http.ResponseWriter, r *http.Request) {
 	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
 	if err != nil {

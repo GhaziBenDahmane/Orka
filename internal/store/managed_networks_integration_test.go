@@ -37,6 +37,25 @@ func TestManagedNetworkLifecycleAndTenantIsolation(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='network.create' AND payload->>'networkId'=$1`, item.ID.String()).Scan(&createJobs); err != nil || createJobs != 1 {
 		t.Fatalf("create jobs=%d err=%v", createJobs, err)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE jobs SET status='failed',attempts=max_attempts,finished_at=now() WHERE kind='network.create' AND payload->>'networkId'=$1`, item.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE managed_networks SET status='error',last_error='daemon unavailable' WHERE id=$1`, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.RetryManagedNetworkProvisioning(ctx, otherOrganizationID, item.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant retry error=%v", err)
+	}
+	retried, err := db.RetryManagedNetworkProvisioning(ctx, organizationID, item.ID)
+	if err != nil || retried.Status != "provisioning" || retried.LastError != "" {
+		t.Fatalf("retried network=%#v err=%v", retried, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='network.create' AND payload->>'networkId'=$1`, item.ID.String()).Scan(&createJobs); err != nil || createJobs != 2 {
+		t.Fatalf("retried create jobs=%d err=%v", createJobs, err)
+	}
+	if _, err = db.RetryManagedNetworkProvisioning(ctx, organizationID, item.ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("non-terminal retry error=%v", err)
+	}
 	if _, err = pool.Exec(ctx, `UPDATE managed_networks SET status='ready',docker_id='docker-network-id' WHERE id=$1`, item.ID); err != nil {
 		t.Fatal(err)
 	}

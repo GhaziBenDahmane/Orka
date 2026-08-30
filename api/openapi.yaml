@@ -2613,6 +2613,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/networks/{networkID}/retry:
+    post:
+      operationId: post_v1_networks_networkID_retry
+      tags: [networks]
+      parameters:
+        - name: networkID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/notification-endpoints:
     get:
       operationId: get_v1_notification_endpoints

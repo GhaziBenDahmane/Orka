@@ -200,6 +200,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/networks", s.requireAuth(http.HandlerFunc(s.listManagedNetworks)))
 	mux.Handle("POST /v1/networks", s.requireRole("admin", http.HandlerFunc(s.createManagedNetwork)))
 	mux.Handle("GET /v1/networks/{networkID}", s.requireAuth(http.HandlerFunc(s.getManagedNetwork)))
+	mux.Handle("POST /v1/networks/{networkID}/retry", s.requireRole("admin", http.HandlerFunc(s.retryManagedNetwork)))
 	mux.Handle("DELETE /v1/networks/{networkID}", s.requireRole("admin", http.HandlerFunc(s.deleteManagedNetwork)))
 	mux.Handle("POST /v1/projects", s.requireRole("developer", http.HandlerFunc(s.createProject)))
 	mux.Handle("GET /v1/projects/{projectID}", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.getProject)))

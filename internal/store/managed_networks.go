@@ -56,6 +56,9 @@ const managedNetworkColumns = `id,organization_id,cluster_id,name,driver,interna
 func (s *Store) CreateManagedNetwork(ctx context.Context, item ManagedNetwork) (ManagedNetwork, error) {
 	item.ID = uuid.New()
 	item.Status = "provisioning"
+	if item.IPAM == nil {
+		item.IPAM = []NetworkIPAMConfig{}
+	}
 	ipam, err := json.Marshal(item.IPAM)
 	if err != nil {
 		return ManagedNetwork{}, err
@@ -142,6 +145,45 @@ func (s *Store) QueueManagedNetworkDeletion(ctx context.Context, organizationID,
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *Store) RetryManagedNetworkProvisioning(ctx context.Context, organizationID, id uuid.UUID) (ManagedNetwork, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	defer tx.Rollback(ctx)
+	var status string
+	var deleting bool
+	if err = tx.QueryRow(ctx, `SELECT status,deletion_requested_at IS NOT NULL FROM managed_networks WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&status, &deleting); errors.Is(err, pgx.ErrNoRows) {
+		return ManagedNetwork{}, ErrNotFound
+	} else if err != nil {
+		return ManagedNetwork{}, err
+	}
+	if deleting {
+		return ManagedNetwork{}, ErrDeleting
+	}
+	if status != "error" {
+		return ManagedNetwork{}, ErrBusy
+	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='network.create' AND payload->>'networkId'=$1 AND status IN ('pending','running'))`, id.String()).Scan(&active); err != nil {
+		return ManagedNetwork{}, err
+	}
+	if active {
+		return ManagedNetwork{}, ErrBusy
+	}
+	if _, err = tx.Exec(ctx, `UPDATE managed_networks SET status='provisioning',last_error='',updated_at=now() WHERE id=$1`, id); err != nil {
+		return ManagedNetwork{}, err
+	}
+	payload, _ := json.Marshal(map[string]string{"networkId": id.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) VALUES($1,'network.create',$2,$3,10)`, uuid.New(), payload, "network:"+id.String()); err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ManagedNetwork{}, err
+	}
+	return s.GetManagedNetwork(ctx, organizationID, id)
 }
 
 func (s *Store) ListServiceNetworks(ctx context.Context, organizationID, serviceID uuid.UUID) ([]ManagedNetwork, error) {

@@ -360,6 +360,11 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodDelete, "/v1/networks/" + args[1], nil, nil
+	case "retry-network":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/networks/" + args[1] + "/retry", map[string]any{}, nil
 	case "service-networks":
 		if err := require(2); err != nil {
 			return "", "", nil, err

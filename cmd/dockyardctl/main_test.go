@@ -135,6 +135,7 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"network", "network-id"}, http.MethodGet, "/v1/networks/network-id"},
 		{[]string{"create-network", `{}`}, http.MethodPost, "/v1/networks"},
 		{[]string{"delete-network", "network-id"}, http.MethodDelete, "/v1/networks/network-id"},
+		{[]string{"retry-network", "network-id"}, http.MethodPost, "/v1/networks/network-id/retry"},
 		{[]string{"service-networks", "service-id"}, http.MethodGet, "/v1/services/service-id/networks"},
 		{[]string{"set-service-networks", "service-id", `{}`}, http.MethodPut, "/v1/services/service-id/networks"},
 		{[]string{"templates", "opaque+/cursor"}, http.MethodGet, "/v1/templates?limit=200&cursor=opaque%2B%2Fcursor"},
