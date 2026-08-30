@@ -47,8 +47,42 @@ func TestClientReturnsStructuredAPIError(t *testing.T) {
 
 func TestClientRejectsHostOverride(t *testing.T) {
 	client, _ := New("https://dockyard.example", "", "")
-	if err := client.Do(context.Background(), http.MethodGet, "https://evil.example/path", nil, io.Discard); err == nil {
-		t.Fatal("expected absolute API path rejection")
+	for _, path := range []string{"https://evil.example/path", "//evil.example/path", "/v1/../admin", "/v1//projects", "/v1/projects#fragment", "/v1/%2e%2e/admin"} {
+		if err := client.Do(context.Background(), http.MethodGet, path, nil, io.Discard); err == nil {
+			t.Errorf("unsafe API path %q was accepted", path)
+		}
+	}
+}
+
+func TestClientValidatesBaseURLAndHeaders(t *testing.T) {
+	for _, rawURL := range []string{
+		"ftp://dockyard.example.test",
+		"https://user@dockyard.example.test",
+		"https://bad_label.example.test",
+		"https://-bad.example.test",
+		"https://dockyard.example.test:",
+		"https://dockyard.example.test:0",
+		"https://dockyard.example.test:65536",
+		"https://dockyard.example.test?token=secret",
+		"https://dockyard.example.test#fragment",
+		"https://dockyard.example.test/a/../b",
+		"https://dockyard.example.test/a//b",
+		"http://dockyard.example.test",
+	} {
+		if _, err := New(rawURL, "", ""); err == nil {
+			t.Errorf("unsafe base URL %q was accepted", rawURL)
+		}
+	}
+	for _, rawURL := range []string{"https://dockyard.example.test", "https://dockyard.example.test:8443/prefix/", "http://localhost:8080", "http://api.dev.localhost", "http://127.0.0.2", "http://[::1]:8080"} {
+		if _, err := New(rawURL, "", ""); err != nil {
+			t.Errorf("valid base URL %q was rejected: %v", rawURL, err)
+		}
+	}
+	if _, err := New("https://dockyard.example.test", "token\nheader", "org"); err == nil {
+		t.Fatal("token containing a line break was accepted")
+	}
+	if _, err := New("https://dockyard.example.test", "token", strings.Repeat("o", maxOrganizationIDBytes+1)); err == nil {
+		t.Fatal("oversized organization ID was accepted")
 	}
 }
 

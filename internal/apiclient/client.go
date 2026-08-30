@@ -7,8 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	pathpkg "path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,9 +25,17 @@ type Client struct {
 	MaxResponseBytes int64
 }
 
-const DefaultMaxResponseBytes int64 = 32 << 20
+const (
+	DefaultMaxResponseBytes int64 = 32 << 20
+	maxBaseURLBytes               = 16 << 10
+	maxClientTokenBytes           = 16 << 10
+	maxOrganizationIDBytes        = 128
+	maxAPIPathBytes               = 16 << 10
+)
 
 var ErrResponseTooLarge = errors.New("Dockyard API response exceeds configured limit")
+
+var apiHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 type APIError struct {
 	Status  int
@@ -39,20 +51,33 @@ func (e *APIError) Error() string {
 }
 
 func New(rawURL, token, organizationID string) (*Client, error) {
-	parsed, err := url.Parse(strings.TrimRight(strings.TrimSpace(rawURL), "/"))
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
-		return nil, errors.New("Dockyard URL must be an HTTP(S) URL without user information")
+	trimmedURL := strings.TrimSpace(rawURL)
+	if len(trimmedURL) > maxBaseURLBytes {
+		return nil, errors.New("Dockyard URL is too long")
 	}
-	if parsed.Scheme == "http" && parsed.Hostname() != "localhost" && parsed.Hostname() != "127.0.0.1" && parsed.Hostname() != "::1" {
+	parsed, err := url.Parse(trimmedURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || !validAPIURLHost(parsed) || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.RawPath != "" {
+		return nil, errors.New("Dockyard URL must be an HTTP(S) URL without user information, query, or fragment and with a valid host and port")
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	if parsed.Path != "" && (pathpkg.Clean(parsed.Path) != parsed.Path || strings.Contains(parsed.Path, "//")) {
+		return nil, errors.New("Dockyard URL path prefix must not contain empty, dot, or parent segments")
+	}
+	if parsed.Scheme == "http" && !isLoopbackAPIHost(parsed.Hostname()) {
 		return nil, errors.New("unencrypted HTTP is only allowed for a loopback Dockyard URL")
 	}
-	return &Client{BaseURL: parsed, Token: strings.TrimSpace(token), OrganizationID: strings.TrimSpace(organizationID), HTTPClient: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("API redirects are disabled") }}, MaxResponseBytes: DefaultMaxResponseBytes}, nil
+	token = strings.TrimSpace(token)
+	organizationID = strings.TrimSpace(organizationID)
+	if len(token) > maxClientTokenBytes || strings.ContainsAny(token, "\x00\r\n") || len(organizationID) > maxOrganizationIDBytes || strings.ContainsAny(organizationID, "\x00\r\n") {
+		return nil, errors.New("Dockyard token or organization ID is invalid")
+	}
+	return &Client{BaseURL: parsed, Token: token, OrganizationID: organizationID, HTTPClient: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("API redirects are disabled") }}, MaxResponseBytes: DefaultMaxResponseBytes}, nil
 }
 
-func (c *Client) Do(ctx context.Context, method, path string, input any, output io.Writer) error {
-	relative, err := url.Parse(path)
-	if err != nil || relative.IsAbs() || !strings.HasPrefix(relative.Path, "/") {
-		return errors.New("API path must be an absolute path without a host")
+func (c *Client) Do(ctx context.Context, method, apiPath string, input any, output io.Writer) error {
+	relative, err := url.Parse(apiPath)
+	if err != nil || len(apiPath) > maxAPIPathBytes || relative.IsAbs() || relative.Host != "" || relative.User != nil || relative.Opaque != "" || relative.Fragment != "" || relative.RawPath != "" || !strings.HasPrefix(relative.Path, "/") || pathpkg.Clean(relative.Path) != relative.Path || strings.Contains(relative.Path, "//") {
+		return errors.New("API path must be a canonical absolute path without a host or fragment")
 	}
 	var body io.Reader
 	if input != nil {
@@ -64,7 +89,9 @@ func (c *Client) Do(ctx context.Context, method, path string, input any, output 
 	}
 	requestURL := *c.BaseURL
 	requestURL.Path = strings.TrimRight(c.BaseURL.Path, "/") + relative.Path
+	requestURL.RawPath = ""
 	requestURL.RawQuery = relative.RawQuery
+	requestURL.ForceQuery = relative.ForceQuery
 	req, err := http.NewRequestWithContext(ctx, method, requestURL.String(), body)
 	if err != nil {
 		return err
@@ -111,4 +138,41 @@ func (c *Client) Do(ctx context.Context, method, path string, input any, output 
 		return fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, limit)
 	}
 	return nil
+}
+
+func validAPIURLHost(endpoint *url.URL) bool {
+	if endpoint == nil || !validAPIHostname(endpoint.Hostname()) || strings.HasSuffix(endpoint.Host, ":") {
+		return false
+	}
+	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(endpoint.Hostname()) == nil {
+		return false
+	}
+	if port := endpoint.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		return err == nil && value >= 1 && value <= 65535
+	}
+	return true
+}
+
+func validAPIHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || !apiHostnameLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLoopbackAPIHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }
