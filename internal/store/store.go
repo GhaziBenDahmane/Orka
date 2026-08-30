@@ -1552,6 +1552,15 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	} else if err != nil {
 		return DatabaseBackup{}, err
 	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM database_backups WHERE database_instance_id=$1 AND status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM jobs WHERE resource_key=$2 AND kind='backup.database' AND status IN ('pending','running'))`, databaseID, "database:"+databaseID.String()).Scan(&active); err != nil {
+		return DatabaseBackup{}, err
+	}
+	if active {
+		return DatabaseBackup{}, ErrBusy
+	}
 	if destinationID != nil {
 		var destinationAllowed bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`, destinationID, organizationID).Scan(&destinationAllowed); err != nil {

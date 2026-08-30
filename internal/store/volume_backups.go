@@ -174,6 +174,15 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 	if nodeID == "" {
 		return VolumeBackup{}, errors.New("service storage node has not been assigned")
 	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM volume_backups WHERE compose_service_id=$1 AND volume_name=$2 AND status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM jobs WHERE resource_key=$3 AND kind='backup.volume' AND status IN ('pending','running'))`, serviceID, volumeName, "service:"+serviceID.String()).Scan(&active); err != nil {
+		return VolumeBackup{}, err
+	}
+	if active {
+		return VolumeBackup{}, ErrBusy
+	}
 	item := VolumeBackup{ID: uuid.New(), VolumeBackupPolicyID: &policyID, ComposeServiceID: serviceID, VolumeName: volumeName, StorageNodeID: nodeID, DestinationID: destinationID, Quiesce: quiesce, Status: "queued"}
 	if err = tx.QueryRow(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,actor_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8) RETURNING created_at`, item.ID, policyID, serviceID, volumeName, nodeID, destinationID, quiesce, nullableUUID(actorID)).Scan(&item.CreatedAt); err != nil {
 		return VolumeBackup{}, err

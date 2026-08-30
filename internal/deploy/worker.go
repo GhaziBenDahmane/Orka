@@ -275,7 +275,13 @@ func (w *Worker) enqueueDueVolumeBackup(ctx context.Context) error {
 	var volumeName, nodeID string
 	var intervalSeconds, retentionCount int
 	var quiesce bool
-	err = tx.QueryRow(ctx, `SELECT policy.id,policy.compose_service_id,policy.volume_name,policy.destination_id,policy.interval_seconds,policy.retention_count,service.storage_node_id,policy.quiesce FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id WHERE policy.enabled AND policy.next_run_at<=now() AND service.storage_node_id<>'' ORDER BY policy.next_run_at FOR UPDATE OF policy SKIP LOCKED LIMIT 1`).Scan(&policyID, &serviceID, &volumeName, &destinationID, &intervalSeconds, &retentionCount, &nodeID, &quiesce)
+	err = tx.QueryRow(ctx, `SELECT policy.id,policy.compose_service_id,policy.volume_name,policy.destination_id,policy.interval_seconds,policy.retention_count,service.storage_node_id,policy.quiesce
+		FROM volume_backup_policies policy
+		JOIN compose_services service ON service.id=policy.compose_service_id
+		WHERE policy.enabled AND policy.next_run_at<=now() AND service.storage_node_id<>''
+			AND NOT EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name AND backup.status IN ('queued','running'))
+			AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.resource_key='service:' || service.id::text AND job.kind='backup.volume' AND job.status IN ('pending','running'))
+		ORDER BY policy.next_run_at FOR UPDATE OF policy,service SKIP LOCKED LIMIT 1`).Scan(&policyID, &serviceID, &volumeName, &destinationID, &intervalSeconds, &retentionCount, &nodeID, &quiesce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
@@ -362,7 +368,13 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	var destinationID *uuid.UUID
 	var intervalSeconds, retentionCount int
 	var verifyRestore bool
-	err = tx.QueryRow(ctx, `SELECT id,database_instance_id,interval_seconds,retention_count,destination_id,verify_restore FROM backup_policies WHERE enabled AND next_run_at<=now() AND (NOT $1 OR destination_id IS NOT NULL) ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 1`, w.Store.RequireRemoteBackups).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID, &verifyRestore)
+	err = tx.QueryRow(ctx, `SELECT policy.id,policy.database_instance_id,policy.interval_seconds,policy.retention_count,policy.destination_id,policy.verify_restore
+		FROM backup_policies policy
+		JOIN database_instances database ON database.id=policy.database_instance_id
+		WHERE policy.enabled AND policy.next_run_at<=now() AND (NOT $1 OR policy.destination_id IS NOT NULL)
+			AND NOT EXISTS(SELECT 1 FROM database_backups backup WHERE backup.database_instance_id=database.id AND backup.status IN ('queued','running'))
+			AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.resource_key='database:' || database.id::text AND job.kind='backup.database' AND job.status IN ('pending','running'))
+		ORDER BY policy.next_run_at FOR UPDATE OF policy,database SKIP LOCKED LIMIT 1`, w.Store.RequireRemoteBackups).Scan(&policyID, &databaseID, &intervalSeconds, &retentionCount, &destinationID, &verifyRestore)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}

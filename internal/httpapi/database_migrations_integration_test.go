@@ -99,6 +99,10 @@ func TestDatabaseMigrationHistoryAndCancellationAPI(t *testing.T) {
 	if err = json.Unmarshal(body, &queuedBackup); status != http.StatusAccepted || err != nil || queuedBackup.Status != "queued" {
 		t.Fatalf("backup queue status=%d body=%s err=%v", status, body, err)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/databases/"+databaseID.String()+"/backups", token, organizationID, http.MethodPost, map[string]any{})
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"backup_in_progress"`)) {
+		t.Fatalf("duplicate backup status=%d body=%s", status, body)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/database-backups/"+queuedBackup.ID.String()+"/cancel", token, organizationID, http.MethodPost, map[string]any{})
 	if status != http.StatusAccepted {
 		t.Fatalf("backup cancel status=%d body=%s", status, body)

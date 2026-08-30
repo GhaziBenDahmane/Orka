@@ -133,6 +133,10 @@ func (s *Server) createVolumeBackup(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	item, err := s.Store.QueueVolumeBackup(r.Context(), p.OrganizationID, serviceID, r.PathValue("volumeName"), p.UserID)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "backup_in_progress", "wait for the active volume backup to finish before starting another")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}

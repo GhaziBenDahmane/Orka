@@ -1297,6 +1297,10 @@ func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	backup, err := s.Store.QueueDatabaseBackup(r.Context(), p.OrganizationID, id, p.UserID, destinationID)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "backup_in_progress", "wait for the active database backup to finish before starting another")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
