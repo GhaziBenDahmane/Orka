@@ -198,6 +198,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
       - name: Resolve immutable release coordinates
         id: release
         env:
@@ -319,6 +324,21 @@ jobs:
           cosign verify-attestation --type slsaprovenance --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
           cosign verify-attestation --type spdxjson --certificate-identity-regexp "$identity" --certificate-oidc-issuer "$issuer" "$subject"
 
+      - name: Exercise exact image named-volume recovery
+        env:
+          DOCKYARD_TEST_VOLUME_HELPER_IMAGE: ${{ steps.platforms.outputs.amd64 }}
+          DOCKYARD_VOLUME_RECOVERY_EVIDENCE: ${{ github.workspace }}/volume-recovery-conformance.json
+        run: |
+          set -euo pipefail
+          DOCKYARD_TEST_VOLUME_RECOVERY=1 go test -timeout 15m -run TestNamedVolumeRecoveryConformance -v -count=1 ./internal/deploy | tee volume-recovery-conformance.log
+          jq -e --arg image "$DOCKYARD_TEST_VOLUME_HELPER_IMAGE" --arg sourceCommit "$GITHUB_SHA" '
+            .status == "passed" and .image == $image and .sourceCommit == $sourceCommit and
+            .artifactBytes > 0 and .backupSeconds >= 0 and .rtoSeconds >= 0 and
+            .backupQuiesced and .restoreQuiesced and .encryptedArtifactVerified and
+            .corruptionReplaced and .permissionsVerified and .symlinkVerified and
+            .workloadResumed and .restartVerified
+          ' volume-recovery-conformance.json >/dev/null
+
       - name: Soak signed release and verify automatic rollback
         env:
           DOCKYARD_IMAGE: ${{ steps.release.outputs.image }}@${{ steps.build.outputs.digest }}
@@ -410,7 +430,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -426,6 +446,8 @@ jobs:
             trivy-arm64.json
             sbom.spdx.json
             database-recovery-evidence.json
+            volume-recovery-conformance.json
+            volume-recovery-conformance.log
             sso-keycloak-evidence.json
             swarm-ha-conformance.json
             lifecycle-conformance.json
@@ -498,7 +520,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

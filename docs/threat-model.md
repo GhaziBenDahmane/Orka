@@ -138,7 +138,8 @@ empty replacement storage.
 Generic named-volume transfer helpers are scheduled only on an explicitly
 persisted node and must run the same digest-pinned image as the controller or
 cluster agent. Presigned URLs and envelope keys are delivered in an ephemeral
-Swarm secret. Archive restore rejects absolute paths, traversal, escaping
+Swarm secret, and plaintext archives exist only in a private helper tmpfs.
+Archive restore rejects absolute paths, traversal, escaping
 symlinks, hard links, devices, sockets, FIFOs, duplicates, and paths beneath
 symlinks before moving any live volume entry; staged replacement retains the
 old top-level tree until all replacement renames succeed.

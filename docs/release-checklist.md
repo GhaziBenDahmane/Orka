@@ -142,6 +142,15 @@ links for every item below.
   record for each engine, and publishes their aggregate as
   `database-recovery-evidence.json`; repeat on production-equivalent storage
   because CI timings are not SLOs.
+- Run `make test-volume-recovery` with
+  `DOCKYARD_TEST_VOLUME_HELPER_IMAGE` set to the exact immutable candidate
+  image. The release workflow runs this gate against its signed amd64 digest
+  and publishes `volume-recovery-conformance.json`. The evidence must prove
+  backup and restore quiescence, encrypted-artifact integrity, replacement of
+  deliberately corrupted contents, preservation of permissions and safe
+  symlinks, workload resumption, and data survival after a service restart.
+  Repeat the measurement on every production storage driver because the CI
+  RTO is not a production SLO.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass
   procedure. `make test-keycloak-sso` provisions a real TLS-enabled Keycloak
   realm. Its OIDC flow verifies discovery, authorization-code login, PKCE,
@@ -184,6 +193,7 @@ links for every item below.
   `image-platforms.json`, per-architecture `trivy-amd64.json` and
   `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
   `database-recovery-evidence.json`,
+  `volume-recovery-conformance.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
   `agent-certificate-conformance.json`, `ai-audit-conformance.json`,

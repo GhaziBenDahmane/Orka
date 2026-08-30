@@ -106,9 +106,12 @@ Named-volume artifacts use a one-shot Swarm service constrained to the node
 that owns the local volume. The service reuses the currently running
 digest-pinned controller or agent image. Its presigned object-store URL and
 per-artifact encryption key are mounted as a temporary Swarm secret rather
-than exposed in arguments or environment variables. The helper validates the
-complete authenticated archive before restore and swaps staged data into the
-volume with rollback renames.
+than exposed in arguments or environment variables; archive staging uses a
+private mode-0700 tmpfs rather than the helper container layer. The helper
+validates the complete authenticated archive before restore and swaps staged
+data into the volume with rollback renames. Restore always scales every
+mounting stack service to zero and resumes its recorded replica count; backup
+policies can require the same quiescence boundary.
 
 Private build-registry credentials are scoped to the configured registry host.
 After a successful push, the scheduler supplies them to `docker stack deploy

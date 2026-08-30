@@ -43,7 +43,7 @@ exit 1
 		t.Fatal(err)
 	}
 	callText := string(arguments)
-	for _, expected := range []string{"node.id==nodeabc123", "type=volume,source=stack_data,target=/volume", "registry.example/dockyard@sha256:" + digest, "volume-artifact"} {
+	for _, expected := range []string{"service create --quiet --detach", "node.id==nodeabc123", "type=volume,source=stack_data,target=/volume", "type=tmpfs,destination=/scratch,tmpfs-mode=0700", "registry.example/dockyard@sha256:" + digest, "volume-artifact"} {
 		if !strings.Contains(callText, expected) {
 			t.Fatalf("missing %q in calls:\n%s", expected, callText)
 		}

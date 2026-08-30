@@ -1,10 +1,14 @@
-.PHONY: test test-agent-certificate-conformance test-ai-audit-conformance test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-lifecycle-conformance test-migration-conformance test-notification-conformance test-reconciliation-conformance test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
+.PHONY: test test-agent-certificate-conformance test-ai-audit-conformance test-database-recovery test-volume-recovery test-install test-keycloak-sso test-keycloak-oidc test-lifecycle-conformance test-migration-conformance test-notification-conformance test-reconciliation-conformance test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
 
 test:
 	go test ./...
 
 test-database-recovery:
 	DOCKYARD_TEST_DATABASE_RECOVERY=1 go test -timeout 35m -run TestNativeDatabaseRecoveryConformance -v -count=1 ./internal/database
+
+test-volume-recovery:
+	@test -n "$${DOCKYARD_TEST_VOLUME_HELPER_IMAGE:-}" || { echo "DOCKYARD_TEST_VOLUME_HELPER_IMAGE must be an immutable image digest" >&2; exit 1; }
+	DOCKYARD_TEST_VOLUME_RECOVERY=1 go test -timeout 15m -run TestNamedVolumeRecoveryConformance -v -count=1 ./internal/deploy
 
 test-install:
 	./scripts/ci/test-install-swarm.sh
