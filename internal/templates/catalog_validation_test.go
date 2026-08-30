@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/store"
 )
 
 func TestValidateDokployCatalogFailsClosedOnInvalidMetadata(t *testing.T) {
@@ -61,6 +62,45 @@ func TestValidateDokployCatalogRejectsEmptyCatalog(t *testing.T) {
 	report, err := ValidateDokployCatalog(root, deploy.Compiler{PublicNetwork: "dockyard-public"})
 	if err == nil || report.Imported != 0 || !strings.Contains(err.Error(), "no templates") {
 		t.Fatalf("empty catalog report=%#v err=%v", report, err)
+	}
+}
+
+func TestCatalogImportRejectsUnsafeComposeBeforePublication(t *testing.T) {
+	root := t.TempDir()
+	writeCatalogBlueprint(t, root, "unsafe", `{"id":"unsafe","name":"Unsafe","version":"1.0.0"}`)
+	composePath := filepath.Join(root, "blueprints", "unsafe", "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example:1\n    privileged: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	repository := store.TemplateRepository{Slug: "community"}
+	report, err := ImportRepositoryCatalog(context.Background(), nil, repository, root)
+	if err == nil || report.Imported != 0 || !strings.Contains(report.Failed["unsafe"], "privileged") {
+		t.Fatalf("unsafe repository catalog report=%#v err=%v", report, err)
+	}
+}
+
+func TestRepositoryCatalogImportRejectsEmptySnapshot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "blueprints"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ImportRepositoryCatalog(context.Background(), nil, store.TemplateRepository{Slug: "community"}, root)
+	if err == nil || report.Imported != 0 || !strings.Contains(err.Error(), "no templates") {
+		t.Fatalf("empty repository catalog report=%#v err=%v", report, err)
+	}
+}
+
+func TestValidateDokployCatalogRejectsMissingDomainService(t *testing.T) {
+	root := t.TempDir()
+	writeCatalogBlueprint(t, root, "invalid-route", `{"id":"invalid-route","name":"Invalid route","version":"1.0.0"}`)
+	templatePath := filepath.Join(root, "blueprints", "invalid-route", "template.toml")
+	definition := "[variables]\n[[config.domains]]\nserviceName = \"missing\"\nport = 8080\nhost = \"${domain}\"\npath = \"/\"\n"
+	if err := os.WriteFile(templatePath, []byte(definition), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateDokployCatalog(root, deploy.Compiler{PublicNetwork: "dockyard-public"})
+	if err == nil || !strings.Contains(report.Failed["invalid-route"], "missing service") {
+		t.Fatalf("invalid route catalog report=%#v err=%v", report, err)
 	}
 }
 

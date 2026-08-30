@@ -35,7 +35,8 @@ Templates must not request privileged mode, custom namespaces or runtimes,
 device access, direct published ports, external networks or volumes, custom
 volume drivers, controller-local files, the Docker socket, host bind mounts,
 or undeclared credentials. Declare HTTP exposure through `[[config.domains]]`;
-Dockyard attaches only routed services to its shared ingress network. Prefer
+each domain must name a service present in the Compose file. Dockyard attaches
+only routed services to its shared ingress network. Prefer
 versioned image tags in development and publish the digest tested for a
 release.
 

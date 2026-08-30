@@ -98,12 +98,19 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
+		if readErr = validateCatalogBlueprint(path, deploy.Compiler{PublicNetwork: "dockyard-public"}); readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
 		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes)})
 		sum := sha256.Sum256(append(tomlBytes, compose...))
 		items = append(items, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "dokploy", SourcePath: filepath.ToSlash(filepath.Join("blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
 	}
 	if len(report.Failed) > 0 {
 		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
+	}
+	if len(items) == 0 {
+		return report, errors.New("catalog contains no templates")
 	}
 	if err = db.UpsertGlobalTemplates(ctx, items); err != nil {
 		return report, err
@@ -154,6 +161,10 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
+		if readErr = validateCatalogBlueprint(path, deploy.Compiler{PublicNetwork: "dockyard-public"}); readErr != nil {
+			report.Failed[entry.Name()] = readErr.Error()
+			continue
+		}
 		provenance := map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef}
 		if key, keyErr := ParsePublicKey([]byte(repository.TrustedPublicKey)); keyErr == nil && len(key) > 0 {
 			provenance["catalogSigner"] = PublicKeyFingerprint(key)
@@ -172,6 +183,9 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 	}
 	if len(report.Failed) > 0 {
 		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
+	}
+	if len(items) == 0 {
+		return report, errors.New("catalog contains no templates")
 	}
 	if err = db.ReplaceRepositoryTemplatesForSync(ctx, repository, items); err != nil {
 		return report, err
@@ -205,20 +219,8 @@ func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport
 				identities[identity] = entry.Name()
 			}
 		}
-		var instance Instance
 		if loadErr == nil {
-			instance, loadErr = LoadDokployDirectory(blueprint, "example.invalid")
-		}
-		if loadErr == nil {
-			for _, domain := range instance.Domains {
-				_, loadErr = PortNumber(domain.Port)
-				if loadErr != nil {
-					break
-				}
-			}
-		}
-		if loadErr == nil {
-			_, loadErr = compiler.Compile(instance.ComposeYAML, nil)
+			loadErr = validateCatalogBlueprint(blueprint, compiler)
 		}
 		if loadErr != nil {
 			report.Failed[entry.Name()] = loadErr.Error()
@@ -233,4 +235,24 @@ func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport
 		return report, fmt.Errorf("catalog contains no templates")
 	}
 	return report, nil
+}
+
+func validateCatalogBlueprint(blueprint string, compiler deploy.Compiler) error {
+	instance, err := LoadDokployDirectory(blueprint, "example.invalid")
+	if err != nil {
+		return err
+	}
+	routes := make([]store.Route, 0, len(instance.Domains))
+	for _, domain := range instance.Domains {
+		port, portErr := PortNumber(domain.Port)
+		if portErr != nil {
+			return portErr
+		}
+		routes = append(routes, store.Route{
+			ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path,
+			TargetPort: port, TLS: true, CertificateResolver: "letsencrypt",
+		})
+	}
+	_, err = compiler.Compile(instance.ComposeYAML, routes)
+	return err
 }

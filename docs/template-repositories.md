@@ -50,6 +50,12 @@ Built-in startup seeding and the signed local catalog importer likewise parse
 the complete catalog first and publish all template versions in one database
 transaction, so an invalid sibling or storage failure cannot expose a partial
 catalog.
+Before publication, every candidate snapshot is instantiated with generated
+validation values, its declared routes are checked against real Compose
+services, and the rendered workload passes the safe Docker Compose compiler.
+One invalid blueprint rejects the whole snapshot, and an empty snapshot cannot
+silently withdraw every published version. Catalog authors must remove the
+repository explicitly when they intend to retire its entire namespace.
 Each repository can be synchronized manually or on a controller-managed
 schedule between five minutes and seven days. Manual requests are durably
 coalesced and return `202 Accepted`; the same HA-safe scheduler performs all
