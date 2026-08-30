@@ -207,6 +207,8 @@ links for every item below.
   unusable private release. It also creates the matching immutable GitHub
   Release with a keyless-Sigstore-signed `promotion-manifest.json`, its
   `promotion-manifest.sigstore.json` bundle, `release-evidence.sha256`,
+  independently signed `production-certification.json` and
+  `production-certification.sigstore.json`,
   `image-digest.txt`,
   `image-platforms.json`, per-architecture `trivy-amd64.json` and
   `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
@@ -232,6 +234,12 @@ links for every item below.
   highest published stable SemVer, regardless of publication order. The prior
   signed manifest must name the same repository, exact Git tag commit, and
   repository-owned GHCR digest before it can enter the upgrade test.
+  Stable tagging runs only in the protected `production-release` environment
+  after the exact candidate has a valid, unexpired certification from the
+  protected `production-certification` environment. Configure required,
+  distinct reviewers for both environments and follow
+  `docs/production-certification.md`; an absent certification leaves only the
+  run-scoped candidate tag.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a

@@ -1,0 +1,98 @@
+name: Production certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_image:
+        description: Exact signed GHCR candidate image digest
+        required: true
+        type: string
+      evidence_json:
+        description: Production certification JSON matching docs/production-certification.md
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-certification-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-certification
+    permissions:
+      contents: read
+      id-token: write
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify candidate image and validate evidence
+        env:
+          CANDIDATE_IMAGE: ${{ inputs.candidate_image }}
+          EVIDENCE_JSON: ${{ inputs.evidence_json }}
+        run: |
+          set -euo pipefail
+          expected_repository="ghcr.io/${GITHUB_REPOSITORY,,}@sha256:"
+          case "$CANDIDATE_IMAGE" in
+            "$expected_repository"*) ;;
+            *) echo "candidate image must be an immutable digest from $expected_repository" >&2; exit 1 ;;
+          esac
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          cosign verify \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$CANDIDATE_IMAGE"
+          jq -e 'type == "object"' <<<"$EVIDENCE_JSON" >submitted-production-certification.json
+          jq \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg candidateImage "$CANDIDATE_IMAGE" \
+            '.sourceCommit=$sourceCommit | .candidateImage=$candidateImage' \
+            submitted-production-certification.json >production-certification.input.json
+          go run ./cmd/dockyard validate-production-certification \
+            --file production-certification.input.json \
+            --source-commit "$GITHUB_SHA" \
+            --candidate-image "$CANDIDATE_IMAGE" \
+            >production-certification.json
+
+      - name: Sign and verify production certification
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/production-certification.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign sign-blob --yes \
+            --bundle production-certification.sigstore.json \
+            production-certification.json
+          cosign verify-blob \
+            --bundle production-certification.sigstore.json \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            production-certification.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-certification-${{ github.sha }}
+          path: |
+            production-certification.json
+            production-certification.sigstore.json
+          if-no-files-found: error
+          retention-days: 30

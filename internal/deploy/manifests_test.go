@@ -158,6 +158,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		"- name: Aggregate database recovery evidence",
 		"- name: Write release checksums and promotion manifest",
 		"- name: Sign and verify promotion manifest",
+		"- name: Authenticate production certification and candidate evidence",
 	} {
 		position := strings.Index(workflow, requiredGate)
 		if position < candidate || position > promote {
@@ -172,6 +173,9 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	}
 	if !strings.Contains(workflow, "cosign verify-blob") || !strings.Contains(workflow, "evidenceChecksumsSHA256") || !strings.Contains(workflow, "sha256sum --check --strict release-evidence.sha256") {
 		t.Fatal("release workflow does not authenticate the promotion manifest and its evidence checksums")
+	}
+	if !strings.Contains(workflow, "environment: production-release") || !strings.Contains(workflow, "production-certification-$GITHUB_SHA") || !strings.Contains(workflow, "validate-production-certification") {
+		t.Fatal("stable release promotion is not gated by exact-candidate production certification")
 	}
 	for _, releaseChainGuard := range []string{
 		"highest stable release",

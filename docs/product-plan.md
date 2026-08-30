@@ -331,4 +331,7 @@ immutable digest, promotion manifest, and downloadable JSON evidence. An
 actual signed promotion and its production soak evidence, plus the staging
 production-data upgrade, load, real-provider, production-topology partition,
 full Dokploy cutover, and measured disaster-recovery gates, remain open; see
-`docs/release-checklist.md`.
+`docs/release-checklist.md`. Stable promotion now fails closed until a protected
+environment supplies a source- and digest-bound, keyless-signed production
+certification covering those external gates; see
+`docs/production-certification.md`.

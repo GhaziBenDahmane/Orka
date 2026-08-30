@@ -92,6 +92,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
       - name: Resolve previous immutable release
         id: previous
         env:
@@ -125,12 +130,22 @@ jobs:
             --jq '.[] | select(.name == "promotion-manifest.json") | .id' | head -1)"
           bundle_asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
             --jq '.[] | select(.name == "promotion-manifest.sigstore.json") | .id' | head -1)"
+          certification_asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq '.[] | select(.name == "production-certification.json") | .id' | head -1)"
+          certification_bundle_asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq '.[] | select(.name == "production-certification.sigstore.json") | .id' | head -1)"
           test -n "$asset_id" || { echo "previous release $previous_version has no promotion manifest" >&2; exit 1; }
           test -n "$bundle_asset_id" || { echo "previous release $previous_version has no signed promotion-manifest bundle" >&2; exit 1; }
+          test -n "$certification_asset_id" || { echo "previous release $previous_version has no production certification" >&2; exit 1; }
+          test -n "$certification_bundle_asset_id" || { echo "previous release $previous_version has no signed production-certification bundle" >&2; exit 1; }
           gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
             --header 'Accept: application/octet-stream' >previous-promotion-manifest.json
           gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$bundle_asset_id" \
             --header 'Accept: application/octet-stream' >previous-promotion-manifest.sigstore.json
+          gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$certification_asset_id" \
+            --header 'Accept: application/octet-stream' >previous-production-certification.json
+          gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$certification_bundle_asset_id" \
+            --header 'Accept: application/octet-stream' >previous-production-certification.sigstore.json
           {
             echo "first_release=false"
             echo "version=$previous_version"
@@ -160,8 +175,21 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" \
             --arg sourceCommit "$previous_commit" \
             --arg imageRepository "$image_repository" \
-            'select(.version == $version and .repository == $repository and .sourceCommit == $sourceCommit and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle") | .image | select(startswith($imageRepository + "@sha256:") and test("@sha256:[a-f0-9]{64}$"))' \
+            'select(.version == $version and .repository == $repository and .sourceCommit == $sourceCommit and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle" and .productionCertification == "production-certification.json" and .productionCertificationSignatureBundle == "production-certification.sigstore.json") | .image | select(startswith($imageRepository + "@sha256:") and test("@sha256:[a-f0-9]{64}$"))' \
             previous-promotion-manifest.json)"
+          certification_identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/production-certification.yml@refs/(heads|tags)/.+$"
+          cosign verify-blob \
+            --bundle previous-production-certification.sigstore.json \
+            --certificate-identity-regexp "$certification_identity" \
+            --certificate-oidc-issuer "$issuer" \
+            previous-production-certification.json
+          manifest_created_at="$(jq -er '.createdAt | select(type == "string")' previous-promotion-manifest.json)"
+          go run ./cmd/dockyard validate-production-certification \
+            --file previous-production-certification.json \
+            --source-commit "$previous_commit" \
+            --candidate-image "$previous_image" \
+            --at "$manifest_created_at" \
+            >/dev/null
           printf 'image=%s\n' "$previous_image" >>"$GITHUB_OUTPUT"
 
       - name: Verify previous release image signature
@@ -206,13 +234,17 @@ jobs:
           path: upgrade-conformance.json
           if-no-files-found: error
 
-  publish:
+  candidate:
     needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance, lifecycle-conformance, reconciliation-conformance, agent-certificate-conformance, ai-audit-conformance, notification-conformance, migration-conformance, upgrade-conformance]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      image: ${{ steps.release.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       actions: read
-      contents: write
+      contents: read
       packages: write
       id-token: write
     steps:
@@ -472,7 +504,7 @@ jobs:
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
             --arg evidenceChecksumsSHA256 "$evidence_checksums_sha256" \
-            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,productionCertification:"production-certification.json",productionCertificationSignatureBundle:"production-certification.sigstore.json",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           cat promotion-manifest.json
 
@@ -495,7 +527,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: promotion-${{ steps.release.outputs.version }}
+          name: candidate-evidence-${{ steps.release.outputs.version }}
           path: |
             promotion-manifest.json
             promotion-manifest.sigstore.json
@@ -522,11 +554,149 @@ jobs:
             release-soak-evidence.json
           if-no-files-found: error
 
-      - name: Assign verified digest to release tag
+      - name: Publish candidate coordinates for certification
         env:
           IMAGE: ${{ steps.release.outputs.image }}
           VERSION: ${{ steps.release.outputs.version }}
           DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "## Production certification required"
+            echo
+            echo "Version: \`$VERSION\`"
+            echo
+            echo "Candidate: \`$IMAGE@$DIGEST\`"
+            echo
+            echo "Run the Production certification workflow on commit \`$GITHUB_SHA\`, then approve the protected production-release environment."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  promote:
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-release
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+
+      - name: Download automated candidate evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: candidate-evidence-${{ needs.candidate.outputs.version }}
+          path: .
+
+      - name: Download production certification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/workflows/production-certification.yml/runs?head_sha=$GITHUB_SHA&status=success&event=workflow_dispatch&per_page=100" --slurp)"
+          run_id="$(jq -er '[.[].workflow_runs[]] | sort_by(.created_at) | reverse | .[0].id' <<<"$runs")"
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "production-certification-$GITHUB_SHA" \
+            --dir production-certification
+
+      - name: Authenticate production certification and candidate evidence
+        env:
+          IMAGE: ${{ needs.candidate.outputs.image }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
+          VERSION: ${{ needs.candidate.outputs.version }}
+        run: |
+          set -euo pipefail
+          certification=production-certification/production-certification.json
+          bundle=production-certification/production-certification.sigstore.json
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/production-certification.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify-blob \
+            --bundle "$bundle" \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$certification"
+          go run ./cmd/dockyard validate-production-certification \
+            --file "$certification" \
+            --source-commit "$GITHUB_SHA" \
+            --candidate-image "$IMAGE@$DIGEST" \
+            >/dev/null
+          release_identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          cosign verify \
+            --certificate-identity-regexp "$release_identity" \
+            --certificate-oidc-issuer "$issuer" \
+            "$IMAGE@$DIGEST"
+          manifest_identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          cosign verify-blob \
+            --bundle promotion-manifest.sigstore.json \
+            --certificate-identity-regexp "$manifest_identity" \
+            --certificate-oidc-issuer "$issuer" \
+            promotion-manifest.json
+          jq -e \
+            --arg version "$VERSION" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg image "$IMAGE@$DIGEST" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            'select(.version == $version and .repository == $repository and .image == $image and .sourceCommit == $sourceCommit and .productionCertification == "production-certification.json" and .productionCertificationSignatureBundle == "production-certification.sigstore.json")' \
+            promotion-manifest.json >/dev/null
+          expected_checksums_sha256="$(jq -er '.evidenceChecksumsSHA256 | select(test("^[a-f0-9]{64}$"))' promotion-manifest.json)"
+          test "$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)" = "$expected_checksums_sha256"
+          sha256sum --check --strict release-evidence.sha256
+          cp "$certification" production-certification.json
+          cp "$bundle" production-certification.sigstore.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: promotion-${{ needs.candidate.outputs.version }}
+          path: |
+            promotion-manifest.json
+            promotion-manifest.sigstore.json
+            production-certification.json
+            production-certification.sigstore.json
+            release-evidence.sha256
+            image-digest.txt
+            image-platforms.json
+            trivy-amd64.json
+            trivy-arm64.json
+            sbom.spdx.json
+            database-recovery-evidence.json
+            volume-recovery-conformance.json
+            volume-recovery-conformance.log
+            template-conformance.json
+            template-conformance.log
+            sso-keycloak-evidence.json
+            swarm-ha-conformance.json
+            lifecycle-conformance.json
+            reconciliation-conformance.json
+            agent-certificate-conformance.json
+            ai-audit-conformance.json
+            notification-conformance.json
+            migration-conformance.json
+            upgrade-conformance.json
+            release-soak-evidence.json
+          if-no-files-found: error
+
+      - name: Assign verified digest to release tag
+        env:
+          IMAGE: ${{ needs.candidate.outputs.image }}
+          VERSION: ${{ needs.candidate.outputs.version }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
         run: |
           set -euo pipefail
           if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
@@ -546,8 +716,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN || github.token }}
           OWNER: ${{ github.repository_owner }}
           PACKAGE: ${{ github.event.repository.name }}
-          IMAGE: ${{ steps.release.outputs.image }}
-          VERSION: ${{ steps.release.outputs.version }}
+          IMAGE: ${{ needs.candidate.outputs.image }}
+          VERSION: ${{ needs.candidate.outputs.version }}
         run: |
           set -euo pipefail
           owner_type="$(gh api "/users/$OWNER" --jq .type)"
@@ -579,10 +749,10 @@ jobs:
       - name: Publish immutable release evidence
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.candidate.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json promotion-manifest.sigstore.json release-evidence.sha256 image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json promotion-manifest.sigstore.json production-certification.json production-certification.sigstore.json release-evidence.sha256 image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

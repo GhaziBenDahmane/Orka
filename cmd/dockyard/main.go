@@ -26,6 +26,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/httpapi"
 	dockyardmigrate "github.com/bendahma/dokploy-go/internal/migrate"
 	"github.com/bendahma/dokploy-go/internal/observability"
+	"github.com/bendahma/dokploy-go/internal/releaseevidence"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
@@ -68,6 +69,8 @@ func main() {
 		err = verifyDokployImport(os.Args[2:])
 	case "rotate-master-key":
 		err = rotateMasterKey(os.Args[2:])
+	case "validate-production-certification":
+		err = validateProductionCertification(os.Args[2:])
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
 	default:
@@ -80,7 +83,43 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|volume-artifact>"
+
+func validateProductionCertification(arguments []string) error {
+	flags := flag.NewFlagSet("validate-production-certification", flag.ContinueOnError)
+	path := flags.String("file", "", "path to production certification JSON")
+	sourceCommit := flags.String("source-commit", "", "expected 40-character source commit")
+	candidateImage := flags.String("candidate-image", "", "expected immutable GHCR candidate image")
+	validationTime := flags.String("at", "", "validation time in RFC3339 (defaults to now)")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *path == "" || *sourceCommit == "" || *candidateImage == "" {
+		return errors.New("usage: dockyard validate-production-certification --file PATH --source-commit SHA --candidate-image GHCR_DIGEST")
+	}
+	file, err := os.Open(*path)
+	if err != nil {
+		return fmt.Errorf("open production certification: %w", err)
+	}
+	defer file.Close()
+	certification, err := releaseevidence.DecodeProductionCertification(file)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if *validationTime != "" {
+		now, err = time.Parse(time.RFC3339, *validationTime)
+		if err != nil {
+			return errors.New("--at must be an RFC3339 timestamp")
+		}
+	}
+	if err = certification.Validate(*sourceCommit, *candidateImage, now); err != nil {
+		return fmt.Errorf("validate production certification: %w", err)
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(certification)
+}
 
 func runVolumeArtifact(arguments []string) error {
 	flags := flag.NewFlagSet("volume-artifact", flag.ContinueOnError)

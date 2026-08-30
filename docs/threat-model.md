@@ -227,4 +227,8 @@ The following are release gates rather than accepted permanent risks:
 
 Any failed or missing item keeps the release in preview. Record evidence and
 owners in the release checklist; do not convert an untested boundary into an
-implicit acceptance.
+implicit acceptance. Stable promotion enforces this boundary with the
+source-commit- and candidate-digest-bound certification described in
+`docs/production-certification.md`; both the certification and final promotion
+run in separately protected GitHub environments and the certification is
+keylessly signed before use.
