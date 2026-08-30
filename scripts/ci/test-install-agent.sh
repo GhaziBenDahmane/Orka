@@ -29,7 +29,8 @@ case "$1 $2" in
     fi
     exit 1 ;;
   "stack config")
-    printf 'service=%s network=%s\n' "$DOCKYARD_AGENT_SERVICE_NAME" "$DOCKYARD_TRAEFIK_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
+    printf 'service=%s network=%s\n' "$DOCKYARD_AGENT_SERVICE_NAME" "$DOCKYARD_TRAEFIK_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG"
+    printf 'enrollment-secret=%s\n' "$DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
   "service inspect")
     image=${DOCKYARD_INSTALL_TEST_AGENT_IMAGE:-$DOCKYARD_IMAGE}
     state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
@@ -54,6 +55,7 @@ DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" | grep -q 'no res
 grep -q '^stack config ' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -Fqx "manifest inspect $DOCKYARD_IMAGE" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^service=edge_agent network=dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^enrollment-secret=dockyard_agent_enrollment_token$' "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'agent dry-run mutated Docker state' >&2
   exit 1
@@ -76,6 +78,31 @@ if grep -q 'one-time-enrollment-token-value' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'enrollment token leaked to Docker command log' >&2
   exit 1
 fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET=dockyard_agent_enrollment_token_v2 \
+  "$root/scripts/install-agent.sh" >/dev/null
+grep -q '^secret inspect dockyard_agent_enrollment_token_v2$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret create dockyard_agent_enrollment_token_v2 $DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^enrollment-secret=dockyard_agent_enrollment_token_v2$' "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -Eq '^secret (inspect|create) dockyard_agent_enrollment_token( |$)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'versioned agent installation used the default enrollment secret' >&2
+  exit 1
+fi
+
+for unsafe_secret in '-leading' 'bad/name' 'bad secret' 'bad:secret'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET="$unsafe_secret" \
+    "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "agent installer accepted unsafe enrollment secret name: $unsafe_secret" >&2
+    exit 1
+  fi
+  grep -q 'invalid DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe agent enrollment secret name mutated Docker state: $unsafe_secret" >&2
+    exit 1
+  fi
+done
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='bridge|local|false|{}' \

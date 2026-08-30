@@ -170,6 +170,23 @@ func TestControllerDatabaseSecretsCanBeVersioned(t *testing.T) {
 	}
 }
 
+func TestAgentEnrollmentSecretCanBeVersioned(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/agent-swarm.yml")
+	secret, ok := manifest.Secrets["dockyard_agent_enrollment_token"]
+	if !ok || !secret.External || secret.Name != "${DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET:-dockyard_agent_enrollment_token}" {
+		t.Fatalf("agent enrollment secret is not configurable and external: %#v", secret)
+	}
+
+	mounts := manifest.Services["agent"].Secrets
+	if len(mounts) != 1 {
+		t.Fatalf("agent enrollment secret mounts=%#v", mounts)
+	}
+	mount, ok := mounts[0].(map[string]any)
+	if !ok || mount["source"] != "dockyard_agent_enrollment_token" || mount["target"] != "dockyard_agent_enrollment_token" {
+		t.Fatalf("agent enrollment secret does not retain a stable container path: %#v", mounts[0])
+	}
+}
+
 func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	manifest := readDeploymentManifest(t, "../../deploy/swarm-ha.yml")
 	if replicas := manifest.Services["postgres"].Deploy.Replicas; replicas != 0 {

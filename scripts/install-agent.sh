@@ -9,7 +9,7 @@ dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
 wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
 stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
-token_secret=dockyard_agent_enrollment_token
+token_secret=${DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET:-dockyard_agent_enrollment_token}
 
 fail() {
   echo "install-agent: $*" >&2
@@ -17,6 +17,7 @@ fail() {
 }
 
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_AGENT_STACK_NAME" ;; esac
+case "$token_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" ;; esac
 case "$network" in ""|[!a-z0-9]*|*[!a-z0-9_.-]*) fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters" ;; esac
 [ "${#network}" -le 63 ] || fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters"
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
@@ -119,6 +120,7 @@ unset token
 DOCKYARD_AGENT_SERVICE_NAME=${stack}_agent
 export DOCKYARD_CONTROL_PLANE_URL="$control_plane_url"
 export DOCKYARD_AGENT_URL="$agent_url"
+export DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET="$token_secret"
 export DOCKYARD_AGENT_SERVICE_NAME DOCKYARD_TRAEFIK_NETWORK="$network"
 
 docker manifest inspect "$DOCKYARD_IMAGE" >/dev/null 2>&1 || fail "DOCKYARD_IMAGE cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"

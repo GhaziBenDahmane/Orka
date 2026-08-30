@@ -303,6 +303,8 @@ export DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com
 export DOCKYARD_AGENT_URL=https://agents.dockyard.example.com:8444
 export DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:...
 export DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE=/secure/dockyard/enrollment-token
+# Use a new versioned name when rotating the token or replacing lost agent state.
+export DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET=dockyard_agent_enrollment_token_v2
 
 DOCKYARD_INSTALL_DRY_RUN=true scripts/install-agent.sh
 scripts/install-agent.sh
@@ -315,7 +317,10 @@ token file. It creates the workload overlay network when absent, derives the exa
 `DOCKYARD_AGENT_STACK_NAME`, and requires the replica count to remain converged
 for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
-one when the corresponding agent identity volume is intact. The equivalent
+one when the corresponding agent identity volume is intact. Docker secrets are
+immutable: when issuing a fresh enrollment token or recovering from a lost
+agent identity volume, set `DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET` to a new,
+versioned Docker secret name rather than reusing the old secret. The equivalent
 installer verifies the exact requested image digest and rejects active, paused,
 or rolled-back service updates before reporting success. Placement, deployment,
 remote commands, and drift repair fail closed when the assigned agent has not
@@ -323,9 +328,11 @@ heartbeated for two minutes; placement capacity is rechecked before every
 deployment or automatic repair. The equivalent manual commands are:
 
 ```sh
-printf '%s' "$ENROLLMENT_TOKEN" | docker secret create dockyard_agent_enrollment_token -
+export DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET=dockyard_agent_enrollment_token_v2
+printf '%s' "$ENROLLMENT_TOKEN" | docker secret create "$DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" -
 DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com \
   DOCKYARD_AGENT_URL=https://agents.dockyard.example.com:8444 \
+  DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET="$DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" \
   DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
   scripts/ci/check-image-digests.sh agent
 DOCKYARD_CONTROL_PLANE_URL=https://dockyard.example.com \

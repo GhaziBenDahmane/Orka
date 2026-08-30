@@ -9,7 +9,9 @@ services:
       DOCKYARD_AGENT_STATE_DIRECTORY: /var/lib/dockyard-agent
       DOCKYARD_AGENT_SERVICE_NAME: ${DOCKYARD_AGENT_SERVICE_NAME:-dockyard-agent_agent}
       DOCKYARD_TRAEFIK_NETWORK: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
-    secrets: [dockyard_agent_enrollment_token]
+    secrets:
+      - source: dockyard_agent_enrollment_token
+        target: dockyard_agent_enrollment_token
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent-state:/var/lib/dockyard-agent
@@ -45,4 +47,6 @@ volumes:
   agent-state: {}
 
 secrets:
-  dockyard_agent_enrollment_token: {external: true}
+  dockyard_agent_enrollment_token:
+    external: true
+    name: ${DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET:-dockyard_agent_enrollment_token}
