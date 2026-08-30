@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"sort"
@@ -673,45 +674,14 @@ func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWork
 	if !ok || len(services) == 0 {
 		return posture
 	}
-	declaredVolumes := map[string]any{}
-	if document["volumes"] != nil {
-		declaredVolumes, ok = document["volumes"].(map[string]any)
-		if !ok {
-			return posture
-		}
+	posture.NamedVolumes, ok = mountedNamedVolumes(document, services)
+	if !ok {
+		return posture
 	}
-	usedVolumes := map[string]bool{}
 	for _, raw := range services {
 		service, valid := raw.(map[string]any)
 		if !valid {
 			return posture
-		}
-		if service["volumes"] != nil {
-			volumes, valid := service["volumes"].([]any)
-			if !valid {
-				return posture
-			}
-			for _, rawVolume := range volumes {
-				var source string
-				if spec, valid := rawVolume.(map[string]any); valid {
-					kind, _ := spec["type"].(string)
-					source, _ = spec["source"].(string)
-					if kind != "volume" {
-						continue
-					}
-				} else if text, valid := rawVolume.(string); valid {
-					parts := strings.SplitN(text, ":", 2)
-					if len(parts) != 2 {
-						continue
-					}
-					source = parts[0]
-				} else {
-					return posture
-				}
-				if _, declared := declaredVolumes[source]; source != "" && declared {
-					usedVolumes[source] = true
-				}
-			}
 		}
 		posture.ContainerCount++
 		if image, exists := service["image"]; exists {
@@ -730,12 +700,102 @@ func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWork
 			posture.MissingImageOrBuild++
 		}
 	}
-	for name := range usedVolumes {
-		posture.NamedVolumes = append(posture.NamedVolumes, name)
-	}
-	sort.Strings(posture.NamedVolumes)
 	posture.DefinitionParseable = true
 	return posture
+}
+
+func mountedNamedVolumes(document, services map[string]any) ([]string, bool) {
+	declaredVolumes := map[string]any{}
+	var ok bool
+	if document["volumes"] != nil {
+		declaredVolumes, ok = document["volumes"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+	}
+	usedVolumes := map[string]bool{}
+	for _, raw := range services {
+		service, valid := raw.(map[string]any)
+		if !valid {
+			return nil, false
+		}
+		if service["volumes"] == nil {
+			continue
+		}
+		volumes, valid := service["volumes"].([]any)
+		if !valid {
+			return nil, false
+		}
+		for _, rawVolume := range volumes {
+			var source string
+			if spec, valid := rawVolume.(map[string]any); valid {
+				kind, _ := spec["type"].(string)
+				source, _ = spec["source"].(string)
+				if kind != "volume" {
+					continue
+				}
+			} else if text, valid := rawVolume.(string); valid {
+				parts := strings.SplitN(text, ":", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				source = parts[0]
+			} else {
+				return nil, false
+			}
+			if _, declared := declaredVolumes[source]; source != "" && declared {
+				usedVolumes[source] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(usedVolumes))
+	for name := range usedVolumes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, true
+}
+
+func ensureProtectedVolumesDeclared(ctx context.Context, tx pgx.Tx, serviceID uuid.UUID, composeYAML string) error {
+	volumes, err := mountedNamedVolumesFromCompose(composeYAML)
+	if err != nil {
+		return err
+	}
+	declared := make(map[string]bool, len(volumes))
+	for _, name := range volumes {
+		declared[name] = true
+	}
+	rows, err := tx.Query(ctx, `SELECT volume_name FROM volume_backup_policies WHERE compose_service_id=$1 ORDER BY volume_name`, serviceID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return err
+		}
+		if !declared[name] {
+			return fmt.Errorf("%w: %s", ErrProtectedVolumeRemoved, name)
+		}
+	}
+	return rows.Err()
+}
+
+func mountedNamedVolumesFromCompose(composeYAML string) ([]string, error) {
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(composeYAML), &document); err != nil {
+		return nil, err
+	}
+	services, ok := document["services"].(map[string]any)
+	if !ok || len(services) == 0 {
+		return nil, errors.New("compose document must define services")
+	}
+	volumes, ok := mountedNamedVolumes(document, services)
+	if !ok {
+		return nil, errors.New("compose volume definitions are invalid")
+	}
+	return volumes, nil
 }
 
 func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {

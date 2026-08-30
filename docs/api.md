@@ -350,7 +350,7 @@ until an administrator retries them.
 | GET/PUT/DELETE | `/v1/projects/{id}/grants…` | Manage per-user project roles |
 | GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
-| GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup) |
+| GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup); revisions cannot remove a named volume while its backup policy exists |
 | PUT | `/v1/services/{id}/source` | Configure a Git or uploaded-ZIP application build, registry target, build mode, credentials, arguments, secrets, and submodules |
 | PUT | `/v1/services/{id}/artifact-source` | Upload or replace an encrypted ZIP source (25 MiB compressed / 250 MiB expanded limits) |
 | POST | `/v1/services/{id}/routes` | Publish a service through Traefik |
@@ -360,6 +360,10 @@ until an administrator retries them.
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful digest-resolved snapshot; returns `409 rollback_unavailable` when no immutable snapshot exists |
 | GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |
+| GET | `/v1/services/{id}/volumes` | List mounted declared named volumes and their resolved Swarm names |
+| GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume |
+| GET/POST | `/v1/services/{id}/volume-backups…` | List or queue named-volume backups |
+| GET/POST | `/v1/services/{id}/volume-restores…` | List restore history or queue a confirmed restore |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
 | POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |
 | DELETE | `/v1/services/{id}/deploy-tokens/{tokenId}` | Revoke a CI deploy-hook credential |

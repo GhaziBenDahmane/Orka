@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -64,6 +65,28 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	status, body := scopedAPIRequest(t, policyURL, token, organizationID, http.MethodPut, map[string]any{"destinationId": destinationID, "intervalSeconds": 3600, "retentionCount": 7, "quiesce": true, "enabled": true})
 	if status != http.StatusOK {
 		t.Fatalf("put policy status=%d body=%s", status, body)
+	}
+	if _, err = db.UpsertVolumeBackupPolicy(ctx, organizationID, serviceID, "missing", "nodeabc123", destinationID, 3600, 7, true, true); !errors.Is(err, store.ErrVolumeNotDeclared) {
+		t.Fatalf("policy for undeclared volume error=%v, want volume not declared", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO template_instances(compose_service_id,template_key,template_version,template_checksum,encrypted_variables) VALUES($1,'test/app','1','checksum','encrypted')`, serviceID); err != nil {
+		t.Fatal(err)
+	}
+	templateService, _, err := db.GetComposeService(ctx, organizationID, serviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateService.ComposeYAML = "services:\n  app:\n    image: example/app:2\n"
+	if _, _, err = db.UpgradeTemplateService(ctx, organizationID, templateService.Revision, templateService, nil, store.TemplateInstance{TemplateKey: "test/app", TemplateVersion: "2", TemplateChecksum: "next", AppliedComposeChecksum: "next", EncryptedVariables: "encrypted", EncryptedOverrides: "encrypted"}); !errors.Is(err, store.ErrProtectedVolumeRemoved) {
+		t.Fatalf("template upgrade removing protected volume error=%v, want protected volume removed", err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+serviceID.String(), token, organizationID, http.MethodPatch, map[string]any{"composeYaml": "services:\n  app:\n    image: example/app:2\n"})
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"protected_volume_removed"`)) || !bytes.Contains(body, []byte("uploads")) {
+		t.Fatalf("protected volume removal status=%d body=%s", status, body)
+	}
+	preservedService, _, err := db.GetComposeService(ctx, organizationID, serviceID)
+	if err != nil || !strings.Contains(preservedService.ComposeYAML, "uploads:/data") || preservedService.Revision != 1 {
+		t.Fatalf("protected service changed after rejected update: service=%#v err=%v", preservedService, err)
 	}
 	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
 	if err != nil || len(snapshot.VolumeBackupPosture) != 1 || snapshot.VolumeBackupPosture[0].VolumeName != "uploads" || snapshot.VolumeBackupPosture[0].StorageNodeID != "nodeabc123" {

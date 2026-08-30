@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,10 +63,25 @@ func (s *Store) UpsertVolumeBackupPolicy(ctx context.Context, organizationID, se
 	}
 	defer tx.Rollback(ctx)
 	var lockedID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT s.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 AND EXISTS(SELECT 1 FROM backup_destinations d WHERE d.id=$3 AND d.organization_id=$2) FOR UPDATE OF s`, serviceID, organizationID, destinationID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+	var composeYAML string
+	if err = tx.QueryRow(ctx, `SELECT s.id,s.compose_yaml FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 AND EXISTS(SELECT 1 FROM backup_destinations d WHERE d.id=$3 AND d.organization_id=$2) FOR UPDATE OF s`, serviceID, organizationID, destinationID).Scan(&lockedID, &composeYAML); errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackupPolicy{}, ErrNotFound
 	} else if err != nil {
 		return VolumeBackupPolicy{}, err
+	}
+	volumes, err := mountedNamedVolumesFromCompose(composeYAML)
+	if err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	declared := false
+	for _, name := range volumes {
+		if name == volumeName {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		return VolumeBackupPolicy{}, fmt.Errorf("%w: %s", ErrVolumeNotDeclared, volumeName)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE compose_services SET storage_node_id=$2,updated_at=now() WHERE id=$1 AND (storage_node_id='' OR storage_node_id=$2)`, serviceID, nodeID)
 	if err != nil {

@@ -185,6 +185,10 @@ files in the helper. Archive restore rejects absolute paths, traversal, escaping
 symlinks, hard links, devices, sockets, FIFOs, duplicates, and paths beneath
 symlinks before moving any live volume entry; staged replacement retains the
 old top-level tree until all replacement renames succeed.
+Direct service revisions and template upgrades lock the service and reject
+removal of any mounted named volume that still has a backup policy. Operators
+must explicitly remove the policy first, preserving a deliberate boundary
+between configuration changes and retirement of protected state.
 
 ### AI prompt injection and unsafe autonomy
 
