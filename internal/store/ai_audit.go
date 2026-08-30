@@ -312,13 +312,13 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 
 	rows, err = s.Pool.Query(ctx, `
 		SELECT service.id,service.name,policy.volume_name,service.storage_node_id,policy.enabled,policy.interval_seconds,policy.retention_count,policy.quiesce,
-			COALESCE(last_backup.status,''),last_backup.created_at,COALESCE(last_restore.status,''),last_restore.created_at
+			COALESCE(last_backup.status,''),last_backup.finished_at,COALESCE(last_restore.status,''),last_restore.finished_at
 		FROM volume_backup_policies policy
 		JOIN compose_services service ON service.id=policy.compose_service_id
 		JOIN environments environment ON environment.id=service.environment_id
 		JOIN projects project ON project.id=environment.project_id
-		LEFT JOIN LATERAL (SELECT backup.id,backup.status,backup.created_at FROM volume_backups backup WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY backup.created_at DESC LIMIT 1) last_backup ON true
-		LEFT JOIN LATERAL (SELECT restore.status,restore.created_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY restore.created_at DESC LIMIT 1) last_restore ON true
+		LEFT JOIN LATERAL (SELECT backup.id,backup.status,backup.finished_at,backup.created_at FROM volume_backups backup WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY backup.created_at DESC LIMIT 1) last_backup ON true
+		LEFT JOIN LATERAL (SELECT restore.status,restore.finished_at,restore.created_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY restore.created_at DESC LIMIT 1) last_restore ON true
 		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
 		ORDER BY service.name,policy.volume_name`, organizationID)
 	if err != nil {
@@ -341,13 +341,13 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	rows, err = s.Pool.Query(ctx, `
 		SELECT d.id,d.name,d.engine,d.status,
 			bp.id IS NOT NULL,COALESCE(bp.enabled,false),COALESCE(bp.interval_seconds,0),COALESCE(bp.retention_count,0),COALESCE(bp.verify_restore,false),bp.destination_id IS NOT NULL,
-			COALESCE(last_backup.status,''),last_backup.created_at,COALESCE(last_drill.status,''),last_drill.created_at
+			COALESCE(last_backup.status,''),last_backup.finished_at,COALESCE(last_drill.status,''),last_drill.finished_at
 		FROM database_instances d
 		JOIN environments e ON e.id=d.environment_id
 		JOIN projects p ON p.id=e.project_id
 		LEFT JOIN backup_policies bp ON bp.database_instance_id=d.id
-		LEFT JOIN LATERAL (SELECT b.status,b.created_at FROM database_backups b WHERE b.database_instance_id=d.id ORDER BY b.created_at DESC LIMIT 1) last_backup ON true
-		LEFT JOIN LATERAL (SELECT r.status,r.created_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id WHERE b.database_instance_id=d.id AND r.kind='drill' ORDER BY r.created_at DESC LIMIT 1) last_drill ON true
+		LEFT JOIN LATERAL (SELECT b.status,b.finished_at,b.created_at FROM database_backups b WHERE b.database_instance_id=d.id ORDER BY b.created_at DESC LIMIT 1) last_backup ON true
+		LEFT JOIN LATERAL (SELECT r.status,r.finished_at,r.created_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id WHERE b.database_instance_id=d.id AND r.kind='drill' ORDER BY r.created_at DESC LIMIT 1) last_drill ON true
 		WHERE p.organization_id=$1 ORDER BY d.name,d.id`, organizationID)
 	if err != nil {
 		return err

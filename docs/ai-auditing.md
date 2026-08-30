@@ -82,7 +82,7 @@ keys make it a privileged service.
   third-party agents cannot bypass the bound, while they may update an existing
   fingerprint without consuming another slot.
 - Before calling the model, the built-in runner records a bounded deterministic
-  safety baseline for missing or disabled backups, missing owners, disabled
+  safety baseline for missing, disabled, or overdue backups and restore drills, missing owners, disabled
   mandatory SSO, stale cluster heartbeats, expiring agent certificates,
   expiring service-account and stale SCIM credentials, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,

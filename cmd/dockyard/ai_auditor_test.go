@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -223,6 +224,47 @@ func TestDeterministicAuditDetectsTemplateRepositoryFreshness(t *testing.T) {
 			findings := deterministicAuditFindings(snapshot, now)
 			if test.want == "" && len(findings) != 0 || test.want != "" && (len(findings) != 1 || findings[0].Title != test.want) {
 				t.Fatalf("findings=%#v", findings)
+			}
+		})
+	}
+}
+
+func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
+	now := time.Now().UTC()
+	staleBackup, staleRestore := now.Add(-3*time.Hour), now.Add(-25*time.Hour)
+	freshBackup, freshRestore := now.Add(-time.Hour), now.Add(-23*time.Hour)
+	for _, test := range []struct {
+		name       string
+		backupAt   *time.Time
+		restoreAt  *time.Time
+		wantTitles []string
+	}{
+		{name: "stale", backupAt: &staleBackup, restoreAt: &staleRestore, wantTitles: []string{"Database backup is overdue", "Database restore drill is overdue", "Volume backup is overdue", "Volume restore validation is overdue"}},
+		{name: "fresh", backupAt: &freshBackup, restoreAt: &freshRestore},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := store.AIAuditSnapshot{
+				Organization:        uuid.New(),
+				IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+				NotificationPosture: fullyCoveredNotifications(),
+				BackupPosture: []store.AIAuditBackupPosture{{
+					DatabaseID: uuid.New(), PolicyConfigured: true, PolicyEnabled: true, IntervalSeconds: 3600,
+					VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt,
+					LastRestoreDrillStatus: "succeeded", LastRestoreDrillAt: test.restoreAt,
+				}},
+				VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{
+					ServiceID: uuid.New(), VolumeName: "uploads", StorageNodeID: "nodeabc123", PolicyEnabled: true,
+					IntervalSeconds: 3600, Quiesce: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt,
+					LastRestoreStatus: "succeeded", LastRestoreAt: test.restoreAt,
+				}},
+			}
+			findings := deterministicAuditFindings(snapshot, now)
+			gotTitles := make([]string, 0, len(findings))
+			for _, finding := range findings {
+				gotTitles = append(gotTitles, finding.Title)
+			}
+			if !slices.Equal(gotTitles, test.wantTitles) {
+				t.Fatalf("finding titles=%v, want %v", gotTitles, test.wantTitles)
 			}
 		})
 	}

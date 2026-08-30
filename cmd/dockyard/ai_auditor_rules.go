@@ -81,11 +81,15 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 		if backup.LastBackupStatus != "succeeded" {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database lacks a successful backup", Description: "No latest successful backup is visible for this managed database.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "lastBackupStatus": backup.LastBackupStatus}, Remediation: "Run a backup, resolve any failure, and verify the resulting artifact checksum."})
+		} else if recoveryEvidenceOverdue(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute) {
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Database backup is overdue", Description: "The latest successful database backup is older than twice the configured interval.", ResourceType: "database", ResourceID: resourceID, Evidence: recoveryAgeEvidence(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute), Remediation: "Inspect the backup scheduler and destination, then complete a fresh verified backup."})
 		}
 		if !backup.VerifyRestore {
 			add(modelFinding{Severity: "medium", Category: "backup", Title: "Automated restore verification is disabled", Description: "Backups are not automatically exercised through isolated restore drills.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine}, Remediation: "Enable restore verification and investigate any failed drill before relying on the backup."})
 		} else if backup.LastRestoreDrillStatus != "succeeded" {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database lacks a successful restore drill", Description: "Restore verification is enabled, but no latest successful drill is visible.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "lastRestoreDrillStatus": backup.LastRestoreDrillStatus}, Remediation: "Run an isolated restore drill and validate application-level data."})
+		} else if backup.PolicyEnabled && recoveryEvidenceOverdue(now, backup.LastRestoreDrillAt, backup.IntervalSeconds, 24*time.Hour) {
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Database restore drill is overdue", Description: "The latest successful isolated restore drill is older than twice the configured backup interval, with a minimum one-day window.", ResourceType: "database", ResourceID: resourceID, Evidence: recoveryAgeEvidence(now, backup.LastRestoreDrillAt, backup.IntervalSeconds, 24*time.Hour), Remediation: "Run an isolated restore drill and validate application-level data before relying on recent backups."})
 		}
 	}
 	for _, backup := range snapshot.VolumeBackupPosture {
@@ -98,12 +102,20 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 		if backup.LastBackupStatus != "succeeded" {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Volume lacks a successful backup", Description: "No latest successful encrypted backup is visible for a protected named volume.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName, "lastBackupStatus": backup.LastBackupStatus}, Remediation: "Run a volume backup, resolve any failure, and verify the resulting artifact checksum."})
+		} else if backup.PolicyEnabled && recoveryEvidenceOverdue(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute) {
+			evidence := recoveryAgeEvidence(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute)
+			evidence["volumeName"] = backup.VolumeName
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Volume backup is overdue", Description: "The latest successful named-volume backup is older than twice the configured interval.", ResourceType: "service", ResourceID: resourceID, Evidence: evidence, Remediation: "Inspect the backup scheduler and destination, then complete a fresh encrypted volume backup."})
 		}
 		if !backup.Quiesce {
 			add(modelFinding{Severity: "medium", Category: "backup", Title: "Volume backups do not pause writers", Description: "The backup policy allows services to keep writing while the volume archive is created.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName}, Remediation: "Enable quiescence or document and validate the application's crash-consistent backup guarantees."})
 		}
 		if backup.LastRestoreStatus != "succeeded" {
 			add(modelFinding{Severity: "medium", Category: "backup", Title: "Volume restore has not been validated", Description: "No latest successful restore is visible for a protected named volume.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName, "lastRestoreStatus": backup.LastRestoreStatus}, Remediation: "Perform a controlled restore rehearsal and validate application-level data before relying on the backup."})
+		} else if backup.PolicyEnabled && recoveryEvidenceOverdue(now, backup.LastRestoreAt, backup.IntervalSeconds, 24*time.Hour) {
+			evidence := recoveryAgeEvidence(now, backup.LastRestoreAt, backup.IntervalSeconds, 24*time.Hour)
+			evidence["volumeName"] = backup.VolumeName
+			add(modelFinding{Severity: "medium", Category: "backup", Title: "Volume restore validation is overdue", Description: "The latest successful named-volume restore validation is older than twice the configured backup interval, with a minimum one-day window.", ResourceType: "service", ResourceID: resourceID, Evidence: evidence, Remediation: "Perform a controlled restore rehearsal and validate application-level data before relying on current backups."})
 		}
 	}
 	for _, cluster := range snapshot.Clusters {
@@ -167,6 +179,29 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		findings[maxDeterministicAuditFindings-1] = modelFinding{Severity: "high", Category: "audit", Title: "Deterministic audit findings were truncated", Description: fmt.Sprintf("The baseline audit reached its %d-finding safety limit.", maxDeterministicAuditFindings), ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"limit": maxDeterministicAuditFindings}, Remediation: "Resolve existing findings and rerun the audit to reveal any remaining issues."}
 	}
 	return findings
+}
+
+func recoveryEvidenceOverdue(now time.Time, completedAt *time.Time, intervalSeconds int, minimum time.Duration) bool {
+	if completedAt == nil {
+		return false
+	}
+	maximumAge := 2 * time.Duration(intervalSeconds) * time.Second
+	if maximumAge < minimum {
+		maximumAge = minimum
+	}
+	return now.Sub(*completedAt) > maximumAge
+}
+
+func recoveryAgeEvidence(now time.Time, completedAt *time.Time, intervalSeconds int, minimum time.Duration) map[string]any {
+	maximumAge := 2 * time.Duration(intervalSeconds) * time.Second
+	if maximumAge < minimum {
+		maximumAge = minimum
+	}
+	return map[string]any{
+		"lastSucceededAt":   completedAt.UTC().Format(time.RFC3339),
+		"ageSeconds":        int64(now.Sub(*completedAt) / time.Second),
+		"maximumAgeSeconds": int64(maximumAge / time.Second),
+	}
 }
 
 func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) []string {
