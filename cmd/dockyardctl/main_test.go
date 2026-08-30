@@ -102,6 +102,8 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"restore-volume", "backup-id", "service-slug"}, http.MethodPost, "/v1/volume-backups/backup-id/restore"},
 		{[]string{"volume-restore", "restore-id"}, http.MethodGet, "/v1/volume-restores/restore-id"},
 		{[]string{"cancel-volume-restore", "restore-id"}, http.MethodPost, "/v1/volume-restores/restore-id/cancel"},
+		{[]string{"templates"}, http.MethodGet, "/v1/templates?limit=200"},
+		{[]string{"templates", "opaque+/cursor"}, http.MethodGet, "/v1/templates?limit=200&cursor=opaque%2B%2Fcursor"},
 		{[]string{"template-repositories"}, http.MethodGet, "/v1/template-repositories"},
 		{[]string{"create-template-repository", `{}`}, http.MethodPost, "/v1/template-repositories"},
 		{[]string{"update-template-repository", "repository-id", `{}`}, http.MethodPatch, "/v1/template-repositories/repository-id"},

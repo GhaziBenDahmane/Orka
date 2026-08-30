@@ -3856,9 +3856,20 @@ paths:
     get:
       operationId: get_v1_templates
       tags: [templates]
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
+        - name: cursor
+          in: query
+          schema: {type: string}
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemplateCatalogPage'
         default:
           description: Structured API error
           content:
@@ -4116,6 +4127,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DatabaseEngine'
+    TemplateCatalogPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {type: object, additionalProperties: true}
+        nextCursor: {type: string}
     ErrorEnvelope:
       type: object
       required: [error]

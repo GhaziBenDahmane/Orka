@@ -101,3 +101,16 @@ func TestOpenAPIDocumentsStructuredDatabaseEngineResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIDocumentsTemplatePagination(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{"#/components/schemas/TemplateCatalogPage", "name: cursor", "maximum: 200", "required: [items, nextCursor]"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing %q", expected)
+		}
+	}
+}

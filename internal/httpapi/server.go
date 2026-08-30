@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1527,7 +1528,34 @@ func (s *Server) getDatabaseRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Store.ListTemplates(r.Context(), principal(r).OrganizationID)
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeError(w, 400, "invalid_page", "limit must be between 1 and 200")
+			return
+		}
+		limit = parsed
+	}
+	var cursor *store.TemplatePageCursor
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		if len(raw) > 2048 {
+			writeError(w, 400, "invalid_cursor", "template cursor is invalid")
+			return
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(raw)
+		var payload struct {
+			Name    string    `json:"n"`
+			Version string    `json:"v"`
+			ID      uuid.UUID `json:"i"`
+		}
+		if err != nil || json.Unmarshal(decoded, &payload) != nil || payload.Name == "" || payload.Version == "" || payload.ID == uuid.Nil {
+			writeError(w, 400, "invalid_cursor", "template cursor is invalid")
+			return
+		}
+		cursor = &store.TemplatePageCursor{Name: payload.Name, Version: payload.Version, ID: payload.ID}
+	}
+	items, hasMore, err := s.Store.ListTemplatesPage(r.Context(), principal(r).OrganizationID, cursor, limit)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1561,7 +1589,21 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 			Deployable: safetyClass == templates.SafetyClassSafe || (safetyClass == templates.SafetyClassRequiresUnsafe && s.Compiler.AllowUnsafe),
 		})
 	}
-	writeJSON(w, 200, map[string]any{"items": response})
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		payload, marshalErr := json.Marshal(struct {
+			Name    string    `json:"n"`
+			Version string    `json:"v"`
+			ID      uuid.UUID `json:"i"`
+		}{Name: last.Name, Version: last.Version, ID: last.ID})
+		if marshalErr != nil {
+			s.writeInternalError(w, r, 500, "cursor_failed", "template page cursor could not be created", marshalErr)
+			return
+		}
+		nextCursor = base64.RawURLEncoding.EncodeToString(payload)
+	}
+	writeJSON(w, 200, map[string]any{"items": response, "nextCursor": nextCursor})
 }
 
 func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
@@ -1822,18 +1864,12 @@ func (s *Server) listTemplateVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	composeSum := sha256.Sum256([]byte(service.ComposeYAML))
 	instance.Drifted = instance.AppliedComposeChecksum != hex.EncodeToString(composeSum[:])
-	items, err := s.Store.ListTemplates(r.Context(), p.OrganizationID)
+	items, err := s.Store.ListTemplateVersions(r.Context(), p.OrganizationID, instance.TemplateKey, instance.TemplateChecksum)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	candidates := make([]store.Template, 0)
-	for _, item := range items {
-		if item.Key == instance.TemplateKey && item.Checksum != instance.TemplateChecksum {
-			candidates = append(candidates, item)
-		}
-	}
-	writeJSON(w, 200, map[string]any{"current": instance, "items": candidates})
+	writeJSON(w, 200, map[string]any{"current": instance, "items": items})
 }
 
 func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) {

@@ -173,6 +173,12 @@ type Template struct {
 	CreatedAt      time.Time       `json:"createdAt"`
 }
 
+type TemplatePageCursor struct {
+	Name    string
+	Version string
+	ID      uuid.UUID
+}
+
 type TemplateInstance struct {
 	ComposeServiceID       uuid.UUID  `json:"composeServiceId"`
 	TemplateID             *uuid.UUID `json:"templateId,omitempty"`
@@ -1980,8 +1986,52 @@ func (s *Store) UpsertGlobalTemplates(ctx context.Context, items []Template) err
 	return tx.Commit(ctx)
 }
 
+func (s *Store) ListTemplatesPage(ctx context.Context, organizationID uuid.UUID, after *TemplatePageCursor, limit int) ([]Template, bool, error) {
+	if limit < 1 || limit > 200 {
+		return nil, false, errors.New("template page limit must be between 1 and 200")
+	}
+	query := `SELECT id,organization_id,repository_id,template_key,version,name,description,config,source,source_path,checksum,created_at
+		FROM templates
+		WHERE (organization_id IS NULL OR organization_id=$1)`
+	args := []any{organizationID}
+	if after != nil {
+		query += ` AND (name>$2 OR (name=$2 AND version<$3) OR (name=$2 AND version=$3 AND id>$4))`
+		args = append(args, after.Name, after.Version, after.ID)
+	}
+	args = append(args, limit+1)
+	query += fmt.Sprintf(` ORDER BY name,version DESC,id LIMIT $%d`, len(args))
+	rows, err := s.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	items := make([]Template, 0, limit+1)
+	for rows.Next() {
+		var item Template
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.RepositoryID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Config, &item.Source, &item.SourcePath, &item.Checksum, &item.CreatedAt); err != nil {
+			return nil, false, err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, false, err
+	}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	return items, hasMore, nil
+}
+
+// ListTemplates is retained for bounded internal catalog checks. API clients
+// should use ListTemplatesPage so every visible entry remains retrievable.
 func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]Template, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,repository_id,template_key,version,name,description,config,source,source_path,checksum,created_at FROM templates WHERE organization_id IS NULL OR organization_id=$1 ORDER BY name,version DESC`, organizationID)
+	items, _, err := s.ListTemplatesPage(ctx, organizationID, nil, 200)
+	return items, err
+}
+
+func (s *Store) ListTemplateVersions(ctx context.Context, organizationID uuid.UUID, key, excludedChecksum string) ([]Template, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,repository_id,template_key,version,name,description,config,source,source_path,checksum,created_at FROM templates WHERE (organization_id IS NULL OR organization_id=$1) AND template_key=$2 AND checksum<>$3 ORDER BY version DESC,id LIMIT 200`, organizationID, key, excludedChecksum)
 	if err != nil {
 		return nil, err
 	}
@@ -1989,7 +2039,7 @@ func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]
 	items := []Template{}
 	for rows.Next() {
 		var item Template
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.RepositoryID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Config, &item.Source, &item.SourcePath, &item.Checksum, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.RepositoryID, &item.Key, &item.Version, &item.Name, &item.Description, &item.Config, &item.Source, &item.SourcePath, &item.Checksum, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

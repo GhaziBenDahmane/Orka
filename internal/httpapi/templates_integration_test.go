@@ -96,11 +96,35 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 
 	server := httptest.NewServer((&Server{Store: db, Box: box, Compiler: deploy.Compiler{PublicNetwork: "dockyard-public"}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	defer server.Close()
-	status, body := scopedAPIRequest(t, server.URL+"/v1/templates", viewerToken, orgID, http.MethodGet, nil)
-	if status != http.StatusOK {
-		t.Fatalf("list status = %d: %s", status, body)
+	status := 0
+	var body []byte
+	var catalog strings.Builder
+	cursor := ""
+	for page := 0; page < 100; page++ {
+		endpoint := server.URL + "/v1/templates?limit=200"
+		if cursor != "" {
+			endpoint += "&cursor=" + cursor
+		}
+		status, body = scopedAPIRequest(t, endpoint, viewerToken, orgID, http.MethodGet, nil)
+		var response struct {
+			Items      []json.RawMessage `json:"items"`
+			NextCursor string            `json:"nextCursor"`
+		}
+		if status != http.StatusOK || json.Unmarshal(body, &response) != nil {
+			t.Fatalf("list status = %d: %s", status, body)
+		}
+		for _, item := range response.Items {
+			catalog.Write(item)
+		}
+		cursor = response.NextCursor
+		if cursor == "" {
+			break
+		}
 	}
-	text := string(body)
+	if cursor != "" {
+		t.Fatal("template catalog did not terminate within 100 pages")
+	}
+	text := catalog.String()
 	if strings.Contains(text, "catalog-secret-must-not-leak") || strings.Contains(text, "${password:24}") {
 		t.Fatalf("template listing leaked secret material: %s", body)
 	}
@@ -112,6 +136,29 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 	}
 	if !strings.Contains(text, `"key":"restricted-test"`) || !strings.Contains(text, `"safetyClass":"requires_unsafe","safetyReason":"service requests privileged mode","deployable":false`) {
 		t.Fatalf("restricted template classification missing: %s", body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates?limit=1", viewerToken, orgID, http.MethodGet, nil)
+	var firstPage struct {
+		Items      []store.Template `json:"items"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &firstPage) != nil || len(firstPage.Items) != 1 || firstPage.NextCursor == "" {
+		t.Fatalf("first template page status = %d: %s", status, body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates?limit=1&cursor="+firstPage.NextCursor, viewerToken, orgID, http.MethodGet, nil)
+	var secondPage struct {
+		Items []store.Template `json:"items"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &secondPage) != nil || len(secondPage.Items) != 1 || secondPage.Items[0].ID == firstPage.Items[0].ID {
+		t.Fatalf("second template page status = %d: %s", status, body)
+	}
+	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates?limit=201", viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("oversized template page status = %d", status)
+	}
+	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates?cursor=not-a-cursor", viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("invalid template cursor status = %d", status)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+restrictedTemplate.ID.String()+"/preview", viewerToken, orgID, http.MethodPost, map[string]any{})
 	if status != http.StatusBadRequest || !bytes.Contains(body, []byte("privileged")) {

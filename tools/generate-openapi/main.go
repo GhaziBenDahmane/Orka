@@ -66,7 +66,7 @@ paths:
 				output.WriteString("      security:\n        - mutualTLS: []\n")
 			}
 			parameters := parameterPattern.FindAllStringSubmatch(op.path, -1)
-			if len(parameters) > 0 {
+			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") {
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
@@ -74,6 +74,9 @@ paths:
 						format = "\n            format: uuid"
 					}
 					fmt.Fprintf(&output, "        - name: %s\n          in: path\n          required: true\n          schema:\n            type: string%s\n", parameter[1], format)
+				}
+				if op.method == "get" && op.path == "/v1/templates" {
+					output.WriteString("        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n        - name: cursor\n          in: query\n          schema: {type: string}\n")
 				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" {
@@ -86,6 +89,8 @@ paths:
 			output.WriteString("      responses:\n        '2XX':\n          description: Successful response\n")
 			if op.method == "get" && op.path == "/v1/database-engines" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseEngineList'\n")
+			} else if op.method == "get" && op.path == "/v1/templates" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/TemplateCatalogPage'\n")
 			}
 			output.WriteString("        default:\n          description: Structured API error\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/ErrorEnvelope'\n")
 		}
@@ -126,6 +131,14 @@ paths:
           type: array
           items:
             $ref: '#/components/schemas/DatabaseEngine'
+    TemplateCatalogPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {type: object, additionalProperties: true}
+        nextCursor: {type: string}
     ErrorEnvelope:
       type: object
       required: [error]

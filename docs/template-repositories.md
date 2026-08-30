@@ -142,12 +142,16 @@ DELETE /v1/template-repositories/{repositoryID}
 GET    /v1/templates
 ```
 
+The catalog endpoint returns at most 100 entries by default (200 maximum).
+Pass its opaque `nextCursor` back as `?cursor=...`; an empty cursor means the
+catalog is exhausted. Ordering is stable by name, descending version, and ID.
+
 Set `credentialId` on `POST` or `PATCH` to the ID returned when creating a
 `git` source credential for `github.com`. Omit it or send an empty string for a
 public repository. `syncIntervalSeconds` accepts `0` for manual-only operation
 or a value from `300` through `604800`.
 
-Automation can use `dockyardctl template-repositories`,
+Automation can page the catalog with `dockyardctl templates [nextCursor]` and use `dockyardctl template-repositories`,
 `create-template-repository JSON`, `update-template-repository ID JSON`,
 `sync-template-repository ID`, `rotate-template-repository-webhook ID`,
 `disable-template-repository-webhook ID`, and `delete-template-repository ID`.

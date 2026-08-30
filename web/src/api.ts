@@ -51,6 +51,7 @@ export type AIAuditRun = { id: string; serviceAccountId: string; agentName: stri
 export type AIAuditFinding = { id: string; runId: string; serviceAccountId: string; agentName: string; severity: string; category: string; title: string; description: string; resourceType?: string; resourceId?: string; evidence: Record<string, unknown>; remediation?: string; fingerprint: string; createdAt: string; disposition: "open" | "acknowledged" | "resolved"; triageNote?: string; triagedByUserId?: string; triagedByServiceAccountId?: string; triagedAt?: string; previousFindingId?: string; occurrenceNumber: number };
 
 type Envelope<T> = { items: T[] };
+type PaginatedEnvelope<T> = Envelope<T> & { nextCursor: string };
 type ErrorEnvelope = { error?: { code?: string; message?: string } };
 
 export class APIError extends Error {
@@ -134,7 +135,7 @@ export const api = {
   restoreVolumeBackup: (backupId: string, confirm: string) => request<VolumeRestore>(`/v1/volume-backups/${backupId}/restore`, { method: "POST", body: JSON.stringify({ confirm }) }),
   volumeRestore: (restoreId: string) => request<VolumeRestore>(`/v1/volume-restores/${restoreId}`),
   cancelVolumeRestore: (restoreId: string) => request<{ status: string }>(`/v1/volume-restores/${restoreId}/cancel`, { method: "POST", body: "{}" }),
-  templates: () => request<Envelope<Template>>("/v1/templates"),
+  templates: (cursor = "") => request<PaginatedEnvelope<Template>>(`/v1/templates?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
   templateRepositories: () => request<Envelope<TemplateRepository>>("/v1/template-repositories"),
   createTemplateRepository: (body: { name: string; slug: string; repositoryUrl: string; gitRef: string; catalogPath: string; trustedPublicKey: string; requireSignature: boolean; credentialId: string; syncIntervalSeconds: number }) => request<TemplateRepository>("/v1/template-repositories", { method: "POST", body: JSON.stringify(body) }),
   updateTemplateRepository: (id: string, body: { trustedPublicKey: string; requireSignature: boolean; credentialId: string; syncIntervalSeconds: number }) => request<void>(`/v1/template-repositories/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
