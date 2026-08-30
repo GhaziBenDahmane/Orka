@@ -188,6 +188,90 @@ paths:
             application/scim+json:
               schema:
                 $ref: '#/components/schemas/SCIMError'
+  /scim/v2/ResourceTypes:
+    get:
+      operationId: get_scim_v2_ResourceTypes
+      tags: [scim]
+      security: []
+      responses:
+        '2XX':
+          description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
+        default:
+          description: Structured API error
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMError'
+  /scim/v2/ResourceTypes/{resourceTypeID}:
+    get:
+      operationId: get_scim_v2_ResourceTypes_resourceTypeID
+      tags: [scim]
+      security: []
+      parameters:
+        - name: resourceTypeID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '2XX':
+          description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
+        default:
+          description: Structured API error
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMError'
+  /scim/v2/Schemas:
+    get:
+      operationId: get_scim_v2_Schemas
+      tags: [scim]
+      security: []
+      responses:
+        '2XX':
+          description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
+        default:
+          description: Structured API error
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMError'
+  /scim/v2/Schemas/{schemaID}:
+    get:
+      operationId: get_scim_v2_Schemas_schemaID
+      tags: [scim]
+      security: []
+      parameters:
+        - name: schemaID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '2XX':
+          description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
+        default:
+          description: Structured API error
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMError'
   /scim/v2/ServiceProviderConfig:
     get:
       operationId: get_scim_v2_ServiceProviderConfig

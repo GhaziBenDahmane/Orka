@@ -115,6 +115,7 @@ are recorded in the tenant audit chain.
 | POST | `/v1/agent/rotate` | Issue a pending short-lived certificate; first successful authentication promotes it and revokes the old serial |
 | GET/POST/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
+| GET | `/scim/v2/Schemas…`, `/scim/v2/ResourceTypes…` | Public SCIM schema and resource-type discovery |
 
 SCIM user resources are bound to the organization that provisioned them.
 SCIM bearer tokens default to a 90-day lifetime, are shown only at creation,

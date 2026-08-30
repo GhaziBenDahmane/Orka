@@ -73,7 +73,7 @@ paths:
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
-					if strings.HasSuffix(parameter[1], "ID") || strings.HasSuffix(parameter[1], "Id") {
+					if isUUIDPathParameter(parameter[1]) {
 						format = "\n            format: uuid"
 					}
 					fmt.Fprintf(&output, "        - name: %s\n          in: path\n          required: true\n          schema:\n            type: string%s\n", parameter[1], format)
@@ -247,8 +247,19 @@ func tag(path string) string {
 }
 
 func isPublic(path string) bool {
-	if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" || path == "/scim/v2/ServiceProviderConfig" {
+	if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" || isPublicSCIMDiscovery(path) {
 		return true
 	}
 	return strings.HasPrefix(path, "/v1/auth/sso/") || strings.HasPrefix(path, "/v1/auth/saml/") || strings.HasPrefix(path, "/v1/hooks/")
+}
+
+func isPublicSCIMDiscovery(path string) bool {
+	return path == "/scim/v2/ServiceProviderConfig" || path == "/scim/v2/Schemas" || strings.HasPrefix(path, "/scim/v2/Schemas/") || path == "/scim/v2/ResourceTypes" || strings.HasPrefix(path, "/scim/v2/ResourceTypes/")
+}
+
+func isUUIDPathParameter(name string) bool {
+	if name == "schemaID" || name == "resourceTypeID" {
+		return false
+	}
+	return strings.HasSuffix(name, "ID") || strings.HasSuffix(name, "Id")
 }

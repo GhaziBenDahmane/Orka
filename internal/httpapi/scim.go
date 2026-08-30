@@ -186,7 +186,13 @@ func scimPage(r *http.Request) (startIndex, count int, err error) {
 }
 
 func (s *Server) scimServiceProviderConfig(w http.ResponseWriter, r *http.Request) {
-	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"}, "patch": map[string]bool{"supported": true}, "bulk": map[string]bool{"supported": false}, "filter": map[string]any{"supported": true, "maxResults": 100}, "changePassword": map[string]bool{"supported": false}, "sort": map[string]bool{"supported": false}})
+	scimJSON(w, 200, map[string]any{
+		"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"},
+		"patch":   map[string]bool{"supported": true}, "bulk": map[string]any{"supported": false, "maxOperations": 0, "maxPayloadSize": 0},
+		"filter": map[string]any{"supported": true, "maxResults": scimMaxPageSize}, "changePassword": map[string]bool{"supported": false},
+		"sort": map[string]bool{"supported": false}, "etag": map[string]bool{"supported": false},
+		"authenticationSchemes": []map[string]any{{"type": "oauthbearertoken", "name": "Bearer token", "description": "Organization-scoped SCIM provisioning token", "specUri": "https://www.rfc-editor.org/info/rfc6750", "primary": true}},
+	})
 }
 
 func (s *Server) scimUsers(w http.ResponseWriter, r *http.Request) {
