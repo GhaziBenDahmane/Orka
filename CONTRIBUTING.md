@@ -25,9 +25,13 @@ With a local Docker daemon in Swarm mode, run `make test-templates` to exercise
 the complete template API and deployment path for the PostgreSQL and Redis
 smoke products.
 
-Templates must not request privileged mode, host namespaces, the Docker socket,
-host bind mounts, or undeclared credentials. Prefer versioned image tags in
-development and publish the digest tested for a release.
+Templates must not request privileged mode, custom namespaces or runtimes,
+device access, direct published ports, external networks or volumes, custom
+volume drivers, controller-local files, the Docker socket, host bind mounts,
+or undeclared credentials. Declare HTTP exposure through `[[config.domains]]`;
+Dockyard attaches only routed services to its shared ingress network. Prefer
+versioned image tags in development and publish the digest tested for a
+release.
 
 Organizations that do not need a built-in template can publish their own
 catalog repository using the layout in `docs/template-repositories.md`, then

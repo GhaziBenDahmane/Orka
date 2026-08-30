@@ -32,7 +32,7 @@ body:
     attributes:
       label: Swarm safety
       options:
-        - label: The template does not require privileged mode, host namespaces, host bind mounts, or the Docker socket.
+        - label: The template does not require privileged mode, custom namespaces/runtimes, device access, direct published ports, external networks or volumes, custom volume drivers, host bind mounts, or the Docker socket.
           required: true
         - label: I have identified an upstream health check or readiness probe.
           required: true

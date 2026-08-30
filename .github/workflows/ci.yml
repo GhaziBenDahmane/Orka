@@ -48,6 +48,8 @@ jobs:
         run: |
           go run ./tools/generate-openapi
           git diff --exit-code -- api/openapi.yaml
+      - name: Validate built-in template catalog
+        run: go run ./cmd/dockyard validate-dokploy-templates internal/templates/builtin
       - name: Start S3-compatible test storage
         run: |
           docker run -d --name dockyard-minio-test -p 9000:9000 \
