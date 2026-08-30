@@ -778,7 +778,11 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "service accounts do not have interactive sessions")
 		return
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	token, ok := bearerToken(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "bearer token required")
+		return
+	}
 	if err := s.Store.DeleteSession(r.Context(), cryptox.Digest(token)); err != nil {
 		s.writeInternalError(w, r, http.StatusInternalServerError, "logout_failed", "session could not be revoked", err)
 		return

@@ -66,8 +66,20 @@ func TestSessionRevocationIsEffectiveAndAudited(t *testing.T) {
 	if status, _ := scopedAPIRequest(t, server.URL+"/v1/me", otherToken, organizationID, http.MethodGet, nil); status != http.StatusUnauthorized {
 		t.Fatalf("other revoked session status=%d, want 401", status)
 	}
-	if status, body := scopedAPIRequest(t, server.URL+"/v1/auth/logout", currentToken, organizationID, http.MethodPost, nil); status != http.StatusNoContent {
-		t.Fatalf("logout status=%d body=%s", status, body)
+	logoutRequest, err := http.NewRequest(http.MethodPost, server.URL+"/v1/auth/logout", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logoutRequest.Header.Set("Authorization", "bEaReR "+currentToken)
+	logoutRequest.Header.Set("X-Organization-ID", organizationID.String())
+	logoutResponse, err := http.DefaultClient.Do(logoutRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logoutBody, _ := io.ReadAll(logoutResponse.Body)
+	_ = logoutResponse.Body.Close()
+	if logoutResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("logout status=%d body=%s", logoutResponse.StatusCode, logoutBody)
 	}
 	if status, _ := scopedAPIRequest(t, server.URL+"/v1/me", currentToken, organizationID, http.MethodGet, nil); status != http.StatusUnauthorized {
 		t.Fatalf("logged-out session status=%d, want 401", status)
