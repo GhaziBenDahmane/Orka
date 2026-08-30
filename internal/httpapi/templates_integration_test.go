@@ -289,7 +289,7 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 	// Simulate an instance created before managed environment ownership was
 	// recorded. The first write must reconstruct ownership before marking the
 	// explicitly rotated keys as operator-managed.
-	if _, err = db.Pool.Exec(ctx, `UPDATE template_instances SET managed_environment_keys='{}' WHERE compose_service_id=$1`, created.Service.ID); err != nil {
+	if _, err = db.Pool.Exec(ctx, `UPDATE template_instances SET managed_environment_keys='{}',environment_ownership_recorded=false WHERE compose_service_id=$1`, created.Service.ID); err != nil {
 		t.Fatal(err)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/variables", viewerToken, orgID, http.MethodPut, map[string]any{"values": map[string]string{"MANUAL_ONLY": "keep-on-upgrade", "PASSWORD": "operator-rotated-password"}})
@@ -339,8 +339,12 @@ feature = "enabled"`, 1)
 		t.Fatalf("upgraded environment = %#v", upgradedEnvironment)
 	}
 	var managedEnvironmentKeys []string
-	if err = db.Pool.QueryRow(ctx, `SELECT managed_environment_keys FROM template_instances WHERE compose_service_id=$1`, created.Service.ID).Scan(&managedEnvironmentKeys); err != nil {
+	var ownershipRecorded bool
+	if err = db.Pool.QueryRow(ctx, `SELECT managed_environment_keys,environment_ownership_recorded FROM template_instances WHERE compose_service_id=$1`, created.Service.ID).Scan(&managedEnvironmentKeys, &ownershipRecorded); err != nil {
 		t.Fatal(err)
+	}
+	if !ownershipRecorded {
+		t.Fatal("template environment ownership was not marked as recorded")
 	}
 	for _, name := range managedEnvironmentKeys {
 		if name == "PASSWORD" || name == "MANUAL_ONLY" {
@@ -377,6 +381,29 @@ feature = "enabled"`, 1)
 	if afterRevision != beforeRevision || afterEnvironment != beforeEnvironment || afterRouteHost != beforeRouteHost || afterTemplateVersion != beforeTemplateVersion {
 		t.Fatalf("failed upgrade was not atomic: before=(%d,%q,%q,%q) after=(%d,%q,%q,%q)", beforeRevision, beforeEnvironment, beforeRouteHost, beforeTemplateVersion, afterRevision, afterEnvironment, afterRouteHost, afterTemplateVersion)
 	}
+	var currentCompose string
+	if err = db.Pool.QueryRow(ctx, `SELECT compose_yaml FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&currentCompose); err != nil {
+		t.Fatal(err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodPatch, map[string]any{"composeYaml": currentCompose, "environment": map[string]string{"PASSWORD": "fully-operator-owned", "FULL_ONLY": "preserved"}})
+	if status != http.StatusOK {
+		t.Fatalf("full environment replacement status = %d: %s", status, body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-upgrades", viewerToken, orgID, http.MethodPost, map[string]any{"templateId": rollbackTemplate.ID, "variables": map[string]string{"hostname": "fresh.example.test"}})
+	if status != http.StatusOK {
+		t.Fatalf("upgrade after full environment replacement status = %d: %s", status, body)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&upgradedEncryptedEnvironment); err != nil {
+		t.Fatal(err)
+	}
+	upgradedEnvironmentJSON, err = box.Decrypt(upgradedEncryptedEnvironment, cryptox.ResourceContext("compose-env", created.Service.ID.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgradedEnvironment = nil
+	if err = json.Unmarshal(upgradedEnvironmentJSON, &upgradedEnvironment); err != nil || upgradedEnvironment["PASSWORD"] != "fully-operator-owned" || upgradedEnvironment["FULL_ONLY"] != "preserved" || upgradedEnvironment["FEATURE"] != "enabled" {
+		t.Fatalf("environment after full replacement upgrade = %#v, err=%v", upgradedEnvironment, err)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/template-versions", otherToken, otherOrgID, http.MethodGet, nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("cross-tenant template versions status = %d: %s", status, body)
@@ -394,7 +421,7 @@ feature = "enabled"`, 1)
 	if status != http.StatusBadRequest {
 		t.Fatalf("unknown override status = %d", status)
 	}
-	collisionBody := map[string]any{"environmentId": environmentID, "name": "Collision", "variables": map[string]string{"hostname": "custom.example.test"}}
+	collisionBody := map[string]any{"environmentId": environmentID, "name": "Collision", "variables": map[string]string{"hostname": "fresh.example.test"}}
 	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates/"+orgTemplate.ID.String()+"/instantiate", viewerToken, orgID, http.MethodPost, collisionBody)
 	if status != http.StatusConflict {
 		t.Fatalf("route collision status = %d", status)

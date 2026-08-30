@@ -36,7 +36,7 @@ func (s *Store) ReplaceComposeServiceEnvironment(ctx context.Context, organizati
 		return ComposeService{}, err
 	}
 	if templateManagedKeys != nil {
-		if _, err = tx.Exec(ctx, `UPDATE template_instances SET managed_environment_keys=$2,updated_at=now() WHERE compose_service_id=$1`, serviceID, *templateManagedKeys); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE template_instances SET managed_environment_keys=$2,environment_ownership_recorded=true,updated_at=now() WHERE compose_service_id=$1`, serviceID, *templateManagedKeys); err != nil {
 			return ComposeService{}, err
 		}
 	}

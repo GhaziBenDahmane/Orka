@@ -2105,7 +2105,7 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	managedEnvironmentKeys := provenance.ManagedEnvironmentKeys
-	if len(currentEnvironment) > 0 && len(managedEnvironmentKeys) == 0 {
+	if len(currentEnvironment) > 0 && !provenance.EnvironmentOwnershipRecorded {
 		managedEnvironmentKeys, err = s.legacyTemplateEnvironmentKeys(r.Context(), p.OrganizationID, provenance, preserved)
 		if err != nil {
 			writeError(w, 409, "template_environment_provenance_missing", "current template environment ownership cannot be reconstructed; reinstantiate the service before upgrading")

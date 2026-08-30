@@ -284,19 +284,20 @@ type TemplatePageCursor struct {
 }
 
 type TemplateInstance struct {
-	ComposeServiceID       uuid.UUID  `json:"composeServiceId"`
-	TemplateID             *uuid.UUID `json:"templateId,omitempty"`
-	TemplateKey            string     `json:"templateKey"`
-	TemplateVersion        string     `json:"templateVersion"`
-	TemplateChecksum       string     `json:"templateChecksum"`
-	AppliedComposeChecksum string     `json:"appliedComposeChecksum"`
-	BaseDomain             string     `json:"baseDomain"`
-	EncryptedVariables     string     `json:"-"`
-	EncryptedOverrides     string     `json:"-"`
-	ManagedEnvironmentKeys []string   `json:"-"`
-	Drifted                bool       `json:"drifted"`
-	CreatedAt              time.Time  `json:"createdAt"`
-	UpdatedAt              time.Time  `json:"updatedAt"`
+	ComposeServiceID             uuid.UUID  `json:"composeServiceId"`
+	TemplateID                   *uuid.UUID `json:"templateId,omitempty"`
+	TemplateKey                  string     `json:"templateKey"`
+	TemplateVersion              string     `json:"templateVersion"`
+	TemplateChecksum             string     `json:"templateChecksum"`
+	AppliedComposeChecksum       string     `json:"appliedComposeChecksum"`
+	BaseDomain                   string     `json:"baseDomain"`
+	EncryptedVariables           string     `json:"-"`
+	EncryptedOverrides           string     `json:"-"`
+	ManagedEnvironmentKeys       []string   `json:"-"`
+	EnvironmentOwnershipRecorded bool       `json:"-"`
+	Drifted                      bool       `json:"drifted"`
+	CreatedAt                    time.Time  `json:"createdAt"`
+	UpdatedAt                    time.Time  `json:"updatedAt"`
 }
 
 type OIDCProvider struct {
@@ -1259,6 +1260,11 @@ func (s *Store) updateComposeService(ctx context.Context, organizationID, id uui
 	}
 	if err != nil {
 		return ComposeService{}, err
+	}
+	if replaceEnvironment {
+		if _, err = tx.Exec(ctx, `UPDATE template_instances SET managed_environment_keys='{}',environment_ownership_recorded=true,updated_at=now() WHERE compose_service_id=$1`, id); err != nil {
+			return ComposeService{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return ComposeService{}, err
@@ -2783,6 +2789,7 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 	if instance.ManagedEnvironmentKeys == nil {
 		instance.ManagedEnvironmentKeys = []string{}
 	}
+	instance.EnvironmentOwnershipRecorded = true
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ComposeService{}, nil, err
@@ -2821,7 +2828,7 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 		}
 	}
 	instance.ComposeServiceID = service.ID
-	if err = tx.QueryRow(ctx, `INSERT INTO template_instances(compose_service_id,template_id,template_key,template_version,template_checksum,applied_compose_checksum,base_domain,encrypted_variables,encrypted_overrides,managed_environment_keys) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING created_at,updated_at`, instance.ComposeServiceID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.BaseDomain, instance.EncryptedVariables, instance.EncryptedOverrides, instance.ManagedEnvironmentKeys).Scan(&instance.CreatedAt, &instance.UpdatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO template_instances(compose_service_id,template_id,template_key,template_version,template_checksum,applied_compose_checksum,base_domain,encrypted_variables,encrypted_overrides,managed_environment_keys,environment_ownership_recorded) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING created_at,updated_at`, instance.ComposeServiceID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.BaseDomain, instance.EncryptedVariables, instance.EncryptedOverrides, instance.ManagedEnvironmentKeys, instance.EnvironmentOwnershipRecorded).Scan(&instance.CreatedAt, &instance.UpdatedAt); err != nil {
 		return ComposeService{}, nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -2832,7 +2839,7 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 
 func (s *Store) GetTemplateInstance(ctx context.Context, organizationID, serviceID uuid.UUID) (TemplateInstance, error) {
 	var item TemplateInstance
-	err := s.Pool.QueryRow(ctx, `SELECT t.compose_service_id,t.template_id,t.template_key,t.template_version,t.template_checksum,t.applied_compose_checksum,t.base_domain,t.encrypted_variables,t.encrypted_overrides,t.managed_environment_keys,t.created_at,t.updated_at FROM template_instances t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&item.ComposeServiceID, &item.TemplateID, &item.TemplateKey, &item.TemplateVersion, &item.TemplateChecksum, &item.AppliedComposeChecksum, &item.BaseDomain, &item.EncryptedVariables, &item.EncryptedOverrides, &item.ManagedEnvironmentKeys, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT t.compose_service_id,t.template_id,t.template_key,t.template_version,t.template_checksum,t.applied_compose_checksum,t.base_domain,t.encrypted_variables,t.encrypted_overrides,t.managed_environment_keys,t.environment_ownership_recorded,t.created_at,t.updated_at FROM template_instances t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.compose_service_id=$1 AND p.organization_id=$2`, serviceID, organizationID).Scan(&item.ComposeServiceID, &item.TemplateID, &item.TemplateKey, &item.TemplateVersion, &item.TemplateChecksum, &item.AppliedComposeChecksum, &item.BaseDomain, &item.EncryptedVariables, &item.EncryptedOverrides, &item.ManagedEnvironmentKeys, &item.EnvironmentOwnershipRecorded, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateInstance{}, ErrNotFound
 	}
@@ -2843,6 +2850,7 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 	if instance.ManagedEnvironmentKeys == nil {
 		instance.ManagedEnvironmentKeys = []string{}
 	}
+	instance.EnvironmentOwnershipRecorded = true
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ComposeService{}, nil, err
@@ -2887,7 +2895,7 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 			return ComposeService{}, nil, err
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE template_instances SET template_id=$2,template_key=$3,template_version=$4,template_checksum=$5,applied_compose_checksum=$6,encrypted_variables=$7,encrypted_overrides=$8,managed_environment_keys=$9,updated_at=now() WHERE compose_service_id=$1`, service.ID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.EncryptedVariables, instance.EncryptedOverrides, instance.ManagedEnvironmentKeys); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE template_instances SET template_id=$2,template_key=$3,template_version=$4,template_checksum=$5,applied_compose_checksum=$6,encrypted_variables=$7,encrypted_overrides=$8,managed_environment_keys=$9,environment_ownership_recorded=$10,updated_at=now() WHERE compose_service_id=$1`, service.ID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.EncryptedVariables, instance.EncryptedOverrides, instance.ManagedEnvironmentKeys, instance.EnvironmentOwnershipRecorded); err != nil {
 		return ComposeService{}, nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {

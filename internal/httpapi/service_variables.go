@@ -107,7 +107,7 @@ func (s *Server) templateManagedKeysForService(ctx context.Context, organization
 		return nil, err
 	}
 	keys := provenance.ManagedEnvironmentKeys
-	if len(keys) == 0 && item.EncryptedEnv != "" {
+	if !provenance.EnvironmentOwnershipRecorded && item.EncryptedEnv != "" {
 		resolved := map[string]string{}
 		if provenance.EncryptedVariables != "" {
 			plain, decryptErr := s.Box.Decrypt(provenance.EncryptedVariables, cryptox.ResourceContext("template-variables", item.ID.String()))
