@@ -103,7 +103,9 @@ SBOM/provenance attestations and are keylessly signed.
 ### Replay, stale work, and split brain
 
 Webhook delivery IDs, SAML assertions, OIDC state, invitation tokens, and agent
-enrollment tokens are one-time or replay-protected. Durable jobs and remote
+enrollment tokens are one-time or replay-protected. An agent enrollment result
+is retryable only for the exact CSR bound to the consumed token, preventing a
+dropped response from requiring an unsafe reusable credential. Durable jobs and remote
 commands use expiring per-attempt fencing identifiers. Resource transitions
 lock the owning job, preventing a stale worker from overwriting a replacement.
 Singleton schedulers use database leases, while Swarm remains the desired-state
@@ -120,7 +122,9 @@ and report the resulting CA fingerprint. The agent binary requires HTTPS
 origins and refuses redirects so enrollment tokens and authenticated requests
 cannot be replayed to another endpoint. Operators must follow
 `docs/agent-ca-rotation.md` and remove old trust only after every managed
-cluster converges.
+cluster converges. The agent persists its pending enrollment key before sending
+the CSR and validates the returned trust bundle, client certificate, cluster
+identity, and key binding before committing durable identity state.
 
 ### Backup destruction and false recovery claims
 

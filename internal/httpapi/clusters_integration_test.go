@@ -26,6 +26,86 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestAgentEnrollmentIsIdempotentForTheSameCSR(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	now := time.Now().UTC()
+	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID, clusterID := uuid.New(), uuid.New()
+	token := "enrollment-" + uuid.NewString()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Enrollment retry',$2)`, organizationID, "enrollment-retry-"+organizationID.String()); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','pending')`, clusterID, organizationID)
+	}
+	if err == nil {
+		err = db.CreateClusterEnrollmentToken(ctx, organizationID, clusterID, uuid.Nil, cryptox.Digest(token), time.Now().Add(5*time.Minute))
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	makeCSR := func(t *testing.T) string {
+		t.Helper()
+		key, keyErr := rsa.GenerateKey(rand.Reader, 2048)
+		if keyErr != nil {
+			t.Fatal(keyErr)
+		}
+		request, requestErr := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "dockyard-agent"}}, key)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: request}))
+	}
+	api := &Server{Store: db, AgentCACertificate: caPEM, AgentCAKey: caKey, AgentCertificateTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	enroll := func(csr string) (int, []byte) {
+		body, _ := json.Marshal(map[string]string{"token": token, "csr": csr})
+		request := httptest.NewRequest(http.MethodPost, "/v1/agent/enroll", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		api.enrollClusterAgent(recorder, request)
+		return recorder.Code, recorder.Body.Bytes()
+	}
+	csr := makeCSR(t)
+	status, firstBody := enroll(csr)
+	if status != http.StatusOK {
+		t.Fatalf("first enrollment status=%d body=%s", status, firstBody)
+	}
+	status, retryBody := enroll(csr)
+	if status != http.StatusOK {
+		t.Fatalf("retry enrollment status=%d body=%s", status, retryBody)
+	}
+	var first, retry struct {
+		Certificate string `json:"certificate"`
+	}
+	if err = json.Unmarshal(firstBody, &first); err == nil {
+		err = json.Unmarshal(retryBody, &retry)
+	}
+	if err != nil || first.Certificate == "" || retry.Certificate != first.Certificate {
+		t.Fatalf("retry did not return the original certificate: first=%q retry=%q err=%v", first.Certificate, retry.Certificate, err)
+	}
+	status, replayBody := enroll(makeCSR(t))
+	if status != http.StatusUnauthorized || !bytes.Contains(replayBody, []byte(`"code":"invalid_enrollment_token"`)) {
+		t.Fatalf("different-key replay status=%d body=%s", status, replayBody)
+	}
+	var auditCount int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='cluster.enroll' AND resource_id=$2`, organizationID, clusterID.String()).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("enrollment audit count=%d err=%v", auditCount, err)
+	}
+}
+
 func TestAgentCertificateRotationPromotesOnlyAfterReplacementAuthentication(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {

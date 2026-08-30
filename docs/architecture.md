@@ -124,7 +124,12 @@ Remote agent identities use short-lived X.509 client certificates issued from
 a dedicated Dockyard CA. Enrollment accepts a proof-of-possession CSR, ignores
 caller-supplied certificate identities, and binds the certificate to
 `spiffe://dockyard/cluster/{uuid}`. Agent certificates are client-auth only and
-capped by the CA lifetime. Rotation reuses the same verified cluster identity,
+capped by the CA lifetime. Before the first request, the agent durably stores a
+mode-0600 pending private key. The controller binds the consumed token to that
+exact CSR and stores the issued public certificate material, allowing a lost
+response to be retried until token expiry without permitting a second key to
+enroll. The pending key is removed only after the validated identity is durable.
+Rotation reuses the same verified cluster identity,
 validates the replacement against the saved CA and newly generated private key
 before atomic persistence, and records it as pending. The controller promotes
 that serial and revokes the old one only after the replacement successfully
@@ -136,7 +141,8 @@ Heartbeats use a separate optional TLS listener configured with
 `DOCKYARD_AGENT_LISTEN_ADDR`, `DOCKYARD_AGENT_SERVER_CERT_FILE`, and
 `DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
 and matches its serial number against the cluster's current or pending database
-record. Reenrollment immediately supersedes both identities. Controller
+record. Reenrollment with a newly issued token immediately supersedes both
+identities. Controller
 startup validates that the configured active CA is current, self-signed,
 signing-capable, and matches its private key. During a bounded CA rollover it
 accepts one different, currently valid previous CA and permits the listener

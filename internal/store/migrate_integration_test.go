@@ -621,3 +621,31 @@ func TestMigrateUpgradeFrom085AddsTemplateRepositorySyncStart(t *testing.T) {
 		t.Fatalf("sync start index exists=%v err=%v", indexExists, err)
 	}
 }
+
+func TestMigrateUpgradeFrom086AddsRetryableClusterEnrollment(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "086_template_repository_sync_started.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, clusterID, tokenID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Enrollment migration',$2)`, organizationID, "enrollment-migration-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Remote','remote','active')`, clusterID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO cluster_enrollment_tokens(id,cluster_id,token_hash,expires_at,used_at) VALUES($1,$2,$3,now()+interval '5 minutes',now())`, tokenID, clusterID, []byte("legacy-used-token")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var csrHash []byte
+	var certificate, caBundle, signingCA, fingerprint string
+	if err := pool.QueryRow(ctx, `SELECT enrollment_csr_sha256,issued_certificate,issued_ca_bundle,issued_signing_ca_certificate,issued_signing_ca_fingerprint FROM cluster_enrollment_tokens WHERE id=$1`, tokenID).Scan(&csrHash, &certificate, &caBundle, &signingCA, &fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if csrHash != nil || certificate != "" || caBundle != "" || signingCA != "" || fingerprint != "" {
+		t.Fatalf("legacy used token unexpectedly became replayable: csr=%x certificate=%q CA=%q signer=%q fingerprint=%q", csrHash, certificate, caBundle, signingCA, fingerprint)
+	}
+}

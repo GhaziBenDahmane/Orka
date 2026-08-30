@@ -275,7 +275,7 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 	if token == "" {
 		return errors.New("agent identity missing and DOCKYARD_AGENT_ENROLLMENT_TOKEN is empty")
 	}
-	key, err := rsa.GenerateKey(rand.Reader, 3072)
+	key, err := loadOrCreateEnrollmentKey(cfg.StateDirectory)
 	if err != nil {
 		return err
 	}
@@ -316,7 +316,47 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 	if err := writeIdentityFile(caPath, []byte(enrolled.CACertificate), 0644); err != nil {
 		return err
 	}
-	return writeIdentityFile(certPath, identityPEM, 0600)
+	if err := writeIdentityFile(certPath, identityPEM, 0600); err != nil {
+		return err
+	}
+	if err := os.Remove(enrollmentKeyPath(cfg.StateDirectory)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove pending enrollment key: %w", err)
+	}
+	return nil
+}
+
+func loadOrCreateEnrollmentKey(directory string) (*rsa.PrivateKey, error) {
+	path := enrollmentKeyPath(directory)
+	if encoded, err := os.ReadFile(path); err == nil {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Mode().Perm()&0077 != 0 {
+			return nil, errors.New("pending enrollment key must not be accessible by group or other users")
+		}
+		block, rest := pem.Decode(encoded)
+		if block == nil || block.Type != "RSA PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
+			return nil, errors.New("invalid pending enrollment key")
+		}
+		key, parseErr := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if parseErr != nil {
+			return nil, errors.New("invalid pending enrollment key")
+		}
+		return key, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read pending enrollment key: %w", err)
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		return nil, err
+	}
+	encoded := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	if err = writeIdentityFile(path, encoded, 0600); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+func enrollmentKeyPath(directory string) string {
+	return filepath.Join(directory, "pending-enrollment-key.pem")
 }
 
 func validateSavedAgentIdentity(certPath, keyPath, caPath string, now time.Time) error {

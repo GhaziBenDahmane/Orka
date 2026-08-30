@@ -193,6 +193,9 @@ func TestEnsureIdentityValidatesEnrollmentBeforePersistence(t *testing.T) {
 				if err = validateSavedAgentIdentity(certPath, keyPath, caPath, time.Now()); err != nil {
 					t.Fatalf("saved identity is invalid: %v", err)
 				}
+				if _, statErr := os.Stat(enrollmentKeyPath(directory)); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("successful enrollment retained its pending key: %v", statErr)
+				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
@@ -203,7 +206,61 @@ func TestEnsureIdentityValidatesEnrollmentBeforePersistence(t *testing.T) {
 					t.Fatalf("rejected enrollment persisted %s: %v", filepath.Base(path), statErr)
 				}
 			}
+			pendingInfo, statErr := os.Stat(enrollmentKeyPath(directory))
+			if statErr != nil {
+				t.Fatalf("rejected enrollment did not preserve its protected retry key: %v", statErr)
+			}
+			if pendingInfo.Mode().Perm() != 0600 {
+				t.Fatalf("pending enrollment key mode=%o, want 600", pendingInfo.Mode().Perm())
+			}
 		})
+	}
+}
+
+func TestEnsureIdentityRetriesWithTheSameCSR(t *testing.T) {
+	now := time.Now().UTC()
+	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedCA, _, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			CSR string `json:"csr"`
+		}
+		if decodeErr := json.NewDecoder(r.Body).Decode(&input); decodeErr != nil {
+			t.Error(decodeErr)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		requests = append(requests, input.CSR)
+		certificate, _, signErr := agentpki.SignAgentCSR(caPEM, caKey, []byte(input.CSR), uuid.NewSHA1(uuid.Nil, []byte("retry-cluster")), time.Now(), time.Hour)
+		if signErr != nil {
+			t.Error(signErr)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		returnedCA := caPEM
+		if len(requests) == 1 {
+			returnedCA = untrustedCA
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"certificate": string(certificate), "caCertificate": string(returnedCA)})
+	}))
+	defer server.Close()
+	directory := t.TempDir()
+	cfg := Config{EnrollmentURL: server.URL, EnrollmentToken: "one-time-token", StateDirectory: directory}
+	if err = ensureIdentity(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "verify agent client certificate") {
+		t.Fatalf("first enrollment error=%v", err)
+	}
+	if err = ensureIdentity(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0] != requests[1] {
+		t.Fatalf("enrollment retry changed CSR: requests=%d equal=%t", len(requests), len(requests) == 2 && requests[0] == requests[1])
 	}
 }
 

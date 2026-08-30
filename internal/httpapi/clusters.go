@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"regexp"
@@ -463,16 +466,21 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tokenHash := cryptox.Digest(token)
-	cluster, err := s.Store.LookupClusterEnrollmentToken(r.Context(), tokenHash)
+	csrHash := sha256.Sum256([]byte(input.CSR))
+	enrollment, err := s.Store.LookupClusterEnrollmentToken(r.Context(), tokenHash, csrHash[:])
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
+		return
+	}
+	if enrollment.Artifacts.Certificate != "" {
+		s.writeClusterEnrollment(w, r, enrollment.Cluster, enrollment.Artifacts, false)
 		return
 	}
 	ttl := s.AgentCertificateTTL
 	if ttl == 0 {
 		ttl = 7 * 24 * time.Hour
 	}
-	certificate, parsed, err := agentpki.SignAgentCSR(s.AgentCACertificate, s.AgentCAKey, []byte(input.CSR), cluster.ID, time.Now(), ttl)
+	certificate, parsed, err := agentpki.SignAgentCSR(s.AgentCACertificate, s.AgentCAKey, []byte(input.CSR), enrollment.Cluster.ID, time.Now(), ttl)
 	if err != nil {
 		writeError(w, 400, "invalid_csr", err.Error())
 		return
@@ -482,10 +490,28 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "agent_ca_invalid", "agent certificate authority is invalid")
 		return
 	}
-	if err = s.Store.ConsumeClusterEnrollmentToken(r.Context(), tokenHash, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter, caFingerprint); err != nil {
+	artifacts := store.ClusterEnrollmentArtifacts{Certificate: string(certificate), CABundle: string(s.agentTrustBundle()), SigningCACertificate: string(s.AgentCACertificate), SigningCAFingerprint: caFingerprint}
+	artifacts, created, err := s.Store.CompleteClusterEnrollment(r.Context(), tokenHash, csrHash[:], artifacts, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
 		return
 	}
-	s.Store.AuditOrganization(r.Context(), cluster.OrganizationID, "cluster.enroll", "cluster", cluster.ID.String(), r.RemoteAddr, map[string]any{"certificateNotAfter": parsed.NotAfter})
-	writeJSON(w, 200, map[string]any{"clusterId": cluster.ID, "certificate": string(certificate), "caCertificate": string(s.agentTrustBundle()), "signingCaCertificate": string(s.AgentCACertificate), "signingCaFingerprint": caFingerprint, "expiresAt": parsed.NotAfter})
+	s.writeClusterEnrollment(w, r, enrollment.Cluster, artifacts, created)
+}
+
+func (s *Server) writeClusterEnrollment(w http.ResponseWriter, r *http.Request, cluster store.Cluster, artifacts store.ClusterEnrollmentArtifacts, audit bool) {
+	block, rest := pem.Decode([]byte(artifacts.Certificate))
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		s.writeInternalError(w, r, http.StatusInternalServerError, "enrollment_state_invalid", "stored agent enrollment certificate is invalid", errors.New("invalid stored enrollment certificate PEM"))
+		return
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		s.writeInternalError(w, r, http.StatusInternalServerError, "enrollment_state_invalid", "stored agent enrollment certificate is invalid", err)
+		return
+	}
+	if audit {
+		s.Store.AuditOrganization(r.Context(), cluster.OrganizationID, "cluster.enroll", "cluster", cluster.ID.String(), r.RemoteAddr, map[string]any{"certificateNotAfter": certificate.NotAfter})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"clusterId": cluster.ID, "certificate": artifacts.Certificate, "caCertificate": artifacts.CABundle, "signingCaCertificate": artifacts.SigningCACertificate, "signingCaFingerprint": artifacts.SigningCAFingerprint, "expiresAt": certificate.NotAfter})
 }

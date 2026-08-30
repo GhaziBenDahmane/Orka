@@ -266,9 +266,13 @@ Resolve and record real 64-character digests before running these commands;
 the abbreviated values above are placeholders. The production manifests have
 no mutable-tag defaults, and the validation script rejects tags.
 
-The token is used once. The agent generates its private key locally, stores its
-identity in the `agent-state` volume, verifies the controller using the
-enrollment CA, and uses mTLS for heartbeat and command polling. No inbound port
+The token enrolls only one locally generated key. The agent stores a protected
+pending key in the `agent-state` volume before sending its CSR, so a lost HTTP
+response can safely retry the exact exchange until the token expires. The
+controller never accepts the consumed token with a different CSR. The agent
+validates the returned CA bundle, client-auth certificate, cluster identity,
+and private-key binding before committing its identity and removing the pending
+key. It then uses mTLS for heartbeat and command polling. No inbound port
 or remote Docker socket is exposed on the managed cluster. The agent binary
 independently requires both controller addresses to be HTTPS origins and
 refuses redirects, preventing an enrollment token or authenticated request

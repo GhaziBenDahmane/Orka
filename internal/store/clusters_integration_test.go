@@ -36,15 +36,37 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	tokenHash := []byte("hashed-enrollment-token")
+	csrHash := []byte("hashed-enrollment-csr")
+	artifacts := ClusterEnrollmentArtifacts{
+		Certificate:          "issued-certificate",
+		CABundle:             "issued-ca-bundle",
+		SigningCACertificate: "issued-signing-ca",
+		SigningCAFingerprint: "sha256:" + strings.Repeat("a", 64),
+	}
 	if err = db.CreateClusterEnrollmentToken(ctx, orgID, cluster.ID, uuid.Nil, tokenHash, time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	lookedUp, err := db.LookupClusterEnrollmentToken(ctx, tokenHash)
-	if err != nil || lookedUp.ID != cluster.ID {
+	lookedUp, err := db.LookupClusterEnrollmentToken(ctx, tokenHash, csrHash)
+	if err != nil || lookedUp.Cluster.ID != cluster.ID || lookedUp.Artifacts.Certificate != "" {
 		t.Fatalf("cluster=%#v err=%v", lookedUp, err)
 	}
-	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "012345", time.Now().Add(time.Hour), "sha256:"+strings.Repeat("a", 64)); err != nil {
-		t.Fatal(err)
+	stored, created, err := db.CompleteClusterEnrollment(ctx, tokenHash, csrHash, artifacts, "012345", time.Now().Add(time.Hour))
+	if err != nil || !created || stored.Certificate != artifacts.Certificate {
+		t.Fatalf("complete enrollment artifacts=%#v created=%t err=%v", stored, created, err)
+	}
+	retried, err := db.LookupClusterEnrollmentToken(ctx, tokenHash, csrHash)
+	if err != nil || retried.Cluster.ID != cluster.ID || retried.Artifacts != artifacts {
+		t.Fatalf("retry lookup=%#v err=%v", retried, err)
+	}
+	winning, created, err := db.CompleteClusterEnrollment(ctx, tokenHash, csrHash, ClusterEnrollmentArtifacts{Certificate: "losing-race-certificate"}, "other", time.Now().Add(2*time.Hour))
+	if err != nil || created || winning != artifacts {
+		t.Fatalf("retry completion artifacts=%#v created=%t err=%v", winning, created, err)
+	}
+	if _, err = db.LookupClusterEnrollmentToken(ctx, tokenHash, []byte("different-csr")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("different CSR lookup error = %v", err)
+	}
+	if _, _, err = db.CompleteClusterEnrollment(ctx, tokenHash, []byte("different-csr"), artifacts, "other", time.Now().Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("different CSR completion error = %v", err)
 	}
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "012345"); err != nil {
 		t.Fatalf("authenticate current certificate: %v", err)
@@ -145,9 +167,6 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	}
 	if _, err = db.UpdateClusterState(ctx, orgID, cluster.ID, "active"); err != nil {
 		t.Fatal(err)
-	}
-	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "other", time.Now().Add(time.Hour), "sha256:"+strings.Repeat("e", 64)); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("replay error = %v", err)
 	}
 	items, err := db.ListClusters(ctx, orgID)
 	if err != nil || len(items) != 1 || items[0].State != "active" || items[0].CertificateNotAfter == nil || items[0].LastSeenAt == nil || items[0].AgentVersion != "1.2.3" {

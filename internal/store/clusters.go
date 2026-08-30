@@ -52,6 +52,18 @@ type ClusterCommand struct {
 	CreatedAt        time.Time  `json:"createdAt"`
 }
 
+type ClusterEnrollmentArtifacts struct {
+	Certificate          string
+	CABundle             string
+	SigningCACertificate string
+	SigningCAFingerprint string
+}
+
+type ClusterEnrollment struct {
+	Cluster   Cluster
+	Artifacts ClusterEnrollmentArtifacts
+}
+
 func (s *Store) CreateCluster(ctx context.Context, item Cluster) (Cluster, error) {
 	item.ID = uuid.New()
 	item.State = "pending"
@@ -423,31 +435,43 @@ func (s *Store) CreateClusterEnrollmentToken(ctx context.Context, organizationID
 	return nil
 }
 
-func (s *Store) LookupClusterEnrollmentToken(ctx context.Context, tokenHash []byte) (Cluster, error) {
-	var item Cluster
-	err := s.Pool.QueryRow(ctx, `SELECT c.id,c.organization_id,c.name,c.slug,c.state FROM cluster_enrollment_tokens t JOIN clusters c ON c.id=t.cluster_id WHERE t.token_hash=$1 AND t.used_at IS NULL AND t.expires_at>now() AND c.state<>'disabled'`, tokenHash).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State)
+func (s *Store) LookupClusterEnrollmentToken(ctx context.Context, tokenHash, csrHash []byte) (ClusterEnrollment, error) {
+	var item ClusterEnrollment
+	err := s.Pool.QueryRow(ctx, `SELECT c.id,c.organization_id,c.name,c.slug,c.state,t.issued_certificate,t.issued_ca_bundle,t.issued_signing_ca_certificate,t.issued_signing_ca_fingerprint FROM cluster_enrollment_tokens t JOIN clusters c ON c.id=t.cluster_id WHERE t.token_hash=$1 AND t.expires_at>now() AND c.state<>'disabled' AND (t.used_at IS NULL OR (t.enrollment_csr_sha256=$2 AND t.issued_certificate<>''))`, tokenHash, csrHash).Scan(&item.Cluster.ID, &item.Cluster.OrganizationID, &item.Cluster.Name, &item.Cluster.Slug, &item.Cluster.State, &item.Artifacts.Certificate, &item.Artifacts.CABundle, &item.Artifacts.SigningCACertificate, &item.Artifacts.SigningCAFingerprint)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Cluster{}, ErrNotFound
+		return ClusterEnrollment{}, ErrNotFound
 	}
 	return item, err
 }
 
-func (s *Store) ConsumeClusterEnrollmentToken(ctx context.Context, tokenHash []byte, serial string, notAfter time.Time, caFingerprint string) error {
+func (s *Store) CompleteClusterEnrollment(ctx context.Context, tokenHash, csrHash []byte, artifacts ClusterEnrollmentArtifacts, serial string, notAfter time.Time) (ClusterEnrollmentArtifacts, bool, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return ClusterEnrollmentArtifacts{}, false, err
 	}
 	defer tx.Rollback(ctx)
 	var clusterID uuid.UUID
-	err = tx.QueryRow(ctx, `UPDATE cluster_enrollment_tokens SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING cluster_id`, tokenHash).Scan(&clusterID)
+	err = tx.QueryRow(ctx, `UPDATE cluster_enrollment_tokens SET used_at=now(),enrollment_csr_sha256=$2,issued_certificate=$3,issued_ca_bundle=$4,issued_signing_ca_certificate=$5,issued_signing_ca_fingerprint=$6 WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING cluster_id`, tokenHash, csrHash, artifacts.Certificate, artifacts.CABundle, artifacts.SigningCACertificate, artifacts.SigningCAFingerprint).Scan(&clusterID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+		var stored ClusterEnrollmentArtifacts
+		retryErr := tx.QueryRow(ctx, `SELECT t.issued_certificate,t.issued_ca_bundle,t.issued_signing_ca_certificate,t.issued_signing_ca_fingerprint FROM cluster_enrollment_tokens t JOIN clusters c ON c.id=t.cluster_id WHERE t.token_hash=$1 AND t.enrollment_csr_sha256=$2 AND t.used_at IS NOT NULL AND t.expires_at>now() AND t.issued_certificate<>'' AND c.state<>'disabled'`, tokenHash, csrHash).Scan(&stored.Certificate, &stored.CABundle, &stored.SigningCACertificate, &stored.SigningCAFingerprint)
+		if errors.Is(retryErr, pgx.ErrNoRows) {
+			return ClusterEnrollmentArtifacts{}, false, ErrNotFound
+		}
+		return stored, false, retryErr
 	}
 	if err != nil {
-		return err
+		return ClusterEnrollmentArtifacts{}, false, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,certificate_ca_fingerprint=$4,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID, serial, notAfter, caFingerprint); err != nil {
-		return err
+	tag, err := tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,certificate_ca_fingerprint=$4,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1 AND state<>'disabled'`, clusterID, serial, notAfter, artifacts.SigningCAFingerprint)
+	if err != nil {
+		return ClusterEnrollmentArtifacts{}, false, err
 	}
-	return tx.Commit(ctx)
+	if tag.RowsAffected() == 0 {
+		return ClusterEnrollmentArtifacts{}, false, ErrNotFound
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ClusterEnrollmentArtifacts{}, false, err
+	}
+	return artifacts, true, nil
 }
