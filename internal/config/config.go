@@ -91,22 +91,12 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if databaseURL == "" {
-		return Config{}, errors.New("DOCKYARD_DATABASE_URL is required")
-	}
 	requireDatabaseTLS, err := strconv.ParseBool(env("DOCKYARD_REQUIRE_DATABASE_TLS", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("parse DOCKYARD_REQUIRE_DATABASE_TLS: %w", err)
 	}
-	if requireDatabaseTLS {
-		parsed, parseErr := url.Parse(databaseURL)
-		var sslModes []string
-		if parseErr == nil {
-			sslModes = parsed.Query()["sslmode"]
-		}
-		if parseErr != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" || len(sslModes) != 1 || sslModes[0] != "verify-full" {
-			return Config{}, errors.New("DOCKYARD_DATABASE_URL must use a PostgreSQL URL with sslmode=verify-full when DOCKYARD_REQUIRE_DATABASE_TLS=true")
-		}
+	if err = ValidateDatabaseURL(databaseURL, requireDatabaseTLS); err != nil {
+		return Config{}, err
 	}
 	backupDirectory := env("DOCKYARD_BACKUP_DIRECTORY", "/var/lib/dockyard/backups")
 	if !filepath.IsAbs(backupDirectory) {
@@ -254,6 +244,30 @@ func Load() (Config, error) {
 		TrustedProxyCIDRs:          trustedProxyCIDRs,
 		EgressPrivateCIDRs:         egressPrivateCIDRs,
 	}, nil
+}
+
+func ValidateDatabaseURL(databaseURL string, requireTLS bool) error {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" || parsed.Path == "" || parsed.Path == "/" || parsed.Opaque != "" || parsed.Fragment != "" {
+		if requireTLS {
+			return errors.New("DOCKYARD_DATABASE_URL must use a PostgreSQL URL with a host, database name, and sslmode=verify-full when DOCKYARD_REQUIRE_DATABASE_TLS=true")
+		}
+		return errors.New("DOCKYARD_DATABASE_URL must be a PostgreSQL URL with a host and database name")
+	}
+	if port := parsed.Port(); port != "" {
+		value, parseErr := strconv.Atoi(port)
+		if parseErr != nil || value < 1 || value > 65535 {
+			return errors.New("DOCKYARD_DATABASE_URL must use a valid TCP port")
+		}
+	}
+	sslModes := parsed.Query()["sslmode"]
+	if len(sslModes) > 1 {
+		return errors.New("DOCKYARD_DATABASE_URL must contain at most one sslmode parameter; sslmode=verify-full is required when database TLS is enforced")
+	}
+	if requireTLS && (len(sslModes) != 1 || sslModes[0] != "verify-full") {
+		return errors.New("DOCKYARD_DATABASE_URL must use a PostgreSQL URL with sslmode=verify-full when DOCKYARD_REQUIRE_DATABASE_TLS=true")
+	}
+	return nil
 }
 
 func parseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {

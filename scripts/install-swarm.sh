@@ -221,6 +221,9 @@ for image_spec in "DOCKYARD_IMAGE:$DOCKYARD_IMAGE" "POSTGRES_IMAGE:$POSTGRES_IMA
   image=${image_spec#*:}
   docker manifest inspect "$image" >/dev/null 2>&1 || fail "$image_label cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
 done
+require_database_tls=false
+[ "$mode" = ha ] && require_database_tls=true
+docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-database-url --require-tls="$require_database_tls" <"$DOCKYARD_DATABASE_URL_FILE" >/dev/null || fail "DOCKYARD_DATABASE_URL_FILE does not contain a valid PostgreSQL URL for $mode mode"
 if [ -n "$egress_private_cidrs" ]; then
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
 fi

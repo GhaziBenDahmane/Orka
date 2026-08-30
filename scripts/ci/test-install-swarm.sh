@@ -22,7 +22,10 @@ case "$1 $2" in
   "manifest inspect")
     if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
   "run --rm")
-    case "$*" in *not-a-cidr*) exit 1 ;; esac ;;
+    case "$*" in
+      *validate-database-url*) [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
+      *not-a-cidr*) exit 1 ;;
+    esac ;;
   "secret inspect")
     case " ${DOCKYARD_INSTALL_TEST_EXISTING_SECRETS:-} " in *" $3 "*) exit 0 ;; *) exit 1 ;; esac ;;
   "secret create")
@@ -80,8 +83,24 @@ grep -q '^stack config ' "$DOCKYARD_INSTALL_TEST_LOG"
 for image in "$DOCKYARD_IMAGE" "$POSTGRES_IMAGE" "$TRAEFIK_IMAGE"; do
   grep -Fqx "manifest inspect $image" "$DOCKYARD_INSTALL_TEST_LOG"
 done
+grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-database-url --require-tls=false$' "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -q 'postgres://dockyard:safe-value' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'database URL leaked to Docker command log' >&2
+  exit 1
+fi
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'dry-run mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL=true "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer ignored candidate database URL validation failure' >&2
+  exit 1
+fi
+grep -q 'does not contain a valid PostgreSQL URL for single mode' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid database URL mutated Docker state' >&2
   exit 1
 fi
 
@@ -405,6 +424,7 @@ export DOCKYARD_AGENT_SERVER_KEY_FILE="$temporary/secrets/agent-server.key"
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-swarm.sh" >/dev/null
 grep -q "stack config -c $root/deploy/swarm.yml -c $root/deploy/swarm-ha.yml" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-database-url --require-tls=true$' "$DOCKYARD_INSTALL_TEST_LOG"
 for secret in dockyard_agent_ca_cert dockyard_agent_ca_key dockyard_agent_server_cert dockyard_agent_server_key; do
   grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
 done

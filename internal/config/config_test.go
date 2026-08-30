@@ -264,6 +264,41 @@ func TestLoadRequiresVerifiedDatabaseTLSWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMalformedDatabaseURLWithoutTLSRequirement(t *testing.T) {
+	for _, databaseURL := range []string{
+		"",
+		"host=example.test dbname=dockyard",
+		"http://example.test/dockyard",
+		"postgres:///dockyard",
+		"postgres://example.test",
+		"postgres://example.test/",
+		"postgres://example.test:0/dockyard",
+		"postgres://example.test:65536/dockyard",
+		"postgres://example.test/dockyard#fragment",
+		"postgres://example.test/dockyard?sslmode=require&sslmode=disable",
+	} {
+		t.Run(databaseURL, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_DATABASE_URL", databaseURL)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_DATABASE_URL") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+	for _, databaseURL := range []string{
+		"postgres://dockyard@example.test/dockyard",
+		"postgresql://dockyard:secret@example.test:5432/dockyard?sslmode=disable",
+	} {
+		t.Run("valid_"+databaseURL, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_DATABASE_URL", databaseURL)
+			if _, err := Load(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestLoadValidatesAgentTLSCredentialsAndRecordsExpiry(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	caPEM, caKeyPEM, certFile, keyFile, caExpiry, serverExpiry := testAgentCredentials(t, now.Add(-time.Minute), now.Add(24*time.Hour))

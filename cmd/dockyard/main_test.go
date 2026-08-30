@@ -29,6 +29,28 @@ func TestValidateEgressPolicyCommand(t *testing.T) {
 	}
 }
 
+func TestValidateDatabaseURLCommand(t *testing.T) {
+	if err := validateDatabaseURL(nil, strings.NewReader("postgres://dockyard:secret@postgres:5432/dockyard?sslmode=disable\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDatabaseURL([]string{"--require-tls"}, strings.NewReader("postgres://dockyard@example.test/dockyard?sslmode=verify-full")); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		arguments []string
+		input     string
+	}{
+		{input: "not-a-url"},
+		{arguments: []string{"--require-tls"}, input: "postgres://dockyard@example.test/dockyard?sslmode=disable"},
+		{arguments: []string{"unexpected"}, input: "postgres://dockyard@example.test/dockyard"},
+		{input: strings.Repeat("x", 65537)},
+	} {
+		if err := validateDatabaseURL(test.arguments, strings.NewReader(test.input)); err == nil {
+			t.Errorf("arguments=%q input length=%d were accepted", test.arguments, len(test.input))
+		}
+	}
+}
+
 func TestReadRestrictedMasterKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master-key")
 	want := []byte(strings.Repeat("k", 32))

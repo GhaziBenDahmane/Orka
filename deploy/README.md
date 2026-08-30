@@ -74,8 +74,12 @@ scripts/install-swarm.sh
 The installer rejects mutable image tags, non-manager nodes, unsafe or malformed
 DNS hostnames, ACME email addresses, and routing-network names, loose secret-file permissions, malformed keys, and existing secrets unless reuse is explicitly
 acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
-fully rendered stack and resolves every immutable image through the current
-Docker registry credentials before creating the overlay network or secrets, then
+fully rendered stack, resolves every immutable image through the current
+Docker registry credentials, and passes the database URL over stdin to a
+networkless, read-only instance of the exact candidate image for runtime parser
+validation before creating the overlay network or secrets. The URL must include
+a PostgreSQL host and database name, may contain at most one `sslmode`, and in
+HA mode must use `sslmode=verify-full`. It then
 rejects existing routing overlays whose `encrypted` option is absent or
 explicitly disabled, and then
 waits for every service to hold its desired replica count continuously for 90

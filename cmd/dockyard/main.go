@@ -74,6 +74,8 @@ func main() {
 		err = validateProductionCertification(os.Args[2:])
 	case "validate-egress-policy":
 		err = validateEgressPolicy(os.Args[2:])
+	case "validate-database-url":
+		err = validateDatabaseURL(os.Args[2:], os.Stdin)
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
 	default:
@@ -86,7 +88,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-database-url|volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
@@ -102,6 +104,25 @@ func validateEgressPolicy(arguments []string) error {
 		return fmt.Errorf("validate egress policy: %w", err)
 	}
 	return nil
+}
+
+func validateDatabaseURL(arguments []string, input io.Reader) error {
+	flags := flag.NewFlagSet("validate-database-url", flag.ContinueOnError)
+	requireTLS := flags.Bool("require-tls", false, "require sslmode=verify-full")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: dockyard validate-database-url [--require-tls] < URL_FILE")
+	}
+	data, err := io.ReadAll(io.LimitReader(input, 65537))
+	if err != nil {
+		return fmt.Errorf("read database URL: %w", err)
+	}
+	if len(data) > 65536 {
+		return errors.New("database URL exceeds 65536 bytes")
+	}
+	return config.ValidateDatabaseURL(strings.TrimSpace(string(data)), *requireTLS)
 }
 
 func validateProductionCertification(arguments []string) error {
