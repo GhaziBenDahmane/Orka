@@ -76,7 +76,10 @@ func TestPublicIdentityEndpointsAreRateLimitedBeforeExpensiveWork(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Pool.Close()
+	t.Cleanup(db.Pool.Close)
+	if _, err = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket IN ('sso-discovery-global','sso-start-global','sso-callback-global','sso-metadata-global','agent-enroll-global')`); err != nil {
+		t.Fatal(err)
+	}
 	for bucket, attempts := range map[string]int{
 		"sso-discovery-global": 300,
 		"sso-start-global":     300,
@@ -88,6 +91,9 @@ func TestPublicIdentityEndpointsAreRateLimitedBeforeExpensiveWork(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket IN ('sso-discovery-global','sso-start-global','sso-callback-global','sso-metadata-global','agent-enroll-global')`)
+	})
 	server := (&Server{Store: db, AgentCACertificate: []byte("configured"), AgentCAKey: []byte("configured")}).Handler()
 	requests := []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/discover?email=user@example.test", nil),

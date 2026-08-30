@@ -129,7 +129,7 @@ func masterKeyRotationTestPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) []masterKeyTestRow {
 	t.Helper()
 	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
-	serviceID, databaseID, backupID := uuid.New(), uuid.New(), uuid.New()
+	serviceID, databaseID, backupID, volumeBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	credentialID, destinationID, providerID := uuid.New(), uuid.New(), uuid.New()
 	webhookID, notificationID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	commandID, deploymentID, deliveryID := uuid.New(), uuid.New(), uuid.New()
@@ -148,6 +148,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret) VALUES($1,$2,'oidc','https://id.example.test','client','')`, []any{providerID, organizationID}},
 		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,'git','git','github.com','bot','')`, []any{credentialID, organizationID}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'backup','https://s3.example.test','bucket','')`, []any{destinationID, organizationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status) VALUES($1,$2,'data','node1',$3,true,'succeeded')`, []any{volumeBackupID, serviceID, destinationID}},
 		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,pending_certificate_pem,pending_encrypted_private_key,pending_certificate_not_after,pending_certificate_created_at) VALUES($1,$2,'saml','metadata','certificate','','pending-certificate','pending',now()+interval '1 day',now())`, []any{providerID, organizationID}},
 		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret) VALUES($1,$2,'deploy','github','main','')`, []any{webhookID, serviceID}},
 		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'alerts','webhook','','',ARRAY['backup.failed'])`, []any{notificationID, organizationID}},
@@ -171,7 +172,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 		"database_backups": backupID, "database_instances": databaseID, "database_migrations": migrationID,
 		"notification_endpoints": notificationID, "oidc_providers": providerID, "saml_providers": providerID,
 		"source_credentials": credentialID, "template_instances": serviceID, "template_repositories": repositoryID,
-		"webhook_integrations": webhookID,
+		"volume_backups": volumeBackupID, "webhook_integrations": webhookID,
 	}
 	result := make([]masterKeyTestRow, 0, len(masterKeyEncryptedColumns))
 	for index, spec := range masterKeyEncryptedColumns {

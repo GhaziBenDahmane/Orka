@@ -75,6 +75,7 @@ printf '%s ' "$@" >> ` + strconv.Quote(logPath) + `; printf '\n' >> ` + strconv.
 if [ "$1" = info ]; then echo active; exit 0; fi
 if [ "$1" = network ] && [ "$2" = inspect ]; then echo 'overlay|swarm|true|{"encrypted":""}'; exit 0; fi
 if [ "$1" = network ]; then exit 0; fi
+if [ "$1" = stack ] && [ "$2" = services ]; then for argument in "$@"; do stack_name="$argument"; done; printf '%s\t%s\n' "${stack_name}_verify" 'postgres:17@sha256:` + strings.Repeat("a", 64) + `'; exit 0; fi
 if [ "$1" = stack ]; then exit 0; fi
 if [ "$1" = service ] && [ "$2" = ls ]; then echo 'drill_verify 1/1'; exit 0; fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'null'; exit 0; fi

@@ -21,6 +21,7 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
@@ -80,11 +81,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	db, err := store.Open(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Pool.Close()
+	db := isolatedMetricsStore(t, ctx, databaseURL)
 	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -480,4 +477,39 @@ func testSAMLMetricMaterial(t *testing.T, notAfter time.Time) (string, string) {
 	metadata := fmt.Sprintf(`<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.test"><IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>%s</ds:X509Certificate></ds:X509Data></ds:KeyInfo></KeyDescriptor><SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.test/sso"/></IDPSSODescriptor></EntityDescriptor>`, encoded)
 	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 	return metadata, certificate
+}
+
+func isolatedMetricsStore(t *testing.T, ctx context.Context, databaseURL string) *store.Store {
+	t.Helper()
+	admin, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := "metrics_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err = admin.Exec(ctx, fmt.Sprintf(`CREATE SCHEMA %s`, schema)); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx, pool); err != nil {
+		pool.Close()
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`DROP SCHEMA %s CASCADE`, schema))
+		admin.Close()
+	})
+	return &store.Store{Pool: pool}
 }
