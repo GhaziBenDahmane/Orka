@@ -2,6 +2,7 @@ services:
   agent:
     image: ${DOCKYARD_IMAGE:?set DOCKYARD_IMAGE to an immutable digest}
     command: ["agent"]
+    stop_grace_period: 30s
     environment:
       DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL}
       DOCKYARD_AGENT_URL: ${DOCKYARD_AGENT_URL}

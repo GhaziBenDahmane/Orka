@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +22,7 @@ type deploymentManifest struct {
 		Tmpfs       []string          `yaml:"tmpfs"`
 		CapDrop     []string          `yaml:"cap_drop"`
 		SecurityOpt []string          `yaml:"security_opt"`
+		StopGrace   string            `yaml:"stop_grace_period"`
 		Logging     struct {
 			Driver  string            `yaml:"driver"`
 			Options map[string]string `yaml:"options"`
@@ -155,6 +157,33 @@ func TestPrivilegedControlProcessesHaveHardenedContainers(t *testing.T) {
 		service := readDeploymentManifest(t, path).Services[name]
 		if !slices.Contains(service.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
 			t.Errorf("%s service %s does not mount the Docker socket read-only: %v", path, name, service.Volumes)
+		}
+	}
+}
+
+func TestProductionServicesHaveExplicitStopGracePeriods(t *testing.T) {
+	for path, minimums := range map[string]map[string]time.Duration{
+		"../../deploy/swarm.yml": {
+			"postgres": time.Minute,
+			"dockyard": 30 * time.Second,
+			"traefik":  30 * time.Second,
+		},
+		"../../deploy/agent-swarm.yml": {
+			"agent": 30 * time.Second,
+		},
+		"../../deploy/ai-auditors.yml": {
+			"9router":             30 * time.Second,
+			"headroom":            30 * time.Second,
+			"security-auditor":    30 * time.Second,
+			"reliability-auditor": 30 * time.Second,
+		},
+	} {
+		manifest := readDeploymentManifest(t, path)
+		for name, minimum := range minimums {
+			configured, err := time.ParseDuration(manifest.Services[name].StopGrace)
+			if err != nil || configured < minimum {
+				t.Errorf("%s service %s stop_grace_period=%q, want at least %s (parse error=%v)", path, name, manifest.Services[name].StopGrace, minimum, err)
+			}
 		}
 	}
 }

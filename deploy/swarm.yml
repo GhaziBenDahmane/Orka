@@ -1,6 +1,7 @@
 services:
   postgres:
     image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to an immutable digest}
+    stop_grace_period: 1m
     environment:
       POSTGRES_USER: dockyard
       POSTGRES_PASSWORD_FILE: /run/secrets/dockyard_db_password
@@ -44,6 +45,7 @@ services:
 
   dockyard:
     image: ${DOCKYARD_IMAGE:?set DOCKYARD_IMAGE to an immutable digest}
+    stop_grace_period: 30s
     environment:
       DOCKYARD_DATABASE_URL_FILE: /run/secrets/dockyard_database_url
       DOCKYARD_MASTER_KEY_FILE: /run/secrets/dockyard_master_key
@@ -112,6 +114,7 @@ services:
 
   traefik:
     image: ${TRAEFIK_IMAGE:?set TRAEFIK_IMAGE to an immutable digest}
+    stop_grace_period: 30s
     command:
       - --providers.swarm=true
       - --providers.swarm.exposedbydefault=false

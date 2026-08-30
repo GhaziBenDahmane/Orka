@@ -98,6 +98,10 @@ backup paths remain explicit volumes. The Docker socket is mounted read-only at
 the filesystem level, but Docker's API still grants root-equivalent manager
 authority; protect these services as infrastructure administrators and never
 attach tenant workloads to their control networks.
+The manifests give the controller, agent, routing, and AI processes 30 seconds
+to stop cleanly, and PostgreSQL one minute to checkpoint, before Swarm sends a
+hard kill. Keep these periods longer than the controller's internal 15-second
+HTTP shutdown deadline when maintaining custom overlays.
 All bundled services use Docker's bounded `local` logging driver with five
 20-MiB files by default. Set `DOCKYARD_CONTAINER_LOG_MAX_SIZE` and
 `DOCKYARD_CONTAINER_LOG_MAX_FILES` before rendering any platform, agent, or AI
