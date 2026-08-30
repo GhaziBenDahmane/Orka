@@ -3,6 +3,7 @@ package deploy
 import (
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -110,5 +111,41 @@ func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	port, ok := controller.Ports[0].(map[string]any)
 	if len(controller.Ports) != 1 || !ok || port["target"] != 8444 || port["published"] != 8444 || port["mode"] != "ingress" {
 		t.Fatalf("agent mTLS listener is not published through Swarm ingress: %#v", controller.Ports)
+	}
+}
+
+func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
+	contents, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(contents)
+	candidate := strings.Index(workflow, "tags: ${{ steps.release.outputs.image }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}")
+	promote := strings.Index(workflow, "- name: Assign verified digest to release tag")
+	publish := strings.Index(workflow, "- name: Publish package for anonymous pulls")
+	if candidate < 0 || promote < 0 || publish < 0 {
+		t.Fatal("release workflow is missing candidate-first promotion steps")
+	}
+	for _, requiredGate := range []string{
+		"- name: Validate vulnerability evidence",
+		"- name: Sign and verify immutable digest",
+		"- name: Validate release soak evidence",
+		"- name: Aggregate database recovery evidence",
+		"- name: Write promotion manifest",
+	} {
+		position := strings.Index(workflow, requiredGate)
+		if position < candidate || position > promote {
+			t.Errorf("release gate %q does not run between candidate build and version promotion", requiredGate)
+		}
+	}
+	if promote >= publish {
+		t.Fatal("release package is made public before the verified digest receives its version tag")
+	}
+	if strings.Contains(workflow[:promote], "tags: ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}") {
+		t.Fatal("release workflow assigns the public version tag before promotion gates")
+	}
+	promotionBlock := workflow[promote:publish]
+	if !strings.Contains(promotionBlock, `imagetools inspect "$IMAGE:$VERSION"`) || !strings.Contains(promotionBlock, "already exists and cannot be overwritten") {
+		t.Fatal("release workflow does not reject an existing version tag before promotion")
 	}
 }

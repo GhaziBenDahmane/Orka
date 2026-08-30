@@ -239,47 +239,14 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}
+          # The public version tag is assigned only after scans, signature
+          # verification, soak, and evidence aggregation have all passed.
+          tags: ${{ steps.release.outputs.image }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           build-args: VERSION=${{ steps.release.outputs.version }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Publish package for anonymous pulls
-        env:
-          GH_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN || github.token }}
-          OWNER: ${{ github.repository_owner }}
-          PACKAGE: ${{ github.event.repository.name }}
-          IMAGE: ${{ steps.release.outputs.image }}
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          set -euo pipefail
-          owner_type="$(gh api "/users/$OWNER" --jq .type)"
-          case "$owner_type" in
-            Organization) endpoint="/orgs/$OWNER/packages/container/$PACKAGE" ;;
-            User) endpoint="/users/$OWNER/packages/container/$PACKAGE" ;;
-            *) echo "unsupported GitHub repository owner type: $owner_type" >&2; exit 1 ;;
-          esac
-          if ! gh api --method PATCH "$endpoint" -f visibility=public >/dev/null; then
-            echo "could not make $IMAGE public; configure the GHCR_ADMIN_TOKEN repository secret with package administration rights" >&2
-            exit 1
-          fi
-          repository="${IMAGE#ghcr.io/}"
-          for _ in {1..12}; do
-            token="$(curl --fail --silent --show-error --get \
-              --data-urlencode "scope=repository:$repository:pull" \
-              'https://ghcr.io/token' | jq -er .token 2>/dev/null || true)"
-            if [ -n "$token" ] && curl --fail --silent --show-error --output /dev/null \
-              --header "Authorization: Bearer $token" \
-              --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-              "https://ghcr.io/v2/$repository/manifests/$VERSION"; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "$IMAGE:$VERSION is not anonymously pullable after publication" >&2
-          exit 1
 
       - name: Resolve promoted platform digests
         id: platforms
@@ -470,6 +437,60 @@ jobs:
             upgrade-conformance.json
             release-soak-evidence.json
           if-no-files-found: error
+
+      - name: Assign verified digest to release tag
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "release image tag $IMAGE:$VERSION already exists and cannot be overwritten" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+          docker buildx imagetools inspect --raw "$IMAGE:$VERSION" > version-image-index.json
+          resolved_digest="sha256:$(sha256sum version-image-index.json | cut -d ' ' -f1)"
+          if [ "$resolved_digest" != "$DIGEST" ]; then
+            echo "release tag resolved to $resolved_digest instead of verified digest $DIGEST" >&2
+            exit 1
+          fi
+
+      - name: Publish package for anonymous pulls
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN || github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ github.event.repository.name }}
+          IMAGE: ${{ steps.release.outputs.image }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          owner_type="$(gh api "/users/$OWNER" --jq .type)"
+          case "$owner_type" in
+            Organization) endpoint="/orgs/$OWNER/packages/container/$PACKAGE" ;;
+            User) endpoint="/users/$OWNER/packages/container/$PACKAGE" ;;
+            *) echo "unsupported GitHub repository owner type: $owner_type" >&2; exit 1 ;;
+          esac
+          if ! gh api --method PATCH "$endpoint" -f visibility=public >/dev/null; then
+            echo "could not make $IMAGE public; configure the GHCR_ADMIN_TOKEN repository secret with package administration rights" >&2
+            exit 1
+          fi
+          repository="${IMAGE#ghcr.io/}"
+          for _ in {1..12}; do
+            token="$(curl --fail --silent --show-error --get \
+              --data-urlencode "scope=repository:$repository:pull" \
+              'https://ghcr.io/token' | jq -er .token 2>/dev/null || true)"
+            if [ -n "$token" ] && curl --fail --silent --show-error --output /dev/null \
+              --header "Authorization: Bearer $token" \
+              --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://ghcr.io/v2/$repository/manifests/$VERSION"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "$IMAGE:$VERSION is not anonymously pullable after publication" >&2
+          exit 1
 
       - name: Publish immutable release evidence
         env:

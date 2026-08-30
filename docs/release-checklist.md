@@ -190,7 +190,9 @@ links for every item below.
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence
   records the exact promoted digest, observation count, and automatic rollback
-  result.
+  result. The workflow initially pushes only a run-scoped candidate tag; the
+  public semantic-version tag is assigned to that exact digest only after
+  vulnerability scans, signatures, soak, and all evidence validation pass.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
