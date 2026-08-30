@@ -340,7 +340,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -592,5 +592,32 @@ func TestMigrateUpgradeFrom071AddsDurableAgentUpgradeVerification(t *testing.T) 
 	}
 	if _, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted", target); !errors.Is(err, ErrBusy) {
 		t.Fatalf("duplicate tracked upgrade error=%v, want ErrBusy", err)
+	}
+}
+
+func TestMigrateUpgradeFrom085AddsTemplateRepositorySyncStart(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "085_audit_event_archive_index.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, repositoryID := uuid.New(), uuid.New()
+	startedAt := time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Microsecond)
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Catalog migration',$2)`, organizationID, "catalog-migration-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,last_sync_status,updated_at) VALUES($1,$2,'Catalog','catalog','https://github.com/acme/catalog','main','running',$3)`, repositoryID, organizationID, startedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var migratedStartedAt time.Time
+	var migratedAttemptID *uuid.UUID
+	var indexExists bool
+	if err := pool.QueryRow(ctx, `SELECT sync_started_at,sync_attempt_id FROM template_repositories WHERE id=$1`, repositoryID).Scan(&migratedStartedAt, &migratedAttemptID); err != nil || !migratedStartedAt.Equal(startedAt) || migratedAttemptID != nil {
+		t.Fatalf("sync start=%v want=%v err=%v", migratedStartedAt, startedAt, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('template_repositories_sync_started_idx') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
+		t.Fatalf("sync start index exists=%v err=%v", indexExists, err)
 	}
 }

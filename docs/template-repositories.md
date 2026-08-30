@@ -39,8 +39,11 @@ coalesced and return `202 Accepted`; the same HA-safe scheduler performs all
 downloads and imports, so an API disconnect or controller replacement cannot
 lose the request. A request received during an active sync schedules one
 follow-up refresh. Scheduled work is claimed atomically, protected by the
-controller singleton lease, and retried at the next interval after either
-success or failure. Existing repositories remain manual-only after upgrading;
+controller singleton lease, and assigned a per-attempt fence. A stale
+controller cannot publish or finalize a catalog after its attempt is replaced.
+Interrupted manual-only syncs are reclaimed after five minutes; scheduled
+repositories retry at the next interval after either success or failure.
+Existing repositories remain manual-only after upgrading;
 new repositories default to hourly refresh in the console. Private repositories
 reuse an organization-scoped HTTPS Git source credential whose server is
 `github.com`; its token is decrypted only for the
@@ -48,6 +51,12 @@ bounded archive request and is never copied into the repository record,
 response, audit event, or sync error. Deleting the credential safely returns
 the repository to unauthenticated access. Repository URLs remain restricted to
 canonical GitHub HTTPS URLs.
+
+Repository responses expose the pending request time, last attempt state, and
+bounded error. Prometheus reports queued/running ages and failed attempts, and
+the built-in AI auditor emits deterministic findings for refreshes that remain
+unclaimed for five minutes or running for ten minutes. The supplied alert pack
+covers the same conditions.
 
 An administrator can also create a repository-specific GitHub webhook from the
 console or with `POST /v1/template-repositories/{repositoryID}/webhook-secret`.

@@ -72,6 +72,16 @@ func TestTemplateRepositorySyncTriggersAreDurableAndReplaySafe(t *testing.T) {
 	if err = json.Unmarshal(body, &queued); err != nil || queued.Status != "queued" || queued.RequestedAt.IsZero() {
 		t.Fatalf("manual sync response=%s err=%v", body, err)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/template-repositories", token, organizationID, http.MethodGet, nil)
+	var listed struct {
+		Items []store.TemplateRepository `json:"items"`
+	}
+	if status != http.StatusOK {
+		t.Fatalf("list repositories status=%d body=%s", status, body)
+	}
+	if err = json.Unmarshal(body, &listed); err != nil || len(listed.Items) != 1 || listed.Items[0].SyncRequestedAt == nil || !listed.Items[0].SyncRequestedAt.Equal(queued.RequestedAt) {
+		t.Fatalf("queued sync is not visible in repository response: body=%s err=%v", body, err)
+	}
 	claimed, err := db.ClaimDueTemplateRepository(ctx)
 	if err != nil || claimed.ID != repository.ID {
 		t.Fatalf("manual sync was not durably claimable: repository=%#v err=%v", claimed, err)

@@ -251,6 +251,8 @@ type AIAuditTemplateRepositoryInfo struct {
 	Enabled              bool       `json:"enabled"`
 	LastSyncStatus       string     `json:"lastSyncStatus"`
 	LastSyncedAt         *time.Time `json:"lastSyncedAt,omitempty"`
+	SyncRequestedAt      *time.Time `json:"syncRequestedAt,omitempty"`
+	SyncStartedAt        *time.Time `json:"syncStartedAt,omitempty"`
 }
 
 type AIAuditServiceDeployment struct {
@@ -708,7 +710,7 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 	for _, repository := range repositories {
-		snapshot.TemplateRepositories = append(snapshot.TemplateRepositories, AIAuditTemplateRepositoryInfo{ID: repository.ID, Name: repository.Name, GitRef: repository.GitRef, RequireSignature: repository.RequireSignature, CredentialConfigured: repository.CredentialID != nil, WebhookConfigured: repository.WebhookConfigured, SyncIntervalSeconds: repository.SyncIntervalSeconds, Enabled: repository.Enabled, LastSyncStatus: repository.LastSyncStatus, LastSyncedAt: repository.LastSyncedAt})
+		snapshot.TemplateRepositories = append(snapshot.TemplateRepositories, AIAuditTemplateRepositoryInfo{ID: repository.ID, Name: repository.Name, GitRef: repository.GitRef, RequireSignature: repository.RequireSignature, CredentialConfigured: repository.CredentialID != nil, WebhookConfigured: repository.WebhookConfigured, SyncIntervalSeconds: repository.SyncIntervalSeconds, Enabled: repository.Enabled, LastSyncStatus: repository.LastSyncStatus, LastSyncedAt: repository.LastSyncedAt, SyncRequestedAt: repository.SyncRequestedAt, SyncStartedAt: repository.SyncStartedAt})
 	}
 
 	rows, err = s.Pool.Query(ctx, `

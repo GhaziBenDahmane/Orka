@@ -141,7 +141,7 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 	if len(report.Failed) > 0 {
 		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
 	}
-	if err = db.ReplaceRepositoryTemplates(ctx, repository.OrganizationID, repository.ID, items); err != nil {
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, repository, items); err != nil {
 		return report, err
 	}
 	report.Imported = len(items)

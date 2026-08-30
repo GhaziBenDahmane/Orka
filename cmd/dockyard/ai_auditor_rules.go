@@ -252,15 +252,22 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 	}
 	for _, repository := range snapshot.TemplateRepositories {
+		syncActive := repository.SyncRequestedAt != nil || repository.LastSyncStatus == "running"
 		if repository.Enabled && !repository.RequireSignature {
 			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository does not require signatures", Description: "An enabled remote catalog can update deployable Compose definitions without signer verification.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"gitRef": repository.GitRef}, Remediation: "Pin an Ed25519 catalog signer and require signature verification."})
 		}
 		if repository.Enabled && repository.LastSyncStatus == "failed" {
 			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Template repository synchronization failed", Description: "The latest refresh of an enabled template repository failed.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"lastSyncStatus": repository.LastSyncStatus}, Remediation: "Inspect the repository credential, ref, signature, and archive validation error before retrying."})
 		}
-		if repository.Enabled && repository.LastSyncStatus != "failed" && repository.LastSyncedAt == nil {
+		if repository.Enabled && repository.SyncRequestedAt != nil && now.Sub(*repository.SyncRequestedAt) > 5*time.Minute {
+			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository synchronization is queued too long", Description: "A durable catalog refresh request has not been claimed within five minutes.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"syncRequestedAt": repository.SyncRequestedAt.UTC().Format(time.RFC3339)}, Remediation: "Restore the template repository scheduler lease and controller database connectivity."})
+		}
+		if repository.Enabled && repository.SyncStartedAt != nil && now.Sub(*repository.SyncStartedAt) > 10*time.Minute {
+			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository synchronization is stuck", Description: "A catalog refresh has remained in the running state for more than ten minutes.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"syncStartedAt": repository.SyncStartedAt.UTC().Format(time.RFC3339)}, Remediation: "Inspect controller connectivity and archive processing; stale work is eligible for a fenced retry."})
+		}
+		if repository.Enabled && !syncActive && repository.LastSyncStatus != "failed" && repository.LastSyncedAt == nil {
 			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository has never synchronized", Description: "An enabled remote catalog has no successful synchronization record.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"gitRef": repository.GitRef, "syncIntervalSeconds": repository.SyncIntervalSeconds}, Remediation: "Run a catalog synchronization and verify its signature and imported template inventory."})
-		} else if repository.Enabled && repository.LastSyncStatus != "failed" && repository.SyncIntervalSeconds > 0 && now.Sub(*repository.LastSyncedAt) > 2*time.Duration(repository.SyncIntervalSeconds)*time.Second+5*time.Minute {
+		} else if repository.Enabled && !syncActive && repository.LastSyncStatus != "failed" && repository.SyncIntervalSeconds > 0 && now.Sub(*repository.LastSyncedAt) > 2*time.Duration(repository.SyncIntervalSeconds)*time.Second+5*time.Minute {
 			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository synchronization is stale", Description: "An enabled scheduled catalog has not synchronized within two configured intervals plus a five-minute grace period.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"gitRef": repository.GitRef, "syncIntervalSeconds": repository.SyncIntervalSeconds, "lastSyncedAt": repository.LastSyncedAt.UTC().Format(time.RFC3339)}, Remediation: "Restore the catalog scheduler or repository access and complete a verified synchronization."})
 		}
 	}

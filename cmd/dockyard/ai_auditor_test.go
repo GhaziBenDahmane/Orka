@@ -229,6 +229,43 @@ func TestDeterministicAuditDetectsTemplateRepositoryFreshness(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsStalledTemplateRepositorySync(t *testing.T) {
+	now := time.Now().UTC()
+	freshSync := now.Add(-time.Minute)
+	staleQueued := now.Add(-6 * time.Minute)
+	staleRunning := now.Add(-11 * time.Minute)
+	lastSuccess := now.Add(-30 * time.Minute)
+	for _, test := range []struct {
+		name        string
+		status      string
+		requestedAt *time.Time
+		startedAt   *time.Time
+		wantFinding string
+	}{
+		{name: "fresh queue", status: "succeeded", requestedAt: &freshSync},
+		{name: "stalled queue", status: "succeeded", requestedAt: &staleQueued, wantFinding: "Template repository synchronization is queued too long"},
+		{name: "fresh running", status: "running", startedAt: &freshSync},
+		{name: "stalled running", status: "running", startedAt: &staleRunning, wantFinding: "Template repository synchronization is stuck"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := store.AIAuditSnapshot{
+				Organization:        uuid.New(),
+				IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+				NotificationPosture: fullyCoveredNotifications(),
+				TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{
+					ID: uuid.New(), Enabled: true, GitRef: "main", RequireSignature: true,
+					LastSyncStatus: test.status, LastSyncedAt: &lastSuccess,
+					SyncRequestedAt: test.requestedAt, SyncStartedAt: test.startedAt,
+				}},
+			}
+			findings := deterministicAuditFindings(snapshot, now)
+			if test.wantFinding == "" && len(findings) != 0 || test.wantFinding != "" && (len(findings) != 1 || findings[0].Title != test.wantFinding) {
+				t.Fatalf("findings=%#v", findings)
+			}
+		})
+	}
+}
+
 func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
 	now := time.Now().UTC()
 	staleBackup, staleRestore := now.Add(-3*time.Hour), now.Add(-25*time.Hour)

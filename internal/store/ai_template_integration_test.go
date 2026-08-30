@@ -60,7 +60,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatalf("cross-organization catalog credential accepted: %v", err)
 	}
 	claimed, err := db.ClaimDueTemplateRepository(ctx)
-	if err != nil || claimed.ID != repository.ID || claimed.LastSyncStatus != "running" {
+	if err != nil || claimed.ID != repository.ID || claimed.LastSyncStatus != "running" || claimed.SyncStartedAt == nil || claimed.SyncAttemptID == nil {
 		t.Fatalf("claimed repository=%#v err=%v", claimed, err)
 	}
 	if _, err = db.ClaimDueTemplateRepository(ctx); !errors.Is(err, ErrNotFound) {
@@ -70,7 +70,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	loaded, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
-	if err != nil || loaded.NextSyncAt == nil || !loaded.NextSyncAt.After(time.Now()) || loaded.LastSyncStatus != "succeeded" {
+	if err != nil || loaded.NextSyncAt == nil || !loaded.NextSyncAt.After(time.Now()) || loaded.LastSyncStatus != "succeeded" || loaded.SyncStartedAt != nil {
 		t.Fatalf("completed repository schedule=%#v err=%v", loaded, err)
 	}
 	manualRequestedAt, err := db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID)
@@ -85,17 +85,21 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatalf("cross-organization manual sync accepted: %v", err)
 	}
 	claimed, err = db.ClaimDueTemplateRepository(ctx)
-	if err != nil || claimed.ID != repository.ID || claimed.SyncRequestedAt != nil {
+	if err != nil || claimed.ID != repository.ID || claimed.SyncRequestedAt != nil || claimed.SyncStartedAt == nil || claimed.SyncAttemptID == nil {
 		t.Fatalf("manual-requested repository=%#v err=%v", claimed, err)
 	}
 	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
 		t.Fatal(err)
 	}
+	loaded, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || loaded.SyncStartedAt == nil || !loaded.SyncStartedAt.Equal(*claimed.SyncStartedAt) || loaded.SyncRequestedAt == nil {
+		t.Fatalf("running sync clock changed while follow-up was queued: repository=%#v err=%v", loaded, err)
+	}
 	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err = db.ClaimDueTemplateRepository(ctx)
-	if err != nil || claimed.ID != repository.ID {
+	if err != nil || claimed.ID != repository.ID || claimed.SyncStartedAt == nil || claimed.SyncAttemptID == nil {
 		t.Fatalf("follow-up manual repository=%#v err=%v", claimed, err)
 	}
 	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
@@ -130,7 +134,14 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatalf("templates=%#v err=%v", listed, err)
 	}
 	replacement := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "community/replacement", Version: "2", Name: "Replacement", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/replacement", Checksum: "def"}
-	if err = db.ReplaceRepositoryTemplates(ctx, organizationID, repository.ID, []Template{replacement}); err != nil {
+	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	catalogAttempt, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, catalogAttempt, []Template{replacement}); err != nil {
 		t.Fatal(err)
 	}
 	listed, err = db.ListTemplates(ctx, organizationID)
@@ -139,8 +150,11 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	badScope := replacement
 	badScope.OrganizationID = &otherOrganizationID
-	if err = db.ReplaceRepositoryTemplates(ctx, organizationID, repository.ID, []Template{badScope}); err == nil {
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, catalogAttempt, []Template{badScope}); err == nil {
 		t.Fatal("repository snapshot accepted a cross-tenant template")
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, catalogAttempt, "succeeded", ""); err != nil {
+		t.Fatal(err)
 	}
 	listed, err = db.ListTemplates(ctx, organizationID)
 	if err != nil || len(listed) != 1 || listed[0].Key != "community/replacement" {

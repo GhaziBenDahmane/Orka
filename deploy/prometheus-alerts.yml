@@ -36,6 +36,33 @@ groups:
           summary: Dockyard background operation failed
           description: One or more {{ $labels.kind }} operations failed in the last ten minutes.
 
+      - alert: DockyardTemplateRepositorySyncQueued
+        expr: dockyard_template_repository_sync_pending_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A template repository refresh is not being claimed
+          description: Repository {{ $labels.repository }} in organization {{ $labels.organization }} has waited more than five minutes for the catalog scheduler.
+
+      - alert: DockyardTemplateRepositorySyncStuck
+        expr: dockyard_template_repository_sync_running_age_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A template repository refresh is stuck
+          description: Repository {{ $labels.repository }} in organization {{ $labels.organization }} has remained in the running state for more than ten minutes.
+
+      - alert: DockyardTemplateRepositorySyncFailed
+        expr: dockyard_template_repository_sync_failed == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A template repository refresh failed
+          description: Inspect the repository ref, credential, signature policy, and bounded sync error before retrying repository {{ $labels.repository }}.
+
       - alert: DockyardDatabaseDriverFleetMismatch
         expr: count(count by (digest) (dockyard_database_driver_inventory_info)) > 1
         for: 5m

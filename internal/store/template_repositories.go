@@ -23,7 +23,9 @@ type TemplateRepository struct {
 	EncryptedWebhookSecret string     `json:"-"`
 	WebhookConfigured      bool       `json:"webhookConfigured"`
 	SyncIntervalSeconds    int        `json:"syncIntervalSeconds"`
-	SyncRequestedAt        *time.Time `json:"-"`
+	SyncRequestedAt        *time.Time `json:"syncRequestedAt,omitempty"`
+	SyncStartedAt          *time.Time `json:"syncStartedAt,omitempty"`
+	SyncAttemptID          *uuid.UUID `json:"-"`
 	NextSyncAt             *time.Time `json:"nextSyncAt,omitempty"`
 	Enabled                bool       `json:"enabled"`
 	LastSyncStatus         string     `json:"lastSyncStatus"`
@@ -44,7 +46,7 @@ func (s *Store) CreateTemplateRepository(ctx context.Context, item TemplateRepos
 }
 
 func (s *Store) ListTemplateRepositories(ctx context.Context, organizationID uuid.UUID) ([]TemplateRepository, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,sync_started_at,sync_attempt_id,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +54,7 @@ func (s *Store) ListTemplateRepositories(ctx context.Context, organizationID uui
 	items := []TemplateRepository{}
 	for rows.Next() {
 		var item TemplateRepository
-		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.SyncStartedAt, &item.SyncAttemptID, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -62,7 +64,7 @@ func (s *Store) ListTemplateRepositories(ctx context.Context, organizationID uui
 
 func (s *Store) GetTemplateRepository(ctx context.Context, organizationID, id uuid.UUID) (TemplateRepository, error) {
 	var item TemplateRepository
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,sync_started_at,sync_attempt_id,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.SyncStartedAt, &item.SyncAttemptID, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -71,7 +73,7 @@ func (s *Store) GetTemplateRepository(ctx context.Context, organizationID, id uu
 
 func (s *Store) GetTemplateRepositoryForWebhook(ctx context.Context, id uuid.UUID) (TemplateRepository, error) {
 	var item TemplateRepository
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE id=$1 AND enabled AND encrypted_webhook_secret<>''`, id).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,sync_started_at,sync_attempt_id,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at FROM template_repositories WHERE id=$1 AND enabled AND encrypted_webhook_secret<>''`, id).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.SyncStartedAt, &item.SyncAttemptID, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -134,8 +136,7 @@ func (s *Store) RequestTemplateRepositorySync(ctx context.Context, id uuid.UUID,
 func (s *Store) QueueTemplateRepositorySync(ctx context.Context, organizationID, id uuid.UUID) (time.Time, error) {
 	var requestedAt time.Time
 	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories
-		SET sync_requested_at=COALESCE(sync_requested_at,now()),
-			updated_at=CASE WHEN last_sync_status='running' THEN updated_at ELSE now() END
+		SET sync_requested_at=COALESCE(sync_requested_at,now()),updated_at=now()
 		WHERE id=$1 AND organization_id=$2 AND enabled
 		RETURNING sync_requested_at`, id, organizationID).Scan(&requestedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -146,9 +147,10 @@ func (s *Store) QueueTemplateRepositorySync(ctx context.Context, organizationID,
 
 func (s *Store) BeginTemplateRepositorySync(ctx context.Context, organizationID, id uuid.UUID) (TemplateRepository, error) {
 	var item TemplateRepository
-	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories SET last_sync_status='running',last_sync_error='',sync_requested_at=NULL,updated_at=now()
-		WHERE id=$1 AND organization_id=$2 AND enabled AND (last_sync_status<>'running' OR updated_at<now()-interval '5 minutes')
-		RETURNING id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at`, id, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+	attemptID := uuid.New()
+	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories SET last_sync_status='running',last_sync_error='',sync_requested_at=NULL,sync_started_at=now(),sync_attempt_id=$3,updated_at=now()
+		WHERE id=$1 AND organization_id=$2 AND enabled AND (last_sync_status<>'running' OR sync_started_at IS NULL OR sync_started_at<now()-interval '5 minutes')
+		RETURNING id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,encrypted_webhook_secret,encrypted_webhook_secret<>'',sync_interval_seconds,next_sync_at,sync_requested_at,sync_started_at,sync_attempt_id,enabled,last_sync_status,last_sync_error,last_synced_at,created_at,updated_at`, id, organizationID, attemptID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.SyncStartedAt, &item.SyncAttemptID, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrBusy
 	}
@@ -157,15 +159,18 @@ func (s *Store) BeginTemplateRepositorySync(ctx context.Context, organizationID,
 
 func (s *Store) ClaimDueTemplateRepository(ctx context.Context) (TemplateRepository, error) {
 	var item TemplateRepository
+	attemptID := uuid.New()
 	err := s.Pool.QueryRow(ctx, `WITH candidate AS (
 		SELECT id FROM template_repositories
-		WHERE enabled AND ((sync_interval_seconds>0 AND next_sync_at<=now()) OR sync_requested_at IS NOT NULL)
-		AND (last_sync_status<>'running' OR updated_at<now()-interval '5 minutes')
-		ORDER BY COALESCE(sync_requested_at,next_sync_at),id FOR UPDATE SKIP LOCKED LIMIT 1
+		WHERE enabled AND (
+			(last_sync_status='running' AND (sync_started_at IS NULL OR sync_started_at<now()-interval '5 minutes'))
+			OR (last_sync_status<>'running' AND ((sync_interval_seconds>0 AND next_sync_at<=now()) OR sync_requested_at IS NOT NULL))
+		)
+		ORDER BY COALESCE(sync_requested_at,sync_started_at,next_sync_at),id FOR UPDATE SKIP LOCKED LIMIT 1
 	)
-	UPDATE template_repositories r SET last_sync_status='running',last_sync_error='',sync_requested_at=NULL,updated_at=now()
+	UPDATE template_repositories r SET last_sync_status='running',last_sync_error='',sync_requested_at=NULL,sync_started_at=now(),sync_attempt_id=$1,updated_at=now()
 	FROM candidate c WHERE r.id=c.id
-	RETURNING r.id,r.organization_id,r.name,r.slug,r.repository_url,r.git_ref,r.catalog_path,r.trusted_public_key,r.require_signature,r.credential_id,r.encrypted_webhook_secret,r.encrypted_webhook_secret<>'',r.sync_interval_seconds,r.next_sync_at,r.sync_requested_at,r.enabled,r.last_sync_status,r.last_sync_error,r.last_synced_at,r.created_at,r.updated_at`).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
+	RETURNING r.id,r.organization_id,r.name,r.slug,r.repository_url,r.git_ref,r.catalog_path,r.trusted_public_key,r.require_signature,r.credential_id,r.encrypted_webhook_secret,r.encrypted_webhook_secret<>'',r.sync_interval_seconds,r.next_sync_at,r.sync_requested_at,r.sync_started_at,r.sync_attempt_id,r.enabled,r.last_sync_status,r.last_sync_error,r.last_synced_at,r.created_at,r.updated_at`, attemptID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.RepositoryURL, &item.GitRef, &item.CatalogPath, &item.TrustedPublicKey, &item.RequireSignature, &item.CredentialID, &item.EncryptedWebhookSecret, &item.WebhookConfigured, &item.SyncIntervalSeconds, &item.NextSyncAt, &item.SyncRequestedAt, &item.SyncStartedAt, &item.SyncAttemptID, &item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.LastSyncedAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -176,9 +181,12 @@ func (s *Store) FinishTemplateRepositorySync(ctx context.Context, repository Tem
 	if status != "succeeded" && status != "failed" {
 		return errors.New("invalid template repository sync status")
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET last_sync_status=$3,last_sync_error=$4,last_synced_at=now(),next_sync_at=CASE WHEN sync_interval_seconds>0 THEN now()+(sync_interval_seconds * interval '1 second') ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND last_sync_status='running'`, repository.ID, repository.OrganizationID, status, message)
+	if repository.SyncAttemptID == nil {
+		return ErrBusy
+	}
+	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET last_sync_status=$3,last_sync_error=$4,last_synced_at=now(),sync_started_at=NULL,sync_attempt_id=NULL,next_sync_at=CASE WHEN sync_interval_seconds>0 THEN now()+(sync_interval_seconds * interval '1 second') ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND last_sync_status='running' AND sync_attempt_id=$5`, repository.ID, repository.OrganizationID, status, message, *repository.SyncAttemptID)
 	if err == nil && tag.RowsAffected() == 0 {
-		return ErrNotFound
+		return ErrBusy
 	}
 	return err
 }
@@ -236,10 +244,15 @@ func (s *Store) UpsertRepositoryTemplate(ctx context.Context, item Template) (Te
 	return s.CreateTemplate(ctx, item)
 }
 
-// ReplaceRepositoryTemplates atomically reconciles one repository snapshot.
+// ReplaceRepositoryTemplatesForSync prevents a superseded scheduler attempt
+// from publishing an older catalog snapshot after a stale-work takeover.
 // Existing template instances retain their copied provenance when a removed
 // catalog version is deleted because their template foreign key uses SET NULL.
-func (s *Store) ReplaceRepositoryTemplates(ctx context.Context, organizationID, repositoryID uuid.UUID, items []Template) error {
+func (s *Store) ReplaceRepositoryTemplatesForSync(ctx context.Context, repository TemplateRepository, items []Template) error {
+	if repository.SyncAttemptID == nil {
+		return ErrBusy
+	}
+	organizationID, repositoryID, attemptID := repository.OrganizationID, repository.ID, repository.SyncAttemptID
 	if len(items) == 0 {
 		return errors.New("repository catalog must contain at least one template")
 	}
@@ -248,11 +261,15 @@ func (s *Store) ReplaceRepositoryTemplates(ctx context.Context, organizationID, 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT true FROM template_repositories WHERE id=$1 AND organization_id=$2 FOR UPDATE`, repositoryID, organizationID).Scan(&exists); errors.Is(err, pgx.ErrNoRows) {
+	var currentAttemptID *uuid.UUID
+	var syncStatus string
+	if err = tx.QueryRow(ctx, `SELECT sync_attempt_id,last_sync_status FROM template_repositories WHERE id=$1 AND organization_id=$2 FOR UPDATE`, repositoryID, organizationID).Scan(&currentAttemptID, &syncStatus); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
+	}
+	if attemptID != nil && (currentAttemptID == nil || *currentAttemptID != *attemptID || syncStatus != "running") {
+		return ErrBusy
 	}
 	ids := make([]uuid.UUID, 0, len(items))
 	for _, item := range items {
