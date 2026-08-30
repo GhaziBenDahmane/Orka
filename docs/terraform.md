@@ -13,6 +13,8 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_backup_policy`
 - `dockyard_volume_backup_policy`
 - `dockyard_template_repository`
+- `dockyard_oidc_provider`
+- `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
 optional `DOCKYARD_ORGANIZATION_ID` selects an organization for owners with
@@ -64,3 +66,15 @@ catalog. Repository identity and location fields are replacement-oriented;
 signing policy, the optional private-GitHub credential, and the automatic sync
 interval update in place. Webhook secret rotation and immediate manual sync are
 intentional one-shot operations and remain available through `dockyardctl`.
+
+`dockyard_oidc_provider` manages OIDC discovery settings, allowed domains,
+JIT-provisioned default role, enabled state, and encrypted client-secret
+rotation. The API never returns the secret, so the provider retains it only in
+sensitive Terraform state. Protect that state with an encrypted remote backend.
+Destroy disables the provider and preserves its audit history; recreating the
+resource provisions a new provider identity.
+
+`dockyard_auth_settings` controls mandatory SSO for the selected organization.
+Depend on at least one enabled OIDC or SAML provider before setting
+`require_sso = true`. Destroying this singleton resource disables mandatory
+SSO before identity-provider resources are removed.

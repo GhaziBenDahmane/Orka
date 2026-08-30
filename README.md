@@ -153,6 +153,11 @@ finding-triage CLI commands. `dockyard ai-auditor --once` performs one
 fail-fast end-to-end audit to validate model and platform credentials before
 deploying the recurring Swarm auditor services.
 
+OIDC providers can be created, rotated, enabled, and disabled with dedicated
+CLI commands or managed declaratively with `dockyard_oidc_provider` in
+Terraform/OpenTofu. `dockyard_auth_settings` controls mandatory SSO. Client
+secrets remain sensitive write-only state.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

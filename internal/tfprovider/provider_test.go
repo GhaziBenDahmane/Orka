@@ -5,8 +5,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	resourceschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -22,8 +24,8 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 10 {
-		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, and template repository resources")
+	if len(instance.Resources(context.Background())) != 12 {
+		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
 	for _, factory := range instance.Resources(context.Background()) {
@@ -37,6 +39,12 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		}
 	}
 	if !slices.Contains(resourceTypes, "dockyard_template_repository") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_oidc_provider") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 }
@@ -62,6 +70,37 @@ func TestTemplateRepositoryInputsSeparateIdentityFromSettings(t *testing.T) {
 	}
 	if _, exists := updated["repositoryUrl"]; exists || updated["trustedPublicKey"] != "public-key" || updated["syncIntervalSeconds"] != int64(3600) {
 		t.Fatalf("update input = %#v", updated)
+	}
+}
+
+func TestOIDCProviderInputAndSecretRetention(t *testing.T) {
+	model := oidcProviderModel{
+		Name: types.StringValue("Workforce"), Issuer: types.StringValue("https://identity.example.com"), ClientID: types.StringValue("dockyard"), ClientSecret: types.StringValue("state-secret"),
+		Domains: stringSet([]string{"example.com"}), Scopes: stringSet([]string{"openid", "email"}), DefaultRole: types.StringValue("developer"), Enabled: types.BoolValue(true),
+	}
+	var diagnostics diag.Diagnostics
+	input := oidcProviderInput(context.Background(), model, "rotated-secret", &diagnostics)
+	if diagnostics.HasError() || input["clientSecret"] != "rotated-secret" || input["defaultRole"] != "developer" {
+		t.Fatalf("OIDC input=%#v diagnostics=%v", input, diagnostics)
+	}
+	setOIDCProvider(&model, oidcProviderResponse{ID: "provider-id", Name: "Workforce", Issuer: "https://identity.example.com", ClientID: "dockyard", Domains: []string{"example.com"}, Scopes: []string{"openid", "email"}, DefaultRole: "developer", Enabled: true})
+	if model.ClientSecret.ValueString() != "state-secret" || model.Domains.IsNull() || model.Scopes.IsNull() {
+		t.Fatalf("OIDC state did not retain its write-only secret: %#v", model)
+	}
+	if secret := oidcClientSecretForUpdate(types.StringValue("state-secret"), types.StringValue("state-secret")); secret != "" {
+		t.Fatalf("unchanged OIDC secret would be resent: %q", secret)
+	}
+	if secret := oidcClientSecretForUpdate(types.StringValue("rotated-secret"), types.StringValue("state-secret")); secret != "rotated-secret" {
+		t.Fatalf("rotated OIDC secret = %q", secret)
+	}
+}
+
+func TestOIDCProviderClientSecretIsSensitive(t *testing.T) {
+	var response resource.SchemaResponse
+	newOIDCProviderResource().Schema(context.Background(), resource.SchemaRequest{}, &response)
+	secret, ok := response.Schema.Attributes["client_secret"].(resourceschema.StringAttribute)
+	if !ok || !secret.Sensitive || !secret.Required {
+		t.Fatalf("client_secret schema = %#v", response.Schema.Attributes["client_secret"])
 	}
 }
 

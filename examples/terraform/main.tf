@@ -20,6 +20,11 @@ variable "backup_secret_key" {
   sensitive = true
 }
 
+variable "oidc_client_secret" {
+  type      = string
+  sensitive = true
+}
+
 resource "dockyard_project" "example" {
   name        = "Example"
   description = "Managed by OpenTofu or Terraform"
@@ -33,6 +38,22 @@ resource "dockyard_template_repository" "orka_examples" {
   catalog_path          = "examples/template-repository"
   require_signature     = false
   sync_interval_seconds = 3600
+}
+
+resource "dockyard_oidc_provider" "workforce" {
+  name          = "Workforce"
+  issuer        = "https://identity.example.com"
+  client_id     = "dockyard"
+  client_secret = var.oidc_client_secret
+  domains       = ["example.com"]
+  scopes        = ["openid", "email", "profile"]
+  default_role  = "developer"
+  enabled       = true
+}
+
+resource "dockyard_auth_settings" "organization" {
+  require_sso = true
+  depends_on  = [dockyard_oidc_provider.workforce]
 }
 
 resource "dockyard_environment" "production" {

@@ -21,6 +21,13 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"ai-audit-findings"}, http.MethodGet, "/v1/ai/audit-findings"},
 		{[]string{"ai-audit-run-findings", "run-id"}, http.MethodGet, "/v1/ai/audit-runs/run-id/findings"},
 		{[]string{"triage-ai-audit-finding", "finding-id", `{}`}, http.MethodPatch, "/v1/ai/audit-findings/finding-id"},
+		{[]string{"oidc-providers"}, http.MethodGet, "/v1/sso/oidc-providers"},
+		{[]string{"create-oidc-provider", `{}`}, http.MethodPost, "/v1/sso/oidc-providers"},
+		{[]string{"update-oidc-provider", "provider-id", `{}`}, http.MethodPut, "/v1/sso/oidc-providers/provider-id"},
+		{[]string{"enable-oidc-provider", "provider-id"}, http.MethodPost, "/v1/sso/oidc-providers/provider-id/enable"},
+		{[]string{"disable-oidc-provider", "provider-id"}, http.MethodDelete, "/v1/sso/oidc-providers/provider-id"},
+		{[]string{"sso-settings"}, http.MethodGet, "/v1/sso/settings"},
+		{[]string{"put-sso-settings", `{}`}, http.MethodPut, "/v1/sso/settings"},
 		{[]string{"environments", "project-id"}, http.MethodGet, "/v1/projects/project-id/environments"},
 		{[]string{"deploy", "service-id"}, http.MethodPost, "/v1/services/service-id/deployments"},
 		{[]string{"database-engines"}, http.MethodGet, "/v1/database-engines"},
@@ -178,6 +185,32 @@ func TestAIAuditAdministrationCommandBodies(t *testing.T) {
 	triage := input.(map[string]any)
 	if triage["disposition"] != "acknowledged" || triage["note"] != "investigating" {
 		t.Fatalf("triage input=%#v", triage)
+	}
+}
+
+func TestOIDCProviderCommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-oidc-provider", "-"}, strings.NewReader(`{"name":"Workforce","issuer":"https://identity.example.com","clientId":"dockyard","clientSecret":"secret","domains":["example.com"]}`))
+	if err != nil || method != http.MethodPost || path != "/v1/sso/oidc-providers" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	provider := input.(map[string]any)
+	if provider["issuer"] != "https://identity.example.com" || provider["clientSecret"] != "secret" {
+		t.Fatalf("OIDC provider input=%#v", provider)
+	}
+	method, path, input, err = commandRequest([]string{"update-oidc-provider", "provider-id", `{"name":"Workforce","clientSecret":"rotated"}`}, strings.NewReader(""))
+	if err != nil || method != http.MethodPut || path != "/v1/sso/oidc-providers/provider-id" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	provider = input.(map[string]any)
+	if provider["clientSecret"] != "rotated" {
+		t.Fatalf("OIDC provider input=%#v", provider)
+	}
+	method, path, input, err = commandRequest([]string{"put-sso-settings", "-"}, strings.NewReader(`{"requireSso":true}`))
+	if err != nil || method != http.MethodPut || path != "/v1/sso/settings" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	if input.(map[string]any)["requireSso"] != true {
+		t.Fatalf("SSO settings input=%#v", input)
 	}
 }
 

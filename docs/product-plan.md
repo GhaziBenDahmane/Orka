@@ -222,8 +222,8 @@ state, duplicate destructive jobs, or expose credentials.
 Status: Compose, Docker-image application, Dockerfile/HTTPS Git application,
 encrypted uploaded-ZIP application sources with bounded hardened extraction,
 managed-database Dokploy dry-run/import tooling, a secure operational CLI with
-a full raw-API escape hatch, generated route-level OpenAPI coverage, and an
-embedded React console for core workload, template, database, and cluster
+  a full raw-API escape hatch, generated route-level OpenAPI coverage, and an
+  embedded React console for core workload, template, database, and cluster
   workflows are implemented. Docker target stages, build arguments, encrypted
   BuildKit secrets, same-origin Git submodules, and packaging of prebuilt static
   sites into a digest-pinned runtime, Nixpacks, and the production Railpack
@@ -236,12 +236,13 @@ embedded React console for core workload, template, database, and cluster
   explicit manual-conversion records. The Terraform/OpenTofu provider covers
   projects, environments, Compose services, routes, managed databases, source
   credentials, backup destinations, database backup policies, named-volume
-  backup policies, and federated template repositories. The console provides
-  credential, backup-destination, OIDC, SAML, hierarchical policy,
+  backup policies, federated template repositories, OIDC providers, and
+  organization authentication policy. The console provides credential,
+  backup-destination, OIDC, SAML, hierarchical policy,
   mandatory-SSO, audit retention/archive, and notification administration.
-  Remote clusters can be registered, enrolled, drained,
-reactivated, removed, and upgraded to a digest-pinned agent image from the
-console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
+  Remote clusters can be registered, enrolled, drained, reactivated, removed,
+  and upgraded to a digest-pinned agent image from the console; HTTPS tokens
+  and pinned-host SSH deploy keys are also supported.
 
 - React/TypeScript console generated from a versioned OpenAPI contract.
 - CLI and Terraform/OpenTofu provider for automation.
