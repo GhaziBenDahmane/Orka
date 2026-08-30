@@ -3,12 +3,16 @@
 package databaseplugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 )
 
-const ProtocolVersion = 1
+const (
+	ProtocolVersion = 1
+	MaxRequestBytes = 4 << 20
+)
 
 type Description struct {
 	Name            string   `json:"name"`
@@ -71,54 +75,71 @@ type Driver interface {
 
 // Serve handles one request on stdin and writes one response to stdout.
 func Serve(driver Driver, input io.Reader, output io.Writer) error {
-	var request Request
-	if err := json.NewDecoder(io.LimitReader(input, 4<<20)).Decode(&request); err != nil {
+	request, err := decodeRequest(input)
+	if err != nil {
 		return err
 	}
 	response := Response{ProtocolVersion: ProtocolVersion}
 	if request.ProtocolVersion != ProtocolVersion {
 		response.Error = "unsupported protocol version"
+	} else if !validRequestShape(request) {
+		response.Error = "invalid request shape"
 	} else {
-		var err error
+		var callErr error
 		switch request.Operation {
 		case "describe":
 			description := driver.Describe()
 			response.Description = &description
 		case "render":
-			if request.Render == nil {
-				err = errors.New("render request is required")
-			} else {
-				result, callErr := driver.Render(*request.Render)
-				response.Result, err = &result, callErr
-			}
+			result, err := driver.Render(*request.Render)
+			response.Result, callErr = &result, err
 		case "backup":
-			if request.Utility == nil {
-				err = errors.New("utility request is required")
-			} else {
-				plan, callErr := driver.Backup(*request.Utility)
-				response.Plan, err = &plan, callErr
-			}
+			plan, err := driver.Backup(*request.Utility)
+			response.Plan, callErr = &plan, err
 		case "restore":
-			if request.Utility == nil {
-				err = errors.New("utility request is required")
-			} else {
-				plan, callErr := driver.Restore(*request.Utility)
-				response.Plan, err = &plan, callErr
-			}
+			plan, err := driver.Restore(*request.Utility)
+			response.Plan, callErr = &plan, err
 		case "readiness":
-			if request.Utility == nil {
-				err = errors.New("utility request is required")
-			} else {
-				plan, callErr := driver.Readiness(*request.Utility)
-				response.Plan, err = &plan, callErr
-			}
-		default:
-			err = errors.New("unsupported operation")
+			plan, err := driver.Readiness(*request.Utility)
+			response.Plan, callErr = &plan, err
 		}
-		if err != nil {
-			response.Error = err.Error()
-			response.Result, response.Plan = nil, nil
+		if callErr != nil {
+			response.Error = callErr.Error()
+			response.Description, response.Result, response.Plan = nil, nil, nil
 		}
 	}
 	return json.NewEncoder(output).Encode(response)
+}
+
+func decodeRequest(input io.Reader) (Request, error) {
+	payload, err := io.ReadAll(io.LimitReader(input, MaxRequestBytes+1))
+	if err != nil {
+		return Request{}, err
+	}
+	if len(payload) > MaxRequestBytes {
+		return Request{}, errors.New("database driver request exceeds size limit")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var request Request
+	if err = decoder.Decode(&request); err != nil {
+		return Request{}, err
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Request{}, errors.New("database driver request must contain one JSON value")
+	}
+	return request, nil
+}
+
+func validRequestShape(request Request) bool {
+	switch request.Operation {
+	case "describe":
+		return request.Render == nil && request.Utility == nil
+	case "render":
+		return request.Render != nil && request.Utility == nil
+	case "backup", "restore", "readiness":
+		return request.Render == nil && request.Utility != nil
+	default:
+		return false
+	}
 }
