@@ -1967,21 +1967,35 @@ func (s *Store) UpsertGlobalTemplates(ctx context.Context, items []Template) err
 	if len(items) == 0 {
 		return errors.New("global template catalog must contain at least one template")
 	}
+	source := items[0].Source
+	if source == "" {
+		return errors.New("global template catalog source is required")
+	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	ids := make([]uuid.UUID, 0, len(items))
 	for _, item := range items {
 		if item.OrganizationID != nil || item.RepositoryID != nil {
 			return errors.New("global template catalog contains a scoped template")
 		}
+		if item.Source != source {
+			return errors.New("global template catalog contains mixed sources")
+		}
 		item.ID = uuid.New()
-		if _, err = tx.Exec(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum)
+		var id uuid.UUID
+		if err = tx.QueryRow(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum)
 			VALUES($1,NULL,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-			ON CONFLICT (organization_id,template_key,version) DO UPDATE SET repository_id=NULL,name=excluded.name,description=excluded.description,compose_yaml=excluded.compose_yaml,config=excluded.config,source=excluded.source,source_path=excluded.source_path,checksum=excluded.checksum`, item.ID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum); err != nil {
+			ON CONFLICT (organization_id,template_key,version) DO UPDATE SET repository_id=NULL,name=excluded.name,description=excluded.description,compose_yaml=excluded.compose_yaml,config=excluded.config,source=excluded.source,source_path=excluded.source_path,checksum=excluded.checksum
+			RETURNING id`, item.ID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum).Scan(&id); err != nil {
 			return err
 		}
+		ids = append(ids, id)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM templates WHERE organization_id IS NULL AND source=$1 AND NOT (id=ANY($2::uuid[]))`, source, ids); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

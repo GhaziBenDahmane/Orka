@@ -77,7 +77,10 @@ the new credential is checked. Existing deployed services are unaffected.
 Built-in startup seeding and the signed local catalog importer likewise parse
 the complete catalog first and publish all template versions in one database
 transaction, so an invalid sibling or storage failure cannot expose a partial
-catalog.
+catalog. Startup also instantiates and compiles every embedded blueprint through
+the safe production Compose profile before publication, and atomically removes
+built-in versions retired from the new binary without touching other catalog
+sources or existing service provenance.
 Before publication, every candidate snapshot is instantiated with generated
 validation values, its declared routes are checked against real Compose
 services, and the rendered workload passes the safe Docker Compose compiler.

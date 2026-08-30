@@ -532,7 +532,8 @@ func serve() error {
 	}
 	defer db.Pool.Close()
 	db.RequireRemoteBackups = cfg.RequireRemoteBackups
-	if report, seedErr := templates.SeedBuiltinCatalog(ctx, db); seedErr != nil {
+	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
+	if report, seedErr := templates.SeedBuiltinCatalog(ctx, db, compiler); seedErr != nil {
 		return fmt.Errorf("seed built-in template catalog: %w", seedErr)
 	} else {
 		logger.Info("built-in template catalog ready", "templates", report.Imported)
@@ -544,7 +545,6 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
 	swarm := deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.TraefikNetwork, Timeout: 5 * time.Minute, ServiceName: cfg.SwarmServiceName}
 	databaseRegistry := database.NewRegistry()
 	if cfg.DatabaseDriverDirectory != "" {

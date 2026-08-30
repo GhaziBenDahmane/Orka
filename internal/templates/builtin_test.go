@@ -62,3 +62,27 @@ func TestExampleTemplateRepositoryIsImportable(t *testing.T) {
 		t.Fatalf("example repository report=%#v", report)
 	}
 }
+
+func TestBuiltinAdmissionChecksRoutesAndSafeComposeProfile(t *testing.T) {
+	digestImage := "example@sha256:" + strings.Repeat("a", 64)
+	tests := map[string]struct {
+		toml    string
+		compose string
+	}{
+		"missing route service": {
+			toml:    "[variables]\ndomain = \"${domain}\"\n[[config.domains]]\nserviceName = \"missing\"\nport = 8080\nhost = \"${domain}\"\npath = \"/\"\n",
+			compose: "services:\n  web:\n    image: " + digestImage + "\n",
+		},
+		"unsafe privilege": {
+			toml:    "[variables]\n",
+			compose: "services:\n  web:\n    image: " + digestImage + "\n    privileged: true\n",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := validateBuiltinBlueprint([]byte(test.toml), []byte(test.compose), deploy.Compiler{PublicNetwork: "dockyard-public", AllowUnsafe: true}); err == nil {
+				t.Fatal("unsafe or unroutable built-in template passed startup admission")
+			}
+		})
+	}
+}

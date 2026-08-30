@@ -307,16 +307,24 @@ func loadCatalogBlueprint(blueprint string) (string, []store.Route, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	routes, err := instanceRoutes(instance)
+	if err != nil {
+		return "", nil, err
+	}
+	return instance.ComposeYAML, routes, nil
+}
+
+func instanceRoutes(instance Instance) ([]store.Route, error) {
 	routes := make([]store.Route, 0, len(instance.Domains))
 	for _, domain := range instance.Domains {
 		port, portErr := PortNumber(domain.Port)
 		if portErr != nil {
-			return "", nil, portErr
+			return nil, portErr
 		}
 		routes = append(routes, store.Route{
 			ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path,
 			TargetPort: port, TLS: true, CertificateResolver: "letsencrypt",
 		})
 	}
-	return instance.ComposeYAML, routes, nil
+	return routes, nil
 }

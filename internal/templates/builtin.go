@@ -18,7 +18,11 @@ import (
 //go:embed builtin/blueprints/*/*
 var builtinCatalog embed.FS
 
-func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, error) {
+func SeedBuiltinCatalog(ctx context.Context, db *store.Store, compiler deploy.Compiler) (ImportReport, error) {
+	// Built-ins are always advertised as safe. Validate them with the safe
+	// profile even when the controller permits explicitly opted-in unsafe
+	// tenant workloads.
+	compiler.AllowUnsafe = false
 	entries, err := fs.ReadDir(builtinCatalog, "builtin/blueprints")
 	if err != nil {
 		return ImportReport{}, err
@@ -58,7 +62,8 @@ func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, err
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		if _, readErr = ParseDokploy(tomlBytes); readErr != nil {
+		readErr = validateBuiltinBlueprint(tomlBytes, compose, compiler)
+		if readErr != nil {
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
@@ -113,15 +118,7 @@ func ValidateBuiltinCatalog(compiler deploy.Compiler) (ImportReport, error) {
 		}
 		compose, readErr := fs.ReadFile(builtinCatalog, path.Join(root, "docker-compose.yml"))
 		if readErr == nil {
-			var definition DokployTemplate
-			definition, readErr = ParseDokploy(tomlBytes)
-			if readErr == nil {
-				var instance Instance
-				instance, readErr = Instantiate(definition, string(compose), "example.test")
-				if readErr == nil {
-					_, readErr = compiler.Compile(instance.ComposeYAML, nil)
-				}
-			}
+			readErr = validateBuiltinBlueprint(tomlBytes, compose, compiler)
 		}
 		if readErr != nil {
 			report.Failed[entry.Name()] = readErr.Error()
@@ -133,4 +130,26 @@ func ValidateBuiltinCatalog(compiler deploy.Compiler) (ImportReport, error) {
 		return report, fmt.Errorf("%d built-in template(s) failed validation", len(report.Failed))
 	}
 	return report, nil
+}
+
+func validateBuiltinBlueprint(tomlBytes, compose []byte, compiler deploy.Compiler) error {
+	compiler.AllowUnsafe = false
+	definition, err := ParseDokploy(tomlBytes)
+	if err != nil {
+		return err
+	}
+	instance, err := Instantiate(definition, string(compose), "example.test")
+	if err != nil {
+		return err
+	}
+	instance.ComposeYAML, err = ApplyMounts(instance.ComposeYAML, instance.Mounts, instance.Environment)
+	if err != nil {
+		return err
+	}
+	routes, err := instanceRoutes(instance)
+	if err != nil {
+		return err
+	}
+	_, err = compiler.Compile(instance.ComposeYAML, routes)
+	return err
 }
