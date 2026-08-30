@@ -71,6 +71,9 @@ direct port publishing, and local Compose environment, label, extension,
 secret, or config imports. Stack-owned overlays are encrypted. Safe Compose
 input cannot declare or attach the shared platform routing network; the
 compiler attaches it only to services with tenant-scoped approved routes. The
+safe profile also rejects node-wide global scheduling and caps each stack at
+100 aggregate replicated tasks, preventing a single service record from
+bypassing resource-count quotas through unbounded Compose fan-out. The
 controller and remote agent retain Docker-manager authority and therefore
 remain high-value trusted components; tenant workloads never receive their
 sockets or credentials.

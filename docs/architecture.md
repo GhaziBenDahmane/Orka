@@ -68,6 +68,8 @@ allowed to finish before deletion can begin.
   declare or attach it, and the compiler attaches it only to services with
   approved routes. Routing labels are generated only from tenant-scoped route
   records after canonical hostname and injection-safe path validation.
+- Safe stacks use replicated scheduling and are capped at 100 aggregate tasks;
+  node-wide global services and jobs require explicit unsafe-workload mode.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

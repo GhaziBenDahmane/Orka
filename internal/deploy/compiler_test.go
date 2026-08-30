@@ -437,7 +437,7 @@ func TestCompilePreservesExplicitRolloutPolicy(t *testing.T) {
 }
 
 func TestCompileSkipsRolloutDefaultsForJobs(t *testing.T) {
-	for _, mode := range []string{"replicated-job", "global-job"} {
+	for _, mode := range []string{"replicated-job"} {
 		out, err := (Compiler{}).Compile("services:\n  task:\n    image: busybox\n    deploy:\n      mode: "+mode+"\n", nil)
 		if err != nil {
 			t.Fatalf("%s: %v", mode, err)
@@ -446,6 +446,33 @@ func TestCompileSkipsRolloutDefaultsForJobs(t *testing.T) {
 		if _, exists := deploy["update_config"]; exists {
 			t.Fatalf("%s received an update policy: %#v", mode, deploy)
 		}
+	}
+}
+
+func TestCompileSafeModeBoundsScheduledTasks(t *testing.T) {
+	tests := map[string]string{
+		"global service":       "services:\n  task:\n    image: busybox\n    deploy:\n      mode: global\n",
+		"global job":           "services:\n  task:\n    image: busybox\n    deploy:\n      mode: global-job\n",
+		"too many replicas":    "services:\n  app:\n    image: nginx\n    deploy:\n      replicas: 101\n",
+		"non-integer replicas": "services:\n  app:\n    image: nginx\n    deploy:\n      replicas: many\n",
+		"aggregate replicas":   "services:\n  api:\n    image: nginx\n    deploy:\n      replicas: 60\n  worker:\n    image: busybox\n    deploy:\n      replicas: 41\n",
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := (Compiler{}).Compile(source, nil); err == nil {
+				t.Fatalf("safe mode accepted unbounded scheduling:\n%s", source)
+			}
+			if _, err := (Compiler{AllowUnsafe: true}).Compile(source, nil); err != nil {
+				t.Fatalf("explicit unsafe mode rejected scheduling request: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompileSafeModeAcceptsBoundedReplicas(t *testing.T) {
+	source := "services:\n  api:\n    image: nginx\n    deploy:\n      replicas: 60\n  worker:\n    image: busybox\n    deploy:\n      replicas: 40\n"
+	if _, err := (Compiler{}).Compile(source, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

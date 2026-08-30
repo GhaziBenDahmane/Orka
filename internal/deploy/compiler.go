@@ -16,6 +16,8 @@ var safeHostname = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\
 var safeCertificateResolver = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 var safeVolumeSource = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
+const maxSafeTasksPerStack = 100
+
 type Compiler struct {
 	PublicNetwork string
 	AllowUnsafe   bool
@@ -30,11 +32,15 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 	if !ok || len(services) == 0 {
 		return "", errors.New("compose document must define at least one service")
 	}
+	if !c.AllowUnsafe && len(services) > maxSafeTasksPerStack {
+		return "", fmt.Errorf("safe compose stacks may schedule at most %d tasks", maxSafeTasksPerStack)
+	}
 	if !c.AllowUnsafe {
 		if err := c.validateSafeDocument(doc); err != nil {
 			return "", err
 		}
 	}
+	scheduledTasks := 0
 	for name, raw := range services {
 		if !safeName.MatchString(name) {
 			return "", fmt.Errorf("invalid compose service name %q", name)
@@ -46,6 +52,14 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		if !c.AllowUnsafe {
 			if err := validateSafeService(name, service, c.PublicNetwork); err != nil {
 				return "", err
+			}
+			replicas, err := safeServiceReplicas(name, service)
+			if err != nil {
+				return "", err
+			}
+			scheduledTasks += replicas
+			if scheduledTasks > maxSafeTasksPerStack {
+				return "", fmt.Errorf("safe compose stacks may schedule at most %d tasks", maxSafeTasksPerStack)
 			}
 		}
 		if err := applyRolloutDefaults(name, service); err != nil {
@@ -122,6 +136,39 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		return "", fmt.Errorf("render compose yaml: %w", err)
 	}
 	return string(out), nil
+}
+
+func safeServiceReplicas(name string, service map[string]any) (int, error) {
+	deploy, valid := stringMap(service["deploy"])
+	if service["deploy"] != nil && !valid {
+		return 0, fmt.Errorf("service %q deploy must be an object", name)
+	}
+	mode := "replicated"
+	if rawMode, exists := deploy["mode"]; exists {
+		var ok bool
+		mode, ok = rawMode.(string)
+		if !ok {
+			return 0, fmt.Errorf("service %q deploy mode must be a string", name)
+		}
+	}
+	if mode == "global" || mode == "global-job" {
+		return 0, fmt.Errorf("service %q requests unbounded %s scheduling", name, mode)
+	}
+	if mode != "replicated" && mode != "replicated-job" {
+		return 0, fmt.Errorf("service %q requests unsupported deploy mode %q", name, mode)
+	}
+	replicas := 1
+	if rawReplicas, exists := deploy["replicas"]; exists {
+		var ok bool
+		replicas, ok = rawReplicas.(int)
+		if !ok {
+			return 0, fmt.Errorf("service %q deploy replicas must be an integer", name)
+		}
+	}
+	if replicas < 0 || replicas > maxSafeTasksPerStack {
+		return 0, fmt.Errorf("service %q deploy replicas must be between 0 and %d", name, maxSafeTasksPerStack)
+	}
+	return replicas, nil
 }
 
 func applyRolloutDefaults(name string, service map[string]any) error {
