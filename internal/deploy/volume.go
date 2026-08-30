@@ -107,7 +107,7 @@ func (s Swarm) RunVolumeArtifact(ctx context.Context, job VolumeArtifactJob) (re
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
-	args := []string{"service", "create", "--quiet", "--detach", "--name", serviceName, "--constraint", "node.id==" + job.NodeID, "--restart-condition", "none", "--mount", "type=volume,source=" + job.VolumeName + ",target=/volume", "--mount", "type=tmpfs,destination=/scratch,tmpfs-mode=0700", "--secret", "source=" + secretName + ",target=volume-job.json,mode=0400"}
+	args := []string{"service", "create", "--quiet", "--detach", "--name", serviceName, "--constraint", "node.id==" + job.NodeID, "--restart-condition", "none", "--mount", "type=volume,source=" + job.VolumeName + ",target=/volume", "--secret", "source=" + secretName + ",target=volume-job.json,mode=0400"}
 	if job.Network != "" {
 		args = append(args, "--network", job.Network)
 	}

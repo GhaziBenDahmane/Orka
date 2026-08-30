@@ -127,6 +127,17 @@ func RestoreArchive(src io.Reader, root string) error {
 	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
+	return restoreValidatedArchive(seeker, root)
+}
+
+// restoreValidatedArchive extracts an archive that has already passed a full
+// validation pass. Callers must not expose src to concurrent mutation between
+// validation and extraction.
+func restoreValidatedArchive(src io.Reader, root string) error {
+	root = filepath.Clean(root)
+	if root == "." || root == string(filepath.Separator) {
+		return errors.New("unsafe volume root")
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return err
 	}
@@ -135,7 +146,7 @@ func RestoreArchive(src io.Reader, root string) error {
 		return err
 	}
 	defer os.RemoveAll(staging)
-	if err = extractArchive(seeker, staging); err != nil {
+	if err = extractArchive(src, staging); err != nil {
 		return err
 	}
 	rollback, err := os.MkdirTemp(root, internalPrefix+"rollback-")

@@ -86,12 +86,12 @@ func runVolumeArtifact(arguments []string) error {
 	flags := flag.NewFlagSet("volume-artifact", flag.ContinueOnError)
 	jobFile := flags.String("job-file", "", "path to the mode-0400 volume artifact job secret")
 	volumeRoot := flags.String("volume-root", "/volume", "mounted volume root")
-	workRoot := flags.String("work-root", "/scratch", "temporary artifact workspace")
+	workRoot := flags.String("work-root", "/tmp", "temporary encrypted artifact workspace")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || *jobFile == "" || !filepath.IsAbs(*volumeRoot) || !filepath.IsAbs(*workRoot) {
-		return errors.New("usage: dockyard volume-artifact --job-file PATH [--volume-root /volume --work-root /scratch]")
+		return errors.New("usage: dockyard volume-artifact --job-file PATH [--volume-root /volume --work-root /tmp]")
 	}
 	job, err := volumeartifact.ReadJob(*jobFile)
 	if err != nil {

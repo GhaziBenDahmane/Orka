@@ -71,24 +71,36 @@ func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, err
 		return result, err
 	}
 	defer os.RemoveAll(work)
-	plainPath, encryptedPath := filepath.Join(work, "volume.tar.gz"), filepath.Join(work, "volume.tar.gz.enc")
+	encryptedPath := filepath.Join(work, "volume.tar.gz.enc")
 	if job.Mode == "backup" {
-		plain, createErr := os.OpenFile(plainPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		encrypted, createErr := os.OpenFile(encryptedPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if createErr != nil {
 			return result, createErr
 		}
-		err = WriteArchive(plain, volumeRoot)
-		if closeErr := plain.Close(); err == nil {
+		plainHash := sha256.New()
+		archiveReader, archiveWriter := io.Pipe()
+		archiveDone := make(chan error, 1)
+		go func() {
+			archiveErr := WriteArchive(io.MultiWriter(archiveWriter, plainHash), volumeRoot)
+			_ = archiveWriter.CloseWithError(archiveErr)
+			archiveDone <- archiveErr
+		}()
+		err = box.EncryptStream(encrypted, archiveReader, job.EncryptionAAD)
+		if err != nil {
+			_ = archiveReader.CloseWithError(err)
+		}
+		archiveErr := <-archiveDone
+		if err == nil {
+			err = archiveErr
+		}
+		if syncErr := encrypted.Sync(); err == nil {
+			err = syncErr
+		}
+		if closeErr := encrypted.Close(); err == nil {
 			err = closeErr
 		}
-		if err != nil {
-			return result, err
-		}
-		result.PlaintextSHA256, _, err = hashFile(plainPath)
 		if err == nil {
-			err = transform(box, plainPath, encryptedPath, job.EncryptionAAD, true)
-		}
-		if err == nil {
+			result.PlaintextSHA256 = hex.EncodeToString(plainHash.Sum(nil))
 			result.SHA256, result.SizeBytes, err = hashFile(encryptedPath)
 		}
 		if err == nil {
@@ -103,22 +115,25 @@ func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, err
 	if err != nil || result.SHA256 != job.SHA256 || result.SizeBytes != job.SizeBytes {
 		return result, errors.New("encrypted volume artifact checksum or size mismatch")
 	}
-	if err = transform(box, encryptedPath, plainPath, job.EncryptionAAD, false); err != nil {
-		return result, err
-	}
-	result.PlaintextSHA256, _, err = hashFile(plainPath)
-	if err != nil || result.PlaintextSHA256 != job.PlaintextSHA256 {
-		return result, errors.New("plaintext volume artifact checksum mismatch")
-	}
-	archive, err := os.Open(plainPath)
+	plainHash := sha256.New()
+	err = decryptAndConsume(box, encryptedPath, job.EncryptionAAD, func(src io.Reader) error {
+		tee := io.TeeReader(src, plainHash)
+		if validateErr := validateArchive(tee); validateErr != nil {
+			return validateErr
+		}
+		_, drainErr := io.Copy(io.Discard, tee)
+		return drainErr
+	})
 	if err != nil {
 		return result, err
 	}
-	err = RestoreArchive(archive, volumeRoot)
-	closeErr := archive.Close()
-	if err == nil {
-		err = closeErr
+	result.PlaintextSHA256 = hex.EncodeToString(plainHash.Sum(nil))
+	if result.PlaintextSHA256 != job.PlaintextSHA256 {
+		return result, errors.New("plaintext volume artifact checksum mismatch")
 	}
+	err = decryptAndConsume(box, encryptedPath, job.EncryptionAAD, func(src io.Reader) error {
+		return restoreValidatedArchive(src, filepath.Clean(volumeRoot))
+	})
 	return result, err
 }
 
@@ -142,31 +157,22 @@ func ValidateJob(job Job) error {
 	return nil
 }
 
-func transform(box *cryptox.Box, source, destination, aad string, encrypt bool) (err error) {
+func decryptAndConsume(box *cryptox.Box, source, aad string, consume func(io.Reader) error) error {
 	input, err := os.Open(source)
 	if err != nil {
 		return err
 	}
-	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = os.Remove(destination)
-		}
-		_ = output.Close()
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		decryptErr := box.DecryptStream(writer, input, aad)
+		closeErr := input.Close()
+		_ = writer.CloseWithError(decryptErr)
+		done <- errors.Join(decryptErr, closeErr)
 	}()
-	if encrypt {
-		err = box.EncryptStream(output, input, aad)
-	} else {
-		err = box.DecryptStream(output, input, aad)
-	}
-	if err == nil {
-		err = output.Sync()
-	}
-	return err
+	consumeErr := consume(reader)
+	_ = reader.CloseWithError(consumeErr)
+	return errors.Join(consumeErr, <-done)
 }
 
 func transfer(ctx context.Context, method, rawURL, filename string, expectedSize int64) error {
