@@ -6,6 +6,24 @@ project="dockyard-template-smoke"
 port="${DOCKYARD_TEMPLATE_SMOKE_PORT:-18081}"
 evidence_file="${DOCKYARD_TEMPLATE_EVIDENCE:-template-conformance.json}"
 barktrace_version="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}"
+template_selection="${DOCKYARD_TEMPLATE_SMOKE_TEMPLATES:-9router postgres redis barktrace-sqlite barktrace-postgres}"
+read -r -a template_keys <<<"$template_selection"
+if (( ${#template_keys[@]} == 0 )); then
+  echo "DOCKYARD_TEMPLATE_SMOKE_TEMPLATES must select at least one template" >&2
+  exit 1
+fi
+declare -A selected_templates=()
+for template_key in "${template_keys[@]}"; do
+  case "$template_key" in
+    9router|postgres|redis|barktrace-sqlite|barktrace-postgres) ;;
+    *) echo "unsupported template smoke target: $template_key" >&2; exit 1 ;;
+  esac
+  if [[ -n "${selected_templates[$template_key]:-}" ]]; then
+    echo "duplicate template smoke target: $template_key" >&2
+    exit 1
+  fi
+  selected_templates[$template_key]=true
+done
 export DOCKYARD_HTTP_BIND="127.0.0.1:$port"
 export DOCKYARD_POSTGRES_BIND="${DOCKYARD_POSTGRES_BIND:-127.0.0.1:54339}"
 base_url="http://127.0.0.1:$port"
@@ -29,6 +47,9 @@ wait_for_deployment() {
     sleep 1
   done
   echo "deployment $deployment_id did not succeed before the timeout" >&2
+  if [[ -n "$response" ]]; then
+    jq . <<<"$response" >&2 || printf '%s\n' "$response" >&2
+  fi
   return 1
 }
 
@@ -115,7 +136,7 @@ project_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"name":
 environment_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"name":"Test","slug":"test"}' "$base_url/v1/projects/$project_id/environments" | jq -er '.id')"
 catalog="$(curl --fail --silent --show-error "${headers[@]}" "$base_url/v1/templates")"
 
-for template_key in 9router postgres redis barktrace-sqlite barktrace-postgres; do
+for template_key in "${template_keys[@]}"; do
   template_id="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .id' <<<"$catalog")"
   template_version="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .version' <<<"$catalog")"
   case "$template_key" in
@@ -184,13 +205,13 @@ jq -n \
   '{status:$status,sourceCommit:$sourceCommit,createdAt:$createdAt,barktraceVersion:$barktraceVersion,productCount:($products|length),products:$products}' \
   >"$evidence_file"
 jq -e '
-  .status == "passed" and .productCount == 5 and
-  ([.products[].template] | sort == ["9router","barktrace-postgres","barktrace-sqlite","postgres","redis"]) and
+  .status == "passed" and .productCount == ($expected | length) and
+  ([.products[].template] | sort == ($expected | sort)) and
   all(.products[]; .deploymentVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and
   all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and
   all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
   all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
-' --arg version "$barktrace_version" "$evidence_file" >/dev/null
+' --arg version "$barktrace_version" --argjson expected "$(printf '%s\n' "${template_keys[@]}" | jq -R . | jq -s .)" "$evidence_file" >/dev/null
 printf 'TEMPLATE_EVIDENCE '
 cat "$evidence_file"
-printf 'Built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL templates deployed and survived Swarm task replacement; stateful products retained application data.\n'
+printf 'Selected built-in templates deployed and survived Swarm task replacement; stateful products retained application data.\n'

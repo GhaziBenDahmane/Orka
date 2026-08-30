@@ -90,7 +90,10 @@ products through the API. The test deploys them to Docker Swarm, verifies
 replica convergence and immutable image resolution, then forces task
 replacement. Stateful products additionally prove application data survives;
 9Router only has its deployment lifecycle tested and requires no provider
-credentials.
+credentials. For a bounded local run, set `DOCKYARD_TEMPLATE_SMOKE_TEMPLATES`
+to a space-separated subset, for example
+`barktrace-sqlite barktrace-postgres`; release CI leaves it unset and always
+executes the complete five-product gate.
 
 Import the complete upstream Dokploy template checkout with:
 
