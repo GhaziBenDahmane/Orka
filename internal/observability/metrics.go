@@ -3,6 +3,8 @@ package observability
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,15 +32,73 @@ type observation struct {
 	Buckets [len(durationBuckets)]uint64
 }
 
+// DatabaseDriverInfo is the bounded, non-secret portion of a database
+// driver's identity that is safe to expose through Prometheus.
+type DatabaseDriverInfo struct {
+	Engine        string
+	Source        string
+	Digest        string
+	BackupCapable bool
+}
+
 type Metrics struct {
 	mu           sync.RWMutex
 	http         map[string]*observation
 	operations   map[string]*observation
 	certificates map[string]time.Time
+	drivers      []DatabaseDriverInfo
+	driverSet    map[string]DatabaseDriverInfo
+	driverDigest string
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time)}
+	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time), driverSet: make(map[string]DatabaseDriverInfo)}
+}
+
+// SetDatabaseDrivers replaces the immutable startup inventory used to detect
+// inconsistent external driver artifacts across HA controller replicas. It
+// accepts metadata rather than paths so local filesystem details can never
+// leak into metrics.
+func (m *Metrics) SetDatabaseDrivers(drivers []DatabaseDriverInfo) {
+	clean := make([]DatabaseDriverInfo, 0, len(drivers))
+	for _, driver := range drivers {
+		driver.Engine = strings.TrimSpace(driver.Engine)
+		if driver.Engine == "" {
+			continue
+		}
+		switch driver.Source {
+		case "built-in":
+			driver.Digest = "built-in"
+		case "external":
+			if !validSHA256Digest(driver.Digest) {
+				driver.Digest = "invalid"
+			}
+		default:
+			driver.Source = "unknown"
+			driver.Digest = "invalid"
+		}
+		clean = append(clean, driver)
+	}
+	sort.Slice(clean, func(i, j int) bool { return clean[i].Engine < clean[j].Engine })
+	hash := sha256.New()
+	driverSet := make(map[string]DatabaseDriverInfo, len(clean))
+	for _, driver := range clean {
+		driverSet[driver.Engine] = driver
+		fmt.Fprintf(hash, "%s\x00%s\x00%s\x00%t\n", driver.Engine, driver.Source, driver.Digest, driver.BackupCapable)
+	}
+	m.mu.Lock()
+	m.drivers = clean
+	m.driverSet = driverSet
+	m.driverDigest = "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	m.mu.Unlock()
+}
+
+func validSHA256Digest(value string) bool {
+	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
 }
 
 func (m *Metrics) SetCertificateExpiry(name string, expiresAt time.Time) {
@@ -170,6 +230,9 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 	if err := renderSAMLCertificateMetrics(ctx, w, db); err != nil {
 		return err
 	}
+	if err := m.renderDatabaseDriverMetrics(ctx, w, db); err != nil {
+		return err
+	}
 	var stale float64
 	if err := db.QueryRow(ctx, `SELECT count(*)::float8 FROM jobs WHERE status='running' AND locked_at<now()-interval '30 seconds'`).Scan(&stale); err != nil {
 		return err
@@ -178,6 +241,89 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 	fmt.Fprintln(w, "# TYPE dockyard_job_stale_leases gauge")
 	fmt.Fprintf(w, "dockyard_job_stale_leases %g\n", stale)
 	return nil
+}
+
+func (m *Metrics) renderDatabaseDriverMetrics(ctx context.Context, w io.Writer, db Queryer) error {
+	drivers, driverSet, inventoryDigest := m.databaseDriverSnapshot()
+	renderDatabaseDriverInventory(w, drivers, inventoryDigest)
+
+	type issueKey struct{ engine, reason string }
+	issues := make(map[issueKey]float64)
+	rows, err := db.Query(ctx, `SELECT engine,driver_source,driver_artifact_digest,count(*)::float8 FROM database_instances GROUP BY engine,driver_source,driver_artifact_digest`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var engine, source, digest string
+		var count float64
+		if err = rows.Scan(&engine, &source, &digest, &count); err != nil {
+			return err
+		}
+		reason := ""
+		driver, available := driverSet[engine]
+		switch {
+		case source == "unbound":
+			reason = "unbound"
+		case !available:
+			reason = "unavailable"
+		case source != driver.Source:
+			reason = "identity_mismatch"
+		case source == "external" && digest != driver.Digest:
+			reason = "identity_mismatch"
+		case source == "built-in" && digest != "":
+			reason = "identity_mismatch"
+		}
+		if reason != "" {
+			issues[issueKey{engine: engine, reason: reason}] += count
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	fmt.Fprintln(w, "# HELP dockyard_database_driver_binding_issues Managed databases whose persisted driver identity cannot be honored by this controller.")
+	fmt.Fprintln(w, "# TYPE dockyard_database_driver_binding_issues gauge")
+	keys := make([]issueKey, 0, len(issues))
+	for key := range issues {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].engine == keys[j].engine {
+			return keys[i].reason < keys[j].reason
+		}
+		return keys[i].engine < keys[j].engine
+	})
+	for _, key := range keys {
+		fmt.Fprintf(w, "dockyard_database_driver_binding_issues%s %g\n", labels([]string{"engine", "reason"}, []string{key.engine, key.reason}), issues[key])
+	}
+	return nil
+}
+
+func (m *Metrics) databaseDriverSnapshot() ([]DatabaseDriverInfo, map[string]DatabaseDriverInfo, string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	drivers := append([]DatabaseDriverInfo(nil), m.drivers...)
+	driverSet := make(map[string]DatabaseDriverInfo, len(m.driverSet))
+	for name, driver := range m.driverSet {
+		driverSet[name] = driver
+	}
+	return drivers, driverSet, m.driverDigest
+}
+
+func renderDatabaseDriverInventory(w io.Writer, drivers []DatabaseDriverInfo, inventoryDigest string) {
+	fmt.Fprintln(w, "# HELP dockyard_database_driver_inventory_info Controller database-driver inventory fingerprint; every HA replica must report the same digest.")
+	fmt.Fprintln(w, "# TYPE dockyard_database_driver_inventory_info gauge")
+	if inventoryDigest != "" {
+		fmt.Fprintf(w, "dockyard_database_driver_inventory_info%s 1\n", labels([]string{"digest"}, []string{inventoryDigest}))
+	}
+	fmt.Fprintln(w, "# HELP dockyard_database_driver_info Database drivers loaded by this controller and their non-secret release identity.")
+	fmt.Fprintln(w, "# TYPE dockyard_database_driver_info gauge")
+	for _, driver := range drivers {
+		fmt.Fprintf(w, "dockyard_database_driver_info%s 1\n", labels(
+			[]string{"engine", "source", "digest", "backup_capable"},
+			[]string{driver.Engine, driver.Source, driver.Digest, strconv.FormatBool(driver.BackupCapable)},
+		))
+	}
 }
 
 func renderSAMLCertificateMetrics(ctx context.Context, w io.Writer, db Queryer) error {

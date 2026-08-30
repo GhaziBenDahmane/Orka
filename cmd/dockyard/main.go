@@ -464,6 +464,11 @@ func serve() error {
 		}
 	}
 	metrics := observability.NewMetrics()
+	driverMetrics := make([]observability.DatabaseDriverInfo, 0, len(databaseRegistry.Engines()))
+	for _, engine := range databaseRegistry.Engines() {
+		driverMetrics = append(driverMetrics, observability.DatabaseDriverInfo{Engine: engine.Name, Source: engine.Source, Digest: engine.ArtifactDigest, BackupCapable: engine.BackupCapable})
+	}
+	metrics.SetDatabaseDrivers(driverMetrics)
 	metrics.SetCertificateExpiry("agent_ca", cfg.AgentCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_previous_ca", cfg.AgentPreviousCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_server", cfg.AgentServerCertExpiresAt)

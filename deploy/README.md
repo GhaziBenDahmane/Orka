@@ -196,6 +196,19 @@ material.
 Route those alerts through Alertmanager to the team's email, Slack, PagerDuty,
 or other incident receiver.
 
+Every controller also publishes a path-free database-driver inventory fingerprint
+and one `dockyard_database_driver_info` series per loaded engine. The
+`DockyardDatabaseDriverFleetMismatch` alert fires when HA replicas expose
+different inventories, including when an engine is absent from one replica.
+`dockyard_database_driver_binding_issues` counts persisted databases by engine
+and the bounded reason `unbound`, `unavailable`, or `identity_mismatch`; its
+critical alert means recovery and migration work may fail closed. First compare
+the per-engine digest series across controller targets. Install the reviewed
+artifact on every replica and restart them. If the new digest is intentional,
+confirm no recovery or migration job is active and use the audited driver-rebind
+API only after the fleet is consistent. Do not silence either alert during a
+mixed-artifact rolling deployment; drain database jobs until it clears.
+
 Validate local rule changes with `make check-alerts`; CI runs the same pinned
 Prometheus `promtool` image.
 

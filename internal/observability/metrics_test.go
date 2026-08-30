@@ -45,6 +45,32 @@ func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 	}
 }
 
+func TestDatabaseDriverInventoryIsStableAndDoesNotExposePaths(t *testing.T) {
+	m := NewMetrics()
+	m.SetDatabaseDrivers([]DatabaseDriverInfo{
+		{Engine: "postgres", Source: "built-in", Digest: "/usr/local/bin/should-not-leak", BackupCapable: true},
+		{Engine: "cockroach", Source: "external", Digest: "sha256:" + strings.Repeat("a", 64), BackupCapable: true},
+		{Engine: "unsafe", Source: "external", Digest: "/opt/drivers/unsafe", BackupCapable: false},
+	})
+	drivers, _, digest := m.databaseDriverSnapshot()
+	var output bytes.Buffer
+	renderDatabaseDriverInventory(&output, drivers, digest)
+	text := output.String()
+	for _, expected := range []string{
+		`dockyard_database_driver_inventory_info{digest="sha256:`,
+		`dockyard_database_driver_info{engine="postgres",source="built-in",digest="built-in",backup_capable="true"} 1`,
+		`dockyard_database_driver_info{engine="cockroach",source="external",digest="sha256:` + strings.Repeat("a", 64) + `",backup_capable="true"} 1`,
+		`dockyard_database_driver_info{engine="unsafe",source="external",digest="invalid",backup_capable="false"} 1`,
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("missing %q in metrics:\n%s", expected, text)
+		}
+	}
+	if strings.Contains(text, "/usr/") || strings.Contains(text, "/opt/") {
+		t.Fatalf("driver filesystem path leaked in metrics:\n%s", text)
+	}
+}
+
 func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -74,6 +100,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	samlProvider := uuid.New()
 	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
 	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
+	databaseDigest := "sha256:" + strings.Repeat("a", 64)
 	statements := []struct {
 		query string
 		args  []any
@@ -83,6 +110,10 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Metrics project','metrics-project')`, []any{projectID, organizationA}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Metrics environment','metrics-environment')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Metrics service','metrics-service',$3,'services: {}')`, []any{serviceID, environmentID, "metrics-" + serviceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Matching','matching','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, databaseDigest}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Mismatch','mismatch','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("b", 64)}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Unbound','unbound','legacy','1','unbound','','encrypted')`, []any{uuid.New(), environmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Unavailable','unavailable','missing','1','external',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("c", 64)}},
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'replica shortfall',now()-interval '30 seconds')`, []any{serviceID}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,created_at) VALUES($1,$2,'metrics-a-auditor','auditor',now()-interval '3 days')`, []any{auditorA, organizationA}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,created_at) VALUES($1,$2,'metrics-b-auditor','auditor',now()-interval '3 days')`, []any{auditorB, organizationB}},
@@ -104,11 +135,16 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		}
 	}
 	recorder := httptest.NewRecorder()
-	NewMetrics().Handler(tx).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	metricSet := NewMetrics()
+	metricSet.SetDatabaseDrivers([]DatabaseDriverInfo{
+		{Engine: "postgres", Source: "built-in", BackupCapable: true},
+		{Engine: "cockroach", Source: "external", Digest: databaseDigest, BackupCapable: true},
+	})
+	metricSet.Handler(tx).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -141,9 +177,31 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_ai_audit_running_age_seconds{organization="` + organizationA.String() + `"}`,
 		`dockyard_ai_audit_completion_overdue{organization="` + organizationA.String() + `"} 0`,
 		`dockyard_ai_audit_completion_overdue{organization="` + organizationB.String() + `"} 1`,
+		`dockyard_database_driver_info{engine="cockroach",source="external",digest="` + databaseDigest + `",backup_capable="true"} 1`,
+		`dockyard_database_driver_binding_issues{engine="cockroach",reason="identity_mismatch"} 1`,
+		`dockyard_database_driver_binding_issues{engine="legacy",reason="unbound"} 1`,
+		`dockyard_database_driver_binding_issues{engine="missing",reason="unavailable"} 1`,
 	} {
 		if !strings.Contains(metrics, expected) {
 			t.Errorf("missing %q in metrics output", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverDatabaseDriverIdentity(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardDatabaseDriverFleetMismatch",
+		"dockyard_database_driver_inventory_info",
+		"alert: DockyardDatabaseDriverBindingIssue",
+		"expr: dockyard_database_driver_binding_issues > 0",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
 		}
 	}
 }

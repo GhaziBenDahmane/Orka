@@ -30,6 +30,16 @@ refuses any already active operation, and commits the new digest with its audit
 event atomically. Every controller should have the new artifact before the
 rebind; a worker that still has the previous digest will fail closed.
 
+Prometheus exposes `dockyard_database_driver_info` for each loaded engine and a
+controller-wide `dockyard_database_driver_inventory_info` fingerprint. The
+fingerprint includes only engine, source, artifact identity, and recovery
+capability—not executable paths. In HA, every replica must report the same
+fingerprint. `dockyard_database_driver_binding_issues` aggregates databases
+that are still `unbound`, whose driver is `unavailable`, or whose persisted
+identity has an `identity_mismatch`. Treat either supplied driver alert as a
+stop signal for recovery and migration work; reconcile controller artifacts
+before using the audited rebind endpoint.
+
 Dockyard starts a fresh process for each call, writes one JSON request to stdin,
 and reads one JSON response from stdout. Protocol version 1 supports
 `describe`, `render`, `backup`, `restore`, and `readiness`. Calls time out after
