@@ -173,6 +173,20 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	if !strings.Contains(workflow, "cosign verify-blob") || !strings.Contains(workflow, "evidenceChecksumsSHA256") || !strings.Contains(workflow, "sha256sum --check --strict release-evidence.sha256") {
 		t.Fatal("release workflow does not authenticate the promotion manifest and its evidence checksums")
 	}
+	for _, releaseChainGuard := range []string{
+		"highest stable release",
+		"sort --version-sort",
+		`git rev-list -n 1 "$PREVIOUS_VERSION"`,
+		`.repository == $repository`,
+		`startswith($imageRepository + "@sha256:")`,
+	} {
+		if !strings.Contains(workflow, releaseChainGuard) {
+			t.Errorf("release workflow is missing predecessor guard %q", releaseChainGuard)
+		}
+	}
+	if strings.Contains(workflow, "[0-9A-Za-z.-]*)?$") {
+		t.Fatal("release workflow accepts prerelease versions as stable releases")
+	}
 	promotionBlock := workflow[promote:publish]
 	if !strings.Contains(promotionBlock, `imagetools inspect "$IMAGE:$VERSION"`) || !strings.Contains(promotionBlock, "already exists and cannot be overwritten") {
 		t.Fatal("release workflow does not reject an existing version tag before promotion")

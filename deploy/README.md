@@ -1,7 +1,8 @@
 # Swarm installation
 
-Tagged releases publish a signed amd64/arm64 image and a promotion manifest
-through `.github/workflows/release.yml`. Download `image-digest.txt` from the
+Stable `vMAJOR.MINOR.PATCH` releases publish a signed amd64/arm64 image and a
+promotion manifest through `.github/workflows/release.yml`. Download
+`image-digest.txt` from the
 workflow artifact and use that exact `ghcr.io/...@sha256:...` value for
 `DOCKYARD_IMAGE`; the version tag is only a discovery alias. The workflow
 verifies the keyless Sigstore signature, SLSA provenance, and SPDX SBOM before

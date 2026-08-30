@@ -99,28 +99,28 @@ jobs:
           CURRENT_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "$CURRENT_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
-            echo "release version must be a v-prefixed SemVer value" >&2
+          if ! printf '%s' "$CURRENT_VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "release version must be a stable v-prefixed SemVer value without leading zeroes" >&2
             exit 1
           fi
           releases="$(gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add')"
-          published_count="$(jq '[.[] | select(.draft == false and .prerelease == false)] | length' <<<"$releases")"
-          previous="$(jq -c --arg current "$CURRENT_VERSION" \
-            '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))] | sort_by(.published_at) | reverse | .[0] // empty' \
-            <<<"$releases")"
-          if [ -z "$previous" ]; then
-            if [ "$published_count" -ne 0 ]; then
-              echo "published releases exist but none is an eligible previous stable release" >&2
-              exit 1
-            fi
+          stable_releases="$(jq '[.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")))]' <<<"$releases")"
+          previous_version="$(jq -r '.[].tag_name' <<<"$stable_releases" | sort --version-sort | tail -1)"
+          if [ -z "$previous_version" ]; then
             echo "first_release=true" >>"$GITHUB_OUTPUT"
             jq -n --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sourceCommit "$GITHUB_SHA" \
               '{status:"not_applicable",firstRelease:true,reason:"no previous published release",sourceCommit:$sourceCommit,createdAt:$createdAt}' \
               >upgrade-conformance.json
             exit 0
           fi
+          newest="$(printf '%s\n%s\n' "$previous_version" "$CURRENT_VERSION" | sort --version-sort | tail -1)"
+          if [ "$newest" != "$CURRENT_VERSION" ] || [ "$previous_version" = "$CURRENT_VERSION" ]; then
+            echo "release $CURRENT_VERSION must be newer than highest stable release $previous_version" >&2
+            exit 1
+          fi
+          previous="$(jq -c --arg version "$previous_version" '.[] | select(.tag_name == $version)' <<<"$stable_releases")"
+          test "$(wc -l <<<"$previous")" -eq 1 || { echo "stable release $previous_version is ambiguous" >&2; exit 1; }
           release_id="$(jq -r .id <<<"$previous")"
-          previous_version="$(jq -r .tag_name <<<"$previous")"
           asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
             --jq '.[] | select(.name == "promotion-manifest.json") | .id' | head -1)"
           bundle_asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
@@ -131,11 +131,6 @@ jobs:
             --header 'Accept: application/octet-stream' >previous-promotion-manifest.json
           gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$bundle_asset_id" \
             --header 'Accept: application/octet-stream' >previous-promotion-manifest.sigstore.json
-          newest="$(printf '%s\n%s\n' "$previous_version" "$CURRENT_VERSION" | sort --version-sort | tail -1)"
-          if [ "$newest" != "$CURRENT_VERSION" ] || [ "$previous_version" = "$CURRENT_VERSION" ]; then
-            echo "release $CURRENT_VERSION must be newer than previous release $previous_version" >&2
-            exit 1
-          fi
           {
             echo "first_release=false"
             echo "version=$previous_version"
@@ -158,8 +153,14 @@ jobs:
             --certificate-identity-regexp "$identity" \
             --certificate-oidc-issuer "$issuer" \
             previous-promotion-manifest.json
-          previous_image="$(jq -er --arg version "$PREVIOUS_VERSION" \
-            'select(.version == $version and (.sourceCommit | test("^[a-f0-9]{40}$")) and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle") | .image | select(test("^ghcr\\.io/.+@sha256:[a-f0-9]{64}$"))' \
+          previous_commit="$(git rev-list -n 1 "$PREVIOUS_VERSION")"
+          image_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          previous_image="$(jq -er \
+            --arg version "$PREVIOUS_VERSION" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg sourceCommit "$previous_commit" \
+            --arg imageRepository "$image_repository" \
+            'select(.version == $version and .repository == $repository and .sourceCommit == $sourceCommit and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle") | .image | select(startswith($imageRepository + "@sha256:") and test("@sha256:[a-f0-9]{64}$"))' \
             previous-promotion-manifest.json)"
           printf 'image=%s\n' "$previous_image" >>"$GITHUB_OUTPUT"
 
@@ -231,8 +232,8 @@ jobs:
           REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "$REQUESTED_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
-            echo "release version must be a v-prefixed SemVer value" >&2
+          if ! printf '%s' "$REQUESTED_VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "release version must be a stable v-prefixed SemVer value without leading zeroes" >&2
             exit 1
           fi
           if git rev-parse --verify --quiet "refs/tags/$REQUESTED_VERSION" >/dev/null; then
@@ -463,6 +464,7 @@ jobs:
           evidence_checksums_sha256="$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)"
           jq -n \
             --arg version "$VERSION" \
+            --arg repository "$GITHUB_REPOSITORY" \
             --arg image "$IMAGE@$DIGEST" \
             --arg sourceCommit "$GITHUB_SHA" \
             --arg schemaVersion "$schema_version" \
@@ -470,7 +472,7 @@ jobs:
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
             --arg evidenceChecksumsSHA256 "$evidence_checksums_sha256" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           cat promotion-manifest.json
 

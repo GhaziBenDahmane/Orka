@@ -195,8 +195,9 @@ links for every item below.
 
 ## Promotion and rollback
 
-- Push a protected `vMAJOR.MINOR.PATCH` tag, or explicitly dispatch the
-  `Release image` workflow with that version. It publishes amd64/arm64 to
+- Push a protected stable `vMAJOR.MINOR.PATCH` tag without leading zeroes, or
+  explicitly dispatch the `Release image` workflow with that version. It
+  publishes amd64/arm64 to
   `ghcr.io/<owner>/<repository>`, attaches SLSA provenance and an SPDX SBOM,
   makes the package public, proves the version can be fetched with an anonymous
   registry token, signs the resulting digest with GitHub's OIDC identity, and
@@ -227,6 +228,10 @@ links for every item below.
   vulnerability scans, image and manifest signatures, checksum verification,
   soak, and all evidence validation pass. A later release verifies the prior
   manifest signature before trusting its recorded image digest.
+  Releases are monotonic: the requested version must be greater than the
+  highest published stable SemVer, regardless of publication order. The prior
+  signed manifest must name the same repository, exact Git tag commit, and
+  repository-owned GHCR digest before it can enter the upgrade test.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
