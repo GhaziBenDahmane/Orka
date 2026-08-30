@@ -73,6 +73,17 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	if snapshot.IdentityPosture.ExpiringServiceAccounts > 0 {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Service account credentials expire soon", Description: "One or more active service accounts have credentials expiring within seven days.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"expiringServiceAccounts7d": snapshot.IdentityPosture.ExpiringServiceAccounts}, Remediation: "Rotate each expiring service-account token and verify its consumer before revoking the old credential."})
 	}
+	if snapshot.IdentityPosture.UnusedServiceAccounts30d > 0 {
+		severity := "medium"
+		if snapshot.IdentityPosture.UnusedPrivilegedServiceAccounts30d > 0 {
+			severity = "high"
+		}
+		evidence := map[string]any{"unusedServiceAccounts30d": snapshot.IdentityPosture.UnusedServiceAccounts30d, "unusedPrivilegedServiceAccounts30d": snapshot.IdentityPosture.UnusedPrivilegedServiceAccounts30d}
+		if snapshot.IdentityPosture.OldestUnusedServiceAccountTokenAt != nil {
+			evidence["oldestUnusedTokenCreatedAt"] = snapshot.IdentityPosture.OldestUnusedServiceAccountTokenAt.UTC().Format(time.RFC3339)
+		}
+		add(modelFinding{Severity: severity, Category: "identity", Title: "Unused service-account credentials are stale", Description: "One or more enabled service-account credentials have never been used and were created more than thirty days ago.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: evidence, Remediation: "Confirm each automation identity still has an owner and purpose, then disable abandoned accounts or rotate credentials before first use."})
+	}
 	if snapshot.DeployTokenPosture.ExpiringTokens > 0 {
 		add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Deployment hook credentials expire soon", Description: "One or more active CI deployment-hook credentials expire within seven days.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeTokens": snapshot.DeployTokenPosture.ActiveTokens, "expiringTokens7d": snapshot.DeployTokenPosture.ExpiringTokens}, Remediation: "Create a replacement deployment token, update the CI secret, verify a deployment, and revoke the old token."})
 	}

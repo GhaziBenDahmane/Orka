@@ -36,7 +36,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	}
 	t.Cleanup(db.Pool.Close)
 
-	organizationID, accountID, clusterID := uuid.New(), uuid.New(), uuid.New()
+	organizationID, accountID, staleServiceAccountID, clusterID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	ownerID, ownerSessionID := uuid.New(), uuid.New()
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedDatabaseID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -75,6 +75,8 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 day','local')`, []any{ownerSessionID, ownerID, cryptox.Digest(ownerToken)}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'conformance-auditor','auditor',true)`, []any{accountID, organizationID}},
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 day')`, []any{uuid.New(), accountID, cryptox.Digest(auditorToken)}},
+		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'stale-conformance-admin','admin',true)`, []any{staleServiceAccountID, organizationID}},
+		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '30 days',now()-interval '31 days')`, []any{uuid.New(), staleServiceAccountID, []byte("service-account:" + secretMarker)}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'other-conformance-auditor','auditor',true)`, []any{otherAccountID, otherOrganizationID}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status) VALUES($1,$2,$3,'other-auditor','completed')`, []any{otherRunID, otherOrganizationID, otherAccountID}},
 		{`INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,evidence,fingerprint) VALUES($1,$2,'low','isolation','Other tenant finding','Must remain unchanged','{}','other-tenant')`, []any{otherFindingID, otherRunID}},
@@ -196,7 +198,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -301,6 +303,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"databaseAvailabilityAudited":    true,
 		"managedNetworkPostureAudited":   true,
 		"staleDeployCredentialAudited":   true,
+		"staleServiceAccountAudited":     true,
 		"customTLSValidityAudited":       true,
 		"edgeTLSConvergenceAudited":      true,
 		"modelFindingsPersisted":         true,

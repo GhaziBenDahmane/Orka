@@ -67,6 +67,7 @@ jq -e '
   .databaseAvailabilityAudited and
   .managedNetworkPostureAudited and
   .staleDeployCredentialAudited and
+  .staleServiceAccountAudited and
   .customTLSValidityAudited and .edgeTLSConvergenceAudited and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and

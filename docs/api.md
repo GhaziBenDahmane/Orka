@@ -324,6 +324,12 @@ oldest active/unused creation times. Tokens, hashes, names, URLs, service
 assignments, and creator identities remain excluded. An active credential that
 has never been used after thirty days produces a medium-severity cleanup
 finding.
+Identity posture also reports aggregate service-account counts whose current
+credentials remain unused after thirty days, including the privileged subset
+and oldest unused creation time. The deterministic baseline raises severity
+when stale credentials belong to administrator or developer automation
+identities; account names, token hashes, and individual identities remain
+excluded.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
 Repository URLs and refs, output image names, credential identifiers, artifact

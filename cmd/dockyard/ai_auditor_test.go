@@ -566,6 +566,34 @@ func TestDeterministicAuditDetectsStaleUnusedDeploymentHookCredentials(t *testin
 	}
 }
 
+func TestDeterministicAuditDetectsStaleUnusedServiceAccountCredentials(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	oldestUnused := now.Add(-45 * 24 * time.Hour)
+	snapshot := store.AIAuditSnapshot{
+		Organization: uuid.New(),
+		IdentityPosture: store.AIAuditIdentityPosture{
+			RequireSSO:                         true,
+			ActiveOwners:                       1,
+			UnusedServiceAccounts30d:           2,
+			UnusedPrivilegedServiceAccounts30d: 1,
+			OldestUnusedServiceAccountTokenAt:  &oldestUnused,
+		},
+		NotificationPosture: fullyCoveredNotifications(),
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Unused service-account credentials are stale" || findings[0].Severity != "high" || findings[0].Evidence["unusedPrivilegedServiceAccounts30d"] != int64(1) {
+		t.Fatalf("stale service-account findings=%#v", findings)
+	}
+	snapshot.IdentityPosture.UnusedPrivilegedServiceAccounts30d = 0
+	if findings = deterministicAuditFindings(snapshot, now); len(findings) != 1 || findings[0].Severity != "medium" {
+		t.Fatalf("unprivileged stale service-account findings=%#v", findings)
+	}
+	snapshot.IdentityPosture.UnusedServiceAccounts30d = 0
+	if findings = deterministicAuditFindings(snapshot, now); len(findings) != 0 {
+		t.Fatalf("fresh service-account posture produced findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsMandatorySSOLockout(t *testing.T) {
 	organizationID := uuid.New()
 	snapshot := store.AIAuditSnapshot{

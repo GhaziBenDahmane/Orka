@@ -121,13 +121,15 @@ keys make it a privileged service.
   transfer credentials never enter the snapshot.
 - Identity posture is aggregate-only: active and disabled membership counts by
   role, active local/OIDC/SAML sessions, active and soon-expiring service
-  accounts, auditor accounts, active SCIM token count/age, pending and expired
+  accounts, auditor accounts, service-account credentials unused for more than
+  thirty days (including the privileged subset), active SCIM token count/age, pending and expired
   invitation counts, project/environment grant counts, redundant grant counts,
   SCIM group and membership counts, and pending SAML certificate rotation
   count/age. Invitation email addresses and tokens, scoped user identities, and
   SCIM group names and external IDs never enter the snapshot. The deterministic
   baseline flags pending privileged invitations, unrevoked expired invitations,
-  and scoped grants that do not raise effective access. Enabled SAML providers
+  stale unused service-account credentials, and scoped grants that do not raise
+  effective access. Enabled SAML providers
   additionally expose only their opaque ID, combined certificate-configuration
   validity, and SP and IdP trust expiry timestamps. Certificates, private keys, IdP metadata,
   provider names, domains, and user identities,

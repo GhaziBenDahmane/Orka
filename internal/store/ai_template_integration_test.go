@@ -175,7 +175,11 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.CreateServiceAccount(ctx, organizationID, userID, "deployment-admin", "admin", []byte("admin-token-hash"), time.Now().Add(30*24*time.Hour)); err != nil {
+	adminAccount, err := db.CreateServiceAccount(ctx, organizationID, userID, "deployment-admin", "admin", []byte("admin-token-hash"), time.Now().Add(30*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE service_account_tokens SET created_at=now()-interval '31 days' WHERE service_account_id=$1`, adminAccount.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.CreateServiceAccount(ctx, otherOrganizationID, otherUserID, "other-admin", "admin", []byte("other-admin-token-hash"), time.Now().Add(time.Hour)); err != nil {
@@ -441,7 +445,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	if !snapshot.IdentityPosture.RequireSSO || snapshot.IdentityPosture.EnabledOIDCProviders != 1 || snapshot.IdentityPosture.EnabledSAMLProviders != 1 || snapshot.IdentityPosture.ActiveMembers != 2 || snapshot.IdentityPosture.ActiveOwners != 1 || snapshot.IdentityPosture.ActiveAdmins != 0 || snapshot.IdentityPosture.ActiveDevelopers != 1 || snapshot.IdentityPosture.ActiveViewers != 0 || snapshot.IdentityPosture.DisabledMembers != 1 {
 		t.Fatalf("identity membership posture=%#v", snapshot.IdentityPosture)
 	}
-	if snapshot.IdentityPosture.ActiveLocalSessions != 1 || snapshot.IdentityPosture.ActiveOIDCSessions != 1 || snapshot.IdentityPosture.ActiveSAMLSessions != 0 || snapshot.IdentityPosture.ActiveServiceAccounts != 2 || snapshot.IdentityPosture.ActivePrivilegedServiceAccounts != 1 || snapshot.IdentityPosture.ExpiringServiceAccounts != 1 || snapshot.IdentityPosture.ActiveAuditorServiceAccounts != 1 || snapshot.IdentityPosture.ActiveSCIMTokens != 1 || snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt == nil || !snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.Equal(scimTokenCreatedAt) {
+	if snapshot.IdentityPosture.ActiveLocalSessions != 1 || snapshot.IdentityPosture.ActiveOIDCSessions != 1 || snapshot.IdentityPosture.ActiveSAMLSessions != 0 || snapshot.IdentityPosture.ActiveServiceAccounts != 2 || snapshot.IdentityPosture.ActivePrivilegedServiceAccounts != 1 || snapshot.IdentityPosture.ExpiringServiceAccounts != 1 || snapshot.IdentityPosture.ActiveAuditorServiceAccounts != 1 || snapshot.IdentityPosture.UnusedServiceAccounts30d != 1 || snapshot.IdentityPosture.UnusedPrivilegedServiceAccounts30d != 1 || snapshot.IdentityPosture.OldestUnusedServiceAccountTokenAt == nil || snapshot.IdentityPosture.ActiveSCIMTokens != 1 || snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt == nil || !snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.Equal(scimTokenCreatedAt) {
 		t.Fatalf("identity posture=%#v", snapshot.IdentityPosture)
 	}
 	if snapshot.IdentityPosture.PendingInvitations != 2 || snapshot.IdentityPosture.PendingPrivilegedInvitations != 1 || snapshot.IdentityPosture.InvitationsExpiringSoon != 1 || snapshot.IdentityPosture.ExpiredInvitations != 1 || snapshot.IdentityPosture.ProjectScopedGrants != 1 || snapshot.IdentityPosture.EnvironmentScopedGrants != 1 || snapshot.IdentityPosture.AdminScopedGrants != 1 || snapshot.IdentityPosture.RedundantScopedGrants != 1 || snapshot.IdentityPosture.SCIMGroups != 2 || snapshot.IdentityPosture.WriteCapableSCIMGroups != 1 || snapshot.IdentityPosture.SCIMGroupMemberships != 2 {

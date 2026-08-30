@@ -30,6 +30,7 @@ jobs:
             .databaseAvailabilityAudited and
             .managedNetworkPostureAudited and
             .staleDeployCredentialAudited and
+            .staleServiceAccountAudited and
             .customTLSValidityAudited and .edgeTLSConvergenceAudited and
             .durableRunCompleted and .lifecycleAudited and .auditorLeastPrivilege and
             .findingTriageAudited and .findingTriageAtomic and
