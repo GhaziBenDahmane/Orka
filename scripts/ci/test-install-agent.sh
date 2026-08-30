@@ -16,6 +16,8 @@ set -eu
 printf '%s\n' "$*" >>"$DOCKYARD_INSTALL_TEST_LOG"
 case "$1 $2" in
   "info --format") printf '%s\n' 'active true' ;;
+  "manifest inspect")
+    if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
   "secret inspect")
     if [ "${DOCKYARD_INSTALL_TEST_SECRET_EXISTS:-false}" = true ]; then exit 0; else exit 1; fi ;;
   "secret create")
@@ -50,6 +52,7 @@ export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" | grep -q 'no resources were changed'
 grep -q '^stack config ' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -Fqx "manifest inspect $DOCKYARD_IMAGE" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^service=edge_agent network=dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'agent dry-run mutated Docker state' >&2
@@ -151,6 +154,17 @@ if DOCKYARD_IMAGE='example/dockyard:latest' "$root/scripts/install-agent.sh" >"$
   exit 1
 fi
 grep -q 'DOCKYARD_IMAGE must be an image reference pinned by sha256 digest' "$temporary/err"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE="$DOCKYARD_IMAGE" "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted an unavailable immutable image' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_IMAGE cannot be resolved from the configured registry' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'unavailable agent image failure mutated Docker state' >&2
+  exit 1
+fi
 
 if DOCKYARD_INSTALL_STABILITY_SECONDS=301 "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'agent installer accepted a stability window longer than its timeout' >&2

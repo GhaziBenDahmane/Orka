@@ -182,6 +182,12 @@ elif [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
   fail "DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE requires DOCKYARD_INSTALL_MODE=ha"
 fi
 
+for image_spec in "DOCKYARD_IMAGE:$DOCKYARD_IMAGE" "POSTGRES_IMAGE:$POSTGRES_IMAGE" "TRAEFIK_IMAGE:$TRAEFIK_IMAGE"; do
+  image_label=${image_spec%%:*}
+  image=${image_spec#*:}
+  docker manifest inspect "$image" >/dev/null 2>&1 || fail "$image_label cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
+done
+
 existing=""
 while IFS= read -r spec; do
   name=${spec%%:*}

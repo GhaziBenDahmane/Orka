@@ -18,6 +18,8 @@ set -eu
 printf '%s\n' "$*" >>"$DOCKYARD_INSTALL_TEST_LOG"
 case "$1 $2" in
   "info --format") printf '%s\n' 'active true' ;;
+  "manifest inspect")
+    if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
   "secret inspect")
     case " ${DOCKYARD_INSTALL_TEST_EXISTING_SECRETS:-} " in *" $3 "*) exit 0 ;; *) exit 1 ;; esac ;;
   "secret create")
@@ -71,6 +73,9 @@ export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-swarm.sh" | grep -q 'no resources were changed'
 grep -q '^stack config ' "$DOCKYARD_INSTALL_TEST_LOG"
+for image in "$DOCKYARD_IMAGE" "$POSTGRES_IMAGE" "$TRAEFIK_IMAGE"; do
+  grep -Fqx "manifest inspect $image" "$DOCKYARD_INSTALL_TEST_LOG"
+done
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'dry-run mutated Docker state' >&2
   exit 1
@@ -209,6 +214,17 @@ if DOCKYARD_IMAGE='example/dockyard:latest' "$root/scripts/install-swarm.sh" >"$
   exit 1
 fi
 grep -q 'DOCKYARD_IMAGE must be an image reference pinned by sha256 digest' "$temporary/err"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE="$POSTGRES_IMAGE" "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted an unavailable immutable image' >&2
+  exit 1
+fi
+grep -q 'POSTGRES_IMAGE cannot be resolved from the configured registry' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'unavailable-image failure mutated Docker state' >&2
+  exit 1
+fi
 
 if DOCKYARD_INSTALL_STABILITY_SECONDS=301 "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'installer accepted a stability window longer than its timeout' >&2

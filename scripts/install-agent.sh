@@ -74,6 +74,8 @@ export DOCKYARD_CONTROL_PLANE_URL="$control_plane_url"
 export DOCKYARD_AGENT_URL="$agent_url"
 export DOCKYARD_AGENT_SERVICE_NAME DOCKYARD_TRAEFIK_NETWORK="$network"
 
+docker manifest inspect "$DOCKYARD_IMAGE" >/dev/null 2>&1 || fail "DOCKYARD_IMAGE cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
+
 if docker secret inspect "$token_secret" >/dev/null 2>&1 && [ "$reuse" != true ]; then
   fail "Docker secret $token_secret already exists; set DOCKYARD_REUSE_EXISTING_SECRETS=true only when the agent identity volume is intact"
 fi
