@@ -2,13 +2,24 @@ package migrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	maxMigratedCredentialNameBytes     = 120
+	maxMigratedCredentialServerBytes   = 512
+	maxMigratedCredentialUsernameBytes = 4 << 10
+	maxMigratedCredentialSecretBytes   = 64 << 10
+	maxDokployEncryptedCredentialBytes = 1 << 20
 )
 
 type sourceCredential struct {
@@ -18,10 +29,12 @@ type sourceCredential struct {
 }
 
 type preparedSourceCredential struct {
-	source sourceCredential
-	id     uuid.UUID
-	server string
-	secret string
+	source   sourceCredential
+	id       uuid.UUID
+	name     string
+	server   string
+	username string
+	secret   string
 }
 
 func readSourceCredentials(ctx context.Context, db *pgxpool.Pool, organizationID string) ([]sourceCredential, error) {
@@ -77,40 +90,62 @@ func prepareSourceCredential(box *cryptox.Box, options DokployOptions, item sour
 	if err != nil {
 		return preparedSourceCredential{}, err
 	}
+	if len(item.secret) > maxDokployEncryptedCredentialBytes {
+		return preparedSourceCredential{}, errors.New("encrypted credential exceeds migration limit")
+	}
 	secret, err := decryptDokploy(item.secret, options.EncryptionKeys)
 	if err != nil {
 		return preparedSourceCredential{}, fmt.Errorf("decrypt credential: %w", err)
 	}
-	if strings.TrimSpace(item.name) == "" || item.username == "" || secret == "" {
+	id := mappedID(options, "source-credential:"+item.sourceKind, item.sourceID)
+	name, err := migratedCredentialName(item.name, id)
+	username := strings.TrimSpace(item.username)
+	if err != nil || username == "" || len(username) > maxMigratedCredentialUsernameBytes || strings.ContainsAny(username, "\x00\r\n") || secret == "" || len(secret) > maxMigratedCredentialSecretBytes || strings.ContainsAny(secret, "\x00\r\n") {
 		return preparedSourceCredential{}, fmt.Errorf("name, username, and secret are required")
 	}
-	id := mappedID(options, "source-credential:"+item.sourceKind, item.sourceID)
 	encrypted, err := box.Encrypt([]byte(secret), cryptox.ResourceContext("source-credential", id.String()))
 	if err != nil {
 		return preparedSourceCredential{}, err
 	}
-	return preparedSourceCredential{source: item, id: id, server: server, secret: encrypted}, nil
+	return preparedSourceCredential{source: item, id: id, name: name, server: server, username: username, secret: encrypted}, nil
 }
 
 func credentialServer(value, kind string) (string, error) {
 	value = strings.TrimSpace(value)
+	if kind != "git" && kind != "registry" {
+		return "", fmt.Errorf("credential kind %q is invalid", kind)
+	}
 	if kind == "registry" && value == "" {
 		return "docker.io", nil
+	}
+	if value == "" || len(value) > maxMigratedCredentialServerBytes || strings.ContainsAny(value, "\x00\r\n") {
+		return "", fmt.Errorf("credential server %q is invalid", value)
 	}
 	if !strings.Contains(value, "://") {
 		value = "https://" + value
 	}
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || !netpolicy.ValidURLHost(parsed) || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || kind == "git" && parsed.Scheme != "https" {
 		return "", fmt.Errorf("credential server %q is invalid", value)
 	}
-	if kind == "registry" && parsed.Path != "" && parsed.Path != "/" {
-		return "", fmt.Errorf("registry server must not contain a path")
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", fmt.Errorf("credential server must not contain a path")
 	}
-	if kind == "registry" {
-		return strings.ToLower(parsed.Host), nil
+	return strings.ToLower(parsed.Host), nil
+}
+
+func migratedCredentialName(raw string, id uuid.UUID) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" || strings.ContainsAny(name, "\x00\r\n") {
+		return "", errors.New("credential name must be a non-empty single-line value")
 	}
-	return strings.ToLower(parsed.Hostname()), nil
+	suffix := " (Dokploy " + strings.Split(id.String(), "-")[0] + ")"
+	limit := maxMigratedCredentialNameBytes - len(suffix)
+	for len(name) > limit {
+		_, size := utf8.DecodeLastRuneInString(name)
+		name = name[:len(name)-size]
+	}
+	return name + suffix, nil
 }
 
 func migrationImageRegistry(image string) string {
@@ -143,5 +178,5 @@ func repositoryHost(repository string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.ToLower(parsed.Hostname())
+	return strings.ToLower(parsed.Host)
 }

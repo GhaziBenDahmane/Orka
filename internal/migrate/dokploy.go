@@ -468,9 +468,8 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 	}
 	for _, item := range preparedCredentials {
-		name := strings.TrimSpace(item.source.name) + " (Dokploy " + strings.Split(item.id.String(), "-")[0] + ")"
 		_, err = tx.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,$3,$4,$5,$6,$7)
-			ON CONFLICT(id) DO UPDATE SET name=excluded.name,server=excluded.server,username=excluded.username,encrypted_secret=excluded.encrypted_secret,updated_at=now()`, item.id, options.TargetOrganizationID, item.source.kind, name, item.server, item.source.username, item.secret)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,server=excluded.server,username=excluded.username,encrypted_secret=excluded.encrypted_secret,updated_at=now()`, item.id, options.TargetOrganizationID, item.source.kind, item.name, item.server, item.username, item.secret)
 		if err != nil {
 			return report, fmt.Errorf("import %s credential %s: %w", item.source.sourceKind, item.source.sourceID, err)
 		}
