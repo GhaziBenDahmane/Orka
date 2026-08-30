@@ -124,7 +124,7 @@ func (s *Server) agentCompleteCommand(w http.ResponseWriter, r *http.Request) {
 		Output string `json:"output"`
 		Error  string `json:"error"`
 	}
-	if !decode(w, r, &input) {
+	if !decodeLimit(w, r, &input, deploy.MaxRemoteCommandRequestBytes) {
 		return
 	}
 	if !validAgentCommandResult(input.Output, input.Error) {

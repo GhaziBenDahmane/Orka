@@ -973,6 +973,9 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 		if err != nil {
 			return err
 		}
+		if len(encoded) > deploy.MaxRemoteCommandRequestBytes {
+			return errors.New("agent request exceeds protocol size limit")
+		}
 		body = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.cfg.AgentURL, "/")+path, body)

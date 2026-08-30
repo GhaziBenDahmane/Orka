@@ -103,8 +103,9 @@ type RemoteArtifactResult struct {
 }
 
 const (
-	MaxRemoteCommandOutputBytes = 1 << 20
-	MaxRemoteCommandErrorBytes  = 8 << 10
+	MaxRemoteCommandOutputBytes  = 1 << 20
+	MaxRemoteCommandErrorBytes   = 8 << 10
+	MaxRemoteCommandRequestBytes = 8 << 20
 )
 
 type DatabaseTransferJob struct {

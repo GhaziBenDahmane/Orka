@@ -2660,19 +2660,23 @@ func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, target any) bool {
+	return decodeLimit(w, r, target, 3<<20)
+}
+
+func decodeLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) bool {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	validMediaType := mediaType == "application/json" || strings.HasPrefix(mediaType, "application/") && strings.HasSuffix(mediaType, "+json")
 	if err != nil || !validMediaType {
 		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "request Content-Type must be application/json or application/*+json")
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 3<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "JSON request body exceeds 3 MiB")
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "JSON request body exceeds the endpoint limit")
 			return false
 		}
 		writeError(w, 400, "invalid_json", "request body must contain one valid JSON object")
@@ -2681,7 +2685,7 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "JSON request body exceeds 3 MiB")
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "JSON request body exceeds the endpoint limit")
 			return false
 		}
 		writeError(w, 400, "invalid_json", "request must contain one JSON value")
