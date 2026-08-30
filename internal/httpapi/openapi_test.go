@@ -57,7 +57,7 @@ func TestOpenAPI31SecurityClassification(t *testing.T) {
 		t.Fatalf("global bearer security is missing: %#v", document.Security)
 	}
 	public := func(path string) bool {
-		if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" {
+		if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" || path == "/scim/v2/ServiceProviderConfig" {
 			return true
 		}
 		return strings.HasPrefix(path, "/v1/auth/sso/") || strings.HasPrefix(path, "/v1/auth/saml/") || strings.HasPrefix(path, "/v1/hooks/")
@@ -82,9 +82,35 @@ func TestOpenAPI31SecurityClassification(t *testing.T) {
 				}
 				continue
 			}
+			if strings.HasPrefix(path, "/scim/") {
+				if op.Security == nil || len(*op.Security) != 1 || (*op.Security)[0]["scimBearer"] == nil {
+					t.Errorf("%s %s must require an organization-scoped SCIM bearer token", strings.ToUpper(method), path)
+				}
+				continue
+			}
 			if op.Security != nil {
 				t.Errorf("%s %s should inherit global bearer authentication", strings.ToUpper(method), path)
 			}
+		}
+	}
+}
+
+func TestOpenAPIDocumentsSCIMPaginationAndMediaType(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{
+		"name: startIndex",
+		"name: count",
+		"application/scim+json:",
+		"$ref: '#/components/schemas/SCIMListResponse'",
+		"$ref: '#/components/schemas/SCIMError'",
+		"scimBearer:",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing %q", expected)
 		}
 	}
 }

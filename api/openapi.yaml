@@ -55,38 +55,62 @@ paths:
     get:
       operationId: get_scim_v2_Groups
       tags: [scim]
+      security:
+        - scimBearer: []
+      parameters:
+        - name: filter
+          in: query
+          schema: {type: string}
+        - name: startIndex
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: count
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 100, default: 100}
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMListResponse'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
     post:
       operationId: post_scim_v2_Groups
       tags: [scim]
+      security:
+        - scimBearer: []
       requestBody:
         required: false
         content:
-          application/json:
+          application/scim+json:
             schema:
               type: object
               additionalProperties: true
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
   /scim/v2/Groups/{groupID}:
     delete:
       operationId: delete_scim_v2_Groups_groupID
       tags: [scim]
+      security:
+        - scimBearer: []
       parameters:
         - name: groupID
           in: path
@@ -97,15 +121,21 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
     get:
       operationId: get_scim_v2_Groups_groupID
       tags: [scim]
+      security:
+        - scimBearer: []
       parameters:
         - name: groupID
           in: path
@@ -116,15 +146,21 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
     patch:
       operationId: patch_scim_v2_Groups_groupID
       tags: [scim]
+      security:
+        - scimBearer: []
       parameters:
         - name: groupID
           in: path
@@ -135,68 +171,101 @@ paths:
       requestBody:
         required: false
         content:
-          application/json:
+          application/scim+json:
             schema:
               type: object
               additionalProperties: true
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
   /scim/v2/ServiceProviderConfig:
     get:
       operationId: get_scim_v2_ServiceProviderConfig
       tags: [scim]
+      security: []
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
   /scim/v2/Users:
     get:
       operationId: get_scim_v2_Users
       tags: [scim]
+      security:
+        - scimBearer: []
+      parameters:
+        - name: filter
+          in: query
+          schema: {type: string}
+        - name: startIndex
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: count
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 100, default: 100}
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMListResponse'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
     post:
       operationId: post_scim_v2_Users
       tags: [scim]
+      security:
+        - scimBearer: []
       requestBody:
         required: false
         content:
-          application/json:
+          application/scim+json:
             schema:
               type: object
               additionalProperties: true
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
   /scim/v2/Users/{userID}:
     delete:
       operationId: delete_scim_v2_Users_userID
       tags: [scim]
+      security:
+        - scimBearer: []
       parameters:
         - name: userID
           in: path
@@ -207,15 +276,21 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
     get:
       operationId: get_scim_v2_Users_userID
       tags: [scim]
+      security:
+        - scimBearer: []
       parameters:
         - name: userID
           in: path
@@ -226,15 +301,21 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
     patch:
       operationId: patch_scim_v2_Users_userID
       tags: [scim]
+      security:
+        - scimBearer: []
       parameters:
         - name: userID
           in: path
@@ -245,19 +326,23 @@ paths:
       requestBody:
         required: false
         content:
-          application/json:
+          application/scim+json:
             schema:
               type: object
               additionalProperties: true
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/scim+json:
+              schema:
+                $ref: '#/components/schemas/SCIMResource'
         default:
           description: Structured API error
           content:
-            application/json:
+            application/scim+json:
               schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
+                $ref: '#/components/schemas/SCIMError'
   /v1/agent-upgrades:
     get:
       operationId: get_v1_agent_upgrades
@@ -4100,6 +4185,10 @@ components:
       type: http
       scheme: bearer
       description: Dedicated operator token configured with DOCKYARD_METRICS_TOKEN.
+    scimBearer:
+      type: http
+      scheme: bearer
+      description: Organization-scoped SCIM provisioning token.
     mutualTLS:
       type: mutualTLS
   schemas:
@@ -4135,6 +4224,32 @@ components:
           type: array
           items: {type: object, additionalProperties: true}
         nextCursor: {type: string}
+    SCIMResource:
+      type: object
+      additionalProperties: true
+    SCIMListResponse:
+      type: object
+      required: [schemas, totalResults, startIndex, itemsPerPage, Resources]
+      properties:
+        schemas:
+          type: array
+          items: {type: string}
+        totalResults: {type: integer, minimum: 0}
+        startIndex: {type: integer, minimum: 1}
+        itemsPerPage: {type: integer, minimum: 0, maximum: 100}
+        Resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SCIMResource'
+    SCIMError:
+      type: object
+      required: [schemas, status, detail]
+      properties:
+        schemas:
+          type: array
+          items: {type: string}
+        status: {type: string}
+        detail: {type: string}
     ErrorEnvelope:
       type: object
       required: [error]

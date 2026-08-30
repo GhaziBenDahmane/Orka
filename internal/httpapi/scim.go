@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,8 @@ import (
 )
 
 const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
+
+const scimMaxPageSize = 100
 
 type scimUserResponse struct {
 	Schemas     []string          `json:"schemas"`
@@ -105,11 +109,30 @@ func (s *Server) scimPrincipal(r *http.Request) (uuid.UUID, string, error) {
 }
 func scimJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/scim+json")
-	writeJSON(w, status, value)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 func scimError(w http.ResponseWriter, status int, detail string) {
-	scimJSON(w, status, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:Error"}, "status": status, "detail": detail})
+	scimJSON(w, status, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:Error"}, "status": strconv.Itoa(status), "detail": detail})
 }
+
+func scimPage(r *http.Request) (startIndex, count int, err error) {
+	startIndex, count = 1, scimMaxPageSize
+	if raw := r.URL.Query().Get("startIndex"); raw != "" {
+		startIndex, err = strconv.Atoi(raw)
+		if err != nil || startIndex < 1 {
+			return 0, 0, errors.New("startIndex must be a positive integer")
+		}
+	}
+	if raw := r.URL.Query().Get("count"); raw != "" {
+		count, err = strconv.Atoi(raw)
+		if err != nil || count < 0 || count > scimMaxPageSize {
+			return 0, 0, errors.New("count must be between 0 and 100")
+		}
+	}
+	return startIndex, count, nil
+}
+
 func (s *Server) scimServiceProviderConfig(w http.ResponseWriter, r *http.Request) {
 	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"}, "patch": map[string]bool{"supported": true}, "bulk": map[string]bool{"supported": false}, "filter": map[string]any{"supported": true, "maxResults": 100}, "changePassword": map[string]bool{"supported": false}, "sort": map[string]bool{"supported": false}})
 }
@@ -130,9 +153,12 @@ func (s *Server) scimUsers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uuid.UUID) {
-	query := `SELECT u.id,u.email,u.display_name,
-		EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1)
-		FROM users u
+	startIndex, count, err := scimPage(r)
+	if err != nil {
+		scimError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	from := ` FROM users u
 		WHERE (EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1)
 			OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$1))`
 	args := []any{orgID}
@@ -142,11 +168,20 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 			scimError(w, 400, "only userName eq filters are supported")
 			return
 		}
-		query += ` AND lower(u.email)=lower($2)`
+		from += ` AND lower(u.email)=lower($2)`
 		args = append(args, match[1])
 	}
-	query += ` ORDER BY u.email LIMIT 100`
-	rows, err := s.Store.Pool.Query(r.Context(), query, args...)
+	var total int
+	if err = s.Store.Pool.QueryRow(r.Context(), `SELECT count(*)`+from, args...).Scan(&total); err != nil {
+		scimError(w, 500, "query failed")
+		return
+	}
+	limitParameter := len(args) + 1
+	query := `SELECT u.id,u.email,u.display_name,
+		EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1)` + from +
+		` ORDER BY u.email LIMIT $` + strconv.Itoa(limitParameter) + ` OFFSET $` + strconv.Itoa(limitParameter+1)
+	pageArgs := append(append([]any(nil), args...), count, startIndex-1)
+	rows, err := s.Store.Pool.Query(r.Context(), query, pageArgs...)
 	if err != nil {
 		scimError(w, 500, "query failed")
 		return
@@ -167,7 +202,7 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 		scimError(w, 500, "query failed")
 		return
 	}
-	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": len(resources), "startIndex": 1, "itemsPerPage": len(resources), "Resources": resources})
+	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": total, "startIndex": startIndex, "itemsPerPage": len(resources), "Resources": resources})
 }
 func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, role string) {
 	var in struct {

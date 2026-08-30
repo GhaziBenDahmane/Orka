@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -53,7 +54,12 @@ func (s *Server) scimGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listSCIMGroups(w http.ResponseWriter, r *http.Request, orgID uuid.UUID) {
-	query := `SELECT id FROM scim_groups WHERE organization_id=$1`
+	startIndex, count, err := scimPage(r)
+	if err != nil {
+		scimError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	from := ` FROM scim_groups WHERE organization_id=$1`
 	args := []any{orgID}
 	if filter := r.URL.Query().Get("filter"); filter != "" {
 		match := regexp.MustCompile(`(?i)^displayName\s+eq\s+"([^"]+)"$`).FindStringSubmatch(filter)
@@ -61,11 +67,18 @@ func (s *Server) listSCIMGroups(w http.ResponseWriter, r *http.Request, orgID uu
 			scimError(w, 400, "only displayName eq filters are supported")
 			return
 		}
-		query += ` AND display_name=$2`
+		from += ` AND display_name=$2`
 		args = append(args, match[1])
 	}
-	query += ` ORDER BY display_name LIMIT 100`
-	rows, err := s.Store.Pool.Query(r.Context(), query, args...)
+	var total int
+	if err = s.Store.Pool.QueryRow(r.Context(), `SELECT count(*)`+from, args...).Scan(&total); err != nil {
+		scimError(w, 500, "query failed")
+		return
+	}
+	limitParameter := len(args) + 1
+	query := `SELECT id` + from + ` ORDER BY display_name,id LIMIT $` + strconv.Itoa(limitParameter) + ` OFFSET $` + strconv.Itoa(limitParameter+1)
+	pageArgs := append(append([]any(nil), args...), count, startIndex-1)
+	rows, err := s.Store.Pool.Query(r.Context(), query, pageArgs...)
 	if err != nil {
 		scimError(w, 500, "query failed")
 		return
@@ -85,7 +98,11 @@ func (s *Server) listSCIMGroups(w http.ResponseWriter, r *http.Request, orgID uu
 		}
 		items = append(items, item)
 	}
-	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": len(items), "startIndex": 1, "itemsPerPage": len(items), "Resources": items})
+	if err = rows.Err(); err != nil {
+		scimError(w, 500, "query failed")
+		return
+	}
+	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": total, "startIndex": startIndex, "itemsPerPage": len(items), "Resources": items})
 }
 
 func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID uuid.UUID) {

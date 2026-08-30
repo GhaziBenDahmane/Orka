@@ -64,9 +64,12 @@ paths:
 				output.WriteString("      security:\n        - metricsBearer: []\n")
 			} else if strings.HasPrefix(op.path, "/v1/agent/") {
 				output.WriteString("      security:\n        - mutualTLS: []\n")
+			} else if strings.HasPrefix(op.path, "/scim/") {
+				output.WriteString("      security:\n        - scimBearer: []\n")
 			}
 			parameters := parameterPattern.FindAllStringSubmatch(op.path, -1)
-			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") {
+			isSCIMList := op.method == "get" && (op.path == "/scim/v2/Users" || op.path == "/scim/v2/Groups")
+			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList {
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
@@ -78,12 +81,19 @@ paths:
 				if op.method == "get" && op.path == "/v1/templates" {
 					output.WriteString("        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n        - name: cursor\n          in: query\n          schema: {type: string}\n")
 				}
+				if isSCIMList {
+					output.WriteString("        - name: filter\n          in: query\n          schema: {type: string}\n        - name: startIndex\n          in: query\n          schema: {type: integer, minimum: 1, default: 1}\n        - name: count\n          in: query\n          schema: {type: integer, minimum: 0, maximum: 100, default: 100}\n")
+				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" {
 				if strings.HasSuffix(op.path, "/artifact-source") {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          multipart/form-data:\n            schema:\n              type: object\n              required: [file]\n              properties:\n                file:\n                  type: string\n                  format: binary\n")
 				} else {
-					output.WriteString("      requestBody:\n        required: false\n        content:\n          application/json:\n            schema:\n              type: object\n              additionalProperties: true\n")
+					mediaType := "application/json"
+					if strings.HasPrefix(op.path, "/scim/") {
+						mediaType = "application/scim+json"
+					}
+					fmt.Fprintf(&output, "      requestBody:\n        required: false\n        content:\n          %s:\n            schema:\n              type: object\n              additionalProperties: true\n", mediaType)
 				}
 			}
 			output.WriteString("      responses:\n        '2XX':\n          description: Successful response\n")
@@ -91,8 +101,20 @@ paths:
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseEngineList'\n")
 			} else if op.method == "get" && op.path == "/v1/templates" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/TemplateCatalogPage'\n")
+			} else if isSCIMList {
+				output.WriteString("          content:\n            application/scim+json:\n              schema:\n                $ref: '#/components/schemas/SCIMListResponse'\n")
+			} else if strings.HasPrefix(op.path, "/scim/") {
+				output.WriteString("          content:\n            application/scim+json:\n              schema:\n                $ref: '#/components/schemas/SCIMResource'\n")
 			}
-			output.WriteString("        default:\n          description: Structured API error\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/ErrorEnvelope'\n")
+			errorMediaType := "application/json"
+			if strings.HasPrefix(op.path, "/scim/") {
+				errorMediaType = "application/scim+json"
+			}
+			errorSchema := "ErrorEnvelope"
+			if strings.HasPrefix(op.path, "/scim/") {
+				errorSchema = "SCIMError"
+			}
+			fmt.Fprintf(&output, "        default:\n          description: Structured API error\n          content:\n            %s:\n              schema:\n                $ref: '#/components/schemas/%s'\n", errorMediaType, errorSchema)
 		}
 	}
 	output.WriteString(`components:
@@ -104,6 +126,10 @@ paths:
       type: http
       scheme: bearer
       description: Dedicated operator token configured with DOCKYARD_METRICS_TOKEN.
+    scimBearer:
+      type: http
+      scheme: bearer
+      description: Organization-scoped SCIM provisioning token.
     mutualTLS:
       type: mutualTLS
   schemas:
@@ -139,6 +165,32 @@ paths:
           type: array
           items: {type: object, additionalProperties: true}
         nextCursor: {type: string}
+    SCIMResource:
+      type: object
+      additionalProperties: true
+    SCIMListResponse:
+      type: object
+      required: [schemas, totalResults, startIndex, itemsPerPage, Resources]
+      properties:
+        schemas:
+          type: array
+          items: {type: string}
+        totalResults: {type: integer, minimum: 0}
+        startIndex: {type: integer, minimum: 1}
+        itemsPerPage: {type: integer, minimum: 0, maximum: 100}
+        Resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/SCIMResource'
+    SCIMError:
+      type: object
+      required: [schemas, status, detail]
+      properties:
+        schemas:
+          type: array
+          items: {type: string}
+        status: {type: string}
+        detail: {type: string}
     ErrorEnvelope:
       type: object
       required: [error]
@@ -195,7 +247,7 @@ func tag(path string) string {
 }
 
 func isPublic(path string) bool {
-	if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" {
+	if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" || path == "/scim/v2/ServiceProviderConfig" {
 		return true
 	}
 	return strings.HasPrefix(path, "/v1/auth/sso/") || strings.HasPrefix(path, "/v1/auth/saml/") || strings.HasPrefix(path, "/v1/hooks/")

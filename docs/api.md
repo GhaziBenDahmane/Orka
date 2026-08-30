@@ -119,6 +119,9 @@ are recorded in the tenant audit chain.
 SCIM user resources are bound to the organization that provisioned them.
 SCIM bearer tokens default to a 90-day lifetime, are shown only at creation,
 and stop authenticating immediately after expiration or explicit revocation.
+User and group collection reads support the SCIM `filter`, one-based
+`startIndex`, and bounded `count` parameters (default and maximum 100), and
+return the full matching `totalResults` independently of the current page.
 Deactivation removes access but retains that binding, so identity providers can
 query and reactivate an inactive user. A tenant cannot PATCH a global user ID
 that it does not own. Because email identities are shared across organizations,

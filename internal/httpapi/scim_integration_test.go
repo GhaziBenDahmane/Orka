@@ -70,6 +70,11 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	createdUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "member-" + orgID.String() + "@example.test", "active": true}, http.StatusCreated)
 	memberID := createdUser["id"].(string)
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, memberID) })
+	userPage := doSCIMRequest(t, server.URL+"/scim/v2/Users?startIndex=2&count=1", token, http.MethodGet, nil, http.StatusOK)
+	if userPage["totalResults"] != float64(2) || userPage["startIndex"] != float64(2) || userPage["itemsPerPage"] != float64(1) || len(userPage["Resources"].([]any)) != 1 {
+		t.Fatalf("unexpected paginated user response: %#v", userPage)
+	}
+	doSCIMRequest(t, server.URL+"/scim/v2/Users?count=101", token, http.MethodGet, nil, http.StatusBadRequest)
 
 	// User mutation endpoints are scoped to resources visible in the token's
 	// organization. A global user UUID from another tenant cannot be renamed or
@@ -91,6 +96,10 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 
 	group := doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"externalId": uuid.NewString(), "displayName": "Engineering", "role": "admin", "members": []map[string]string{{"value": memberID}}}, http.StatusCreated)
 	groupID := group["id"].(string)
+	groupCount := doSCIMRequest(t, server.URL+"/scim/v2/Groups?count=0", token, http.MethodGet, nil, http.StatusOK)
+	if groupCount["totalResults"] != float64(1) || groupCount["itemsPerPage"] != float64(0) || len(groupCount["Resources"].([]any)) != 0 {
+		t.Fatalf("unexpected group count response: %#v", groupCount)
+	}
 	var role string
 	if err = db.Pool.QueryRow(ctx, `SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, memberID).Scan(&role); err != nil || role != "admin" {
 		t.Fatalf("group role = %q, err = %v", role, err)
@@ -169,6 +178,9 @@ func doSCIMRequest(t *testing.T, url, token, method string, body any, wantStatus
 	}
 	if wantStatus == http.StatusNoContent {
 		return nil
+	}
+	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "application/scim+json") {
+		t.Fatalf("SCIM Content-Type = %q", contentType)
 	}
 	var result map[string]any
 	if err = json.NewDecoder(response.Body).Decode(&result); err != nil {
