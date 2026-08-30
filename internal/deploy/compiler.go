@@ -199,7 +199,9 @@ func (c Compiler) CompileWithNetworkAttachments(source string, routes []store.Ro
 		}
 		if route.TLS {
 			labels["traefik.http.routers."+key+".tls"] = "true"
-			labels["traefik.http.routers."+key+".tls.certresolver"] = route.CertificateResolver
+			if route.CustomCertificateID == nil {
+				labels["traefik.http.routers."+key+".tls.certresolver"] = route.CertificateResolver
+			}
 		}
 		deploy["labels"] = labels
 		service["deploy"] = deploy
@@ -586,7 +588,10 @@ func ValidateRoute(route store.Route) error {
 			return errors.New("invalid route")
 		}
 	}
-	if route.TLS && !safeCertificateResolver.MatchString(route.CertificateResolver) {
+	if route.CustomCertificateID != nil && (!route.TLS || route.CertificateResolver != "") {
+		return errors.New("invalid route")
+	}
+	if route.TLS && route.CustomCertificateID == nil && !safeCertificateResolver.MatchString(route.CertificateResolver) {
 		return errors.New("invalid route")
 	}
 	return nil

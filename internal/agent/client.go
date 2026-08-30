@@ -721,15 +721,17 @@ func (c *Client) execute(parent context.Context, cmd command) {
 
 func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error) {
 	var payload struct {
-		StackName          string             `json:"stackName"`
-		VolumeName         string             `json:"volumeName"`
-		Compose            string             `json:"compose"`
-		Environment        map[string]string  `json:"environment"`
-		Tail               int                `json:"tail"`
-		Command            []string           `json:"command"`
-		Network            string             `json:"network"`
-		Image              string             `json:"image"`
-		RegistryCredential *deploy.Credential `json:"registryCredential"`
+		StackName          string                           `json:"stackName"`
+		VolumeName         string                           `json:"volumeName"`
+		Compose            string                           `json:"compose"`
+		Environment        map[string]string                `json:"environment"`
+		Tail               int                              `json:"tail"`
+		Command            []string                         `json:"command"`
+		Network            string                           `json:"network"`
+		Image              string                           `json:"image"`
+		RegistryCredential *deploy.Credential               `json:"registryCredential"`
+		Proxy              deploy.EdgeProxySpec             `json:"proxy"`
+		Certificates       []deploy.EdgeCertificateMaterial `json:"certificates"`
 	}
 	if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 		return "", err
@@ -806,6 +808,15 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 			return "", errors.New("scheduler does not support managed networks")
 		}
 		return "", manager.RemoveManagedNetwork(ctx, spec)
+	case "swarm.edge-certificates":
+		manager, ok := c.swarm.(deploy.EdgeCertificateManager)
+		if !ok {
+			return "", errors.New("scheduler does not support edge certificates")
+		}
+		if c.cfg.EdgeProxyServiceName == "" || payload.Proxy.ServiceName != c.cfg.EdgeProxyServiceName || payload.Proxy.DynamicConfigurationPath != c.cfg.EdgeProxyDynamicConfigurationPath {
+			return "", errors.New("edge proxy request does not match the registered agent contract")
+		}
+		return "", manager.ReconcileEdgeCertificates(ctx, payload.Proxy, payload.Certificates)
 	case "swarm.volume-artifact":
 		var job deploy.VolumeArtifactJob
 		if err := json.Unmarshal(cmd.Payload, &job); err != nil {

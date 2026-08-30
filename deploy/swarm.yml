@@ -51,6 +51,8 @@ services:
       DOCKYARD_MASTER_KEY_FILE: /run/secrets/dockyard_master_key
       DOCKYARD_METRICS_TOKEN_FILE: /run/secrets/dockyard_metrics_token
       DOCKYARD_TRAEFIK_NETWORK: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+      DOCKYARD_EDGE_PROXY_SERVICE_NAME: ${DOCKYARD_EDGE_PROXY_SERVICE_NAME:-dockyard_traefik}
+      DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH: /etc/traefik/dynamic
       DOCKYARD_TRUSTED_PROXY_CIDRS: ${DOCKYARD_EDGE_SUBNET:-10.255.250.0/24}
       DOCKYARD_PUBLIC_URL: https://${DOCKYARD_HOST}
       DOCKYARD_BACKUP_DIRECTORY: /var/lib/dockyard/backups

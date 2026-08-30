@@ -53,6 +53,7 @@ type Worker struct {
 	// without weakening the system trust store used in production.
 	notificationTLS *tls.Config
 	RemoteScheduler func(uuid.UUID) Scheduler
+	LocalEdgeProxy  EdgeProxySpec
 }
 
 type job struct {
@@ -67,19 +68,40 @@ type job struct {
 func (w *Worker) Run(ctx context.Context) {
 	w.recoverStale(ctx)
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(7)
 	go func() { defer wg.Done(); w.scheduleBackups(ctx) }()
 	go func() { defer wg.Done(); w.scheduleServiceCommands(ctx) }()
 	go func() { defer wg.Done(); w.pruneAuditEvents(ctx) }()
 	go func() { defer wg.Done(); w.scheduleAuditArchives(ctx) }()
 	go func() { defer wg.Done(); w.scheduleBackupArtifactCleanup(ctx) }()
 	go func() { defer wg.Done(); w.reconcileStacks(ctx) }()
+	go func() { defer wg.Done(); w.scheduleEdgeCertificateReconciliation(ctx) }()
 	for i := 0; i < w.Concurrency; i++ {
 		wg.Add(1)
 		go func() { defer wg.Done(); w.loop(ctx) }()
 	}
 	<-ctx.Done()
 	wg.Wait()
+}
+
+func (w *Worker) scheduleEdgeCertificateReconciliation(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		leader, err := w.Store.AcquireControllerLease(ctx, "edge-certificate-scheduler", w.ID, 90*time.Second)
+		if err != nil && ctx.Err() == nil {
+			w.Logger.Error("acquire edge certificate scheduler lease", "error", err)
+		} else if leader {
+			if _, err = w.Store.QueueAllEdgeCertificateReconciliations(ctx); err != nil {
+				w.Logger.Error("schedule edge certificate reconciliation", "error", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (w *Worker) scheduleServiceCommands(ctx context.Context) {
@@ -724,6 +746,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if j.Kind == "network.delete" {
 		return w.deleteManagedNetwork(ctx, j)
 	}
+	if j.Kind == "edge-certificates.reconcile" {
+		return w.reconcileEdgeCertificates(ctx, j)
+	}
 	if j.Kind == "backup.database" {
 		return w.backupDatabase(ctx, j)
 	}
@@ -771,14 +796,14 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
-	rows, err := w.Store.Pool.Query(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.internal_path,r.strip_path,NOT r.enabled,r.redirect_regex,r.redirect_replacement,r.redirect_permanent,r.target_port,r.tls,r.certificate_resolver,r.created_at,r.updated_at FROM routes r JOIN deployments d ON d.compose_service_id=r.compose_service_id WHERE d.id=$1`, id)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT r.id,r.compose_service_id,r.service_name,r.host,r.path_prefix,r.internal_path,r.strip_path,NOT r.enabled,r.redirect_regex,r.redirect_replacement,r.redirect_permanent,r.target_port,r.tls,r.certificate_resolver,r.custom_certificate_id,r.created_at,r.updated_at FROM routes r JOIN deployments d ON d.compose_service_id=r.compose_service_id WHERE d.id=$1`, id)
 	if err != nil {
 		return err
 	}
 	routes := []store.Route{}
 	for rows.Next() {
 		var r store.Route
-		if err := rows.Scan(&r.ID, &r.ComposeServiceID, &r.ServiceName, &r.Host, &r.PathPrefix, &r.InternalPath, &r.StripPath, &r.Disabled, &r.RedirectRegex, &r.RedirectReplacement, &r.RedirectPermanent, &r.TargetPort, &r.TLS, &r.CertificateResolver, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ComposeServiceID, &r.ServiceName, &r.Host, &r.PathPrefix, &r.InternalPath, &r.StripPath, &r.Disabled, &r.RedirectRegex, &r.RedirectReplacement, &r.RedirectPermanent, &r.TargetPort, &r.TLS, &r.CertificateResolver, &r.CustomCertificateID, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -789,6 +814,19 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		return err
 	}
 	rows.Close()
+	customCertificatesRequired := false
+	for _, route := range routes {
+		if route.Enabled && route.CustomCertificateID != nil {
+			customCertificatesRequired = true
+			break
+		}
+	}
+	if customCertificatesRequired {
+		if err = w.waitForEdgeCertificates(ctx, clusterID, 90*time.Second); err != nil {
+			w.markDeployment(ctx, j, id, "failed", "", err)
+			return err
+		}
+	}
 	authRows, err := w.Store.Pool.Query(ctx, `SELECT username,password_hash FROM route_basic_auth_users WHERE compose_service_id=$1 ORDER BY username,id`, serviceID)
 	if err != nil {
 		return err

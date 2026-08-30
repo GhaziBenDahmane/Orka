@@ -49,6 +49,8 @@ var masterKeyEncryptedColumns = []encryptedColumnSpec{
 	{table: "cluster_commands", column: "encrypted_result", idColumn: "id", contextColumn: "id", contextKind: "cluster-command-result"},
 	{table: "commit_status_deliveries", column: "encrypted_credential", idColumn: "id", contextColumn: "credential_id", contextKind: "source-credential", legacyContext: "source-credential"},
 	{table: "compose_services", column: "encrypted_env", idColumn: "id", contextColumn: "id", contextKind: "compose-env", legacyContext: "compose-env"},
+	{table: "custom_tls_certificates", column: "encrypted_certificate", idColumn: "id", contextColumn: "id", contextKind: "custom-tls-certificate-certificate"},
+	{table: "custom_tls_certificates", column: "encrypted_private_key", idColumn: "id", contextColumn: "id", contextKind: "custom-tls-certificate-private-key"},
 	{table: "database_backups", column: "encrypted_data_key", idColumn: "id", contextColumn: "id", contextKind: "backup-data-key"},
 	{table: "database_instances", column: "encrypted_credentials", idColumn: "id", contextColumn: "id", contextKind: "database-credentials", legacyContext: "database-credentials"},
 	{table: "database_migrations", column: "encrypted_source_config", idColumn: "id", contextColumn: "id", contextKind: "database-migration-source"},

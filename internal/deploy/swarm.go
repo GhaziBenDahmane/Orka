@@ -22,9 +22,11 @@ import (
 )
 
 type Swarm struct {
-	DockerBin string
-	Network   string
-	Timeout   time.Duration
+	DockerBin                         string
+	Network                           string
+	Timeout                           time.Duration
+	EdgeProxyServiceName              string
+	EdgeProxyDynamicConfigurationPath string
 	// ServiceName identifies the currently running, digest-pinned Dockyard or
 	// agent service whose image is reused for privileged one-shot helpers.
 	ServiceName string
@@ -1195,6 +1197,7 @@ func (s Swarm) runEnv(ctx context.Context, env map[string]string, args ...string
 func (s Swarm) runAllowTruncated(ctx context.Context, args ...string) (string, error) {
 	return s.runEnvMode(ctx, nil, true, args...)
 }
+
 func (s Swarm) runEnvMode(ctx context.Context, env map[string]string, allowTruncated bool, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, s.DockerBin, args...)
 	cmd.Env = os.Environ()

@@ -29,6 +29,8 @@ type Config struct {
 	MaxBuildWorkspaceBytes     int64
 	SessionTTL                 time.Duration
 	TraefikNetwork             string
+	EdgeProxyServiceName       string
+	EdgeProxyDynamicConfigPath string
 	UnsafeWorkloads            bool
 	PublicURL                  string
 	BackupDirectory            string
@@ -138,6 +140,14 @@ func Load() (Config, error) {
 	if !swarmNetworkName.MatchString(traefikNetwork) {
 		return Config{}, errors.New("DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters")
 	}
+	edgeProxyServiceName := strings.TrimSpace(env("DOCKYARD_EDGE_PROXY_SERVICE_NAME", "dockyard_traefik"))
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(edgeProxyServiceName) {
+		return Config{}, errors.New("DOCKYARD_EDGE_PROXY_SERVICE_NAME must be a valid Swarm service name")
+	}
+	edgeProxyDynamicConfigPath := strings.TrimSpace(env("DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH", "/etc/traefik/dynamic"))
+	if !filepath.IsAbs(edgeProxyDynamicConfigPath) || filepath.Clean(edgeProxyDynamicConfigPath) != edgeProxyDynamicConfigPath || edgeProxyDynamicConfigPath == "/" || strings.ContainsAny(edgeProxyDynamicConfigPath, "\x00\r\n,=") {
+		return Config{}, errors.New("DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH must be a clean absolute container path")
+	}
 	swarmServiceName := strings.TrimSpace(os.Getenv("DOCKYARD_SWARM_SERVICE_NAME"))
 	if swarmServiceName != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(swarmServiceName) {
 		return Config{}, errors.New("DOCKYARD_SWARM_SERVICE_NAME must be a valid Swarm service name")
@@ -229,6 +239,8 @@ func Load() (Config, error) {
 		MaxBuildWorkspaceBytes:     maxBuildWorkspaceBytes,
 		SessionTTL:                 ttl,
 		TraefikNetwork:             traefikNetwork,
+		EdgeProxyServiceName:       edgeProxyServiceName,
+		EdgeProxyDynamicConfigPath: edgeProxyDynamicConfigPath,
 		UnsafeWorkloads:            unsafeWorkloads,
 		PublicURL:                  publicURL,
 		BackupDirectory:            filepath.Clean(backupDirectory),

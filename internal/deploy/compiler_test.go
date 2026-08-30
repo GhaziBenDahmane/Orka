@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,6 +19,17 @@ func TestCompileInjectsTraefikAndNetwork(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("compiled compose does not contain %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestCompileCustomCertificateRouteOmitsACMEResolver(t *testing.T) {
+	certificateID := uuid.New()
+	output, err := (Compiler{PublicNetwork: "public"}).Compile("services:\n  app:\n    image: nginx:1.27\n", []store.Route{{ServiceName: "app", Host: "custom.example.test", PathPrefix: "/", InternalPath: "/", TargetPort: 80, TLS: true, CertificateResolver: "", CustomCertificateID: &certificateID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "traefik.http.routers.dockyard-0-custom-example-test.tls: \"true\"") || strings.Contains(output, "tls.certresolver") {
+		t.Fatalf("custom-certificate route emitted the wrong TLS labels:\n%s", output)
 	}
 }
 

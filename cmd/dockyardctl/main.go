@@ -452,6 +452,21 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		return http.MethodGet, "/v1/services/" + args[1] + "/logs", nil, nil
 	case "database-engines":
 		return http.MethodGet, "/v1/database-engines", nil, require(1)
+	case "custom-tls-certificates":
+		return http.MethodGet, "/v1/custom-tls-certificates", nil, require(1)
+	case "create-custom-tls-certificate":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/custom-tls-certificates", 2)
+	case "update-custom-tls-certificate":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/custom-tls-certificates/" + args[1], input, err
+	case "delete-custom-tls-certificate":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/custom-tls-certificates/" + args[1], nil, nil
 	case "backup-destinations":
 		return http.MethodGet, "/v1/backup-destinations", nil, require(1)
 	case "create-backup-destination":
@@ -956,5 +971,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, tags, networks, create-network, set-service-networks, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules)")
 }

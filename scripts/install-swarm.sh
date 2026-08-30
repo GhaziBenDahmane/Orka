@@ -5,7 +5,8 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 mode=${DOCKYARD_INSTALL_MODE:-single}
 stack=${DOCKYARD_STACK_NAME:-dockyard}
 DOCKYARD_SWARM_SERVICE_NAME=${stack}_dockyard
-export DOCKYARD_SWARM_SERVICE_NAME
+DOCKYARD_EDGE_PROXY_SERVICE_NAME=${stack}_traefik
+export DOCKYARD_SWARM_SERVICE_NAME DOCKYARD_EDGE_PROXY_SERVICE_NAME
 network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
 db_password_secret=${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}
 database_url_secret=${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}

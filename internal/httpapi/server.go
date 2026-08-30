@@ -144,6 +144,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
 	mux.Handle("DELETE /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.deleteSourceCredential)))
+	mux.Handle("GET /v1/custom-tls-certificates", s.requireRole("admin", http.HandlerFunc(s.listCustomTLSCertificates)))
+	mux.Handle("POST /v1/custom-tls-certificates", s.requireRole("admin", http.HandlerFunc(s.createCustomTLSCertificate)))
+	mux.Handle("PUT /v1/custom-tls-certificates/{certificateID}", s.requireRole("admin", http.HandlerFunc(s.updateCustomTLSCertificate)))
+	mux.Handle("DELETE /v1/custom-tls-certificates/{certificateID}", s.requireRole("admin", http.HandlerFunc(s.deleteCustomTLSCertificate)))
 	mux.Handle("GET /v1/notification-endpoints", s.requireRole("admin", http.HandlerFunc(s.listNotificationEndpoints)))
 	mux.Handle("POST /v1/notification-endpoints", s.requireRole("admin", http.HandlerFunc(s.createNotificationEndpoint)))
 	mux.Handle("DELETE /v1/notification-endpoints/{endpointID}", s.requireRole("admin", http.HandlerFunc(s.deleteNotificationEndpoint)))
@@ -2708,18 +2712,19 @@ func (s *Server) deleteSourceCredential(w http.ResponseWriter, r *http.Request) 
 }
 
 type routeInput struct {
-	ServiceName         string `json:"serviceName"`
-	Host                string `json:"host"`
-	PathPrefix          string `json:"pathPrefix"`
-	InternalPath        string `json:"internalPath"`
-	StripPath           bool   `json:"stripPath"`
-	Enabled             *bool  `json:"enabled"`
-	RedirectRegex       string `json:"redirectRegex"`
-	RedirectReplacement string `json:"redirectReplacement"`
-	RedirectPermanent   bool   `json:"redirectPermanent"`
-	TargetPort          int    `json:"targetPort"`
-	TLS                 *bool  `json:"tls"`
-	CertificateResolver string `json:"certificateResolver"`
+	ServiceName         string     `json:"serviceName"`
+	Host                string     `json:"host"`
+	PathPrefix          string     `json:"pathPrefix"`
+	InternalPath        string     `json:"internalPath"`
+	StripPath           bool       `json:"stripPath"`
+	Enabled             *bool      `json:"enabled"`
+	RedirectRegex       string     `json:"redirectRegex"`
+	RedirectReplacement string     `json:"redirectReplacement"`
+	RedirectPermanent   bool       `json:"redirectPermanent"`
+	TargetPort          int        `json:"targetPort"`
+	TLS                 *bool      `json:"tls"`
+	CertificateResolver string     `json:"certificateResolver"`
+	CustomCertificateID *uuid.UUID `json:"customCertificateId"`
 }
 
 func (in routeInput) route(serviceID uuid.UUID) store.Route {
@@ -2730,7 +2735,7 @@ func (in routeInput) route(serviceID uuid.UUID) store.Route {
 	if in.InternalPath == "" {
 		in.InternalPath = "/"
 	}
-	if in.CertificateResolver == "" {
+	if in.CertificateResolver == "" && in.CustomCertificateID == nil {
 		in.CertificateResolver = "letsencrypt"
 	}
 	tls, enabled := true, true
@@ -2740,7 +2745,7 @@ func (in routeInput) route(serviceID uuid.UUID) store.Route {
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	return store.Route{ComposeServiceID: serviceID, ServiceName: in.ServiceName, Host: in.Host, PathPrefix: in.PathPrefix, InternalPath: in.InternalPath, StripPath: in.StripPath, Enabled: enabled, Disabled: !enabled, RedirectRegex: in.RedirectRegex, RedirectReplacement: in.RedirectReplacement, RedirectPermanent: in.RedirectPermanent, TargetPort: in.TargetPort, TLS: tls, CertificateResolver: in.CertificateResolver}
+	return store.Route{ComposeServiceID: serviceID, ServiceName: in.ServiceName, Host: in.Host, PathPrefix: in.PathPrefix, InternalPath: in.InternalPath, StripPath: in.StripPath, Enabled: enabled, Disabled: !enabled, RedirectRegex: in.RedirectRegex, RedirectReplacement: in.RedirectReplacement, RedirectPermanent: in.RedirectPermanent, TargetPort: in.TargetPort, TLS: tls, CertificateResolver: in.CertificateResolver, CustomCertificateID: in.CustomCertificateID}
 }
 
 func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
@@ -3233,6 +3238,14 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrInvalidRouteBasicAuth) {
 		writeError(w, http.StatusBadRequest, "invalid_route_basic_auth", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrInvalidRouteCertificate) {
+		writeError(w, http.StatusBadRequest, "invalid_route_certificate", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrRevisionConflict) {
+		writeError(w, http.StatusConflict, "revision_conflict", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrCrossClusterMove) {

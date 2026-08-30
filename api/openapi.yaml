@@ -1578,6 +1578,84 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/custom-tls-certificates:
+    get:
+      operationId: get_v1_custom_tls_certificates
+      tags: [custom-tls-certificates]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: post_v1_custom_tls_certificates
+      tags: [custom-tls-certificates]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/custom-tls-certificates/{certificateID}:
+    delete:
+      operationId: delete_v1_custom_tls_certificates_certificateID
+      tags: [custom-tls-certificates]
+      parameters:
+        - name: certificateID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      operationId: put_v1_custom_tls_certificates_certificateID
+      tags: [custom-tls-certificates]
+      parameters:
+        - name: certificateID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/database-backups/{backupID}:
     get:
       operationId: get_v1_database_backups_backupID

@@ -136,7 +136,13 @@ func (s RemoteSwarm) RemoveManagedNetwork(ctx context.Context, spec ManagedNetwo
 	return err
 }
 
+func (s RemoteSwarm) ReconcileEdgeCertificates(ctx context.Context, proxy EdgeProxySpec, certificates []EdgeCertificateMaterial) error {
+	_, err := s.run(ctx, "swarm.edge-certificates", map[string]any{"proxy": proxy, "certificates": certificates})
+	return err
+}
+
 var _ NetworkManager = RemoteSwarm{}
+var _ EdgeCertificateManager = RemoteSwarm{}
 
 type RemoteArtifactJob struct {
 	Mode            string            `json:"mode"`
