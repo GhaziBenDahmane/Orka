@@ -41,7 +41,7 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 	}
 	remote := RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 5 * time.Second}
 	type result struct {
-		output string
+		output DeploymentResult
 		err    error
 	}
 	resultChannel := make(chan result, 1)
@@ -76,7 +76,8 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 	if payload["stackName"] != "test-stack" || credential["secret"] != "registry-secret" {
 		t.Fatalf("payload=%s err=%v", plain, err)
 	}
-	resultPayload, _ := json.Marshal(map[string]string{"output": "deployed"})
+	remoteDeployment, _ := json.Marshal(DeploymentResult{Output: "deployed", ResolvedImages: map[string]string{}})
+	resultPayload, _ := json.Marshal(map[string]string{"output": string(remoteDeployment)})
 	encryptedResult, err := box.Encrypt(resultPayload, "cluster-command-result:"+command.ID.String())
 	if err != nil {
 		t.Fatal(err)
@@ -85,8 +86,8 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 		t.Fatal(err)
 	}
 	resultValue := <-resultChannel
-	if resultValue.err != nil || resultValue.output != "deployed" {
-		t.Fatalf("output=%q err=%v", resultValue.output, resultValue.err)
+	if resultValue.err != nil || resultValue.output.Output != "deployed" || resultValue.output.ResolvedImages == nil {
+		t.Fatalf("output=%#v err=%v", resultValue.output, resultValue.err)
 	}
 
 	transferChannel := make(chan struct {

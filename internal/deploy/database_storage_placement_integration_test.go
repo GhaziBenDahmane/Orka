@@ -16,8 +16,8 @@ type storagePlacementScheduler struct {
 	calls int
 }
 
-func (*storagePlacementScheduler) Deploy(context.Context, string, string, map[string]string, *Credential) (string, error) {
-	return "", nil
+func (*storagePlacementScheduler) Deploy(_ context.Context, _ string, compose string, _ map[string]string, _ *Credential) (DeploymentResult, error) {
+	return DeploymentResult{ResolvedImages: map[string]string{}}, nil
 }
 func (*storagePlacementScheduler) Remove(context.Context, string) (string, error) { return "", nil }
 func (*storagePlacementScheduler) RemoveVolumes(context.Context, string) (string, error) {

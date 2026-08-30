@@ -359,14 +359,14 @@ type lifecycleScheduler struct {
 	deploys []string
 }
 
-func (s *lifecycleScheduler) Deploy(_ context.Context, _ string, compose string, _ map[string]string, _ *deploy.Credential) (string, error) {
+func (s *lifecycleScheduler) Deploy(_ context.Context, _ string, compose string, _ map[string]string, _ *deploy.Credential) (deploy.DeploymentResult, error) {
 	s.mu.Lock()
 	s.deploys = append(s.deploys, compose)
 	s.mu.Unlock()
 	if strings.Contains(compose, "failure-marker") {
-		return "scheduler rejected fixture", errors.New("conformance deployment failure")
+		return deploy.DeploymentResult{Output: "scheduler rejected fixture"}, errors.New("conformance deployment failure")
 	}
-	return "scheduler accepted fixture", nil
+	return deploy.DeploymentResult{Output: "scheduler accepted fixture", ResolvedImages: map[string]string{"app": "example.invalid/conformance@sha256:" + strings.Repeat("a", 64)}}, nil
 }
 
 func (s *lifecycleScheduler) Remove(context.Context, string) (string, error)        { return "", nil }

@@ -32,12 +32,19 @@ type Swarm struct {
 // manager. The local CLI adapter and outbound cluster agents implement the
 // same contract so Compose remains the workload format in either topology.
 type Scheduler interface {
-	Deploy(context.Context, string, string, map[string]string, *Credential) (string, error)
+	Deploy(context.Context, string, string, map[string]string, *Credential) (DeploymentResult, error)
 	Remove(context.Context, string) (string, error)
 	RemoveVolumes(context.Context, string) (string, error)
 	Logs(context.Context, string, int) (string, error)
 	Nodes(context.Context) ([]Node, error)
 	RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error)
+}
+
+// DeploymentResult carries operator-facing output and the image identities
+// observed from Swarm so the controller can build an immutable snapshot.
+type DeploymentResult struct {
+	Output         string            `json:"output"`
+	ResolvedImages map[string]string `json:"resolvedImages"`
 }
 
 type StackStatus struct {
@@ -136,16 +143,16 @@ func (s Swarm) EnsureReady(ctx context.Context) error {
 	return err
 }
 
-func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[string]string, registryCredential *Credential) (string, error) {
+func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[string]string, registryCredential *Credential) (DeploymentResult, error) {
 	if !safeName.MatchString(stackName) {
-		return "", fmt.Errorf("invalid stack name %q", stackName)
+		return DeploymentResult{}, fmt.Errorf("invalid stack name %q", stackName)
 	}
 	if err := s.EnsureReady(ctx); err != nil {
-		return "", err
+		return DeploymentResult{}, err
 	}
 	directory, err := os.MkdirTemp("", "dockyard-stack-*")
 	if err != nil {
-		return "", err
+		return DeploymentResult{}, err
 	}
 	defer os.RemoveAll(directory)
 	processEnv := make(map[string]string, len(env)+1)
@@ -154,17 +161,17 @@ func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[st
 	}
 	compose, err = materializeInlineFiles(directory, compose, processEnv)
 	if err != nil {
-		return "", err
+		return DeploymentResult{}, err
 	}
 	path := filepath.Join(directory, "compose.yml")
 	if err = os.WriteFile(path, []byte(compose), 0600); err != nil {
-		return "", err
+		return DeploymentResult{}, err
 	}
 	args := []string{"stack", "deploy", "--compose-file", path, "--prune", "--resolve-image", "always"}
 	if registryCredential != nil && registryCredential.Secret != "" {
 		configDirectory, configErr := writeDockerConfig(*registryCredential)
 		if configErr != nil {
-			return "", configErr
+			return DeploymentResult{}, configErr
 		}
 		defer os.RemoveAll(configDirectory)
 		processEnv["DOCKER_CONFIG"] = configDirectory
@@ -174,10 +181,76 @@ func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[st
 	startedAt := time.Now().UTC()
 	output, err := s.runEnv(ctx, processEnv, args...)
 	if err != nil {
-		return output, err
+		return DeploymentResult{Output: output}, err
 	}
 	waitOutput, err := s.waitConverged(ctx, stackName, startedAt)
-	return output + waitOutput, err
+	result := DeploymentResult{Output: output + waitOutput}
+	if err != nil {
+		return result, err
+	}
+	result.ResolvedImages, err = s.captureResolvedImages(ctx, stackName)
+	return result, err
+}
+
+func (s Swarm) captureResolvedImages(ctx context.Context, stackName string) (map[string]string, error) {
+	output, err := s.run(ctx, "stack", "services", "--format", "{{.Name}}\t{{.Image}}", stackName)
+	if err != nil {
+		return nil, fmt.Errorf("inspect deployed images: %w", err)
+	}
+	images := map[string]string{}
+	prefix := stackName + "_"
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 || !strings.HasPrefix(parts[0], prefix) || strings.TrimSpace(parts[1]) == "" {
+			return nil, fmt.Errorf("inspect deployed images: unexpected service record %q", line)
+		}
+		images[strings.TrimPrefix(parts[0], prefix)] = strings.TrimSpace(parts[1])
+	}
+	if len(images) == 0 {
+		return nil, errors.New("inspect deployed images: stack has no services")
+	}
+	return images, nil
+}
+
+func ApplyResolvedImages(compose string, images map[string]string) (string, error) {
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(compose), &document); err != nil {
+		return "", fmt.Errorf("parse deployed Compose: %w", err)
+	}
+	services, ok := document["services"].(map[string]any)
+	if !ok {
+		return "", errors.New("parse deployed Compose: services must be an object")
+	}
+	changed := false
+	for name, raw := range services {
+		service, ok := raw.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("parse deployed Compose service %q", name)
+		}
+		if _, hasImage := service["image"]; !hasImage {
+			continue
+		}
+		original, _ := service["image"].(string)
+		image, found := images[name]
+		if !found {
+			image = original
+		}
+		if !pinnedImage.MatchString(image) {
+			return "", fmt.Errorf("inspect deployed images: service %q image is not digest-pinned", name)
+		}
+		if image != original {
+			service["image"] = image
+			changed = true
+		}
+	}
+	if !changed {
+		return compose, nil
+	}
+	encoded, err := yaml.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("encode effective Compose: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func materializeInlineFiles(directory, compose string, environment map[string]string) (string, error) {

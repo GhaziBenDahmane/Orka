@@ -343,7 +343,7 @@ type takeoverScheduler struct {
 	output  string
 }
 
-func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string, _ map[string]string, _ *Credential) (string, error) {
+func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string, _ map[string]string, _ *Credential) (DeploymentResult, error) {
 	if s.compose != nil {
 		s.compose <- compose
 	}
@@ -354,10 +354,14 @@ func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string,
 		select {
 		case <-s.release:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return DeploymentResult{}, ctx.Err()
 		}
 	}
-	return s.output, nil
+	resolved := map[string]string{}
+	if !strings.Contains(compose, "@sha256:") {
+		resolved["web"] = "registry.example/app@sha256:" + strings.Repeat("b", 64)
+	}
+	return DeploymentResult{Output: s.output, ResolvedImages: resolved}, nil
 }
 
 func TestReconciliationDeploymentUsesEffectiveSnapshotWithoutRebuild(t *testing.T) {
@@ -482,8 +486,8 @@ func TestDeploymentTakeoverRejectsPausedWorkerCompletion(t *testing.T) {
 	}
 
 	close(release)
-	if err = <-firstExecution; err != nil {
-		t.Fatalf("paused scheduler result: %v", err)
+	if err = <-firstExecution; !errors.Is(err, store.ErrLeaseLost) {
+		t.Fatalf("paused scheduler result=%v, want lease lost", err)
 	}
 	if err = firstWorker.finish(ctx, firstLease, nil); !errors.Is(err, store.ErrLeaseLost) {
 		t.Fatalf("paused worker finish error=%v, want lease lost", err)

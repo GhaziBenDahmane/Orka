@@ -597,9 +597,9 @@ func (f *fakeScheduler) RunDatabaseTransfer(_ context.Context, job deploy.Databa
 	return deploy.DatabaseTransferResult{SHA256: strings.Repeat("a", 64), SizeBytes: 42, Output: "restored"}, nil
 }
 
-func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environment map[string]string, registryCredential *deploy.Credential) (string, error) {
+func (f *fakeScheduler) Deploy(_ context.Context, stack, compose string, environment map[string]string, registryCredential *deploy.Credential) (deploy.DeploymentResult, error) {
 	f.stack, f.compose, f.environment, f.registryCredential = stack, compose, environment, registryCredential
-	return "deployed", nil
+	return deploy.DeploymentResult{Output: "deployed", ResolvedImages: map[string]string{}}, nil
 }
 func (*fakeScheduler) Remove(context.Context, string) (string, error)        { return "", nil }
 func (*fakeScheduler) RemoveVolumes(context.Context, string) (string, error) { return "", nil }
@@ -709,7 +709,9 @@ func TestExecuteDeployCommand(t *testing.T) {
 	scheduler := &fakeScheduler{}
 	client := &Client{swarm: scheduler}
 	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.deploy", Payload: []byte(`{"stackName":"demo","compose":"services: {}","environment":{"TOKEN":"secret"},"registryCredential":{"kind":"registry","server":"registry.example.test","username":"robot","secret":"registry-secret"}}`)})
-	if err != nil || output != "deployed" {
+	var result deploy.DeploymentResult
+	decodeErr := json.Unmarshal([]byte(output), &result)
+	if err != nil || decodeErr != nil || result.Output != "deployed" || result.ResolvedImages == nil {
 		t.Fatalf("output=%q err=%v", output, err)
 	}
 	if scheduler.stack != "demo" || scheduler.compose != "services: {}" || scheduler.environment["TOKEN"] != "secret" || scheduler.registryCredential == nil || scheduler.registryCredential.Secret != "registry-secret" {

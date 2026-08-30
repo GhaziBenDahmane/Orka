@@ -170,6 +170,7 @@ printf '%s\n' "$*" >> "` + logPath + `"
 if [ "$1" = info ]; then echo active; exit 0; fi
 if [ "$1" = network ] && [ "$2" = inspect ]; then echo 'overlay|swarm|true|{"encrypted":""}'; exit 0; fi
 if [ "$1" = stack ] && [ "$2" = deploy ]; then cp "$DOCKER_CONFIG/config.json" "` + directory + `/registry.json"; exit 0; fi
+if [ "$1" = stack ] && [ "$2" = services ]; then echo 'test_web	registry.example.test/app@sha256:` + strings.Repeat("a", 64) + `'; exit 0; fi
 if [ "$1" = service ] && [ "$2" = ls ]; then echo 'test_web 1/1'; exit 0; fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'null'; exit 0; fi
 exit 1
@@ -178,9 +179,13 @@ exit 1
 		t.Fatal(err)
 	}
 	credential := &Credential{Kind: "registry", Server: "registry.example.test", Username: "robot", Secret: "private-token"}
-	_, err := (Swarm{DockerBin: docker, Network: "dockyard-public", Timeout: time.Second}).Deploy(context.Background(), "test", "services:\n  web:\n    image: registry.example.test/app:1\n", nil, credential)
+	result, err := (Swarm{DockerBin: docker, Network: "dockyard-public", Timeout: time.Second}).Deploy(context.Background(), "test", "services:\n  web:\n    image: registry.example.test/app:1\n", nil, credential)
 	if err != nil {
 		t.Fatal(err)
+	}
+	effective, applyErr := ApplyResolvedImages("services:\n  web:\n    image: registry.example.test/app:1\n", result.ResolvedImages)
+	if applyErr != nil || !strings.Contains(effective, "registry.example.test/app@sha256:"+strings.Repeat("a", 64)) {
+		t.Fatalf("effective Compose did not capture the deployed digest: %s (%v)", effective, applyErr)
 	}
 	calls, _ := os.ReadFile(logPath)
 	if !strings.Contains(string(calls), "stack deploy") || !strings.Contains(string(calls), "--with-registry-auth") {
@@ -193,6 +198,21 @@ exit 1
 	want := base64.StdEncoding.EncodeToString([]byte("robot:private-token"))
 	if !strings.Contains(string(config), want) {
 		t.Fatal("temporary Docker configuration did not contain the expected encoded credential")
+	}
+}
+
+func TestApplyResolvedImagesRequiresImmutableRuntimeImages(t *testing.T) {
+	compose := "services:\n  web:\n    image: registry.example.test/app:latest\n    environment:\n      TOKEN: preserved\n"
+	if _, err := ApplyResolvedImages(compose, nil); err == nil || !strings.Contains(err.Error(), "not digest-pinned") {
+		t.Fatalf("missing resolved image was accepted: %v", err)
+	}
+	digest := "registry.example.test/app:latest@sha256:" + strings.Repeat("b", 64)
+	effective, err := ApplyResolvedImages(compose, map[string]string{"web": digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(effective, digest) || !strings.Contains(effective, "TOKEN: preserved") {
+		t.Fatalf("effective Compose lost deployment state: %s", effective)
 	}
 }
 

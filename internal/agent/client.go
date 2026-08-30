@@ -653,7 +653,9 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 	}
 	switch cmd.Kind {
 	case "swarm.deploy":
-		return c.swarm.Deploy(ctx, payload.StackName, payload.Compose, payload.Environment, payload.RegistryCredential)
+		result, err := c.swarm.Deploy(ctx, payload.StackName, payload.Compose, payload.Environment, payload.RegistryCredential)
+		encoded, _ := json.Marshal(result)
+		return string(encoded), err
 	case "swarm.remove":
 		return c.swarm.Remove(ctx, payload.StackName)
 	case "swarm.prune-volumes":

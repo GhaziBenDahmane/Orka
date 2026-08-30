@@ -783,14 +783,16 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		compiled, err = w.pinPersistentStorage(ctx, serviceID, stack, compiled, clusterID)
 	}
 	if err == nil {
-		if snapshotErr := w.Store.SetDeploymentEffectiveComposeForJob(ctx, j.ID, j.LeaseID, id, compiled); snapshotErr != nil {
-			err = snapshotErr
+		var result DeploymentResult
+		result, err = w.scheduler(clusterID).Deploy(ctx, stack, compiled, env, deploymentRegistryCredential)
+		if err == nil {
+			var effective string
+			effective, err = ApplyResolvedImages(compiled, result.ResolvedImages)
+			if err == nil {
+				err = w.Store.SetDeploymentEffectiveComposeForJob(ctx, j.ID, j.LeaseID, id, effective)
+			}
 		}
-	}
-	if err == nil {
-		var output string
-		output, err = w.scheduler(clusterID).Deploy(ctx, stack, compiled, env, deploymentRegistryCredential)
-		w.markDeployment(ctx, j, id, map[bool]string{true: "failed", false: "succeeded"}[err != nil], buildOutput+output, err)
+		w.markDeployment(ctx, j, id, map[bool]string{true: "failed", false: "succeeded"}[err != nil], buildOutput+result.Output, err)
 	} else {
 		w.markDeployment(ctx, j, id, "failed", buildOutput, err)
 	}

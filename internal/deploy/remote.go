@@ -24,8 +24,16 @@ type RemoteSwarm struct {
 	Timeout   time.Duration
 }
 
-func (s RemoteSwarm) Deploy(ctx context.Context, stackName, compose string, environment map[string]string, registryCredential *Credential) (string, error) {
-	return s.run(ctx, "swarm.deploy", map[string]any{"stackName": stackName, "compose": compose, "environment": environment, "registryCredential": registryCredential})
+func (s RemoteSwarm) Deploy(ctx context.Context, stackName, compose string, environment map[string]string, registryCredential *Credential) (DeploymentResult, error) {
+	output, err := s.run(ctx, "swarm.deploy", map[string]any{"stackName": stackName, "compose": compose, "environment": environment, "registryCredential": registryCredential})
+	if err != nil {
+		return DeploymentResult{}, err
+	}
+	var result DeploymentResult
+	if err = json.Unmarshal([]byte(output), &result); err != nil {
+		return DeploymentResult{}, fmt.Errorf("decode remote deployment result: %w", err)
+	}
+	return result, nil
 }
 
 func (s RemoteSwarm) Remove(ctx context.Context, stackName string) (string, error) {
