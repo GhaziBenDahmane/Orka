@@ -96,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/hooks/template-repositories/{repositoryID}", s.templateRepositoryWebhook)
 	mux.HandleFunc("POST /v1/agent/enroll", s.enrollClusterAgent)
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
+	mux.Handle("PUT /v1/auth/password", s.requireAuth(http.HandlerFunc(s.changePassword)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.me)))
 	mux.Handle("GET /v1/authorization/effective-role", s.requireAuth(http.HandlerFunc(s.getEffectiveRole)))
 	mux.Handle("GET /v1/sessions", s.requireAuth(http.HandlerFunc(s.listSessions)))
@@ -792,6 +793,48 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.Audit(r.Context(), &p, "auth.logout", "session", p.SessionID.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	p := principal(r)
+	if p.ServiceAccountID != nil {
+		writeError(w, http.StatusForbidden, "local_session_required", store.ErrLocalSessionRequired.Error())
+		return
+	}
+	var in struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if !s.allowAuthenticationAttempt(w, r, "password-change", cryptox.Digest(p.UserID.String()), 5) {
+		return
+	}
+	if in.CurrentPassword == in.NewPassword {
+		writeError(w, http.StatusBadRequest, "password_reused", "new password must differ from the current password")
+		return
+	}
+	newHash, err := auth.HashPassword(in.NewPassword)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_password", err.Error())
+		return
+	}
+	revoked, err := s.Store.ChangeLocalPassword(r.Context(), p, in.CurrentPassword, newHash, r.RemoteAddr)
+	if errors.Is(err, store.ErrInvalidCurrentPassword) {
+		writeError(w, http.StatusUnauthorized, "invalid_current_password", store.ErrInvalidCurrentPassword.Error())
+		return
+	}
+	if errors.Is(err, store.ErrLocalSessionRequired) {
+		writeError(w, http.StatusForbidden, "local_session_required", store.ErrLocalSessionRequired.Error())
+		return
+	}
+	if err != nil {
+		s.writeInternalError(w, r, http.StatusInternalServerError, "password_change_failed", "password could not be changed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"revoked": revoked})
 }
 func (s *Server) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, principal(r)) }
 

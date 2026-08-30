@@ -238,6 +238,17 @@ func TestAIAuditAdministrationCommandBodies(t *testing.T) {
 	}
 }
 
+func TestChangePasswordCommandBody(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"change-password", "-"}, strings.NewReader(`{"currentPassword":"old-password","newPassword":"new-password"}`))
+	if err != nil || method != http.MethodPut || path != "/v1/auth/password" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	passwords := input.(map[string]any)
+	if passwords["currentPassword"] != "old-password" || passwords["newPassword"] != "new-password" {
+		t.Fatalf("password input=%#v", passwords)
+	}
+}
+
 func TestOIDCProviderCommandBodies(t *testing.T) {
 	method, path, input, err := commandRequest([]string{"create-oidc-provider", "-"}, strings.NewReader(`{"name":"Workforce","issuer":"https://identity.example.com","clientId":"dockyard","clientSecret":"secret","domains":["example.com"]}`))
 	if err != nil || method != http.MethodPost || path != "/v1/sso/oidc-providers" {

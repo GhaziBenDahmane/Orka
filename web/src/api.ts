@@ -96,6 +96,7 @@ async function download(path: string): Promise<{ blob: Blob; filename: string; s
 export const api = {
   login: (email: string, password: string) => request<{ token: string }>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) => request<{ revoked: number }>("/v1/auth/password", { method: "PUT", body: JSON.stringify({ currentPassword, newPassword }) }),
   me: () => request<Principal>("/v1/me"),
   sessions: () => request<Envelope<SessionInfo>>("/v1/sessions"),
   revokeSession: (sessionId: string) => request<void>(`/v1/sessions/${sessionId}`, { method: "DELETE" }),

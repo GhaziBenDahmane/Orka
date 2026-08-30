@@ -50,13 +50,17 @@ and operation durations. Send `Authorization: Bearer <metrics-token>` and omit
 | POST | `/v1/auth/bootstrap` | Create the first organization owner |
 | POST | `/v1/auth/login` | Exchange local credentials for a session |
 | POST | `/v1/auth/logout` | Revoke the current session |
+| PUT | `/v1/auth/password` | Change the caller's local password and revoke every other session |
 | GET | `/v1/me` | Return the current principal and role |
 | GET | `/v1/authorization/effective-role?resourceType=…&resourceId=…` | Resolve inherited project/environment RBAC for a resource |
 | GET | `/v1/sessions` | List the caller's active device sessions |
 | DELETE | `/v1/sessions/{id}` | Revoke one of the caller's sessions |
 | POST | `/v1/sessions/revoke-others` | Revoke every session except the caller's |
 
-Logout fails closed if the authenticated session cannot be deleted; it never
+Password changes require the current password and a local interactive session.
+The password update, revocation of every other session across organizations,
+and audit event commit atomically; the current session remains valid. Logout
+fails closed if the authenticated session cannot be deleted; it never
 reports success while leaving the bearer token active. Service accounts do not
 have interactive sessions and receive `403` from all session-management
 routes, including logout. Logout, individual revocation, and bulk revocation

@@ -202,6 +202,9 @@ function Nav({ active, onClick, icon, children }: { active: boolean; onClick: ()
 function Account({ principal, onSessionRevoked, flash, setError }: { principal: Principal; onSessionRevoked: () => void; flash: (s: string) => void; setError: (s: string) => void }) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [busy, setBusy] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const refresh = useCallback(async () => setSessions((await api.sessions()).items), []);
   useEffect(() => { void refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
 
@@ -226,8 +229,20 @@ function Account({ principal, onSessionRevoked, flash, setError }: { principal: 
     } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
 
+  async function changePassword(event: FormEvent) {
+    event.preventDefault();
+    if (newPassword !== confirmPassword) { setError("New password confirmation does not match"); return; }
+    setBusy(true);
+    try {
+      const result = await api.changePassword(currentPassword, newPassword);
+      setCurrentPassword(""); setNewPassword(""); setConfirmPassword("");
+      await refresh();
+      flash(`Password changed; ${result.revoked} other session${result.revoked === 1 ? "" : "s"} revoked`);
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
   return <div className="account-layout">
-    <section className="card settings-card account-profile"><p className="eyebrow">Signed-in identity</p><h2>{principal.email}</h2><p className="muted">{principal.organization}</p><dl><div><dt>Organization role</dt><dd>{principal.role}</dd></div><div><dt>User ID</dt><dd><code>{principal.userId}</code></dd></div></dl></section>
+    <div className="account-security-column"><section className="card settings-card account-profile"><p className="eyebrow">Signed-in identity</p><h2>{principal.email}</h2><p className="muted">{principal.organization}</p><dl><div><dt>Organization role</dt><dd>{principal.role}</dd></div><div><dt>User ID</dt><dd><code>{principal.userId}</code></dd></div></dl></section><section className="card settings-card password-change"><p className="eyebrow">Local credential</p><h2>Change password</h2><p className="muted">Requires a local login. All other sessions are revoked after a successful change.</p><form onSubmit={changePassword}><label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={event => setNewPassword(event.target.value)} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={12} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} required /></label><button className="primary" disabled={busy}>Change password</button></form></section></div>
     <section className="card settings-card account-sessions"><div className="card-head"><div><p className="eyebrow">Security</p><h2>Device sessions</h2><p className="muted">Review where your account is signed in and revoke access you no longer recognize.</p></div><div className="actions"><button type="button" disabled={busy} onClick={() => void refresh().catch(reason => setError(message(reason)))}>Refresh</button><button type="button" className="danger-button" disabled={busy || sessions.filter(item => !item.current).length === 0} onClick={() => void revokeOthers()}>Revoke all others</button></div></div><div className="admin-items session-list">{sessions.map(item => <article key={item.id}><div><strong>{item.current ? "This device" : item.userAgent || "Unknown device"}</strong><small>{item.current && item.userAgent ? `${item.userAgent} · ` : ""}{item.authMethod.toUpperCase()} · {item.ipAddress || "unknown address"}</small><small>Last active {new Date(item.lastSeenAt).toLocaleString()} · expires {new Date(item.expiresAt).toLocaleString()}</small></div><Status value={item.current ? "current" : "active"} /><button type="button" className="danger-button" disabled={busy} onClick={() => void revoke(item)}>{item.current ? "Sign out" : "Revoke"}</button></article>)}{!sessions.length && <p className="muted">No active sessions were returned.</p>}</div></section>
   </div>;
 }

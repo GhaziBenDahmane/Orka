@@ -81,7 +81,9 @@ DOCKYARD_GOPROXY=https://proxy.example.com \
 
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Every interactive user can inspect active device
-sessions and revoke individual or all other sessions from the Account page.
+sessions, revoke individual or all other sessions, and rotate a local password
+from the Account page. Password rotation preserves the current session and
+atomically revokes every other session for that identity.
 Run `make web` after changing files under `web/`.
 
 Run `make test-templates` to start an isolated controller and instantiate the
@@ -186,6 +188,12 @@ listed, inspected, issued, and revoked with `invitations`, `invitation ID`,
 `dockyard_invitation` resources.
 Project and environment grants have list, put, and delete CLI commands and can
 be managed declaratively with `dockyard_access_grant`.
+
+Local users can rotate their credential without placing it in shell history:
+
+```sh
+printf '%s\n' '{"currentPassword":"...","newPassword":"..."}' | dockyardctl change-password -
+```
 
 CI deployment hooks use expiring, revocable bearer credentials. Manage them
 with `deploy-tokens SERVICE_ID`, `create-deploy-token SERVICE_ID JSON`, and

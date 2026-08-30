@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
@@ -95,5 +97,82 @@ func TestSessionRevocationIsEffectiveAndAudited(t *testing.T) {
 	}
 	if individual != 1 || bulk != 1 || logout != 1 {
 		t.Fatalf("session audit counts individual=%d bulk=%d logout=%d", individual, bulk, logout)
+	}
+}
+
+func TestLocalPasswordChangeIsAtomicAndRevokesOtherSessions(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	organizationID, userID, otherUserID := uuid.New(), uuid.New(), uuid.New()
+	currentID, otherID, federatedID, unrelatedID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	currentToken, otherToken := "current-"+uuid.NewString(), "other-"+uuid.NewString()
+	federatedToken, unrelatedToken := "federated-"+uuid.NewString(), "unrelated-"+uuid.NewString()
+	oldPassword, newPassword := "old-password-long-enough", "new-password-long-enough"
+	oldHash, err := auth.HashPassword(oldPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Password rotation',$2)`, []any{organizationID, "password-rotation-" + organizationID.String()}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3),($4,$5,'unused')`, []any{userID, userID.String() + "@example.test", oldHash, otherUserID, otherUserID.String() + "@example.test"}},
+		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'viewer')`, []any{organizationID, userID, otherUserID}},
+		{`INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,NULL,$3,now()+interval '1 hour','local'),($4,$2,NULL,$5,now()+interval '1 hour','local'),($6,$2,$7,$8,now()+interval '1 hour','oidc'),($9,$10,NULL,$11,now()+interval '1 hour','local')`, []any{currentID, userID, cryptox.Digest(currentToken), otherID, cryptox.Digest(otherToken), federatedID, organizationID, cryptox.Digest(federatedToken), unrelatedID, otherUserID, cryptox.Digest(unrelatedToken)}},
+	}
+	for _, statement := range statements {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, userID, otherUserID)
+	})
+
+	server := httptest.NewServer((&Server{Store: db, SessionTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
+	defer server.Close()
+	change := func(token, current, replacement string) (int, []byte) {
+		return scopedAPIRequest(t, server.URL+"/v1/auth/password", token, organizationID, http.MethodPut, map[string]string{"currentPassword": current, "newPassword": replacement})
+	}
+	if status, body := change(federatedToken, oldPassword, newPassword); status != http.StatusForbidden || !strings.Contains(string(body), `"code":"local_session_required"`) {
+		t.Fatalf("federated password change status=%d body=%s", status, body)
+	}
+	if status, body := change(currentToken, "wrong-password-long-enough", newPassword); status != http.StatusUnauthorized || !strings.Contains(string(body), `"code":"invalid_current_password"`) {
+		t.Fatalf("invalid current password status=%d body=%s", status, body)
+	}
+	if status, body := change(currentToken, oldPassword, newPassword); status != http.StatusOK || string(body) != "{\"revoked\":2}\n" {
+		t.Fatalf("password change status=%d body=%s", status, body)
+	}
+	for _, token := range []string{otherToken, federatedToken} {
+		if status, _ := scopedAPIRequest(t, server.URL+"/v1/me", token, organizationID, http.MethodGet, nil); status != http.StatusUnauthorized {
+			t.Fatalf("revoked token remained usable: status=%d", status)
+		}
+	}
+	for _, token := range []string{currentToken, unrelatedToken} {
+		if status, body := scopedAPIRequest(t, server.URL+"/v1/me", token, organizationID, http.MethodGet, nil); status != http.StatusOK {
+			t.Fatalf("preserved token status=%d body=%s", status, body)
+		}
+	}
+	if _, hash, err := db.PasswordLogin(ctx, userID.String()+"@example.test"); err != nil || !auth.VerifyPassword(hash, newPassword) || auth.VerifyPassword(hash, oldPassword) {
+		t.Fatalf("password hash was not rotated safely: err=%v", err)
+	}
+	var auditCount, revoked int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*),COALESCE(max((metadata->>'revokedSessions')::integer),0) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action='auth.password_change'`, organizationID, userID).Scan(&auditCount, &revoked); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 || revoked != 2 {
+		t.Fatalf("password audit count=%d revoked=%d", auditCount, revoked)
 	}
 }
