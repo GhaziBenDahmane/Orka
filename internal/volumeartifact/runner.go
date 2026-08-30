@@ -176,6 +176,9 @@ func decryptAndConsume(box *cryptox.Box, source, aad string, consume func(io.Rea
 }
 
 func transfer(ctx context.Context, method, rawURL, filename string, expectedSize int64) error {
+	if expectedSize <= 0 {
+		return errors.New("volume artifact transfer requires a positive expected size")
+	}
 	var body io.ReadCloser
 	if method == http.MethodPut {
 		file, err := os.Open(filename)
@@ -192,6 +195,15 @@ func transfer(ctx context.Context, method, rawURL, filename string, expectedSize
 		return err
 	}
 	if body != nil {
+		info, statErr := os.Stat(filename)
+		if statErr != nil {
+			_ = body.Close()
+			return statErr
+		}
+		if info.Size() != expectedSize {
+			_ = body.Close()
+			return errors.New("volume artifact upload size mismatch")
+		}
 		request.ContentLength = expectedSize
 		defer body.Close()
 	}
@@ -210,10 +222,19 @@ func transfer(ctx context.Context, method, rawURL, filename string, expectedSize
 	if method != http.MethodGet {
 		return nil
 	}
+	if response.ContentLength >= 0 && response.ContentLength != expectedSize {
+		return errors.New("volume artifact download content length mismatch")
+	}
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(filename)
+		}
+	}()
 	written, copyErr := io.Copy(file, io.LimitReader(response.Body, expectedSize+1))
 	closeErr := file.Close()
 	if copyErr != nil {
@@ -225,6 +246,7 @@ func transfer(ctx context.Context, method, rawURL, filename string, expectedSize
 	if written != expectedSize {
 		return errors.New("volume artifact download size mismatch")
 	}
+	keep = true
 	return nil
 }
 
