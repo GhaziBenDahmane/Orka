@@ -157,6 +157,12 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','deployment-secret','succeeded','manual',$3::timestamptz - interval '1 minute',$3::timestamptz - interval '30 seconds')`, []any{uuid.New(), serviceID, latestDeploymentAt}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','queued-secret','queued','manual',$3)`, []any{uuid.New(), serviceID, latestDeploymentAt}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Primary','primary','postgres','17','encrypted','ready')`, []any{databaseID, environmentID}},
+		{`INSERT INTO dokploy_migration_resources(target_organization_id,source_organization_id,source_kind,source_id,target_id,status,reason,metadata,updated_at) VALUES
+			($1,'legacy-org','project','project-1',$2,'imported','','{}',now()-interval '1 minute'),
+			($1,'legacy-org','database','postgres:source-db',$3,'imported','','{"private":"migration-metadata-secret"}',now()-interval '1 minute'),
+			($1,'legacy-org','volume_backup','volume-1',NULL,'skipped','manual conversion required','{}',now()-interval '1 minute'),
+			($4,'other-source-org','database','postgres:other-db',$5,'imported','','{"private":"other-migration-secret"}',now()-interval '1 minute')`, []any{organizationID, projectID, databaseID, otherOrganizationID, otherDatabaseID}},
+		{`INSERT INTO database_migrations(id,database_instance_id,source_kind,source_id,source_engine,source_version,source_host,encrypted_source_config,status,finished_at) VALUES($1,$2,'dokploy','source-db','postgres','17','legacy-db.internal','migration-source-secret','succeeded',now())`, []any{uuid.New(), databaseID}},
 		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,verify_restore) VALUES($1,$2,3600,14,true,now(),true)`, []any{policyID, databaseID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,finished_at) VALUES($1,$2,'succeeded','dump',now())`, []any{backupID, databaseID}},
 		{`INSERT INTO database_restores(id,database_backup_id,status,kind,finished_at) VALUES($1,$2,'succeeded','drill',now())`, []any{uuid.New(), backupID}},
@@ -208,6 +214,12 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if len(snapshot.TemplateRepositories) != 1 || snapshot.TemplateRepositories[0].ID != repository.ID || !snapshot.TemplateRepositories[0].RequireSignature || !snapshot.TemplateRepositories[0].CredentialConfigured || !snapshot.TemplateRepositories[0].WebhookConfigured {
 		t.Fatalf("template repository posture=%#v", snapshot.TemplateRepositories)
 	}
+	if len(snapshot.MigrationPosture) != 1 || snapshot.MigrationPosture[0].SourceOrganizationID != "legacy-org" || snapshot.MigrationPosture[0].Resources != 3 || snapshot.MigrationPosture[0].Imported != 2 || snapshot.MigrationPosture[0].Unresolved != 1 || snapshot.MigrationPosture[0].Databases != 1 || snapshot.MigrationPosture[0].SuccessfulDatabaseTransfers != 1 {
+		t.Fatalf("migration posture=%#v", snapshot.MigrationPosture)
+	}
+	if len(snapshot.MigrationBlockers) != 1 || snapshot.MigrationBlockers[0].SourceOrganizationID != "legacy-org" || snapshot.MigrationBlockers[0].SourceKind != "volume_backup" || snapshot.MigrationBlockers[0].SourceID != "volume-1" || snapshot.MigrationBlockers[0].Reason == "" {
+		t.Fatalf("migration blockers=%#v", snapshot.MigrationBlockers)
+	}
 	if len(snapshot.ServiceDeployments) != 1 || snapshot.ServiceDeployments[0].ServiceID != serviceID || snapshot.ServiceDeployments[0].DesiredRevision != 3 || snapshot.ServiceDeployments[0].LatestDeploymentStatus != "queued" || snapshot.ServiceDeployments[0].LatestDeploymentRevision != 3 || snapshot.ServiceDeployments[0].LatestDeploymentAt == nil || !snapshot.ServiceDeployments[0].LatestDeploymentAt.Equal(latestDeploymentAt) || !snapshot.ServiceDeployments[0].CurrentRevisionDeployed {
 		t.Fatalf("service deployment posture=%#v", snapshot.ServiceDeployments)
 	}
@@ -218,7 +230,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "SECRET_COMPOSE_VALUE", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "OTHER_COMPOSE_SECRET", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret"} {
+	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "SECRET_COMPOSE_VALUE", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-migration-secret", "other-source-org"} {
 		if strings.Contains(string(encodedSnapshot), secret) {
 			t.Fatalf("snapshot leaked %q: body=%s", secret, encodedSnapshot)
 		}

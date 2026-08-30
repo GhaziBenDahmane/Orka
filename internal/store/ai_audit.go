@@ -24,11 +24,31 @@ type AIAuditSnapshot struct {
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
+	MigrationPosture     []AIAuditMigrationPosture       `json:"migrationPosture"`
+	MigrationBlockers    []AIAuditMigrationBlocker       `json:"migrationBlockers"`
 	ServiceDeployments   []AIAuditServiceDeployment      `json:"serviceDeployments"`
 	QueuePosture         AIAuditQueuePosture             `json:"queuePosture"`
 	Reconciliation       []ServiceReconciliation         `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
 	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
+}
+
+type AIAuditMigrationPosture struct {
+	SourceOrganizationID        string    `json:"sourceOrganizationId"`
+	Resources                   int64     `json:"resources"`
+	Imported                    int64     `json:"imported"`
+	Unresolved                  int64     `json:"unresolved"`
+	Databases                   int64     `json:"databases"`
+	SuccessfulDatabaseTransfers int64     `json:"successfulDatabaseTransfers"`
+	LastUpdatedAt               time.Time `json:"lastUpdatedAt"`
+}
+
+type AIAuditMigrationBlocker struct {
+	SourceOrganizationID string    `json:"sourceOrganizationId"`
+	SourceKind           string    `json:"sourceKind"`
+	SourceID             string    `json:"sourceId"`
+	Reason               string    `json:"reason"`
+	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
 type AIAuditSignal struct {
@@ -133,7 +153,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -391,6 +411,64 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	for _, repository := range repositories {
 		snapshot.TemplateRepositories = append(snapshot.TemplateRepositories, AIAuditTemplateRepositoryInfo{ID: repository.ID, Name: repository.Name, GitRef: repository.GitRef, RequireSignature: repository.RequireSignature, CredentialConfigured: repository.CredentialID != nil, WebhookConfigured: repository.WebhookConfigured, SyncIntervalSeconds: repository.SyncIntervalSeconds, Enabled: repository.Enabled, LastSyncStatus: repository.LastSyncStatus, LastSyncedAt: repository.LastSyncedAt})
 	}
+
+	rows, err = s.Pool.Query(ctx, `
+		SELECT resource.source_organization_id,
+			count(*),
+			count(*) FILTER (WHERE resource.status='imported'),
+			count(*) FILTER (WHERE resource.status<>'imported'),
+			count(*) FILTER (WHERE resource.source_kind='database' AND resource.status='imported'),
+			count(*) FILTER (WHERE resource.source_kind='database' AND resource.status='imported' AND EXISTS (
+				SELECT 1 FROM database_migrations migration
+				WHERE migration.database_instance_id=resource.target_id
+					AND migration.source_kind='dokploy'
+					AND migration.source_id=split_part(resource.source_id,':',2)
+					AND migration.status='succeeded'
+					AND migration.created_at>=resource.updated_at
+			)),
+			max(resource.updated_at)
+		FROM dokploy_migration_resources resource
+		WHERE resource.target_organization_id=$1
+		GROUP BY resource.source_organization_id
+		ORDER BY resource.source_organization_id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditMigrationPosture
+		if err = rows.Scan(&item.SourceOrganizationID, &item.Resources, &item.Imported, &item.Unresolved, &item.Databases, &item.SuccessfulDatabaseTransfers, &item.LastUpdatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.MigrationPosture = append(snapshot.MigrationPosture, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `SELECT source_organization_id,source_kind,source_id,reason,updated_at
+		FROM dokploy_migration_resources
+		WHERE target_organization_id=$1 AND status<>'imported'
+		ORDER BY updated_at DESC,source_organization_id,source_kind,source_id
+		LIMIT 200`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditMigrationBlocker
+		if err = rows.Scan(&item.SourceOrganizationID, &item.SourceKind, &item.SourceID, &item.Reason, &item.UpdatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.MigrationBlockers = append(snapshot.MigrationBlockers, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	return nil
 }
 
