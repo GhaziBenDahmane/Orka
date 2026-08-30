@@ -30,6 +30,21 @@ func TestNormalizedOIDCIssuer(t *testing.T) {
 	}
 }
 
+func TestCanonicalEmailIsSharedAcrossIdentityProviders(t *testing.T) {
+	email, domain, ok := canonicalEmail("  User.Name+tag@Example.TEST  ")
+	if !ok || email != "user.name+tag@example.test" || domain != "example.test" {
+		t.Fatalf("canonical email=%q domain=%q valid=%t", email, domain, ok)
+	}
+	for _, invalid := range []string{
+		"", "missing-at-sign", "Display Name <user@example.test>", "@example.test", "user@",
+		"user@example.test@attacker.test", strings.Repeat("a", 309) + "@example.test",
+	} {
+		if email, domain, ok = canonicalEmail(invalid); ok || email != "" || domain != "" {
+			t.Errorf("accepted non-canonical email %q as %q domain %q", invalid, email, domain)
+		}
+	}
+}
+
 func TestOIDCClientRefusesDiscoveryAndTokenRedirects(t *testing.T) {
 	targetRequests := 0
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

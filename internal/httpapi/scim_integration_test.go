@@ -61,6 +61,10 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	server := httptest.NewServer((&Server{Store: db, PublicURL: "http://example.test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	defer server.Close()
 
+	for _, invalid := range []string{"missing-at-sign", "Display Name <member@example.test>", "member@example.test@attacker.test"} {
+		doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": invalid, "active": true}, http.StatusBadRequest)
+	}
+
 	createdUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "member-" + orgID.String() + "@example.test", "active": true}, http.StatusCreated)
 	memberID := createdUser["id"].(string)
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, memberID) })

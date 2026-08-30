@@ -14,7 +14,6 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -476,14 +475,12 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	if email == "" {
 		email = assertion.Subject.NameID.Value
 	}
-	parsedEmail, err := mail.ParseAddress(strings.TrimSpace(email))
-	if err != nil || parsedEmail.Address != strings.TrimSpace(email) {
+	email, domain, validEmail := canonicalEmail(email)
+	if !validEmail {
 		writeError(w, 401, "invalid_claims", "SAML assertion lacks a valid email address")
 		return
 	}
-	email = strings.ToLower(parsedEmail.Address)
-	domainParts := strings.SplitN(email, "@", 2)
-	if len(domainParts) != 2 || !contains(provider.Domains, domainParts[1]) {
+	if !contains(provider.Domains, domain) {
 		writeError(w, 403, "domain_not_allowed", "email domain is not allowed")
 		return
 	}

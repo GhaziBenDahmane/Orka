@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"regexp"
 	"strings"
@@ -501,16 +500,7 @@ func loginStateCookieName(kind, state string) string {
 }
 
 func oidcEmail(raw string) (string, string, bool) {
-	raw = strings.TrimSpace(raw)
-	parsed, err := mail.ParseAddress(raw)
-	if err != nil || parsed.Address != raw {
-		return "", "", false
-	}
-	parts := strings.SplitN(strings.ToLower(parsed.Address), "@", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return strings.ToLower(parsed.Address), parts[1], true
+	return canonicalEmail(raw)
 }
 
 func contains(items []string, want string) bool {

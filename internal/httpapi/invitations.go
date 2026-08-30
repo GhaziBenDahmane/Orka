@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -23,12 +22,12 @@ func (s *Server) createOrganizationInvitation(w http.ResponseWriter, r *http.Req
 	if !decode(w, r, &input) {
 		return
 	}
-	address, err := mail.ParseAddress(strings.TrimSpace(input.Email))
-	if err != nil || !strings.EqualFold(address.Address, strings.TrimSpace(input.Email)) || len(address.Address) > 320 {
+	email, _, validEmail := canonicalEmail(input.Email)
+	if !validEmail {
 		writeError(w, http.StatusBadRequest, "invalid_email", "a plain email address is required")
 		return
 	}
-	input.Email = strings.ToLower(address.Address)
+	input.Email = email
 	input.Role = strings.ToLower(strings.TrimSpace(input.Role))
 	if !store.ValidOrganizationRole(input.Role) {
 		writeError(w, http.StatusBadRequest, "invalid_role", "role must be owner, admin, developer, or viewer")

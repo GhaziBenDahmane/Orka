@@ -179,8 +179,8 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 	if !decode(w, r, &in) {
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(in.UserName))
-	if !strings.Contains(email, "@") {
+	email, _, validEmail := canonicalEmail(in.UserName)
+	if !validEmail {
 		scimError(w, 400, "userName must be an email address")
 		return
 	}

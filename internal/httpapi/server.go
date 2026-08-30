@@ -633,10 +633,12 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	if !s.allowAuthenticationAttempt(w, r, "bootstrap", cryptox.Digest("instance"), 5) {
 		return
 	}
-	if _, err := mail.ParseAddress(in.Email); err != nil {
+	email, _, validEmail := canonicalEmail(in.Email)
+	if !validEmail {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
+	in.Email = email
 	slug := slugify(in.Organization)
 	if slug == "" {
 		writeError(w, 400, "invalid_organization", "organization name required")
@@ -2710,6 +2712,23 @@ func slugify(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(value, "-")
 	return strings.Trim(value, "-")
+}
+
+func canonicalEmail(raw string) (string, string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > 320 || strings.Count(raw, "@") != 1 {
+		return "", "", false
+	}
+	parsed, err := mail.ParseAddress(raw)
+	if err != nil || parsed.Address != raw {
+		return "", "", false
+	}
+	email := strings.ToLower(parsed.Address)
+	parts := strings.SplitN(email, "@", 2)
+	if parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return email, parts[1], true
 }
 
 var _ = fmt.Sprintf
