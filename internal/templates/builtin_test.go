@@ -2,6 +2,7 @@ package templates
 
 import (
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -46,5 +47,18 @@ func TestNineRouterTemplatePinsReleasedImages(t *testing.T) {
 	}
 	if !strings.Contains(string(compose), "ghcr.io/headroomlabs-ai/headroom:${HEADROOM_VERSION}") {
 		t.Fatalf("9Router template uses the wrong Headroom package: %s", compose)
+	}
+}
+
+func TestExampleTemplateRepositoryIsImportable(t *testing.T) {
+	report, err := ValidateDokployCatalog(
+		filepath.Join("..", "..", "examples", "template-repository"),
+		deploy.Compiler{PublicNetwork: "dockyard-public"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Imported != 1 || len(report.Failed) != 0 {
+		t.Fatalf("example repository report=%#v", report)
 	}
 }
