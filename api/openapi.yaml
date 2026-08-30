@@ -2027,6 +2027,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/environments:
+    get:
+      operationId: get_v1_environments
+      tags: [environments]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/environments/{environmentID}:
     delete:
       operationId: delete_v1_environments_environmentID

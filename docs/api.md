@@ -381,6 +381,7 @@ until an administrator retries them.
 |---|---|---|
 | GET/POST | `/v1/projects` | List or create projects |
 | GET/POST | `/v1/projects/{id}/environments` | List or create environments |
+| GET | `/v1/environments` | List active environments across the current organization for destination selection |
 | GET/PUT/DELETE | `/v1/projects/{id}/grants…` | Manage per-user project roles |
 | GET/PUT/DELETE | `/v1/environments/{id}/grants…` | Manage per-user environment roles |
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |

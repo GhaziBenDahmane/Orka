@@ -1058,6 +1058,26 @@ func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID 
 	return items, rows.Err()
 }
 
+func (s *Store) ListOrganizationEnvironments(ctx context.Context, organizationID uuid.UUID) ([]Environment, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.minimum_nano_cpus,e.minimum_memory_bytes,e.name,e.slug,e.created_at
+		FROM environments e JOIN projects p ON p.id=e.project_id
+		WHERE p.organization_id=$1 AND p.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL
+		ORDER BY lower(p.name),lower(e.name),e.id`, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Environment{}
+	for rows.Next() {
+		var item Environment
+		if err = rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) GetEnvironment(ctx context.Context, organizationID, environmentID uuid.UUID) (Environment, error) {
 	var item Environment
 	err := s.Pool.QueryRow(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.minimum_nano_cpus,e.minimum_memory_bytes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, environmentID, organizationID).Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt)

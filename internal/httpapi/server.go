@@ -192,6 +192,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /scim/v2/Groups/{groupID}", s.scimGroup)
 	mux.HandleFunc("DELETE /scim/v2/Groups/{groupID}", s.scimGroup)
 	mux.Handle("GET /v1/projects", s.requireAuth(http.HandlerFunc(s.listProjects)))
+	mux.Handle("GET /v1/environments", s.requireAuth(http.HandlerFunc(s.listOrganizationEnvironments)))
 	mux.Handle("GET /v1/tags", s.requireAuth(http.HandlerFunc(s.listTags)))
 	mux.Handle("POST /v1/tags", s.requireRole("admin", http.HandlerFunc(s.createTag)))
 	mux.Handle("GET /v1/tags/{tagID}", s.requireAuth(http.HandlerFunc(s.getTag)))
@@ -1132,6 +1133,15 @@ func (s *Server) listEnvironments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
+}
+
+func (s *Server) listOrganizationEnvironments(w http.ResponseWriter, r *http.Request) {
+	items, err := s.Store.ListOrganizationEnvironments(r.Context(), principal(r).OrganizationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) getEnvironment(w http.ResponseWriter, r *http.Request) {
