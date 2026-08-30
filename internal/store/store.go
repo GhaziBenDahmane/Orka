@@ -48,6 +48,8 @@ var ErrProtectedVolumeRemoved = errors.New("a protected named volume cannot be r
 var ErrVolumeNotDeclared = errors.New("named volume is not mounted by the service")
 var ErrInvalidSchedule = errors.New("invalid service schedule")
 var ErrInvalidRouteBasicAuth = errors.New("invalid route basic-auth user")
+var ErrCrossClusterMove = errors.New("service can only move between environments assigned to the same cluster")
+var ErrManagedDatabaseMove = errors.New("managed database services must be moved through a database migration")
 
 type Store struct {
 	Pool                 *pgxpool.Pool

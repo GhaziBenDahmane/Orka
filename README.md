@@ -150,6 +150,7 @@ dockyardctl create-environment PROJECT_ID '{"name":"Production","clusterId":null
 dockyardctl deploy SERVICE_ID
 dockyardctl stop SERVICE_ID
 dockyardctl start SERVICE_ID
+dockyardctl move-service SERVICE_ID TARGET_ENVIRONMENT_ID
 ```
 
 Core project, environment, service, database, template, deployment, log, and

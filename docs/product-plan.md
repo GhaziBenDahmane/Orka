@@ -172,6 +172,10 @@ durable provider build-status callbacks implemented.
 - Durable service stop/start intent preserves named volumes, is serialized with
   deployments and deletion, works through local or remote Swarm schedulers,
   and prevents reconciliation from resurrecting intentionally stopped stacks.
+- Compose services can move between projects and environments without changing
+  their Swarm stack identity when both environments target the same cluster.
+  The move requires access to both scopes and is serialized against lifecycle
+  and data operations; cross-cluster and managed-database moves fail closed.
 - Durable Compose-service schedules support five-field cron expressions and
   IANA timezones, manual runs, cancellation, bounded output, immutable history,
   local/remote agent execution, stopped-service fencing, AI posture, and

@@ -25,6 +25,8 @@ func TestWriteStoreErrorClassifiesRemoteClusterAvailability(t *testing.T) {
 		{name: "protected volume removed", err: store.ErrProtectedVolumeRemoved, status: http.StatusConflict, code: "protected_volume_removed"},
 		{name: "volume not declared", err: store.ErrVolumeNotDeclared, status: http.StatusConflict, code: "volume_not_declared"},
 		{name: "resource deleting", err: store.ErrDeleting, status: http.StatusConflict, code: "resource_deleting"},
+		{name: "cross-cluster move", err: store.ErrCrossClusterMove, status: http.StatusConflict, code: "cross_cluster_move"},
+		{name: "managed database move", err: store.ErrManagedDatabaseMove, status: http.StatusConflict, code: "managed_database_move"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

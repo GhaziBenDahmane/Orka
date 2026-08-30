@@ -267,6 +267,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/services/{serviceID}/template-upgrades", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upgradeTemplateService)))
 	mux.Handle("DELETE /v1/services/{serviceID}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteService)))
 	mux.Handle("PATCH /v1/services/{serviceID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateService)))
+	mux.Handle("PUT /v1/services/{serviceID}/environment", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.moveService)))
 	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertSource)))
 	mux.Handle("PUT /v1/services/{serviceID}/artifact-source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertArtifactSource)))
 	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.addRoute)))
@@ -3143,6 +3144,14 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrInvalidRouteBasicAuth) {
 		writeError(w, http.StatusBadRequest, "invalid_route_basic_auth", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrCrossClusterMove) {
+		writeError(w, http.StatusConflict, "cross_cluster_move", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrManagedDatabaseMove) {
+		writeError(w, http.StatusConflict, "managed_database_move", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrNotCancellable) {

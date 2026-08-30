@@ -147,6 +147,7 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"disable-template-repository-webhook", "repository-id"}, http.MethodDelete, "/v1/template-repositories/repository-id/webhook-secret"},
 		{[]string{"delete-template-repository", "repository-id"}, http.MethodDelete, "/v1/template-repositories/repository-id"},
 		{[]string{"preview-template", "template-id", `{}`}, http.MethodPost, "/v1/templates/template-id/preview"},
+		{[]string{"move-service", "service-id", "environment-id"}, http.MethodPut, "/v1/services/service-id/environment"},
 		{[]string{"template-versions", "service-id"}, http.MethodGet, "/v1/services/service-id/template-versions"},
 		{[]string{"clusters"}, http.MethodGet, "/v1/clusters"},
 		{[]string{"create-cluster", `{}`}, http.MethodPost, "/v1/clusters"},

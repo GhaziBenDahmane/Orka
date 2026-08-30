@@ -648,6 +648,11 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodPost, "/v1/services/" + args[1] + "/start", map[string]any{}, nil
+	case "move-service":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPut, "/v1/services/" + args[1] + "/environment", map[string]string{"environmentId": args[2]}, nil
 	case "schedules":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -931,5 +936,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, tags, networks, create-network, set-service-networks, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, tags, networks, create-network, set-service-networks, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
 }
