@@ -83,6 +83,10 @@ func TestDatabaseMigrationHistoryAndCancellationAPI(t *testing.T) {
 	if status != http.StatusAccepted {
 		t.Fatalf("restore status=%d body=%s", status, body)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/database-backups/"+backupID.String()+"/restore", token, organizationID, http.MethodPost, map[string]string{"confirm": "database"})
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"restore_in_progress"`)) {
+		t.Fatalf("duplicate restore status=%d body=%s", status, body)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/databases/"+databaseID.String()+"/restores", token, organizationID, http.MethodGet, nil)
 	var restores struct {
 		Items []store.DatabaseRestore `json:"items"`

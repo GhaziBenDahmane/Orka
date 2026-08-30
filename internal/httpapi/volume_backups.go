@@ -191,6 +191,10 @@ func (s *Server) restoreVolumeBackup(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	item, err := s.Store.QueueVolumeRestore(r.Context(), p.OrganizationID, id, p.UserID, in.Confirm)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "restore_in_progress", "wait for the active volume restore to finish before starting another")
+			return
+		}
 		if strings.Contains(err.Error(), "confirmation") || strings.Contains(err.Error(), "not restorable") {
 			writeError(w, http.StatusConflict, "restore_rejected", err.Error())
 			return

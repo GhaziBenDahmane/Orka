@@ -140,6 +140,10 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	if err = json.Unmarshal(body, &restore); status != http.StatusAccepted || err != nil {
 		t.Fatalf("restore status=%d body=%s err=%v", status, body, err)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String()+"/restore", token, organizationID, http.MethodPost, map[string]string{"confirm": "app"})
+	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"restore_in_progress"`)) {
+		t.Fatalf("duplicate restore status=%d body=%s", status, body)
+	}
 	status, body = scopedAPIRequest(t, policyURL, token, organizationID, http.MethodDelete, nil)
 	if status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"volume_backup_policy_busy"`)) {
 		t.Fatalf("delete policy during queued restore status=%d body=%s", status, body)

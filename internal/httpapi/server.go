@@ -1513,6 +1513,10 @@ func (s *Server) restoreDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	restore, err := s.Store.QueueDatabaseRestore(r.Context(), p.OrganizationID, id, p.UserID, in.Confirm)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "restore_in_progress", "wait for the active database restore to finish before starting another")
+			return
+		}
 		if strings.Contains(err.Error(), "confirmation") || strings.Contains(err.Error(), "not restorable") {
 			writeError(w, 409, "restore_rejected", err.Error())
 			return

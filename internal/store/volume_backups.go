@@ -241,6 +241,15 @@ func (s *Store) QueueVolumeRestore(ctx context.Context, organizationID, backupID
 	if confirmation != slug {
 		return VolumeRestore{}, errors.New("restore confirmation must match service slug")
 	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=$1 AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM jobs WHERE resource_key=$2 AND kind='restore.volume' AND status IN ('pending','running'))`, serviceID, "service:"+serviceID.String()).Scan(&active); err != nil {
+		return VolumeRestore{}, err
+	}
+	if active {
+		return VolumeRestore{}, ErrBusy
+	}
 	item := VolumeRestore{ID: uuid.New(), VolumeBackupID: backupID, Status: "queued"}
 	if err = tx.QueryRow(ctx, `INSERT INTO volume_restores(id,volume_backup_id,status,actor_user_id) VALUES($1,$2,'queued',$3) RETURNING created_at`, item.ID, backupID, nullableUUID(actorID)).Scan(&item.CreatedAt); err != nil {
 		return VolumeRestore{}, err

@@ -363,7 +363,7 @@ until an administrator retries them.
 | GET | `/v1/services/{id}/volumes` | List mounted declared named volumes and their resolved Swarm names |
 | GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume; deletion returns `409 volume_backup_policy_busy` while a backup or restore is active and preserves completed history |
 | GET/POST | `/v1/services/{id}/volume-backups…` | List or queue named-volume backups; duplicate active requests return `409 backup_in_progress` |
-| GET/POST | `/v1/services/{id}/volume-restores…` | List restore history or queue a confirmed restore |
+| GET/POST | `/v1/services/{id}/volume-restores…` | List restore history or queue a confirmed restore; concurrent requests return `409 restore_in_progress` |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
 | POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |
 | DELETE | `/v1/services/{id}/deploy-tokens/{tokenId}` | Revoke a CI deploy-hook credential |
@@ -473,7 +473,7 @@ authenticated context and is never returned by the API.
 | POST | `/v1/databases/{id}/driver-rebind` | Confirm and audit adoption of the currently installed driver identity |
 | GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
-| POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation |
+| POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation; concurrent requests return `409 restore_in_progress` |
 | POST | `/v1/database-backups/{id}/cancel` | Cancel a queued or running backup |
 | POST | `/v1/database-restores/{id}/cancel` | Cancel a queued or running restore |
 | GET | `/v1/databases/{id}/migrations` | List the latest 100 Dokploy data transfers |

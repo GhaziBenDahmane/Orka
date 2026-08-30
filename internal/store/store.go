@@ -1737,6 +1737,15 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	if confirmation != slug {
 		return DatabaseRestore{}, errors.New("restore confirmation must match database slug")
 	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id WHERE backup.database_instance_id=$1 AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM jobs WHERE resource_key=$2 AND kind='restore.database' AND status IN ('pending','running'))`, backupDatabaseID, "database:"+backupDatabaseID.String()).Scan(&active); err != nil {
+		return DatabaseRestore{}, err
+	}
+	if active {
+		return DatabaseRestore{}, ErrBusy
+	}
 	restore := DatabaseRestore{ID: uuid.New(), DatabaseBackupID: backupID, Status: "queued"}
 	restore.Kind = "manual"
 	if err = tx.QueryRow(ctx, `INSERT INTO database_restores(id,database_backup_id,status,kind,actor_user_id) VALUES($1,$2,'queued','manual',$3) RETURNING created_at`, restore.ID, backupID, nullableUUID(actorID)).Scan(&restore.CreatedAt); err != nil {
