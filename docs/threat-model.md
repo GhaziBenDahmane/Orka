@@ -68,8 +68,9 @@ required to use immutable digests where the platform owns the image choice.
 Git credentials are host-bound, SSH requires pinned known-host entries, and
 submodules remain same-origin. Remote template catalogs can require a pinned
 Ed25519 signer and are replaced transactionally only after archive and
-signature validation. Releases produce SBOM/provenance attestations and are
-keylessly signed.
+signature validation. Private catalog downloads refuse redirects rather than
+risk forwarding a GitHub token to a substituted host. Releases produce
+SBOM/provenance attestations and are keylessly signed.
 
 ### Replay, stale work, and split brain
 
@@ -107,7 +108,9 @@ Compose content and secret values are excluded from the model snapshot. All
 included strings are marked untrusted, model output is size/count/schema
 bounded, and deterministic findings are persisted before a model call. The
 auditor role cannot deploy, read credentials, invoke Docker, or remediate a
-finding. 9Router and Hermes remain outside the control-plane trust boundary.
+finding. Auditor control-plane and model requests refuse redirects so neither
+bearer token can be forwarded to a substituted endpoint. 9Router and Hermes
+remain outside the control-plane trust boundary.
 
 ## Explicitly trusted components
 

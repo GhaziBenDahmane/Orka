@@ -45,6 +45,29 @@ func TestFetchCatalogArchiveUsesBearerToken(t *testing.T) {
 	}
 }
 
+func TestFetchCatalogArchiveRefusesCredentialBearingRedirect(t *testing.T) {
+	redirectedRequests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirectedRequests++
+	}))
+	t.Cleanup(target.Close)
+	archive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer private-token" {
+			t.Errorf("authorization=%q", r.Header.Get("Authorization"))
+		}
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(archive.Close)
+
+	_, _, err := fetchCatalogArchive(context.Background(), archive.Client(), archive.URL, "private-token")
+	if err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+		t.Fatalf("redirect error=%v", err)
+	}
+	if redirectedRequests != 0 {
+		t.Fatalf("redirect target received %d credential-bearing request(s)", redirectedRequests)
+	}
+}
+
 func TestVerifyRepositoryCatalogEnforcesPinnedSigner(t *testing.T) {
 	root := t.TempDir()
 	catalogRoot := filepath.Join(root, "catalog")

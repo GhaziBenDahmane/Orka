@@ -72,6 +72,65 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 	}
 }
 
+func TestPerformAIAuditRefusesCredentialBearingRedirects(t *testing.T) {
+	t.Run("control plane", func(t *testing.T) {
+		redirectedRequests := 0
+		target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			redirectedRequests++
+		}))
+		defer target.Close()
+		platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+		}))
+		defer platform.Close()
+
+		err := performAIAudit(context.Background(), platform.Client(), auditorConfig{
+			DockyardURL: platform.URL, DockyardToken: "control-plane-secret",
+		})
+		if err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+			t.Fatalf("redirect error=%v", err)
+		}
+		if redirectedRequests != 0 {
+			t.Fatalf("redirect target received %d credential-bearing request(s)", redirectedRequests)
+		}
+	})
+
+	t.Run("model gateway", func(t *testing.T) {
+		redirectedRequests := 0
+		target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			redirectedRequests++
+		}))
+		defer target.Close()
+		model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+		}))
+		defer model.Close()
+		platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/v1/ai/audit-snapshot":
+				_ = json.NewEncoder(w).Encode(map[string]any{"identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}})
+			case "/v1/ai/audit-runs":
+				w.WriteHeader(http.StatusCreated)
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
+			default:
+				w.WriteHeader(http.StatusNoContent)
+			}
+		}))
+		defer platform.Close()
+
+		err := performAIAudit(context.Background(), &http.Client{Timeout: time.Second}, auditorConfig{
+			DockyardURL: platform.URL, DockyardToken: "control-plane-secret",
+			ModelURL: model.URL, ModelToken: "model-secret", Model: "test", Focus: "security",
+		})
+		if err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+			t.Fatalf("redirect error=%v", err)
+		}
+		if redirectedRequests != 0 {
+			t.Fatalf("redirect target received %d credential-bearing request(s)", redirectedRequests)
+		}
+	})
+}
+
 func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	now := time.Now().UTC()
 	organizationID, databaseID, clusterID, repositoryID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()

@@ -57,7 +57,7 @@ func runAIAuditor() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	client := &http.Client{Timeout: 2 * time.Minute}
+	client := auditorHTTPClient(nil)
 	for {
 		runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		err = performAIAudit(runCtx, client, cfg)
@@ -92,7 +92,19 @@ func secretValue(name string) string {
 	return strings.TrimSpace(string(data))
 }
 
+func auditorHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: 2 * time.Minute}
+	}
+	secured := *client
+	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("AI auditor redirects are disabled")
+	}
+	return &secured
+}
+
 func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig) (auditErr error) {
+	client = auditorHTTPClient(client)
 	var snapshot json.RawMessage
 	if err := auditorRequest(ctx, client, cfg, http.MethodGet, "/v1/ai/audit-snapshot", nil, &snapshot); err != nil {
 		return err

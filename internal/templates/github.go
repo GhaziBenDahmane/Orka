@@ -51,9 +51,7 @@ func FetchGitHubCatalog(ctx context.Context, client *http.Client, repositoryURL,
 }
 
 func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, token string) (string, func(), error) {
-	if client == nil {
-		client = &http.Client{}
-	}
+	client = catalogHTTPClient(client)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL, nil)
 	if err != nil {
 		return "", nil, err
@@ -140,6 +138,17 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 		}
 	}
 	return directory, cleanup, nil
+}
+
+func catalogHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: 45 * time.Second}
+	}
+	secured := *client
+	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("template repository redirects are disabled")
+	}
+	return &secured
 }
 
 // VerifyRepositoryCatalog applies the repository's trust policy before any
