@@ -72,6 +72,36 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 	}
 }
 
+func TestNormalizedAuditorEndpoint(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		raw       string
+		allowPath bool
+		want      string
+	}{
+		{name: "control", raw: " https://dockyard.example.test/ ", want: "https://dockyard.example.test"},
+		{name: "model", raw: "http://9router:20128/v1/", allowPath: true, want: "http://9router:20128/v1"},
+	} {
+		got, err := normalizedAuditorEndpoint(test.name, test.raw, test.allowPath)
+		if err != nil || got != test.want {
+			t.Errorf("normalizedAuditorEndpoint(%q)=%q, %v; want %q", test.raw, got, err, test.want)
+		}
+	}
+	for _, test := range []struct {
+		raw       string
+		allowPath bool
+	}{
+		{raw: ""}, {raw: "ftp://dockyard.example.test"},
+		{raw: "https://token@dockyard.example.test"}, {raw: "https://dockyard.example.test?target=evil"},
+		{raw: "https://dockyard.example.test#fragment"}, {raw: "https://dockyard.example.test/prefix"},
+		{raw: "//dockyard.example.test"},
+	} {
+		if _, err := normalizedAuditorEndpoint("endpoint", test.raw, test.allowPath); err == nil {
+			t.Errorf("accepted unsafe endpoint %q", test.raw)
+		}
+	}
+}
+
 func TestPerformAIAuditRefusesCredentialBearingRedirects(t *testing.T) {
 	t.Run("control plane", func(t *testing.T) {
 		redirectedRequests := 0

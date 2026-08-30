@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -51,7 +52,15 @@ func runAIAuditor() error {
 	if err != nil || timeout < time.Minute {
 		return errors.New("DOCKYARD_AI_AUDIT_TIMEOUT must be at least one minute")
 	}
-	cfg := auditorConfig{DockyardURL: strings.TrimRight(os.Getenv("DOCKYARD_CONTROL_PLANE_URL"), "/"), DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: strings.TrimRight(os.Getenv("DOCKYARD_AI_BASE_URL"), "/"), ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, Timeout: timeout}
+	controlPlaneURL, err := normalizedAuditorEndpoint("DOCKYARD_CONTROL_PLANE_URL", os.Getenv("DOCKYARD_CONTROL_PLANE_URL"), false)
+	if err != nil {
+		return err
+	}
+	modelURL, err := normalizedAuditorEndpoint("DOCKYARD_AI_BASE_URL", os.Getenv("DOCKYARD_AI_BASE_URL"), true)
+	if err != nil {
+		return err
+	}
+	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: modelURL, ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, Timeout: timeout}
 	if cfg.DockyardURL == "" || cfg.DockyardToken == "" || cfg.ModelURL == "" || cfg.Model == "" {
 		return errors.New("control-plane URL, auditor token, AI base URL, and model are required")
 	}
@@ -75,6 +84,20 @@ func runAIAuditor() error {
 		case <-timer.C:
 		}
 	}
+}
+
+func normalizedAuditorEndpoint(name, raw string, allowPath bool) (string, error) {
+	raw = strings.TrimSpace(raw)
+	endpoint, err := url.Parse(raw)
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" {
+		return "", fmt.Errorf("%s must be an HTTP(S) URL without credentials, query, or fragment", name)
+	}
+	if !allowPath && endpoint.EscapedPath() != "" && endpoint.EscapedPath() != "/" {
+		return "", fmt.Errorf("%s must be an HTTP(S) origin without a path", name)
+	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
+	endpoint.RawPath = strings.TrimRight(endpoint.RawPath, "/")
+	return endpoint.String(), nil
 }
 
 func secretValue(name string) string {

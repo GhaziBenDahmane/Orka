@@ -96,6 +96,10 @@ and limits each complete audit lifecycle to ten minutes with
 `DOCKYARD_AI_AUDIT_TIMEOUT`. A replacement process with the same service
 account and agent name marks its predecessor failed before starting, while
 different named specialists remain independent.
+Both base URLs reject embedded credentials, query strings, and fragments. The
+control-plane value must be an origin; the model value may include an API path
+such as `/v1`. Plain HTTP is intended only for these encrypted in-stack
+networks—use HTTPS for external endpoints.
 The 9Router service is deliberately not published outside the overlay network;
 perform initial provider setup through a temporary authenticated tunnel or a
 separately protected administration route.
