@@ -103,7 +103,8 @@ links for every item below.
   normal workload APIs to the auditor identity. It distinguishes desired
   template tags from digest-pinned effective runtime snapshots, reports a
   mutable deployed image, and keeps runtime image identities outside the model
-  boundary. It also proves audited
+  boundary. It also proves deterministic detection of a managed database left
+  in an error state and audited
   administrator finding triage, atomic rollback when its audit write fails,
   denial of triage to the auditor identity, and prevention of cross-tenant
   finding mutation, and verifies that a new critical finding queues a durable

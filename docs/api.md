@@ -254,6 +254,8 @@ both an image and a build source. Mutable desired template tags alone are not
 reported as deployed-image vulnerabilities.
 Active and draining remote clusters whose reported agent runtime image is
 missing or not digest-pinned produce a high-severity supply-chain finding.
+Managed databases left in an error state produce a high-severity availability
+finding independently of their backup posture.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
 Repository URLs and refs, output image names, credential identifiers, artifact

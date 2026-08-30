@@ -64,6 +64,7 @@ jq -e '
   .promptInjectionBoundaryPresent and .deterministicFindingsPersisted and
   .deployedImageProvenanceAudited and
   .agentCAMismatchDetected and .agentImageProvenanceAudited and
+  .databaseAvailabilityAudited and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and
   .findingTriageAudited and .findingTriageAtomic and .criticalFindingNotified and .auditorTriageDenied and

@@ -27,6 +27,7 @@ jobs:
             .deterministicFindingsPersisted and .modelFindingsPersisted and
             .deployedImageProvenanceAudited and
             .agentCAMismatchDetected and .agentImageProvenanceAudited and
+            .databaseAvailabilityAudited and
             .durableRunCompleted and .lifecycleAudited and .auditorLeastPrivilege and
             .findingTriageAudited and .findingTriageAtomic and
             .criticalFindingNotified and .auditorTriageDenied and

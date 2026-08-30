@@ -153,7 +153,8 @@ keys make it a privileged service.
   fingerprint without consuming another slot.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing, disabled, or overdue backups and restore drills,
-  active maintenance scopes, near-capacity quotas, missing owners, disabled
+  managed databases left in an error state, active maintenance scopes,
+  near-capacity quotas, missing owners, disabled
   mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,
   missing or mutable active-agent images, expiring agent certificates,
   expiring service-account and deployment-hook credentials, stale SCIM credentials,

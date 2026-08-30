@@ -39,7 +39,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	organizationID, accountID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	ownerID, ownerSessionID := uuid.New(), uuid.New()
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	projectID, environmentID, serviceID, mutableRuntimeServiceID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedDatabaseID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
 	secretMarker := "DO_NOT_EXPOSE_AI_CONFORMANCE_SECRET_" + uuid.NewString()
@@ -76,6 +76,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,'services: {app: {image: example.invalid/private:v1}}',$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), serviceID, "services: {app: {image: example.invalid/private@sha256:" + strings.Repeat("a", 64) + "}}"}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,revision) VALUES($1,$2,'Mutable runtime service','mutable-runtime-service',$3,$4,1)`, []any{mutableRuntimeServiceID, environmentID, "ai-conformance-" + mutableRuntimeServiceID.String(), "services: {app: {image: example.invalid/desired:released}}"}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,$3,$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), mutableRuntimeServiceID, "services: {app: {image: example.invalid/" + runtimeImageMarker + ":latest}}"}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Failed database','failed-database','postgres','17','encrypted','error')`, []any{failedDatabaseID, environmentID}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,certificate_ca_fingerprint,certificate_not_after,last_seen_at) VALUES($1,$2,'Legacy CA cluster','legacy-ca','active',$3,now()+interval '1 day',now())`, []any{clusterID, organizationID, previousAgentCAFingerprint}},
 	}
 	for _, statement := range statements {
@@ -188,7 +189,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -290,6 +291,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"deployedImageProvenanceAudited": true,
 		"agentCAMismatchDetected":        true,
 		"agentImageProvenanceAudited":    true,
+		"databaseAvailabilityAudited":    true,
 		"modelFindingsPersisted":         true,
 		"durableRunCompleted":            true,
 		"lifecycleAudited":               true,

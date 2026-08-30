@@ -155,6 +155,11 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	for _, finding := range operationalSignalFindings(snapshot.Signals, snapshot.Organization) {
 		add(finding)
 	}
+	for _, database := range snapshot.Databases {
+		if database.Status == "error" {
+			add(modelFinding{Severity: "high", Category: "availability", Title: "Managed database deployment is unhealthy", Description: "The managed database's latest deployment failed and its lifecycle remains in an error state.", ResourceType: "database", ResourceID: database.ID.String(), Evidence: map[string]any{"engine": database.Engine, "version": database.Version, "status": database.Status}, Remediation: "Inspect the database deployment and Swarm task state, correct the failure, then redeploy and verify application connectivity."})
+		}
+	}
 	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
 	unusableDatabaseDrivers := make(map[uuid.UUID]bool)
 	for _, engine := range snapshot.DatabaseEngines {

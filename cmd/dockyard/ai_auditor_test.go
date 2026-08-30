@@ -921,6 +921,25 @@ func TestDeterministicAuditDetectsDatabaseDriverIdentityDrift(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsUnhealthyManagedDatabase(t *testing.T) {
+	errorID := uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		Databases: []store.AIAuditDatabaseInfo{
+			{ID: errorID, Engine: "postgres", Version: "17", Status: "error"},
+			{ID: uuid.New(), Engine: "redis", Version: "8", Status: "pending"},
+			{ID: uuid.New(), Engine: "mysql", Version: "9", Status: "running"},
+			{ID: uuid.New(), Engine: "mariadb", Version: "11", Status: "ready"},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 1 || findings[0].Title != "Managed database deployment is unhealthy" || findings[0].ResourceID != errorID.String() || findings[0].Severity != "high" {
+		t.Fatalf("database lifecycle findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditAcceptsClusterOnActiveCertificateAuthority(t *testing.T) {
 	now := time.Now().UTC()
 	snapshot := store.AIAuditSnapshot{
