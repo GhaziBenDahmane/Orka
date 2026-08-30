@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,13 +28,14 @@ import (
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/templates"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
+		fmt.Fprintln(os.Stderr, dockyardUsage)
 		os.Exit(2)
 	}
 	var err error
@@ -61,14 +64,125 @@ func main() {
 		err = migrateDokployData(os.Args[2:])
 	case "verify-dokploy-import":
 		err = verifyDokployImport(os.Args[2:])
+	case "rotate-master-key":
+		err = rotateMasterKey(os.Args[2:])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import>")
+		fmt.Fprintln(os.Stderr, dockyardUsage)
 		os.Exit(2)
 	}
 	if err != nil {
 		slog.Error("dockyard stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key>"
+
+func rotateMasterKey(arguments []string) error {
+	flags := flag.NewFlagSet("rotate-master-key", flag.ContinueOnError)
+	databaseURL := flags.String("database-url", "", "PostgreSQL connection URL (or DOCKYARD_DATABASE_URL/DOCKYARD_DATABASE_URL_FILE)")
+	oldKeyFile := flags.String("old-key-file", "", "mode-0600 file containing the current base64 master key")
+	newKeyFile := flags.String("new-key-file", "", "mode-0600 file containing the new base64 master key")
+	dryRun := flags.Bool("dry-run", true, "authenticate all records and report without changing them")
+	confirm := flags.String("confirm", "", "new-key fingerprint required when --dry-run=false")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *oldKeyFile == "" || *newKeyFile == "" {
+		return errors.New("usage: dockyard rotate-master-key --old-key-file PATH --new-key-file PATH [--database-url URL] [--dry-run=false --confirm NEW_KEY_FINGERPRINT]")
+	}
+	resolvedDatabaseURL, err := resolveDatabaseURL(*databaseURL)
+	if err != nil {
+		return err
+	}
+	oldKey, err := readRestrictedMasterKey(*oldKeyFile)
+	if err != nil {
+		return fmt.Errorf("read old master key: %w", err)
+	}
+	defer clear(oldKey)
+	newKey, err := readRestrictedMasterKey(*newKeyFile)
+	if err != nil {
+		return fmt.Errorf("read new master key: %w", err)
+	}
+	defer clear(newKey)
+	newFingerprint := store.MasterKeyFingerprint(newKey)
+	if !*dryRun && *confirm != newFingerprint {
+		return fmt.Errorf("--confirm must exactly match the new key fingerprint %q; run the default dry-run first", newFingerprint)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, resolvedDatabaseURL)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer pool.Close()
+	if err = pool.Ping(ctx); err != nil {
+		return fmt.Errorf("ping database: %w", err)
+	}
+	report, err := store.RotateMasterKey(ctx, pool, oldKey, newKey, *dryRun)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(report)
+}
+
+func resolveDatabaseURL(flagValue string) (string, error) {
+	if strings.TrimSpace(flagValue) != "" {
+		return strings.TrimSpace(flagValue), nil
+	}
+	value, path := os.Getenv("DOCKYARD_DATABASE_URL"), os.Getenv("DOCKYARD_DATABASE_URL_FILE")
+	if value != "" && path != "" {
+		return "", errors.New("DOCKYARD_DATABASE_URL and DOCKYARD_DATABASE_URL_FILE cannot both be configured")
+	}
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read DOCKYARD_DATABASE_URL_FILE: %w", err)
+		}
+		defer clear(data)
+		value = string(data)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("--database-url or DOCKYARD_DATABASE_URL/DOCKYARD_DATABASE_URL_FILE is required")
+	}
+	return value, nil
+}
+
+func readRestrictedMasterKey(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("key file must be a regular file with no group or other permissions")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(info, openedInfo) {
+		return nil, errors.New("key file changed while it was being opened")
+	}
+	encoded, err := io.ReadAll(io.LimitReader(file, 1025))
+	if err != nil {
+		return nil, err
+	}
+	defer clear(encoded)
+	if len(encoded) > 1024 {
+		return nil, errors.New("key file exceeds 1 KiB")
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(encoded)))
+	if err != nil || len(key) != 32 {
+		clear(key)
+		return nil, errors.New("key file must contain one base64-encoded 32-byte key")
+	}
+	return key, nil
 }
 
 func runAgent() error {

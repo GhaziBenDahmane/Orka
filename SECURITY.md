@@ -44,8 +44,12 @@ only for a dedicated, isolated cluster whose workloads are fully trusted.
   environment values, source credentials, provider secrets, backup
   destinations, and wrapped backup keys unrecoverable. Database backups alone
   are insufficient.
-- Rotating the master key currently requires an operator-controlled re-encrypt
-  migration and maintenance window; do not simply replace it in place.
+- Rotate the master key only with the offline `dockyard rotate-master-key`
+  workflow. It authenticates every stored ciphertext before changing any row,
+  re-encrypts everything atomically, and refuses active controllers, running
+  workers, or encrypted schema fields unknown to the binary. Follow
+  [docs/master-key-rotation.md](docs/master-key-rotation.md); never replace the
+  Docker secret without first completing the database rotation.
 - Use a dedicated PostgreSQL role and database, certificate-and-hostname
   verified network transport when PostgreSQL is remote, and network policy
   limiting access to controllers. The HA profile enforces

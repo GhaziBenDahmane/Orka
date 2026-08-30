@@ -126,4 +126,6 @@ volumes:
 secrets:
   dockyard_db_password: {external: true}
   dockyard_database_url: {external: true}
-  dockyard_master_key: {external: true}
+  dockyard_master_key:
+    external: true
+    name: ${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}

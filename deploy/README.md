@@ -295,3 +295,8 @@ recorded in the manifest, verify login and representative secret decryption,
 and perform a managed-database restore drill before upgrading. Deployments
 using external PostgreSQL should use the provider's consistent snapshot/PITR
 mechanism and preserve the same recovery-set metadata and secret escrow.
+
+Rotate the control-plane master key with the transactional offline procedure
+in [docs/master-key-rotation.md](../docs/master-key-rotation.md). The Swarm
+manifest accepts `DOCKYARD_MASTER_KEY_SECRET` so a versioned replacement Docker
+secret can be deployed without mutating secret data in place.
