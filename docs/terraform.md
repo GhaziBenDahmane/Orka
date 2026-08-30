@@ -17,6 +17,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_saml_provider`
 - `dockyard_scim_token`
 - `dockyard_service_account`
+- `dockyard_deploy_token`
 - `dockyard_invitation`
 - `dockyard_access_grant`
 - `dockyard_resource_policy`
@@ -110,6 +111,14 @@ so apply creates a fresh credential and disables the previous account. Use
 `create_before_destroy` to avoid a credential gap and deliver the new token to
 the consuming secret store before removing the old value. Service accounts
 cannot be imported because their bearer tokens are never returned by the API.
+
+`dockyard_deploy_token` creates a time-limited CI deployment hook for exactly
+one Compose service. Its complete hook URL and raw bearer token are returned
+once and retained only in sensitive state. Refresh removes revoked or expired
+hooks from state, while `renew_before_days` plans replacement before expiry.
+Use `create_before_destroy` so the replacement can be installed in the CI
+secret store before Terraform revokes the old hook. Deploy tokens cannot be
+imported because their secret values are never returned by the API.
 
 `dockyard_invitation` issues a one-time organization enrollment link for a
 normalized lowercase email address. Pending invitations are replaced inside

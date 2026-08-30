@@ -204,6 +204,23 @@ resource "dockyard_service" "whoami" {
   YAML
 }
 
+resource "dockyard_deploy_token" "whoami_ci" {
+  service_id        = dockyard_service.whoami.id
+  name              = "Whoami CI"
+  expires_in_days   = 90
+  renew_before_days = 7
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+output "whoami_deploy_hook_url" {
+  description = "Install this one-time URL in the CI secret store. Invoking it queues a deployment for only this service."
+  sensitive   = true
+  value       = dockyard_deploy_token.whoami_ci.url
+}
+
 resource "dockyard_backup_destination" "primary" {
   name       = "Primary backups"
   endpoint   = "https://s3.example.com"
