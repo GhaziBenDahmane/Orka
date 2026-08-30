@@ -75,10 +75,13 @@ type VariableDescriptor struct {
 }
 
 const (
-	maxVariableOverrides  = 128
-	maxVariableNameBytes  = 128
-	maxVariableValueBytes = 8 << 10
-	maxVariableTotalBytes = 64 << 10
+	maxTemplateVariables      = 128
+	maxVariableNameBytes      = 128
+	maxVariableValueBytes     = 8 << 10
+	maxVariableTotalBytes     = 64 << 10
+	maxResolvedValueBytes     = 512 << 10
+	maxResolvedVariablesBytes = 1 << 20
+	maxExpressionsPerValue    = 256
 )
 
 var sensitiveVariableName = regexp.MustCompile(`(?i)(password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|encryption[_-]?key|signing[_-]?key|credential|auth|salt)`)
@@ -404,12 +407,20 @@ func Instantiate(template DokployTemplate, compose, baseDomain string) (Instance
 // variables declared by the template. Overrides are deliberately not expanded
 // as helper expressions, which prevents callers from injecting generators.
 func InstantiateWithOverrides(template DokployTemplate, compose, baseDomain string, overrides map[string]string) (Instance, error) {
+	if err := validateTemplateVariables(template); err != nil {
+		return Instance{}, err
+	}
 	if err := validateOverrides(template, overrides); err != nil {
 		return Instance{}, err
 	}
+	if len(baseDomain) > 253 {
+		return Instance{}, errors.New("template base domain exceeds 253 bytes")
+	}
 	resolved := make(map[string]string, len(template.Variables))
+	resolvedBytes := 0
 	for key, value := range overrides {
 		resolved[key] = value
+		resolvedBytes += len(key) + len(value)
 	}
 	unresolved := make(map[string]string, len(template.Variables)-len(resolved))
 	for key, value := range template.Variables {
@@ -426,6 +437,13 @@ func InstantiateWithOverrides(template DokployTemplate, compose, baseDomain stri
 			next, err := resolve(value, resolved, baseDomain)
 			if err != nil {
 				return Instance{}, fmt.Errorf("resolve variable %q: %w", key, err)
+			}
+			if len(next) > maxResolvedValueBytes {
+				return Instance{}, fmt.Errorf("resolved template variable %q exceeds %d bytes", key, maxResolvedValueBytes)
+			}
+			resolvedBytes += len(key) + len(next)
+			if resolvedBytes > maxResolvedVariablesBytes {
+				return Instance{}, fmt.Errorf("resolved template variables exceed %d bytes", maxResolvedVariablesBytes)
 			}
 			resolved[key] = next
 			delete(unresolved, key)
@@ -501,9 +519,29 @@ func InstantiateWithOverrides(template DokployTemplate, compose, baseDomain stri
 	return instance, nil
 }
 
+func validateTemplateVariables(template DokployTemplate) error {
+	if len(template.Variables) > maxTemplateVariables {
+		return fmt.Errorf("template declares too many variables (maximum %d)", maxTemplateVariables)
+	}
+	total := 0
+	for key, value := range template.Variables {
+		if key == "" || len(key) > maxVariableNameBytes || strings.ContainsRune(key, '\x00') {
+			return errors.New("template declares an invalid variable name")
+		}
+		if len(value) > maxVariableValueBytes {
+			return fmt.Errorf("template variable %q exceeds %d bytes", key, maxVariableValueBytes)
+		}
+		total += len(key) + len(value)
+		if total > maxVariableTotalBytes {
+			return fmt.Errorf("template variable definitions exceed %d bytes", maxVariableTotalBytes)
+		}
+	}
+	return nil
+}
+
 func validateOverrides(template DokployTemplate, overrides map[string]string) error {
-	if len(overrides) > maxVariableOverrides {
-		return fmt.Errorf("too many variable overrides (maximum %d)", maxVariableOverrides)
+	if len(overrides) > maxTemplateVariables {
+		return fmt.Errorf("too many variable overrides (maximum %d)", maxTemplateVariables)
 	}
 	total := 0
 	for key, value := range overrides {
@@ -564,6 +602,12 @@ func addEnvLine(target map[string]string, line string, variables map[string]stri
 var expression = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 func resolve(value string, variables map[string]string, baseDomain string) (string, error) {
+	if len(value) > maxResolvedValueBytes {
+		return "", fmt.Errorf("template value exceeds %d bytes before expansion", maxResolvedValueBytes)
+	}
+	if len(expression.FindAllStringIndex(value, maxExpressionsPerValue+1)) > maxExpressionsPerValue {
+		return "", fmt.Errorf("template value contains more than %d expressions", maxExpressionsPerValue)
+	}
 	var resolveErr error
 	result := expression.ReplaceAllStringFunc(value, func(match string) string {
 		key := expression.FindStringSubmatch(match)[1]
@@ -732,7 +776,11 @@ func resolve(value string, variables map[string]string, baseDomain string) (stri
 	})
 	result = strings.ReplaceAll(result, "__DOCKYARD_ESCAPED_DOLLAR__{", "${")
 	result = strings.ReplaceAll(result, "__DOCKYARD_ESCAPED_DOLLAR__", "$")
-	return strings.ReplaceAll(result, "__DOCKYARD_BACKSLASH_BRACE__", `\{`), resolveErr
+	result = strings.ReplaceAll(result, "__DOCKYARD_BACKSLASH_BRACE__", `\{`)
+	if len(result) > maxResolvedValueBytes {
+		return "", fmt.Errorf("resolved template value exceeds %d bytes", maxResolvedValueBytes)
+	}
+	return result, resolveErr
 }
 
 func timestampValue(helper, key string) (string, error) {

@@ -62,13 +62,52 @@ func TestInstantiateWithOverridesRejectsUnknownAndOversizedValues(t *testing.T) 
 		t.Fatalf("oversized override error = %v", err)
 	}
 	manyVariables, manyOverrides := map[string]string{}, map[string]string{}
-	for index := 0; index <= maxVariableOverrides; index++ {
+	for index := 0; index <= maxTemplateVariables; index++ {
 		name := fmt.Sprintf("variable_%d", index)
 		manyVariables[name], manyOverrides[name] = "default", "override"
 	}
 	if _, err := InstantiateWithOverrides(DokployTemplate{Variables: manyVariables}, "services: {}\n", "", manyOverrides); err == nil || !strings.Contains(err.Error(), "too many") {
 		t.Fatalf("override count error = %v", err)
 	}
+}
+
+func TestInstantiateRejectsOversizedTemplateDefinitionsAndExpansion(t *testing.T) {
+	t.Run("too many variables", func(t *testing.T) {
+		variables := map[string]string{}
+		for index := 0; index <= maxTemplateVariables; index++ {
+			variables[fmt.Sprintf("value_%d", index)] = "safe"
+		}
+		if _, err := Instantiate(DokployTemplate{Variables: variables}, "services: {}\n", ""); err == nil || !strings.Contains(err.Error(), "too many variables") {
+			t.Fatalf("oversized definition error=%v", err)
+		}
+	})
+	t.Run("definition bytes", func(t *testing.T) {
+		variables := map[string]string{}
+		for index := 0; index < 9; index++ {
+			variables[fmt.Sprintf("value_%d", index)] = strings.Repeat("x", maxVariableValueBytes)
+		}
+		if _, err := Instantiate(DokployTemplate{Variables: variables}, "services: {}\n", ""); err == nil || !strings.Contains(err.Error(), "definitions exceed") {
+			t.Fatalf("oversized definitions error=%v", err)
+		}
+	})
+	t.Run("expanded value", func(t *testing.T) {
+		template := DokployTemplate{Variables: map[string]string{
+			"seed":     strings.Repeat("x", maxVariableValueBytes),
+			"expanded": strings.Repeat("${seed}", 65),
+		}}
+		if _, err := Instantiate(template, "services: {}\n", ""); err == nil || !strings.Contains(err.Error(), "resolved template value exceeds") {
+			t.Fatalf("expansion error=%v", err)
+		}
+	})
+	t.Run("expression count", func(t *testing.T) {
+		template := DokployTemplate{Variables: map[string]string{
+			"seed":     "x",
+			"expanded": strings.Repeat("${seed}", maxExpressionsPerValue+1),
+		}}
+		if _, err := Instantiate(template, "services: {}\n", ""); err == nil || !strings.Contains(err.Error(), "more than 256 expressions") {
+			t.Fatalf("expression-count error=%v", err)
+		}
+	})
 }
 
 func TestInstantiateRejectsUnsafeGeneratorParameters(t *testing.T) {

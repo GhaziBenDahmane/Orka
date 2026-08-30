@@ -28,7 +28,10 @@ respectively, and `base64` uses padded standard encoding. A parameterless
 Signed JWT helpers must reference a declared, non-empty secret variable and may
 reference one declared JSON payload variable. Malformed, missing, negative, or
 unbounded parameters reject the complete catalog snapshot. `timestampms` and
-`timestamps` accept an optional RFC3339 or `YYYY-MM-DD` date. Resolved managed-file contents are stored only inside the service's
+`timestamps` accept an optional RFC3339 or `YYYY-MM-DD` date. Catalog admission
+also bounds variable counts, source bytes, resolved bytes, and expression count
+so chained substitutions cannot amplify a small repository into unbounded
+memory use. Resolved managed-file contents are stored only inside the service's
 encrypted deployment environment; persisted Compose and deployment snapshots
 contain opaque references. The Swarm manager materializes mode-0600 temporary
 files immediately before deployment, removes their internal values from
