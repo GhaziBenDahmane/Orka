@@ -60,12 +60,21 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	staleCluster := uuid.New()
 	missingCluster := uuid.New()
 	upgradeID := uuid.New()
+	auditorA := uuid.New()
+	auditorB := uuid.New()
 	statements := []struct {
 		query string
 		args  []any
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics A',$2)`, []any{organizationA, "metrics-a-" + organizationA.String()}},
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics B',$2)`, []any{organizationB, "metrics-b-" + organizationB.String()}},
+		{`INSERT INTO service_accounts(id,organization_id,name,role,created_at) VALUES($1,$2,'metrics-a-auditor','auditor',now()-interval '3 days')`, []any{auditorA, organizationA}},
+		{`INSERT INTO service_accounts(id,organization_id,name,role,created_at) VALUES($1,$2,'metrics-b-auditor','auditor',now()-interval '3 days')`, []any{auditorB, organizationB}},
+		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorA, []byte("metrics-token-a-" + auditorA.String())}},
+		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorB, []byte("metrics-token-b-" + auditorB.String())}},
+		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','completed',now()-interval '65 minutes',now()-interval '1 hour')`, []any{uuid.New(), organizationA, auditorA}},
+		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','failed',now()-interval '10 minutes',now()-interval '5 minutes')`, []any{uuid.New(), organizationA, auditorA}},
+		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at) VALUES($1,$2,$3,'metrics-agent','running',now()-interval '20 minutes')`, []any{uuid.New(), organizationA, auditorA}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,certificate_serial,certificate_not_after,pending_certificate_serial,pending_certificate_not_after,pending_certificate_created_at) VALUES($1,$2,'Shared A','shared','active',now(),'current',now()+interval '1 hour','pending',now()+interval '7 days',now()-interval '10 minutes')`, []any{currentCluster, organizationA}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Shared B','shared','active',now()-interval '10 minutes')`, []any{staleCluster, organizationB}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,agent_update_state) VALUES($1,$2,'Never connected','never-connected','draining',NULL,'rollback_completed')`, []any{missingCluster, organizationB}},
@@ -81,7 +90,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -98,9 +107,37 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_agent_upgrade_active_age_seconds{organization="` + organizationA.String() + `",cluster="shared",status="verifying"}`,
 		`dockyard_cluster_certificate_expiry_seconds{organization="` + organizationA.String() + `",cluster="shared"}`,
 		`dockyard_cluster_certificate_rotation_pending_age_seconds{organization="` + organizationA.String() + `",cluster="shared"}`,
+		`dockyard_ai_audit_runs{status="running"}`,
+		`dockyard_ai_audit_runs{status="completed"}`,
+		`dockyard_ai_audit_runs{status="failed"}`,
+		`dockyard_ai_audit_last_completed_age_seconds{organization="` + organizationA.String() + `"}`,
+		`dockyard_ai_audit_last_failure_age_seconds{organization="` + organizationA.String() + `"}`,
+		`dockyard_ai_audit_running_age_seconds{organization="` + organizationA.String() + `"}`,
+		`dockyard_ai_audit_completion_overdue{organization="` + organizationA.String() + `"} 0`,
+		`dockyard_ai_audit_completion_overdue{organization="` + organizationB.String() + `"} 1`,
 	} {
 		if !strings.Contains(metrics, expected) {
 			t.Errorf("missing %q in metrics output", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverAIAuditHealth(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardAIAuditFailed",
+		"expr: dockyard_ai_audit_last_failure_age_seconds < 900",
+		"alert: DockyardAIAuditOverdue",
+		"expr: dockyard_ai_audit_completion_overdue == 1",
+		"alert: DockyardAIAuditStuck",
+		"expr: dockyard_ai_audit_running_age_seconds > 600",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
 		}
 	}
 }
