@@ -732,11 +732,21 @@ func writeCredentialHelper() (string, error) {
 }
 
 func writeDockerConfig(credential Credential) (string, error) {
+	server, err := ociref.NormalizeRegistryAuthority(credential.Server)
+	if err != nil {
+		return "", errors.New("registry credential server is invalid")
+	}
+	if credential.Kind != "" && credential.Kind != "registry" {
+		return "", errors.New("registry credential kind is invalid")
+	}
+	if credential.Username == "" || strings.ContainsAny(credential.Username, ":\x00\r\n") || credential.Secret == "" || strings.ContainsRune(credential.Secret, '\x00') {
+		return "", errors.New("registry credential material is invalid")
+	}
 	directory, err := os.MkdirTemp("", "dockyard-docker-config-*")
 	if err != nil {
 		return "", err
 	}
-	config := map[string]any{"auths": map[string]any{credential.Server: map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(credential.Username + ":" + credential.Secret))}}}
+	config := map[string]any{"auths": map[string]any{server: map[string]string{"auth": base64.StdEncoding.EncodeToString([]byte(credential.Username + ":" + credential.Secret))}}}
 	data, err := json.Marshal(config)
 	if err == nil {
 		err = os.WriteFile(filepath.Join(directory, "config.json"), data, 0600)

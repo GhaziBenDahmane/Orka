@@ -49,3 +49,20 @@ func TestRepositoryAndDigestClassification(t *testing.T) {
 		t.Fatal("digest pin classification is incorrect")
 	}
 }
+
+func TestNormalizeRegistryAuthority(t *testing.T) {
+	for raw, want := range map[string]string{
+		"registry.example.test":      "registry.example.test",
+		"REGISTRY.EXAMPLE.TEST:5000": "registry.example.test:5000",
+		"[2001:db8::1]:5000":         "[2001:db8::1]:5000",
+	} {
+		if got, err := NormalizeRegistryAuthority(raw); err != nil || got != want {
+			t.Errorf("NormalizeRegistryAuthority(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"", " registry.example.test", "https://registry.example.test", "user@registry.example.test", "registry.example.test/path", "registry.example.test?query", "registry.example.test:", "bad_label.example.test"} {
+		if got, err := NormalizeRegistryAuthority(raw); err == nil {
+			t.Errorf("NormalizeRegistryAuthority(%q) = %q; want error", raw, got)
+		}
+	}
+}

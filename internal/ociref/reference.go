@@ -59,6 +59,20 @@ func IsDigestPinned(raw string) bool {
 	return err == nil && reference.Digest != ""
 }
 
+// NormalizeRegistryAuthority validates a bare OCI registry host with an
+// optional port. URL syntax, paths, userinfo, query strings, and fragments are
+// rejected so credentials cannot be stored under an ambiguous Docker auth key.
+func NormalizeRegistryAuthority(raw string) (string, error) {
+	if raw == "" || raw != strings.TrimSpace(raw) || len(raw) > maxRepositoryBytes || strings.ContainsAny(raw, "\x00\r\n") {
+		return "", errors.New("invalid OCI registry authority")
+	}
+	endpoint, err := url.Parse("https://" + raw)
+	if err != nil || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" || !netpolicy.ValidURLHost(endpoint) {
+		return "", errors.New("invalid OCI registry authority")
+	}
+	return strings.ToLower(endpoint.Host), nil
+}
+
 func validateRepository(repository string) (string, error) {
 	if repository == "" || len(repository) > maxRepositoryBytes {
 		return "", errors.New("invalid OCI image repository")
@@ -67,16 +81,16 @@ func validateRepository(repository string) (string, error) {
 	if path == "" {
 		return "", errors.New("invalid OCI image repository")
 	}
-	endpoint, err := url.Parse("https://" + registry)
-	if err != nil || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" || !netpolicy.ValidURLHost(endpoint) {
-		return "", errors.New("invalid OCI registry authority")
+	registry, err := NormalizeRegistryAuthority(registry)
+	if err != nil {
+		return "", err
 	}
 	for _, component := range strings.Split(path, "/") {
 		if len(component) > 255 || !pathComponentPattern.MatchString(component) {
 			return "", errors.New("invalid OCI repository path")
 		}
 	}
-	return strings.ToLower(registry), nil
+	return registry, nil
 }
 
 func splitRegistry(repository string) (string, string) {

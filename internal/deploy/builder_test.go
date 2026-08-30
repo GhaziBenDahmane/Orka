@@ -165,6 +165,21 @@ func TestDockerConfigPermissionsAndAuth(t *testing.T) {
 	}
 }
 
+func TestDockerConfigRejectsUnscopedRegistryCredentials(t *testing.T) {
+	for _, credential := range []Credential{
+		{Kind: "git", Server: "registry.example.test", Username: "robot", Secret: "secret"},
+		{Kind: "registry", Server: "https://registry.example.test", Username: "robot", Secret: "secret"},
+		{Kind: "registry", Server: "registry.example.test/path", Username: "robot", Secret: "secret"},
+		{Kind: "registry", Server: "registry.example.test", Username: "robot:admin", Secret: "secret"},
+		{Kind: "registry", Server: "registry.example.test", Username: "robot", Secret: "secret\x00suffix"},
+	} {
+		if directory, err := writeDockerConfig(credential); err == nil {
+			_ = os.RemoveAll(directory)
+			t.Fatalf("unsafe registry credential was accepted: %#v", credential)
+		}
+	}
+}
+
 func TestBuildRejectsCredentialHostMismatchBeforeClone(t *testing.T) {
 	source := store.ApplicationSource{RepositoryURL: "https://github.com/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
 	_, _, err := (Builder{}).Build(context.Background(), source, uuid.New(), BuildCredentials{Git: Credential{Server: "gitlab.com", Username: "robot", Secret: "secret"}})
