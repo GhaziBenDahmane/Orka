@@ -41,6 +41,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	scimTokenCreatedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
+	targetSCIMAdminGroupID, targetSCIMViewerGroupID, otherSCIMGroupID := uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -51,6 +52,16 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local'),($4,$5,$6,now()+interval '1 hour','local'),($7,$8,$9,now()+interval '1 hour','local'),($10,$11,$12,now()+interval '1 hour','local')`, []any{uuid.New(), userID, []byte("target-owner-local"), uuid.New(), developerUserID, []byte("target-developer-local"), uuid.New(), disabledUserID, []byte("disabled-local"), uuid.New(), otherUserID, []byte("other-local")}},
 		{`INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc'),($5,$6,$7,$8,now()+interval '1 hour','saml')`, []any{uuid.New(), developerUserID, organizationID, []byte("target-oidc"), uuid.New(), otherUserID, otherOrganizationID, []byte("other-saml")}},
 		{`INSERT INTO scim_tokens(id,organization_id,name,token_hash,created_at) VALUES($1,$2,'Target SCIM',$3,$4),($5,$6,'Other SCIM',$7,now()-interval '1 year')`, []any{uuid.New(), organizationID, []byte("target-scim"), scimTokenCreatedAt, uuid.New(), otherOrganizationID, []byte("other-scim")}},
+		{`INSERT INTO organization_invitations(id,organization_id,email,role,token_hash,created_by,expires_at) VALUES
+			($1,$2,'target-admin-invite@example.test','admin',$3,$4,now()+interval '12 hours'),
+			($5,$2,'target-viewer-invite@example.test','viewer',$6,$4,now()+interval '7 days'),
+			($7,$2,'target-expired-invite@example.test','developer',$8,$4,now()-interval '1 hour'),
+			($9,$10,'other-admin-invite@example.test','owner',$11,$12,now()+interval '12 hours')`, []any{uuid.New(), organizationID, []byte("target-admin-invitation-token-hash"), userID, uuid.New(), []byte("target-viewer-invitation-token-hash"), uuid.New(), []byte("target-expired-invitation-token-hash"), uuid.New(), otherOrganizationID, []byte("other-admin-invitation-token-hash"), otherUserID}},
+		{`INSERT INTO scim_groups(id,organization_id,external_id,display_name,role) VALUES
+			($1,$2,'target-admin-group-external-secret','Target administrators secret name','admin'),
+			($3,$2,'target-viewer-group-external-secret','Target viewers secret name','viewer'),
+			($4,$5,'other-group-external-secret','Other tenant group secret name','admin')`, []any{targetSCIMAdminGroupID, organizationID, targetSCIMViewerGroupID, otherSCIMGroupID, otherOrganizationID}},
+		{`INSERT INTO scim_group_members(group_id,user_id) VALUES($1,$2),($3,$4),($5,$6)`, []any{targetSCIMAdminGroupID, developerUserID, targetSCIMViewerGroupID, disabledUserID, otherSCIMGroupID, otherUserID}},
 	} {
 		if _, err = pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)
@@ -288,6 +299,8 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}{
 		{`INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,'Audit project','audit-project','target-project-description-secret')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug,placement_selector) VALUES($1,$2,'Production','production','{"credential":"target-placement-secret"}')`, []any{environmentID, projectID}},
+		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{projectID, developerUserID}},
+		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'viewer')`, []any{environmentID, developerUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','audit-api.example.test','/',8080,false,'letsencrypt')`, []any{routeID, serviceID}},
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'target-reconciliation-detail-secret',now()-interval '30 seconds')`, []any{serviceID}},
@@ -323,6 +336,8 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 				($10,$7,'backup.failed','database','other-4','{}','failed')`, []any{uuid.New(), notificationEndpointID, uuid.New(), uuid.New(), uuid.New(), uuid.New(), otherNotificationEndpointID, uuid.New(), uuid.New(), uuid.New()}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Other audit project','other-audit-project')`, []any{otherProjectID, otherOrganizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{otherEnvironmentID, otherProjectID}},
+		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{otherProjectID, otherUserID}},
+		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'admin')`, []any{otherEnvironmentID, otherUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Other API','other-api',$3,$4,'other-encrypted-env',7)`, []any{otherServiceID, otherEnvironmentID, "other-audit-api-" + otherServiceID.String(), "services: {api: {image: registry.example.test/other-private-api@sha256:" + strings.Repeat("a", 64) + ", environment: [OTHER_COMPOSE_SECRET]}}"}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','other-audit-api.example.test','/',8080,true,'letsencrypt')`, []any{otherRouteID, otherServiceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,7,'services: {api: {image: other:v7}}','other-deployment-secret','failed','manual',now())`, []any{uuid.New(), otherServiceID}},
@@ -412,6 +427,9 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if snapshot.IdentityPosture.ActiveLocalSessions != 1 || snapshot.IdentityPosture.ActiveOIDCSessions != 1 || snapshot.IdentityPosture.ActiveSAMLSessions != 0 || snapshot.IdentityPosture.ActiveServiceAccounts != 2 || snapshot.IdentityPosture.ActivePrivilegedServiceAccounts != 1 || snapshot.IdentityPosture.ExpiringServiceAccounts != 1 || snapshot.IdentityPosture.ActiveAuditorServiceAccounts != 1 || snapshot.IdentityPosture.ActiveSCIMTokens != 1 || snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt == nil || !snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.Equal(scimTokenCreatedAt) {
 		t.Fatalf("identity posture=%#v", snapshot.IdentityPosture)
 	}
+	if snapshot.IdentityPosture.PendingInvitations != 2 || snapshot.IdentityPosture.PendingPrivilegedInvitations != 1 || snapshot.IdentityPosture.InvitationsExpiringSoon != 1 || snapshot.IdentityPosture.ExpiredInvitations != 1 || snapshot.IdentityPosture.ProjectScopedGrants != 1 || snapshot.IdentityPosture.EnvironmentScopedGrants != 1 || snapshot.IdentityPosture.AdminScopedGrants != 1 || snapshot.IdentityPosture.RedundantScopedGrants != 1 || snapshot.IdentityPosture.SCIMGroups != 2 || snapshot.IdentityPosture.WriteCapableSCIMGroups != 1 || snapshot.IdentityPosture.SCIMGroupMemberships != 2 {
+		t.Fatalf("identity governance posture=%#v", snapshot.IdentityPosture)
+	}
 	if len(snapshot.SAMLPosture) != 1 || snapshot.SAMLPosture[0].ID != samlProviderID || snapshot.SAMLPosture[0].CertificateConfigurationOK || snapshot.SAMLPosture[0].SPCertificateNotAfter != nil || snapshot.SAMLPosture[0].IDPCertificateNotAfter != nil {
 		t.Fatalf("SAML posture=%#v", snapshot.SAMLPosture)
 	}
@@ -446,6 +464,11 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	encodedSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, secret := range []string{"target-admin-invitation-token-hash", "target-viewer-invitation-token-hash", "target-expired-invitation-token-hash", "other-admin-invitation-token-hash", "target-admin-group-external-secret", "Target administrators secret name", "target-viewer-group-external-secret", "Target viewers secret name", "other-group-external-secret", "Other tenant group secret name"} {
+		if strings.Contains(string(encodedSnapshot), secret) {
+			t.Fatalf("snapshot leaked identity governance secret %q: body=%s", secret, encodedSnapshot)
+		}
 	}
 	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "target-project-description-secret", "target-placement-secret", "target-cluster-label-secret", "target-cluster-capacity-secret", "SECRET_COMPOSE_VALUE", "registry.example.test/private-api", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "target-agent-error-secret", "target-reconciliation-detail-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "registry.example.test/other-private-api", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-migration-secret", "other-source-org", "target-source-secret.example", "target-build-config-secret", "target-registry-secret.example", "other-source-secret.example", "other-build-config-secret", "other-registry-secret.example", "target-notification-payload-secret", "other-notification-payload-secret", "target-archive-secret-name", "target-secret-bucket", "target-archive-credentials-secret", "target-secret-prefix", "target-chain-secret", "target-secret-object", "target-archive-error-secret", "target-audit-metadata-secret", "disabled-archive-secret-name", "disabled-secret-bucket", "disabled-archive-credentials-secret", "disabled-secret-prefix", "disabled-chain-secret", "other-archive-secret-name", "other-secret-bucket", "other-archive-credentials-secret", "other-secret-prefix", "other-chain-secret", "other-audit-metadata-secret", "target-idp-metadata-secret", "target-sp-certificate-secret", "target-saml-key-secret", "other-idp-metadata-secret", "other-sp-certificate-secret", "other-saml-key-secret"} {
 		if strings.Contains(string(encodedSnapshot), secret) {

@@ -323,6 +323,17 @@ type AIAuditIdentityPosture struct {
 	ActiveAuditorServiceAccounts    int64      `json:"activeAuditorServiceAccounts"`
 	ActiveSCIMTokens                int64      `json:"activeScimTokens"`
 	OldestActiveSCIMTokenCreatedAt  *time.Time `json:"oldestActiveScimTokenCreatedAt,omitempty"`
+	PendingInvitations              int64      `json:"pendingInvitations"`
+	PendingPrivilegedInvitations    int64      `json:"pendingPrivilegedInvitations"`
+	InvitationsExpiringSoon         int64      `json:"invitationsExpiring24h"`
+	ExpiredInvitations              int64      `json:"expiredInvitations"`
+	ProjectScopedGrants             int64      `json:"projectScopedGrants"`
+	EnvironmentScopedGrants         int64      `json:"environmentScopedGrants"`
+	AdminScopedGrants               int64      `json:"adminScopedGrants"`
+	RedundantScopedGrants           int64      `json:"redundantScopedGrants"`
+	SCIMGroups                      int64      `json:"scimGroups"`
+	WriteCapableSCIMGroups          int64      `json:"writeCapableScimGroups"`
+	SCIMGroupMemberships            int64      `json:"scimGroupMemberships"`
 	PendingSAMLCertificateRotations int64      `json:"pendingSamlCertificateRotations"`
 	OldestPendingSAMLRotationAt     *time.Time `json:"oldestPendingSamlRotationAt,omitempty"`
 }
@@ -787,6 +798,25 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		(SELECT count(*) FROM service_accounts account WHERE account.organization_id=$1 AND account.enabled AND account.role='auditor' AND EXISTS(SELECT 1 FROM service_account_tokens token WHERE token.service_account_id=account.id AND token.revoked_at IS NULL AND token.expires_at>now())),
 		(SELECT count(*) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now()),
 		(SELECT min(created_at) FROM scim_tokens WHERE organization_id=$1 AND revoked_at IS NULL AND expires_at>now()),
+		(SELECT count(*) FROM organization_invitations WHERE organization_id=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now()),
+		(SELECT count(*) FROM organization_invitations WHERE organization_id=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now() AND role IN ('owner','admin')),
+		(SELECT count(*) FROM organization_invitations WHERE organization_id=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now() AND expires_at<=now()+interval '24 hours'),
+		(SELECT count(*) FROM organization_invitations WHERE organization_id=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at<=now()),
+		(SELECT count(*) FROM project_grants scoped_grant JOIN projects project ON project.id=scoped_grant.project_id WHERE project.organization_id=$1),
+		(SELECT count(*) FROM environment_grants scoped_grant JOIN environments environment ON environment.id=scoped_grant.environment_id JOIN projects project ON project.id=environment.project_id WHERE project.organization_id=$1),
+		(SELECT count(*) FROM (
+			SELECT scoped_grant.role FROM project_grants scoped_grant JOIN projects project ON project.id=scoped_grant.project_id WHERE project.organization_id=$1
+			UNION ALL
+			SELECT scoped_grant.role FROM environment_grants scoped_grant JOIN environments environment ON environment.id=scoped_grant.environment_id JOIN projects project ON project.id=environment.project_id WHERE project.organization_id=$1
+		) scoped WHERE scoped.role='admin'),
+		(SELECT count(*) FROM (
+			SELECT scoped_grant.role AS grant_role,membership.role AS member_role FROM project_grants scoped_grant JOIN projects project ON project.id=scoped_grant.project_id JOIN memberships membership ON membership.organization_id=project.organization_id AND membership.user_id=scoped_grant.user_id WHERE project.organization_id=$1
+			UNION ALL
+			SELECT scoped_grant.role AS grant_role,membership.role AS member_role FROM environment_grants scoped_grant JOIN environments environment ON environment.id=scoped_grant.environment_id JOIN projects project ON project.id=environment.project_id JOIN memberships membership ON membership.organization_id=project.organization_id AND membership.user_id=scoped_grant.user_id WHERE project.organization_id=$1
+		) scoped WHERE (CASE scoped.grant_role WHEN 'admin' THEN 3 WHEN 'developer' THEN 2 ELSE 1 END)<=(CASE scoped.member_role WHEN 'owner' THEN 4 WHEN 'admin' THEN 3 WHEN 'developer' THEN 2 ELSE 1 END)),
+		(SELECT count(*) FROM scim_groups WHERE organization_id=$1),
+		(SELECT count(*) FROM scim_groups WHERE organization_id=$1 AND role IN ('admin','developer')),
+		(SELECT count(*) FROM scim_group_members member JOIN scim_groups group_record ON group_record.id=member.group_id WHERE group_record.organization_id=$1),
 		(SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND pending_certificate_created_at IS NOT NULL),
 		(SELECT min(pending_certificate_created_at) FROM saml_providers WHERE organization_id=$1 AND pending_certificate_created_at IS NOT NULL)`, organizationID).Scan(
 		&snapshot.IdentityPosture.RequireSSO,
@@ -807,6 +837,17 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		&snapshot.IdentityPosture.ActiveAuditorServiceAccounts,
 		&snapshot.IdentityPosture.ActiveSCIMTokens,
 		&snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt,
+		&snapshot.IdentityPosture.PendingInvitations,
+		&snapshot.IdentityPosture.PendingPrivilegedInvitations,
+		&snapshot.IdentityPosture.InvitationsExpiringSoon,
+		&snapshot.IdentityPosture.ExpiredInvitations,
+		&snapshot.IdentityPosture.ProjectScopedGrants,
+		&snapshot.IdentityPosture.EnvironmentScopedGrants,
+		&snapshot.IdentityPosture.AdminScopedGrants,
+		&snapshot.IdentityPosture.RedundantScopedGrants,
+		&snapshot.IdentityPosture.SCIMGroups,
+		&snapshot.IdentityPosture.WriteCapableSCIMGroups,
+		&snapshot.IdentityPosture.SCIMGroupMemberships,
 		&snapshot.IdentityPosture.PendingSAMLCertificateRotations,
 		&snapshot.IdentityPosture.OldestPendingSAMLRotationAt,
 	)

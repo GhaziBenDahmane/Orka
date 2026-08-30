@@ -207,7 +207,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	oldSCIMToken, oldPendingJob := now.Add(-181*24*time.Hour), now.Add(-11*time.Minute)
 	snapshot := store.AIAuditSnapshot{
 		Organization:    organizationID,
-		IdentityPosture: store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation, ExpiringServiceAccounts: 2, ActiveSCIMTokens: 1, OldestActiveSCIMTokenCreatedAt: &oldSCIMToken},
+		IdentityPosture: store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation, ExpiringServiceAccounts: 2, ActiveSCIMTokens: 1, OldestActiveSCIMTokenCreatedAt: &oldSCIMToken, PendingInvitations: 2, PendingPrivilegedInvitations: 1, InvitationsExpiringSoon: 1, ExpiredInvitations: 1, ProjectScopedGrants: 1, EnvironmentScopedGrants: 1, AdminScopedGrants: 1, RedundantScopedGrants: 1, SCIMGroups: 2, WriteCapableSCIMGroups: 1, SCIMGroupMemberships: 2},
 		MigrationPosture: []store.AIAuditMigrationPosture{{
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
@@ -232,8 +232,13 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 			t.Errorf("missing deterministic finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 24 {
-		t.Fatalf("findings=%d, want 24: %#v", len(findings), findings)
+	for _, title := range []string{"Privileged organization invitations are pending", "Expired organization invitations remain active in inventory", "Scoped access grants are redundant"} {
+		if !titles[title] {
+			t.Errorf("missing identity governance finding %q in %#v", title, findings)
+		}
+	}
+	if len(findings) != 27 {
+		t.Fatalf("findings=%d, want 27: %#v", len(findings), findings)
 	}
 }
 
