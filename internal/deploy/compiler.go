@@ -43,7 +43,7 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 			return "", fmt.Errorf("service %q must be an object", name)
 		}
 		if !c.AllowUnsafe {
-			if err := validateSafeService(name, service); err != nil {
+			if err := validateSafeService(name, service, c.PublicNetwork); err != nil {
 				return "", err
 			}
 		}
@@ -187,7 +187,7 @@ func ValidateRoute(route store.Route) error {
 	return nil
 }
 
-func validateSafeService(name string, service map[string]any) error {
+func validateSafeService(name string, service map[string]any, publicNetwork string) error {
 	if value, _ := service["privileged"].(bool); value {
 		return fmt.Errorf("service %q requests privileged mode", name)
 	}
@@ -209,6 +209,17 @@ func validateSafeService(name string, service map[string]any) error {
 	}
 	if capabilities, exists := service["cap_add"]; exists && capabilities != nil {
 		return fmt.Errorf("service %q requests added Linux capabilities", name)
+	}
+	if rawNetworks, exists := service["networks"]; exists && rawNetworks != nil {
+		networks, err := validatedServiceNetworkNames(rawNetworks)
+		if err != nil {
+			return fmt.Errorf("service %q: %w", name, err)
+		}
+		for _, network := range networks {
+			if publicNetwork != "" && network == publicNetwork {
+				return fmt.Errorf("service %q requests platform-managed network %q", name, network)
+			}
+		}
 	}
 	if rawOptions, exists := service["security_opt"]; exists && rawOptions != nil {
 		options, ok := rawOptions.([]any)
@@ -277,24 +288,50 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 	}
 	if networks, ok := stringMap(document["networks"]); ok {
 		for name, raw := range networks {
+			if c.PublicNetwork != "" && name == c.PublicNetwork {
+				return fmt.Errorf("network %q is managed by the platform", name)
+			}
 			spec, valid := stringMap(raw)
 			if raw != nil && !valid {
 				return fmt.Errorf("network %q must be an object", name)
 			}
 			externalValue, hasExternal := spec["external"]
 			external, externalValid := externalValue.(bool)
-			explicitName, hasName := spec["name"]
-			networkName, nameValid := explicitName.(string)
-			isPlatformNetwork := name == c.PublicNetwork && external && (!hasName || (nameValid && networkName == c.PublicNetwork))
 			if hasExternal && !externalValid {
 				return fmt.Errorf("network %q has an invalid external declaration", name)
 			}
-			if (external || hasName) && !isPlatformNetwork {
+			_, hasName := spec["name"]
+			if external || hasName {
 				return fmt.Errorf("network %q requests cross-stack external access", name)
 			}
 		}
 	}
 	return nil
+}
+
+func validatedServiceNetworkNames(value any) ([]string, error) {
+	switch networks := value.(type) {
+	case []any:
+		names := make([]string, 0, len(networks))
+		for _, rawName := range networks {
+			name, valid := rawName.(string)
+			if !valid {
+				return nil, errors.New("networks list must contain only names")
+			}
+			names = append(names, name)
+		}
+		return names, nil
+	case []string:
+		return networks, nil
+	case map[string]any:
+		names := make([]string, 0, len(networks))
+		for name := range networks {
+			names = append(names, name)
+		}
+		return names, nil
+	default:
+		return nil, errors.New("networks must be a list or object")
+	}
 }
 
 func (c Compiler) encryptStackNetworks(document map[string]any) error {

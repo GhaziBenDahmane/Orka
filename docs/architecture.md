@@ -62,9 +62,10 @@ allowed to finish before deletion can begin.
   device/capability access, unsafe security profiles, controller-local
   environment files, Compose-managed secrets/configs, cross-stack volumes or
   networks, and caller-supplied Traefik labels unless an administrator
-  explicitly enables unsafe workloads. The one exception is the configured
-  public overlay network, which the compiler attaches for approved routes;
-  those routing labels are generated only from tenant-scoped route records.
+  explicitly enables unsafe workloads. The configured public overlay network
+  is reserved: safe Compose input cannot declare or attach it, and the compiler
+  attaches it only to services with approved routes. Routing labels are
+  generated only from tenant-scoped route records.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

@@ -188,20 +188,6 @@ networks:
 				}
 			},
 		},
-		{
-			name: "explicit public only",
-			source: `services:
-  web:
-    image: nginx:alpine
-    networks: [public]
-networks:
-  public:
-    external: true
-`,
-			check: func(t *testing.T, value any) {
-				assertNetworkNames(t, value, "public")
-			},
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -298,32 +284,42 @@ networks:
 	}
 }
 
-func TestCompileSafeModeAllowsOnlyPlatformExternalNetwork(t *testing.T) {
-	source := `services:
+func TestCompileSafeModeReservesPlatformNetworkForRoutes(t *testing.T) {
+	tests := map[string]string{
+		"declared external": `services:
   app:
     image: alpine
-    networks: [public]
 networks:
   public:
     external: true
     name: public
-`
-	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCompileSafeModeRejectsNamedNonExternalPlatformNetwork(t *testing.T) {
-	source := `services:
+`,
+		"undeclared attachment": `services:
   app:
     image: alpine
     networks: [public]
-networks:
-  public:
-    name: public
-`
-	if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, nil); err == nil {
-		t.Fatal("safe mode accepted a cross-stack platform network without external: true")
+`,
+		"unrouted sidecar": `services:
+  web:
+    image: nginx
+  sidecar:
+    image: alpine
+    networks: [public]
+`,
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			routes := []store.Route(nil)
+			if name == "unrouted sidecar" {
+				routes = []store.Route{{ServiceName: "web", Host: "app.example.com", PathPrefix: "/", TargetPort: 80}}
+			}
+			if _, err := (Compiler{PublicNetwork: "public"}).Compile(source, routes); err == nil {
+				t.Fatal("safe mode accepted caller access to the platform network")
+			}
+			if _, err := (Compiler{PublicNetwork: "public", AllowUnsafe: true}).Compile(source, routes); err != nil {
+				t.Fatalf("unsafe mode rejected caller-managed network: %v", err)
+			}
+		})
 	}
 }
 
