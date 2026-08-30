@@ -136,6 +136,20 @@ func (s *Server) createVolumeBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, item)
 }
 
+func (s *Server) listVolumeRestores(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid service id")
+		return
+	}
+	items, err := s.Store.ListVolumeRestores(r.Context(), principal(r).OrganizationID, serviceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) getVolumeBackup(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("backupID"))
 	if err != nil {

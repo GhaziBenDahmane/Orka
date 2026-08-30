@@ -211,6 +211,23 @@ func (s *Store) GetVolumeRestore(ctx context.Context, organizationID, id uuid.UU
 	return item, err
 }
 
+func (s *Store) ListVolumeRestores(ctx context.Context, organizationID, serviceID uuid.UUID) ([]VolumeRestore, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT restore.id,restore.volume_backup_id,restore.status,restore.error,restore.created_at,restore.started_at,restore.finished_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND p.organization_id=$2 ORDER BY restore.created_at DESC LIMIT 100`, serviceID, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VolumeRestore{}
+	for rows.Next() {
+		var item VolumeRestore
+		if err = rows.Scan(&item.ID, &item.VolumeBackupID, &item.Status, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) CancelVolumeBackup(ctx context.Context, organizationID, id uuid.UUID) error {
 	return s.cancelVolumeJob(ctx, organizationID, id, "backup.volume", "volume_backups", "backupId", `JOIN compose_services service ON service.id=resource.compose_service_id`)
 }

@@ -242,6 +242,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/services/{serviceID}/volume-backup-policies/{volumeName}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteVolumeBackupPolicy)))
 	mux.Handle("GET /v1/services/{serviceID}/volume-backups", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listVolumeBackups)))
 	mux.Handle("POST /v1/services/{serviceID}/volume-backups/{volumeName}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createVolumeBackup)))
+	mux.Handle("GET /v1/services/{serviceID}/volume-restores", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listVolumeRestores)))
 	mux.Handle("POST /v1/services/{serviceID}/rollback", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.rollbackService)))
 	mux.Handle("POST /v1/services/{serviceID}/deploy-tokens", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createDeployToken)))
 	mux.Handle("GET /v1/services/{serviceID}/webhooks", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.listWebhookIntegrations)))

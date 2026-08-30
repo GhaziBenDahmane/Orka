@@ -106,6 +106,13 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	if status != http.StatusAccepted {
 		t.Fatalf("cancel restore status=%d body=%s", status, body)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+serviceID.String()+"/volume-restores", token, organizationID, http.MethodGet, nil)
+	var restoreHistory struct {
+		Items []store.VolumeRestore `json:"items"`
+	}
+	if err = json.Unmarshal(body, &restoreHistory); status != http.StatusOK || err != nil || len(restoreHistory.Items) != 1 || restoreHistory.Items[0].Status != "cancelled" {
+		t.Fatalf("restore history status=%d body=%s err=%v", status, body, err)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String(), token, otherOrganizationID, http.MethodGet, nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("cross-tenant backup status=%d body=%s", status, body)
