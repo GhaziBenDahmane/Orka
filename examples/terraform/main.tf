@@ -25,6 +25,11 @@ variable "oidc_client_secret" {
   sensitive = true
 }
 
+variable "saml_metadata_xml" {
+  type      = string
+  sensitive = true
+}
+
 resource "dockyard_project" "example" {
   name        = "Example"
   description = "Managed by OpenTofu or Terraform"
@@ -51,9 +56,20 @@ resource "dockyard_oidc_provider" "workforce" {
   enabled       = true
 }
 
+resource "dockyard_saml_provider" "partners" {
+  name                = "Partners"
+  metadata_xml        = var.saml_metadata_xml
+  domains             = ["partners.example.com"]
+  email_attribute     = "email"
+  name_attribute      = "name"
+  default_role        = "viewer"
+  allow_idp_initiated = false
+  enabled             = true
+}
+
 resource "dockyard_auth_settings" "organization" {
   require_sso = true
-  depends_on  = [dockyard_oidc_provider.workforce]
+  depends_on  = [dockyard_oidc_provider.workforce, dockyard_saml_provider.partners]
 }
 
 resource "dockyard_environment" "production" {

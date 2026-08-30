@@ -14,6 +14,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_volume_backup_policy`
 - `dockyard_template_repository`
 - `dockyard_oidc_provider`
+- `dockyard_saml_provider`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -73,6 +74,14 @@ rotation. The API never returns the secret, so the provider retains it only in
 sensitive Terraform state. Protect that state with an encrypted remote backend.
 Destroy disables the provider and preserves its audit history; recreating the
 resource provisions a new provider identity.
+
+`dockyard_saml_provider` manages IdP metadata, domain and attribute mappings,
+IdP-initiated policy, enabled state, and computed IdP/SP certificate posture.
+The service-provider signing key is generated and encrypted by Dockyard. The
+two-phase signing-certificate rotation remains an explicit `dockyardctl`
+operation because promotion is safe only after the IdP imports the published
+replacement certificate. Destroy disables the provider and retains its audit
+history.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting

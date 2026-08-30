@@ -5,6 +5,19 @@ binding, plus signed SAML 2.0 SP- and IdP-initiated login. Treat a provider as
 production-ready only after completing this checklist in an isolated
 organization and preserving the results with the release evidence.
 
+OIDC and SAML configuration can be managed with the corresponding
+`dockyard_*_provider` Terraform/OpenTofu resources or dedicated `dockyardctl`
+commands. SAML signing-certificate rollover remains an explicit begin,
+IdP-import, and promote sequence; do not model promotion as an automatic
+Terraform update.
+
+The SAML CLI lifecycle is `saml-providers`, `create-saml-provider JSON`,
+`update-saml-provider ID JSON`, `enable-saml-provider ID`, and
+`disable-saml-provider ID`. Certificate rollover uses
+`rotate-saml-certificate ID`, then `promote-saml-certificate ID PROVIDER_NAME`
+after the IdP imports the replacement, or `cancel-saml-certificate ID` to abort.
+Pass `-` instead of JSON when metadata should not appear in shell history.
+
 The OIDC redirect URI is:
 
 ```text

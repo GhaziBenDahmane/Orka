@@ -24,7 +24,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 12 {
+	if len(instance.Resources(context.Background())) != 13 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -42,6 +42,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_oidc_provider") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_saml_provider") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -101,6 +104,28 @@ func TestOIDCProviderClientSecretIsSensitive(t *testing.T) {
 	secret, ok := response.Schema.Attributes["client_secret"].(resourceschema.StringAttribute)
 	if !ok || !secret.Sensitive || !secret.Required {
 		t.Fatalf("client_secret schema = %#v", response.Schema.Attributes["client_secret"])
+	}
+}
+
+func TestSAMLProviderMetadataIsSensitiveAndRetained(t *testing.T) {
+	var schemaResponse resource.SchemaResponse
+	newSAMLProviderResource().Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+	metadata, ok := schemaResponse.Schema.Attributes["metadata_xml"].(resourceschema.StringAttribute)
+	if !ok || !metadata.Sensitive || !metadata.Required {
+		t.Fatalf("metadata_xml schema = %#v", schemaResponse.Schema.Attributes["metadata_xml"])
+	}
+	model := samlProviderModel{
+		Name: types.StringValue("Workforce"), MetadataXML: types.StringValue("<EntityDescriptor/>"), Domains: stringSet([]string{"example.com"}),
+		EmailAttribute: types.StringValue("email"), NameAttribute: types.StringValue("name"), DefaultRole: types.StringValue("developer"), AllowIDPInitiated: types.BoolValue(true),
+	}
+	var diagnostics diag.Diagnostics
+	input := samlProviderInput(context.Background(), model, &diagnostics)
+	if diagnostics.HasError() || input["metadataXml"] != "<EntityDescriptor/>" || input["allowIdpInitiated"] != true {
+		t.Fatalf("SAML input=%#v diagnostics=%v", input, diagnostics)
+	}
+	setSAMLProvider(&model, samlProviderResponse{ID: "provider-id", Name: "Workforce", Domains: []string{"example.com"}, EmailAttribute: "email", NameAttribute: "name", DefaultRole: "developer", Enabled: true})
+	if model.MetadataXML.ValueString() != "<EntityDescriptor/>" || model.Domains.IsNull() || !model.SPCertificateNotAfter.IsNull() {
+		t.Fatalf("SAML state did not retain write-only metadata: %#v", model)
 	}
 }
 

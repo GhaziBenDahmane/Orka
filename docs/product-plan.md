@@ -236,7 +236,7 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
   explicit manual-conversion records. The Terraform/OpenTofu provider covers
   projects, environments, Compose services, routes, managed databases, source
   credentials, backup destinations, database backup policies, named-volume
-  backup policies, federated template repositories, OIDC providers, and
+  backup policies, federated template repositories, OIDC/SAML providers, and
   organization authentication policy. The console provides credential,
   backup-destination, OIDC, SAML, hierarchical policy,
   mandatory-SSO, audit retention/archive, and notification administration.

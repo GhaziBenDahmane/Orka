@@ -28,6 +28,14 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"disable-oidc-provider", "provider-id"}, http.MethodDelete, "/v1/sso/oidc-providers/provider-id"},
 		{[]string{"sso-settings"}, http.MethodGet, "/v1/sso/settings"},
 		{[]string{"put-sso-settings", `{}`}, http.MethodPut, "/v1/sso/settings"},
+		{[]string{"saml-providers"}, http.MethodGet, "/v1/sso/saml-providers"},
+		{[]string{"create-saml-provider", `{}`}, http.MethodPost, "/v1/sso/saml-providers"},
+		{[]string{"update-saml-provider", "provider-id", `{}`}, http.MethodPut, "/v1/sso/saml-providers/provider-id"},
+		{[]string{"enable-saml-provider", "provider-id"}, http.MethodPost, "/v1/sso/saml-providers/provider-id/enable"},
+		{[]string{"disable-saml-provider", "provider-id"}, http.MethodDelete, "/v1/sso/saml-providers/provider-id"},
+		{[]string{"rotate-saml-certificate", "provider-id"}, http.MethodPost, "/v1/sso/saml-providers/provider-id/certificate-rotation"},
+		{[]string{"promote-saml-certificate", "provider-id", "Workforce"}, http.MethodPost, "/v1/sso/saml-providers/provider-id/certificate-rotation/promote"},
+		{[]string{"cancel-saml-certificate", "provider-id"}, http.MethodDelete, "/v1/sso/saml-providers/provider-id/certificate-rotation"},
 		{[]string{"environments", "project-id"}, http.MethodGet, "/v1/projects/project-id/environments"},
 		{[]string{"deploy", "service-id"}, http.MethodPost, "/v1/services/service-id/deployments"},
 		{[]string{"database-engines"}, http.MethodGet, "/v1/database-engines"},
@@ -211,6 +219,24 @@ func TestOIDCProviderCommandBodies(t *testing.T) {
 	}
 	if input.(map[string]any)["requireSso"] != true {
 		t.Fatalf("SSO settings input=%#v", input)
+	}
+}
+
+func TestSAMLProviderCommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-saml-provider", "-"}, strings.NewReader(`{"name":"Workforce","metadataXml":"<EntityDescriptor/>","domains":["example.com"]}`))
+	if err != nil || method != http.MethodPost || path != "/v1/sso/saml-providers" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	provider := input.(map[string]any)
+	if provider["metadataXml"] != "<EntityDescriptor/>" {
+		t.Fatalf("SAML provider input=%#v", provider)
+	}
+	method, path, input, err = commandRequest([]string{"promote-saml-certificate", "provider-id", "Workforce"}, strings.NewReader(""))
+	if err != nil || method != http.MethodPost || path != "/v1/sso/saml-providers/provider-id/certificate-rotation/promote" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	if input.(map[string]string)["confirm"] != "Workforce" {
+		t.Fatalf("SAML promotion input=%#v", input)
 	}
 }
 

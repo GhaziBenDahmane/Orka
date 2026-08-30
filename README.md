@@ -158,6 +158,10 @@ CLI commands or managed declaratively with `dockyard_oidc_provider` in
 Terraform/OpenTofu. `dockyard_auth_settings` controls mandatory SSO. Client
 secrets remain sensitive write-only state.
 
+SAML providers likewise have dedicated CLI and Terraform/OpenTofu management.
+Signing-certificate creation stays server-side; rotation uses explicit
+begin/promote/cancel CLI commands so IdP metadata can be updated before cutover.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,
