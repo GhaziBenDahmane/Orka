@@ -278,7 +278,12 @@ export const api = {
   rotateServiceAccount: (id: string, expiresInDays: number) => request<{ token: string; expiresAt: string }>(`/v1/service-accounts/${id}/rotate`, { method: "POST", body: JSON.stringify({ expiresInDays }) }),
   disableServiceAccount: (id: string) => request<void>(`/v1/service-accounts/${id}`, { method: "DELETE" }),
   aiAuditRuns: () => request<Envelope<AIAuditRun>>("/v1/ai/audit-runs"),
-  currentAIAuditFindings: (disposition = "") => request<Envelope<AIAuditFinding>>(`/v1/ai/audit-findings${disposition ? `?disposition=${encodeURIComponent(disposition)}` : ""}`),
+  currentAIAuditFindings: (disposition = "", severity = "") => {
+    const query = new URLSearchParams({ limit: "200" });
+    if (disposition) query.set("disposition", disposition);
+    if (severity) query.set("severity", severity);
+    return request<Envelope<AIAuditFinding>>(`/v1/ai/audit-findings?${query}`);
+  },
   aiAuditFindings: (runId: string) => request<Envelope<AIAuditFinding>>(`/v1/ai/audit-runs/${runId}/findings`),
   updateAIAuditFinding: (findingId: string, disposition: AIAuditFinding["disposition"], note: string) => request<AIAuditFinding>(`/v1/ai/audit-findings/${findingId}`, { method: "PATCH", body: JSON.stringify({ disposition, note }) }),
 };

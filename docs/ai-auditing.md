@@ -148,6 +148,9 @@ keys make it a privileged service.
   findings with an optional operator note. These triage changes are
   tenant-scoped and enter the platform audit log; auditor identities cannot
   alter disposition.
+- The console's current-findings review can filter the latest lineage state by
+  disposition and severity, and exposes resource identity, remediation, and
+  bounded structured evidence before an operator acknowledges or resolves it.
 - A recurring fingerprint from the same auditor identity and agent carries an
   acknowledged disposition and its operator context into the next run. A
   finding that reappears after resolution is reopened automatically, linked to
