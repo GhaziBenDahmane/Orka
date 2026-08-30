@@ -29,77 +29,12 @@ case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be
 case "$stability_seconds" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_STABILITY_SECONDS must be a non-negative integer" ;; esac
 [ "$stability_seconds" -le "$wait_timeout" ] || fail "DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed DOCKYARD_INSTALL_WAIT_TIMEOUT"
 
-for command in awk docker find grep sleep tr wc; do
+for command in docker find grep sleep tr wc; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
-validate_https_url() {
-  label=$1
-  value=$2
-  case "$value" in
-    https://*) ;;
-    *) fail "$label must be an https:// URL" ;;
-  esac
-  case "$value" in *\?*|*\#*) fail "$label must not contain a query string or fragment" ;; esac
-  if printf '%s' "$value" | grep -q '[[:space:]]'; then
-    fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port"
-  fi
-  remainder=${value#https://}
-  authority=${remainder%%/*}
-  path=${remainder#"$authority"}
-  case "$path" in ""|/) ;; *) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-  case "$authority" in ""|*@*|*\\*) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-
-  host=$authority
-  port=
-  has_port=false
-  case "$authority" in
-    \[*\]:*)
-      bracketed=${authority#\[}
-      host=${bracketed%%\]*}
-      port_suffix=${bracketed#"$host"}
-      port_suffix=${port_suffix#\]}
-      case "$port_suffix" in :*) port=${port_suffix#:}; has_port=true ;; *) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-      ;;
-    \[*\])
-      host=${authority#\[}
-      host=${host%\]}
-      ;;
-    *:*)
-      host=${authority%:*}
-      port=${authority##*:}
-      has_port=true
-      case "$host" in *:*) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-      ;;
-  esac
-  case "$authority" in
-    \[*\]*)
-      case "$host" in ""|*[!0-9A-Fa-f:.]*) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-      case "$host" in *:*) ;; *) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-      ;;
-    *)
-      printf '%s\n' "$host" | awk '
-        NR != 1 || length($0) < 1 || length($0) > 253 { exit 1 }
-        {
-          count = split($0, labels, ".")
-          for (i = 1; i <= count; i++) {
-            if (length(labels[i]) < 1 || length(labels[i]) > 63) exit 1
-            if (labels[i] !~ /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) exit 1
-          }
-        }
-      ' || fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port"
-      ;;
-  esac
-  if [ "$has_port" = true ]; then
-    case "$port" in ""|*[!0-9]*) fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port" ;; esac
-    [ "${#port}" -le 5 ] && [ "$port" -gt 0 ] && [ "$port" -le 65535 ] || fail "$label must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port"
-  fi
-}
-
 control_plane_url=${DOCKYARD_CONTROL_PLANE_URL:-}
 agent_url=${DOCKYARD_AGENT_URL:-}
-validate_https_url DOCKYARD_CONTROL_PLANE_URL "$control_plane_url"
-validate_https_url DOCKYARD_AGENT_URL "$agent_url"
 
 DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
 export DOCKYARD_IMAGE
@@ -126,6 +61,7 @@ export DOCKYARD_AGENT_SERVICE_NAME DOCKYARD_TRAEFIK_NETWORK="$network"
 export DOCKYARD_EGRESS_PRIVATE_CIDRS="$egress_private_cidrs"
 
 docker manifest inspect "$DOCKYARD_IMAGE" >/dev/null 2>&1 || fail "DOCKYARD_IMAGE cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-agent-endpoints --control-plane-url "$control_plane_url" --agent-url "$agent_url" >/dev/null || fail "DOCKYARD_CONTROL_PLANE_URL and DOCKYARD_AGENT_URL must be valid HTTPS origins without credentials, paths, queries, or fragments"
 if [ -n "$egress_private_cidrs" ]; then
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
 fi

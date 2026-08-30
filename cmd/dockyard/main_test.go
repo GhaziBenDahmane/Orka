@@ -51,6 +51,26 @@ func TestValidateDatabaseURLCommand(t *testing.T) {
 	}
 }
 
+func TestValidateAgentEndpointsCommand(t *testing.T) {
+	valid := []string{
+		"--control-plane-url", "https://dockyard.example.test",
+		"--agent-url", "https://agents.example.test:8444",
+	}
+	if err := validateAgentEndpoints(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, arguments := range [][]string{
+		{"--control-plane-url", "http://dockyard.example.test", "--agent-url", "https://agents.example.test"},
+		{"--control-plane-url", "https://dockyard.example.test", "--agent-url", "https://agents.example.test/mtls"},
+		{"--control-plane-url", "https://dockyard.example.test"},
+		append(append([]string{}, valid...), "unexpected"),
+	} {
+		if err := validateAgentEndpoints(arguments); err == nil {
+			t.Errorf("arguments %q were accepted", arguments)
+		}
+	}
+}
+
 func TestReadRestrictedMasterKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master-key")
 	want := []byte(strings.Repeat("k", 32))

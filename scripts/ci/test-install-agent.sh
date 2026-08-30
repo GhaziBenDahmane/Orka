@@ -20,7 +20,15 @@ case "$1 $2" in
   "manifest inspect")
     if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
   "run --rm")
-    case "$*" in *not-a-cidr*) exit 1 ;; esac ;;
+    case "$*" in
+      *' validate-agent-endpoints '*)
+        case "${DOCKYARD_CONTROL_PLANE_URL:-}|${DOCKYARD_AGENT_URL:-}" in
+          'https://dockyard.example.test|https://agents.example.test:8444'|'https://127.0.0.1|https://[::1]:8444') ;;
+          *) exit 1 ;;
+        esac
+        ;;
+      *not-a-cidr*) exit 1 ;;
+    esac ;;
   "secret inspect")
     if [ "${DOCKYARD_INSTALL_TEST_SECRET_EXISTS:-false}" = true ]; then exit 0; else exit 1; fi ;;
   "secret create")
@@ -57,6 +65,7 @@ export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" | grep -q 'no resources were changed'
 grep -q '^stack config ' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -Fqx "manifest inspect $DOCKYARD_IMAGE" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -Fqx "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard $DOCKYARD_IMAGE validate-agent-endpoints --control-plane-url $DOCKYARD_CONTROL_PLANE_URL --agent-url $DOCKYARD_AGENT_URL" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^service=edge_agent network=dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^enrollment-secret=dockyard_agent_enrollment_token$' "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
@@ -201,7 +210,7 @@ if DOCKYARD_CONTROL_PLANE_URL='http://dockyard.example.test' "$root/scripts/inst
   echo 'agent installer accepted a plaintext control-plane URL' >&2
   exit 1
 fi
-grep -q 'DOCKYARD_CONTROL_PLANE_URL must be an https:// URL' "$temporary/err"
+grep -q 'must be valid HTTPS origins without credentials, paths, queries, or fragments' "$temporary/err"
 
 for unsafe_origin in \
   'https://dockyard.example.test/v1' \
@@ -214,7 +223,7 @@ for unsafe_origin in \
     echo "agent installer accepted unsafe control-plane origin: $unsafe_origin" >&2
     exit 1
   fi
-  grep -q 'must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port' "$temporary/err"
+  grep -q 'must be valid HTTPS origins without credentials, paths, queries, or fragments' "$temporary/err"
   if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
     echo "unsafe control-plane origin mutated Docker state: $unsafe_origin" >&2
     exit 1
@@ -226,7 +235,7 @@ if DOCKYARD_AGENT_URL='https://agents.example.test/mtls' "$root/scripts/install-
   echo 'agent installer accepted an agent API URL with a path' >&2
   exit 1
 fi
-grep -q 'must be an HTTPS origin without credentials, path, query, or fragment and with a valid host and port' "$temporary/err"
+grep -q 'must be valid HTTPS origins without credentials, paths, queries, or fragments' "$temporary/err"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'unsafe agent API origin mutated Docker state' >&2
   exit 1

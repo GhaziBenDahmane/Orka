@@ -72,10 +72,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.EnrollmentURL == "" || cfg.AgentURL == "" || !filepath.IsAbs(cfg.StateDirectory) {
 		return errors.New("agent enrollment URL, agent URL, and absolute state directory are required")
 	}
-	if err := validateAgentEndpoint("agent enrollment URL", cfg.EnrollmentURL); err != nil {
-		return err
-	}
-	if err := validateAgentEndpoint("agent mTLS URL", cfg.AgentURL); err != nil {
+	if err := ValidateEndpoints(cfg.EnrollmentURL, cfg.AgentURL); err != nil {
 		return err
 	}
 	if cfg.DockerBin == "" {
@@ -107,6 +104,16 @@ func Run(ctx context.Context, cfg Config) error {
 	c := &Client{cfg: cfg, swarm: deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.Network, Timeout: 5 * time.Minute, ServiceName: cfg.ServiceName}, http: httpClient}
 	c.serviceState = c.inspectServiceState
 	return c.loop(ctx)
+}
+
+// ValidateEndpoints applies the same fail-closed origin policy used by the
+// running agent. Installers call this through the candidate image so preflight
+// cannot drift from the deployed binary's URL parser.
+func ValidateEndpoints(enrollmentURL, agentURL string) error {
+	if err := validateAgentEndpoint("agent enrollment URL", enrollmentURL); err != nil {
+		return err
+	}
+	return validateAgentEndpoint("agent mTLS URL", agentURL)
 }
 
 func validateAgentEndpoint(label, rawURL string) error {

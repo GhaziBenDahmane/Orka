@@ -76,6 +76,8 @@ func main() {
 		err = validateEgressPolicy(os.Args[2:])
 	case "validate-database-url":
 		err = validateDatabaseURL(os.Args[2:], os.Stdin)
+	case "validate-agent-endpoints":
+		err = validateAgentEndpoints(os.Args[2:])
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
 	default:
@@ -88,7 +90,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-database-url|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-database-url|validate-agent-endpoints|volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
@@ -123,6 +125,19 @@ func validateDatabaseURL(arguments []string, input io.Reader) error {
 		return errors.New("database URL exceeds 65536 bytes")
 	}
 	return config.ValidateDatabaseURL(strings.TrimSpace(string(data)), *requireTLS)
+}
+
+func validateAgentEndpoints(arguments []string) error {
+	flags := flag.NewFlagSet("validate-agent-endpoints", flag.ContinueOnError)
+	controlPlaneURL := flags.String("control-plane-url", "", "public HTTPS control-plane origin")
+	agentURL := flags.String("agent-url", "", "public HTTPS agent mTLS origin")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *controlPlaneURL == "" || *agentURL == "" {
+		return errors.New("usage: dockyard validate-agent-endpoints --control-plane-url URL --agent-url URL")
+	}
+	return agent.ValidateEndpoints(*controlPlaneURL, *agentURL)
 }
 
 func validateProductionCertification(arguments []string) error {

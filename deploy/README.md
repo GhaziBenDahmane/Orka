@@ -357,10 +357,11 @@ DOCKYARD_INSTALL_DRY_RUN=true scripts/install-agent.sh
 scripts/install-agent.sh
 ```
 
-The installer requires HTTPS origins without credentials, paths, query strings,
-or fragments, with valid hostnames and ports. It also requires an immutable and
-registry-resolvable image, an active Swarm manager, and a protected non-empty
-token file. It creates the workload overlay network when absent, derives the exact self-upgrade service name from
+The installer uses the exact immutable candidate image to require HTTPS origins
+without credentials, paths, query strings, or fragments, with valid hostnames
+and ports. It also requires a registry-resolvable image, an active Swarm
+manager, and a mode-0600 enrollment-token file containing 32–4096 bytes and no
+line breaks. It creates the workload overlay network when absent, derives the exact self-upgrade service name from
 `DOCKYARD_AGENT_STACK_NAME`, and requires the replica count to remain converged
 for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
