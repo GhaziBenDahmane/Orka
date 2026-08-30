@@ -86,6 +86,9 @@ func VerifyDokployImport(ctx context.Context, destination *store.Store, targetOr
 
 func verifyDokployTarget(ctx context.Context, destination *store.Store, organizationID uuid.UUID, resource store.MigrationResource, requireOperational bool) (string, error) {
 	id := *resource.TargetID
+	if resource.SourceKind == "volume_backup" {
+		return verifyDokployVolumeBackup(ctx, destination, organizationID, id, resource.UpdatedAt, requireOperational)
+	}
 	if resource.SourceKind == "compose" || resource.SourceKind == "application" {
 		var exists bool
 		err := destination.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2)`, id, organizationID).Scan(&exists)
@@ -140,7 +143,6 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		"application_route":  `SELECT EXISTS(SELECT 1 FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2)`,
 		"backup_destination": `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`,
 		"backup_policy":      `SELECT EXISTS(SELECT 1 FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2)`,
-		"volume_backup":      `SELECT EXISTS(SELECT 1 FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE policy.id=$1 AND p.organization_id=$2)`,
 		"source_credential":  `SELECT EXISTS(SELECT 1 FROM source_credentials WHERE id=$1 AND organization_id=$2)`,
 		"notification":       `SELECT EXISTS(SELECT 1 FROM notification_endpoints WHERE id=$1 AND organization_id=$2)`,
 	}
@@ -154,6 +156,49 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 	}
 	if !exists {
 		return "target resource is missing", nil
+	}
+	return "", nil
+}
+
+func verifyDokployVolumeBackup(ctx context.Context, destination *store.Store, organizationID, policyID uuid.UUID, importedAt time.Time, requireOperational bool) (string, error) {
+	var enabled bool
+	var storageNodeID string
+	err := destination.Pool.QueryRow(ctx, `SELECT policy.enabled,service.storage_node_id
+		FROM volume_backup_policies policy
+		JOIN compose_services service ON service.id=policy.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE policy.id=$1 AND project.organization_id=$2`, policyID, organizationID).Scan(&enabled, &storageNodeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "target volume backup policy is missing", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !requireOperational || !enabled {
+		return "", nil
+	}
+	if storageNodeID == "" {
+		return "enabled target volume backup policy has no storage-node binding", nil
+	}
+	var backedUp bool
+	err = destination.Pool.QueryRow(ctx, `SELECT EXISTS(
+		SELECT 1 FROM volume_backups backup
+		WHERE backup.volume_backup_policy_id=$1
+		  AND backup.storage_node_id=$2
+		  AND backup.status='succeeded'
+		  AND backup.finished_at >= $3
+		  AND backup.object_key<>''
+		  AND backup.size_bytes>0
+		  AND backup.sha256<>''
+		  AND backup.plaintext_sha256<>''
+		  AND backup.encrypted_data_key<>''
+	)`, policyID, storageNodeID, importedAt).Scan(&backedUp)
+	if err != nil {
+		return "", err
+	}
+	if !backedUp {
+		return "enabled target volume backup policy has no successful encrypted backup since import", nil
 	}
 	return "", nil
 }

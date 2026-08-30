@@ -160,7 +160,7 @@ volumes:
 		t.Fatalf("acknowledged control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	operationalVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 9 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 10 {
 		t.Fatalf("pre-deployment operational verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
@@ -325,7 +325,7 @@ volumes:
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 9 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 10 {
 		t.Fatalf("operational verification without live observations=%#v err=%v", operationalVerification, err)
 	}
 	for _, serviceID := range serviceIDs {
@@ -334,10 +334,32 @@ volumes:
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 1 || !verificationReasonContains(operationalVerification, "volume_backup", "volume1", "storage-node binding") {
+		t.Fatalf("volume backup binding verification=%#v err=%v", operationalVerification, err)
+	}
+	composeServiceID := mappedID(options, "compose", "c1")
+	volumePolicyID := mappedID(options, "volume-backup-policy", "volume1")
+	if _, err = destination.Pool.Exec(ctx, `UPDATE compose_services SET storage_node_id='nodeabc123' WHERE id=$1`, composeServiceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = destination.Pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,started_at,finished_at)
+		SELECT $1,policy.id,policy.compose_service_id,policy.volume_name,'nodeabc123',policy.destination_id,policy.quiesce,'succeeded',now(),now()
+		FROM volume_backup_policies policy WHERE policy.id=$2`, uuid.New(), volumePolicyID); err != nil {
+		t.Fatal(err)
+	}
+	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 1 || !verificationReasonContains(operationalVerification, "volume_backup", "volume1", "successful encrypted backup") {
+		t.Fatalf("volume backup evidence verification=%#v err=%v", operationalVerification, err)
+	}
+	if _, err = destination.Pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,started_at,finished_at)
+		SELECT $1,policy.id,policy.compose_service_id,policy.volume_name,'nodeabc123',policy.destination_id,policy.quiesce,'succeeded','migration/volume.enc',42,$2,$3,'encrypted-data-key',now(),now()
+		FROM volume_backup_policies policy WHERE policy.id=$4`, uuid.New(), strings.Repeat("a", 64), strings.Repeat("b", 64), volumePolicyID); err != nil {
+		t.Fatal(err)
+	}
+	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
 	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 18 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
 		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
-	composeServiceID := mappedID(options, "compose", "c1")
 	if _, err = destination.Pool.Exec(ctx, `UPDATE service_reconciliations SET state='degraded',last_checked_at=now() WHERE compose_service_id=$1`, composeServiceID); err != nil {
 		t.Fatal(err)
 	}
@@ -367,6 +389,7 @@ volumes:
 			"notificationsReencrypted": true, "databaseTransfersQueued": 6,
 			"transferSecretsEncrypted": true, "tenantOwnershipEnforced": true,
 			"manualAcknowledgementsExplicit": true, "operationalVerifierFailClosed": true,
+			"volumeBackupCutoverVerified": true,
 		})
 		fmt.Printf("MIGRATION_EVIDENCE %s\n", evidence)
 	}

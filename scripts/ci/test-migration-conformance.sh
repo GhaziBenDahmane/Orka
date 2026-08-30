@@ -63,6 +63,7 @@ jq -e '
   .notificationsReencrypted and .databaseTransfersQueued == 6 and
   .transferSecretsEncrypted and .tenantOwnershipEnforced and
   .manualAcknowledgementsExplicit and .operationalVerifierFailClosed and
+  .volumeBackupCutoverVerified and
   (.sourceCommit | test("^[a-f0-9]{40}$"))
 ' "$evidence_file" >/dev/null
 

@@ -203,10 +203,13 @@ and managed-database stack must have a successful deployment of its current
 revision plus a healthy Swarm reconciliation observation from the previous
 five minutes. Each database must also be running, and each PostgreSQL, MySQL,
 MariaDB, MongoDB, Redis, or libSQL database must have a successful Dokploy
-data-transfer record. Missing targets, stale or unhealthy stacks, and
-unconverted resources make the command exit non-zero. Allow the controller's
-one-minute reconciler to observe newly deployed stacks before running the
-final verification.
+data-transfer record. Every enabled named-volume policy must be bound to its
+service's Swarm storage node and have a successful encrypted backup created
+after the final import. Trigger those backups explicitly if their next
+scheduled run falls outside the cutover window. Missing targets, stale or
+unhealthy stacks, incomplete backup evidence, and unconverted resources make
+the command exit non-zero. Allow the controller's one-minute reconciler to
+observe newly deployed stacks before running the final verification.
 
 Some source features deliberately require manual conversion. After completing
 and documenting one, acknowledge its exact parity key explicitly; the entry
