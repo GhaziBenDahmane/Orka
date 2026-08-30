@@ -138,5 +138,5 @@ jobs:
           image-ref: dockyard:ci
           format: table
           severity: HIGH,CRITICAL
-          ignore-unfixed: true
+          ignore-unfixed: false
           exit-code: "1"

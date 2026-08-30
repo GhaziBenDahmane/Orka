@@ -137,8 +137,9 @@ The following are release gates rather than accepted permanent risks:
   backup-capable engine;
 - multi-host Swarm partition, manager-loss, workload convergence, and remote
   agent CA rotation exercises on the deployment topology;
-- an independently reviewed container/socket hardening assessment and a clean
-  vulnerability scan of the exact signed release digest;
+- an independently reviewed container/socket hardening assessment and clean,
+  blocking vulnerability scans of both architecture manifests in the exact
+  signed release digest, including vulnerabilities without an upstream fix;
 - restoration from PostgreSQL, master-key and CA escrow, and artifact storage
   with audit-chain continuity.
 

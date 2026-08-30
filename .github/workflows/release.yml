@@ -281,6 +281,39 @@ jobs:
           echo "$IMAGE:$VERSION is not anonymously pullable after publication" >&2
           exit 1
 
+      - name: Resolve promoted platform digests
+        id: platforms
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "$IMAGE@$DIGEST" > image-index.json
+          amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' image-index.json)"
+          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' image-index.json)"
+          platform_count="$(jq -r '[.manifests[] | select(.platform.os == "linux" and (.platform.architecture == "amd64" or .platform.architecture == "arm64"))] | length' image-index.json)"
+          test "$platform_count" -eq 2
+          printf 'amd64=%s@%s\n' "$IMAGE" "$amd64_digest" >> "$GITHUB_OUTPUT"
+          printf 'arm64=%s@%s\n' "$IMAGE" "$arm64_digest" >> "$GITHUB_OUTPUT"
+
+      - name: Scan exact promoted amd64 image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ steps.platforms.outputs.amd64 }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Scan exact promoted arm64 image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: ${{ steps.platforms.outputs.arm64 }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
       - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
 
       - name: Sign and verify immutable digest

@@ -28,8 +28,10 @@ links for every item below.
 - Build and runtime base images are pinned by manifest digest, and the runtime
   image verifies its Git client and CA trust store without downloading mutable
   operating-system packages during the release build.
-- The final container has no unfixed high or critical finding allowed by the
-  project's exception register. Exceptions identify owner and expiry date.
+- Both amd64 and arm64 manifests referenced by the exact promoted image index
+  have no high or critical findings. No finding is ignored merely because an
+  upstream fix is unavailable; any exception must identify its owner and
+  expiry date in the project's exception register.
 - A clean Compose installation bootstraps an owner, creates project,
   environment, and service records, deploys the service to Swarm, verifies its
   replica, persists an undeployed revision across a controller restart, and
