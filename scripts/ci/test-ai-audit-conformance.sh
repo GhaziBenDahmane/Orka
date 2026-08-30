@@ -66,6 +66,7 @@ jq -e '
   .agentCAMismatchDetected and .agentImageProvenanceAudited and
   .databaseAvailabilityAudited and
   .managedNetworkPostureAudited and
+  .staleDeployCredentialAudited and
   .customTLSValidityAudited and .edgeTLSConvergenceAudited and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and

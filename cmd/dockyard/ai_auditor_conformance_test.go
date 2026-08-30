@@ -42,6 +42,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedDatabaseID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	customTLSCertificateID, customTLSRouteID := uuid.New(), uuid.New()
 	managedNetworkID := uuid.New()
+	staleDeployTokenID := uuid.New()
 	customTLSHost := "ai-" + customTLSCertificateID.String() + ".example.test"
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
@@ -82,6 +83,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,certificate_ca_fingerprint,certificate_not_after,last_seen_at) VALUES($1,$2,'Legacy CA cluster','legacy-ca','active',$3,now()+interval '1 day',now())`, []any{clusterID, organizationID, previousAgentCAFingerprint}},
 		{`INSERT INTO environments(id,project_id,cluster_id,name,slug) VALUES($1,$2,$3,'Production','production')`, []any{environmentID, projectID, clusterID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Sensitive service','sensitive-service',$3,$4,$5,2)`, []any{serviceID, environmentID, "ai-conformance-" + serviceID.String(), "services: {app: {image: example.invalid/private, environment: [" + secretMarker + "]}}", "encrypted:" + secretMarker}},
+		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,expires_at,created_at) VALUES($1,$2,$3,'stale-conformance-hook',now()+interval '30 days',now()-interval '31 days')`, []any{staleDeployTokenID, serviceID, []byte("deploy-token:" + secretMarker)}},
 		{`INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,common_name,dns_names,not_before,not_after) VALUES($1,$2,'Expired conformance certificate',$3,$4,$5,$6,ARRAY[$6],now()-interval '90 days',now()-interval '1 hour')`, []any{customTLSCertificateID, organizationID, "encrypted-certificate:" + secretMarker, "encrypted-private-key:" + secretMarker, "sha256:" + strings.Repeat("c", 64), customTLSHost}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,enabled,target_port,tls,certificate_resolver,custom_certificate_id) VALUES($1,$2,'app',$4,'/','/',true,8080,true,'',$3)`, []any{customTLSRouteID, serviceID, customTLSCertificateID, customTLSHost}},
 		{`INSERT INTO managed_networks(id,organization_id,cluster_id,name,driver,status,last_error) VALUES($1,$2,$3,$4,'overlay','error',$5)`, []any{managedNetworkID, organizationID, clusterID, "audit-network-" + managedNetworkID.String(), "network-error:" + secretMarker}},
@@ -194,7 +196,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -298,6 +300,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"agentImageProvenanceAudited":    true,
 		"databaseAvailabilityAudited":    true,
 		"managedNetworkPostureAudited":   true,
+		"staleDeployCredentialAudited":   true,
 		"customTLSValidityAudited":       true,
 		"edgeTLSConvergenceAudited":      true,
 		"modelFindingsPersisted":         true,

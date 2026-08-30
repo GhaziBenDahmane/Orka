@@ -305,10 +305,10 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'viewer')`, []any{environmentID, developerUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE], volumes: [uploads:/uploads]}}
 volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
-		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at,last_used_at) VALUES
-			($1,$2,$3,'target-active-deploy-token-secret-name',$4,now()+interval '30 days',now()),
-			($5,$2,$6,'target-expiring-deploy-token-secret-name',$4,now()+interval '2 days',NULL),
-			($7,$2,$8,'target-expired-deploy-token-secret-name',$4,now()-interval '1 hour',NULL)`, []any{activeDeployTokenID, serviceID, []byte("target-active-deploy-token-hash"), userID, expiringDeployTokenID, []byte("target-expiring-deploy-token-hash"), expiredDeployTokenID, []byte("target-expired-deploy-token-hash")}},
+		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at,last_used_at,created_at) VALUES
+			($1,$2,$3,'target-active-deploy-token-secret-name',$4,now()+interval '30 days',now(),now()),
+			($5,$2,$6,'target-expiring-deploy-token-secret-name',$4,now()+interval '2 days',NULL,now()-interval '31 days'),
+			($7,$2,$8,'target-expired-deploy-token-secret-name',$4,now()-interval '1 hour',NULL,now()-interval '40 days')`, []any{activeDeployTokenID, serviceID, []byte("target-active-deploy-token-hash"), userID, expiringDeployTokenID, []byte("target-expiring-deploy-token-hash"), expiredDeployTokenID, []byte("target-expired-deploy-token-hash")}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,deletion_requested_at) VALUES($1,$2,'Deleting worker','deleting-worker',$3,'services: {worker: {image: worker:latest}}','deleting-service-env-secret',now()-interval '5 minutes')`, []any{deletingServiceID, environmentID, "deleting-worker-" + deletingServiceID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status) VALUES($1,'delete.compose',$2,'pending')`, []any{uuid.New(), `{"serviceId":"` + deletingServiceID.String() + `","stackName":"target-deleting-stack-secret"}`}},
 		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret,enabled) VALUES($1,$2,'target-github-secret-name','github','target-main-secret',$3,true),($4,$2,'target-gitlab-secret-name','gitlab','target-release-secret',$5,false)`, []any{enabledWebhookID, serviceID, "target-webhook-encrypted-secret", disabledWebhookID, "target-disabled-webhook-encrypted-secret"}},
@@ -447,7 +447,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	if snapshot.IdentityPosture.PendingInvitations != 2 || snapshot.IdentityPosture.PendingPrivilegedInvitations != 1 || snapshot.IdentityPosture.InvitationsExpiringSoon != 1 || snapshot.IdentityPosture.ExpiredInvitations != 1 || snapshot.IdentityPosture.ProjectScopedGrants != 1 || snapshot.IdentityPosture.EnvironmentScopedGrants != 1 || snapshot.IdentityPosture.AdminScopedGrants != 1 || snapshot.IdentityPosture.RedundantScopedGrants != 1 || snapshot.IdentityPosture.SCIMGroups != 2 || snapshot.IdentityPosture.WriteCapableSCIMGroups != 1 || snapshot.IdentityPosture.SCIMGroupMemberships != 2 {
 		t.Fatalf("identity governance posture=%#v", snapshot.IdentityPosture)
 	}
-	if snapshot.DeployTokenPosture.ActiveTokens != 2 || snapshot.DeployTokenPosture.ExpiringTokens != 1 || snapshot.DeployTokenPosture.ExpiredUnrevokedTokens != 1 || snapshot.DeployTokenPosture.UnusedActiveTokens != 1 || snapshot.DeployTokenPosture.OldestActiveTokenCreatedAt == nil {
+	if snapshot.DeployTokenPosture.ActiveTokens != 2 || snapshot.DeployTokenPosture.ExpiringTokens != 1 || snapshot.DeployTokenPosture.ExpiredUnrevokedTokens != 1 || snapshot.DeployTokenPosture.UnusedActiveTokens != 1 || snapshot.DeployTokenPosture.UnusedActiveTokensOlderThan30Days != 1 || snapshot.DeployTokenPosture.OldestActiveTokenCreatedAt == nil || snapshot.DeployTokenPosture.OldestUnusedActiveTokenCreatedAt == nil {
 		t.Fatalf("deploy token posture=%#v", snapshot.DeployTokenPosture)
 	}
 	if len(snapshot.SAMLPosture) != 1 || snapshot.SAMLPosture[0].ID != samlProviderID || snapshot.SAMLPosture[0].CertificateConfigurationOK || snapshot.SAMLPosture[0].SPCertificateNotAfter != nil || snapshot.SAMLPosture[0].IDPCertificateNotAfter != nil {

@@ -542,6 +542,30 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsStaleUnusedDeploymentHookCredentials(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	oldestUnused := now.Add(-31 * 24 * time.Hour)
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		DeployTokenPosture: store.AIAuditDeployTokenPosture{
+			ActiveTokens:                      3,
+			UnusedActiveTokens:                2,
+			UnusedActiveTokensOlderThan30Days: 1,
+			OldestUnusedActiveTokenCreatedAt:  &oldestUnused,
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Unused deployment hook credentials are stale" || findings[0].Severity != "medium" || findings[0].Evidence["unusedActiveTokensOlderThan30Days"] != int64(1) {
+		t.Fatalf("stale deployment hook findings=%#v", findings)
+	}
+	snapshot.DeployTokenPosture.UnusedActiveTokensOlderThan30Days = 0
+	if findings = deterministicAuditFindings(snapshot, now); len(findings) != 0 {
+		t.Fatalf("fresh unused deployment hook produced findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsMandatorySSOLockout(t *testing.T) {
 	organizationID := uuid.New()
 	snapshot := store.AIAuditSnapshot{

@@ -431,11 +431,13 @@ type AIAuditIdentityPosture struct {
 }
 
 type AIAuditDeployTokenPosture struct {
-	ActiveTokens               int64      `json:"activeTokens"`
-	ExpiringTokens             int64      `json:"expiringTokens7d"`
-	ExpiredUnrevokedTokens     int64      `json:"expiredUnrevokedTokens"`
-	UnusedActiveTokens         int64      `json:"unusedActiveTokens"`
-	OldestActiveTokenCreatedAt *time.Time `json:"oldestActiveTokenCreatedAt,omitempty"`
+	ActiveTokens                      int64      `json:"activeTokens"`
+	ExpiringTokens                    int64      `json:"expiringTokens7d"`
+	ExpiredUnrevokedTokens            int64      `json:"expiredUnrevokedTokens"`
+	UnusedActiveTokens                int64      `json:"unusedActiveTokens"`
+	UnusedActiveTokensOlderThan30Days int64      `json:"unusedActiveTokensOlderThan30Days"`
+	OldestActiveTokenCreatedAt        *time.Time `json:"oldestActiveTokenCreatedAt,omitempty"`
+	OldestUnusedActiveTokenCreatedAt  *time.Time `json:"oldestUnusedActiveTokenCreatedAt,omitempty"`
 }
 
 type AIAuditSAMLProviderPosture struct {
@@ -1543,7 +1545,9 @@ func (s *Store) loadAIAuditDeployTokenPosture(ctx context.Context, organizationI
 		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now() AND token.expires_at<=now()+interval '7 days'),
 		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at<=now()),
 		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now() AND token.last_used_at IS NULL),
-		min(token.created_at) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now())
+		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now() AND token.last_used_at IS NULL AND token.created_at<=now()-interval '30 days'),
+		min(token.created_at) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now()),
+		min(token.created_at) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now() AND token.last_used_at IS NULL)
 		FROM deploy_tokens token
 		JOIN compose_services service ON service.id=token.compose_service_id
 		JOIN environments environment ON environment.id=service.environment_id
@@ -1553,7 +1557,9 @@ func (s *Store) loadAIAuditDeployTokenPosture(ctx context.Context, organizationI
 		&posture.ExpiringTokens,
 		&posture.ExpiredUnrevokedTokens,
 		&posture.UnusedActiveTokens,
+		&posture.UnusedActiveTokensOlderThan30Days,
 		&posture.OldestActiveTokenCreatedAt,
+		&posture.OldestUnusedActiveTokenCreatedAt,
 	)
 }
 

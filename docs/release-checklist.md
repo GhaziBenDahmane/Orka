@@ -115,6 +115,8 @@ links for every item below.
   reconciliation target while keeping encrypted certificate and private-key
   material outside the model boundary. A failed managed network must also
   produce a deterministic finding without exposing its raw Docker/agent error.
+  An active deployment-hook credential that remains unused after thirty days
+  must produce a cleanup finding without exposing token material or identity.
   The gate additionally verifies audited administrator finding triage, atomic
   rollback when its audit write fails, denial of triage to the auditor identity,
   prevention of cross-tenant finding mutation, and durable notification for a

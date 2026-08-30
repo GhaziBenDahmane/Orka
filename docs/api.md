@@ -318,6 +318,12 @@ the last safe state-update timestamp. Raw Docker/agent errors, Docker IDs,
 MTU, and IPAM details are excluded. Failed provisioning and provisioning that
 remains pending beyond fifteen minutes produce high-severity deterministic
 findings.
+Deployment-hook posture is aggregate-only and reports active, expiring,
+expired-unrevoked, unused, and unused-for-more-than-thirty-days counts plus
+oldest active/unused creation times. Tokens, hashes, names, URLs, service
+assignments, and creator identities remain excluded. An active credential that
+has never been used after thirty days produces a medium-severity cleanup
+finding.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
 Repository URLs and refs, output image names, credential identifiers, artifact

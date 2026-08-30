@@ -133,10 +133,11 @@ keys make it a privileged service.
   provider names, domains, and user identities,
   session metadata, token hashes, and provider configuration remain excluded.
 - Deployment-hook posture reports only aggregate active, expiring, expired,
-  and never-used token counts plus the oldest active credential creation time.
+  never-used, and never-used-for-more-than-thirty-days token counts plus the
+  oldest active and oldest unused credential creation times.
   Token names, hashes, URLs, service assignments, and creator identities remain
-  outside the model boundary. Expiring and unrevoked expired credentials
-  produce deterministic rotation and cleanup findings.
+  outside the model boundary. Expiring, unrevoked expired, and stale never-used
+  credentials produce deterministic rotation and cleanup findings.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy
