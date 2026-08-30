@@ -13,6 +13,7 @@ const maxDeterministicAuditFindings = 100
 
 const auditArchiveSchedulerGrace = 5 * time.Minute
 const minimumOperationalSignalSample = 4
+const finalizerStallThreshold = 15 * time.Minute
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -287,6 +288,12 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	}
 	if snapshot.QueuePosture.OldestPendingAt != nil && now.Sub(*snapshot.QueuePosture.OldestPendingAt) > 10*time.Minute {
 		add(modelFinding{Severity: "high", Category: "operations", Title: "Deployment queue is stalled", Description: "A tenant-scoped service or database job has remained pending for more than ten minutes.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingServiceJobs": snapshot.QueuePosture.PendingServiceJobs, "pendingDatabaseJobs": snapshot.QueuePosture.PendingDatabaseJobs, "oldestPendingAt": snapshot.QueuePosture.OldestPendingAt.UTC().Format(time.RFC3339)}, Remediation: "Check worker health, leader leases, cluster admission, and job retry state before accepting more work."})
+	}
+	finalizers := snapshot.FinalizerPosture
+	if finalizers.FailedJobs > 0 || finalizers.ResourcesWithoutActiveJob > 0 {
+		add(modelFinding{Severity: "high", Category: "operations", Title: "Resource deletion finalizer requires intervention", Description: "One or more deleting resources have a failed finalizer or no pending/running finalizer job.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"deletingProjects": finalizers.DeletingProjects, "deletingEnvironments": finalizers.DeletingEnvironments, "deletingServices": finalizers.DeletingServices, "deletingClusters": finalizers.DeletingClusters, "pendingJobs": finalizers.PendingJobs, "runningJobs": finalizers.RunningJobs, "failedJobs": finalizers.FailedJobs, "resourcesWithoutActiveJob": finalizers.ResourcesWithoutActiveJob}, Remediation: "Inspect the failed deletion jobs and Swarm state, restore worker access, then retry or safely reconstruct the missing finalizer job."})
+	} else if finalizers.OldestRequestedAt != nil && now.Sub(*finalizers.OldestRequestedAt) > finalizerStallThreshold {
+		add(modelFinding{Severity: "medium", Category: "operations", Title: "Resource deletion finalizer is stalled", Description: "A resource has remained in deletion for more than fifteen minutes while its finalizer is still pending or running.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"deletingProjects": finalizers.DeletingProjects, "deletingEnvironments": finalizers.DeletingEnvironments, "deletingServices": finalizers.DeletingServices, "deletingClusters": finalizers.DeletingClusters, "pendingJobs": finalizers.PendingJobs, "runningJobs": finalizers.RunningJobs, "oldestRequestedAt": finalizers.OldestRequestedAt.UTC().Format(time.RFC3339)}, Remediation: "Inspect worker and Swarm availability, then confirm the finalizer completes before retrying dependent deletions."})
 	}
 	if missing := missingNotificationCoverage(snapshot.NotificationPosture); len(missing) > 0 {
 		add(modelFinding{Severity: "medium", Category: "operations", Title: "Failure notifications have coverage gaps", Description: "No enabled notification endpoint subscribes to one or more supported failure events.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"missingEvents": missing}, Remediation: "Enable at least one tested notification destination for every supported failure event."})

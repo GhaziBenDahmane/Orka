@@ -283,7 +283,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil || len(currentFindings) != 2 {
 		t.Fatalf("current findings after retention=%#v err=%v", currentFindings, err)
 	}
-	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, deletingServiceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	backupID, policyID := uuid.New(), uuid.New()
 	routeID, otherRouteID := uuid.New(), uuid.New()
@@ -303,6 +303,8 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{projectID, developerUserID}},
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'viewer')`, []any{environmentID, developerUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,deletion_requested_at) VALUES($1,$2,'Deleting worker','deleting-worker',$3,'services: {worker: {image: worker:latest}}','deleting-service-env-secret',now()-interval '5 minutes')`, []any{deletingServiceID, environmentID, "deleting-worker-" + deletingServiceID.String()}},
+		{`INSERT INTO jobs(id,kind,payload,status) VALUES($1,'delete.compose',$2,'pending')`, []any{uuid.New(), `{"serviceId":"` + deletingServiceID.String() + `","stackName":"target-deleting-stack-secret"}`}},
 		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret,enabled) VALUES($1,$2,'target-github-secret-name','github','target-main-secret',$3,true),($4,$2,'target-gitlab-secret-name','gitlab','target-release-secret',$5,false)`, []any{enabledWebhookID, serviceID, "target-webhook-encrypted-secret", disabledWebhookID, "target-disabled-webhook-encrypted-secret"}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','audit-api.example.test','/',8080,false,'letsencrypt')`, []any{routeID, serviceID}},
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'target-reconciliation-detail-secret',now()-interval '30 seconds')`, []any{serviceID}},
@@ -320,8 +322,9 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,verify_restore) VALUES($1,$2,3600,14,true,now(),true)`, []any{policyID, databaseID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,finished_at) VALUES($1,$2,'succeeded','dump',now())`, []any{backupID, databaseID}},
 		{`INSERT INTO database_restores(id,database_backup_id,status,kind,finished_at) VALUES($1,$2,'succeeded','drill',now())`, []any{uuid.New(), backupID}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,agent_image,agent_update_state) VALUES($1,$2,'Paris','paris','active','{"secret":"target-cluster-label-secret"}','{"secret":"target-cluster-capacity-secret"}',$3,'updating')`, []any{clusterID, organizationID, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,agent_image,agent_update_state,deletion_requested_at) VALUES($1,$2,'Paris','paris','active','{"secret":"target-cluster-label-secret"}','{"secret":"target-cluster-capacity-secret"}',$3,'updating',now()-interval '20 minutes')`, []any{clusterID, organizationID, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,attempts,target_image,last_error,run_after) VALUES($1,$2,'agent.upgrade','agent-command-secret','verifying',1,$3,'target-agent-error-secret',now()-interval '1 minute')`, []any{upgradeID, clusterID, "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)}},
+		{`INSERT INTO jobs(id,kind,payload,status,attempts,max_attempts,last_error,finished_at) VALUES($1,'delete.cluster',$2,'failed',10,10,'target-finalizer-error-secret',now()-interval '10 minutes')`, []any{uuid.New(), `{"clusterId":"` + clusterID.String() + `"}`}},
 		{`INSERT INTO organization_auth_settings(organization_id,require_sso) VALUES($1,true)`, []any{organizationID}},
 		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,enabled) VALUES($1,$2,'Company','https://id.example.test','client','encrypted',true)`, []any{uuid.New(), organizationID}},
 		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,enabled) VALUES($1,$2,'Target SAML','target-idp-metadata-secret','target-sp-certificate-secret','target-saml-key-secret',true),($3,$4,'Other SAML','other-idp-metadata-secret','other-sp-certificate-secret','other-saml-key-secret',true)`, []any{samlProviderID, organizationID, otherSAMLProviderID, otherOrganizationID}},
@@ -347,8 +350,9 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO application_sources(compose_service_id,source_type,repository_url,git_ref,build_type,encrypted_build_config,target_service,registry_image) VALUES($1,'git','https://other-source-secret.example/repository','main','dockerfile','other-build-config-secret','api','other-registry-secret.example/private/api')`, []any{otherServiceID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Other primary','other-primary','postgres','17','other-database-secret','ready')`, []any{otherDatabaseID, otherEnvironmentID}},
 		{`INSERT INTO resource_policies(organization_id,scope_type,scope_id,maintenance_enabled,maintenance_reason,max_projects) VALUES($1,'organization',$1,true,'other-policy-secret',1)`, []any{otherOrganizationID}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'Other cluster','other-cluster','active')`, []any{otherClusterID, otherOrganizationID}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,deletion_requested_at) VALUES($1,$2,'Other cluster','other-cluster','active',now()-interval '1 day')`, []any{otherClusterID, otherOrganizationID}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,attempts,target_image,last_error,finished_at) VALUES($1,$2,'agent.upgrade','other-agent-command-secret','failed',1,$3,'other tenant failure',now())`, []any{otherUpgradeID, otherClusterID, "registry.example/dockyard@sha256:" + strings.Repeat("c", 64)}},
+		{`INSERT INTO jobs(id,kind,payload,status) VALUES($1,'delete.cluster',$2,'pending')`, []any{uuid.New(), `{"clusterId":"` + otherClusterID.String() + `"}`}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'deploy.compose','{"secret":"job-secret-payload"}','pending',$2,$3)`, []any{uuid.New(), "service:" + serviceID.String(), oldestPendingAt}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'deploy.compose','{}','running',$2,now())`, []any{uuid.New(), "service:" + serviceID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'backup.database','{}','pending',$2,$3::timestamptz + interval '30 minutes')`, []any{uuid.New(), "database:" + databaseID.String(), oldestPendingAt}},
@@ -478,9 +482,18 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if snapshot.QueuePosture.Coverage != "resource-keyed-service-and-database-jobs" || snapshot.QueuePosture.PendingServiceJobs != 1 || snapshot.QueuePosture.RunningServiceJobs != 1 || snapshot.QueuePosture.PendingDatabaseJobs != 1 || snapshot.QueuePosture.RunningDatabaseJobs != 1 || snapshot.QueuePosture.OldestPendingAt == nil || !snapshot.QueuePosture.OldestPendingAt.Equal(oldestPendingAt) {
 		t.Fatalf("queue posture=%#v", snapshot.QueuePosture)
 	}
+	if snapshot.FinalizerPosture.DeletingProjects != 0 || snapshot.FinalizerPosture.DeletingEnvironments != 0 || snapshot.FinalizerPosture.DeletingServices != 1 || snapshot.FinalizerPosture.DeletingClusters != 1 || snapshot.FinalizerPosture.PendingJobs != 1 || snapshot.FinalizerPosture.RunningJobs != 0 || snapshot.FinalizerPosture.FailedJobs != 1 || snapshot.FinalizerPosture.ResourcesWithoutActiveJob != 1 || snapshot.FinalizerPosture.OldestRequestedAt == nil {
+		t.Fatalf("finalizer posture=%#v", snapshot.FinalizerPosture)
+	}
 	encodedSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if strings.Contains(string(encodedSnapshot), "target-finalizer-error-secret") || strings.Contains(string(encodedSnapshot), "target-deleting-stack-secret") || strings.Contains(string(encodedSnapshot), "deleting-service-env-secret") {
+		t.Fatalf("snapshot leaked finalizer error: body=%s", encodedSnapshot)
+	}
+	if strings.Contains(string(encodedSnapshot), deletingServiceID.String()) {
+		t.Fatalf("snapshot leaked deleting resource identity %s: body=%s", deletingServiceID, encodedSnapshot)
 	}
 	for _, secret := range []string{"target-admin-invitation-token-hash", "target-viewer-invitation-token-hash", "target-expired-invitation-token-hash", "other-admin-invitation-token-hash", "target-admin-group-external-secret", "Target administrators secret name", "target-viewer-group-external-secret", "Target viewers secret name", "other-group-external-secret", "Other tenant group secret name", "target-github-secret-name", "target-main-secret", "target-webhook-encrypted-secret", "target-gitlab-secret-name", "target-release-secret", "target-disabled-webhook-encrypted-secret", "other-webhook-secret-name", "other-main-secret", "other-webhook-encrypted-secret", "target-plaintext-storage-secret.example.test", "other-plaintext-storage-secret.example.test"} {
 		if strings.Contains(string(encodedSnapshot), secret) {

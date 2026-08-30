@@ -69,6 +69,12 @@ keys make it a privileged service.
   reliability finding once at least four terminal operations exist and at
   least 25% failed; severity becomes high at 50%. Pending, running, and
   cancelled work is excluded from the denominator.
+- Finalizer posture reports tenant-scoped counts of projects, environments,
+  services, and clusters awaiting deletion, their oldest request time, deletion
+  job states, and resources with no active finalizer. Job payloads, Swarm
+  output, and raw failure text remain excluded. Failed or missing finalizers are
+  reported immediately; otherwise deletion pending beyond fifteen minutes is
+  reported as stalled.
 - Audit-log posture reports the effective retention period, enabled and
   disabled immutable archive counts, the tenant's current maximum event ID,
   and per-destination checkpoint, backlog, and latest batch status/timestamps.
@@ -152,7 +158,9 @@ keys make it a privileged service.
   and volume recovery operations, migrations, audit archives, remote agent
   commands, commit-status callbacks, notification delivery, and prior AI
   audits are surfaced even when a resource's latest individual state has
-  recovered. These findings survive a model gateway
+  recovered. Failed, missing, and stalled deletion finalizers are also surfaced
+  even though deleting resources are excluded from active workload inventory.
+  These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and

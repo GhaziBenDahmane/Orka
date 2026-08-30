@@ -51,6 +51,7 @@ type AIAuditSnapshot struct {
 	MigrationBlockers    []AIAuditMigrationBlocker       `json:"migrationBlockers"`
 	ServiceDeployments   []AIAuditServiceDeployment      `json:"serviceDeployments"`
 	QueuePosture         AIAuditQueuePosture             `json:"queuePosture"`
+	FinalizerPosture     AIAuditFinalizerPosture         `json:"finalizerPosture"`
 	Reconciliation       []AIAuditReconciliationPosture  `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
 	AuditEvents          []AIAuditEventInfo              `json:"recentAuditEvents"`
@@ -404,6 +405,18 @@ type AIAuditQueuePosture struct {
 	OldestPendingAt     *time.Time `json:"oldestPendingAt,omitempty"`
 }
 
+type AIAuditFinalizerPosture struct {
+	DeletingProjects          int64      `json:"deletingProjects"`
+	DeletingEnvironments      int64      `json:"deletingEnvironments"`
+	DeletingServices          int64      `json:"deletingServices"`
+	DeletingClusters          int64      `json:"deletingClusters"`
+	PendingJobs               int64      `json:"pendingJobs"`
+	RunningJobs               int64      `json:"runningJobs"`
+	FailedJobs                int64      `json:"failedJobs"`
+	ResourcesWithoutActiveJob int64      `json:"resourcesWithoutActiveJob"`
+	OldestRequestedAt         *time.Time `json:"oldestRequestedAt,omitempty"`
+}
+
 // BuildAIAuditSnapshot deliberately uses the list projections: Compose source,
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
@@ -630,6 +643,9 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 	if err := s.loadAIAuditIntegrationPosture(ctx, organizationID, &snapshot.WebhookPosture, &snapshot.BackupDestinations); err != nil {
+		return err
+	}
+	if err := s.loadAIAuditFinalizerPosture(ctx, organizationID, &snapshot.FinalizerPosture); err != nil {
 		return err
 	}
 	rows, err := s.Pool.Query(ctx, `
@@ -999,6 +1015,67 @@ func (s *Store) loadAIAuditIntegrationPosture(ctx context.Context, organizationI
 		*destinations = append(*destinations, item)
 	}
 	return rows.Err()
+}
+
+func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID uuid.UUID, posture *AIAuditFinalizerPosture) error {
+	return s.Pool.QueryRow(ctx, `
+		WITH deleting_resources AS (
+			SELECT 'project'::text AS resource_type,project.id::text AS resource_id,project.deletion_requested_at AS requested_at
+			FROM projects project WHERE project.organization_id=$1 AND project.deletion_requested_at IS NOT NULL
+			UNION ALL
+			SELECT 'environment',environment.id::text,environment.deletion_requested_at
+			FROM environments environment JOIN projects project ON project.id=environment.project_id
+			WHERE project.organization_id=$1 AND environment.deletion_requested_at IS NOT NULL
+			UNION ALL
+			SELECT 'service',service.id::text,service.deletion_requested_at
+			FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id
+			WHERE project.organization_id=$1 AND service.deletion_requested_at IS NOT NULL
+			UNION ALL
+			SELECT 'cluster',cluster.id::text,cluster.deletion_requested_at
+			FROM clusters cluster WHERE cluster.organization_id=$1 AND cluster.deletion_requested_at IS NOT NULL
+		), deletion_jobs AS (
+			SELECT CASE job.kind
+					WHEN 'delete.project' THEN 'project'
+					WHEN 'delete.environment' THEN 'environment'
+					WHEN 'delete.compose' THEN 'service'
+					WHEN 'delete.cluster' THEN 'cluster'
+				END AS resource_type,
+				CASE job.kind
+					WHEN 'delete.project' THEN job.payload->>'projectId'
+					WHEN 'delete.environment' THEN job.payload->>'environmentId'
+					WHEN 'delete.compose' THEN job.payload->>'serviceId'
+					WHEN 'delete.cluster' THEN job.payload->>'clusterId'
+				END AS resource_id,
+				job.status
+			FROM jobs job
+			WHERE job.kind IN ('delete.project','delete.environment','delete.compose','delete.cluster')
+		), scoped_jobs AS (
+			SELECT job.status FROM deletion_jobs job JOIN deleting_resources resource USING(resource_type,resource_id)
+		)
+		SELECT
+			count(*) FILTER (WHERE resource_type='project'),
+			count(*) FILTER (WHERE resource_type='environment'),
+			count(*) FILTER (WHERE resource_type='service'),
+			count(*) FILTER (WHERE resource_type='cluster'),
+			(SELECT count(*) FROM scoped_jobs WHERE status='pending'),
+			(SELECT count(*) FROM scoped_jobs WHERE status='running'),
+			(SELECT count(*) FROM scoped_jobs WHERE status='failed'),
+			count(*) FILTER (WHERE NOT EXISTS (
+				SELECT 1 FROM deletion_jobs job
+				WHERE job.resource_type=deleting_resources.resource_type AND job.resource_id=deleting_resources.resource_id AND job.status IN ('pending','running')
+			)),
+			min(requested_at)
+		FROM deleting_resources`, organizationID).Scan(
+		&posture.DeletingProjects,
+		&posture.DeletingEnvironments,
+		&posture.DeletingServices,
+		&posture.DeletingClusters,
+		&posture.PendingJobs,
+		&posture.RunningJobs,
+		&posture.FailedJobs,
+		&posture.ResourcesWithoutActiveJob,
+		&posture.OldestRequestedAt,
+	)
 }
 
 func (s *Store) loadAIAuditSourceBuildPosture(ctx context.Context, organizationID uuid.UUID, posture *[]AIAuditSourceBuildPosture) error {

@@ -220,6 +220,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 		TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{ID: repositoryID, Enabled: true, GitRef: "main", LastSyncStatus: "failed"}},
 		NotificationPosture:  []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{"deployment.failed"}}},
 		QueuePosture:         store.AIAuditQueuePosture{PendingServiceJobs: 1, PendingDatabaseJobs: 1, OldestPendingAt: &oldPendingJob},
+		FinalizerPosture:     store.AIAuditFinalizerPosture{DeletingClusters: 1, FailedJobs: 1, ResourcesWithoutActiveJob: 1},
 		ServiceDeployments:   []store.AIAuditServiceDeployment{{ServiceID: serviceID, DesiredRevision: 2, LatestDeploymentRevision: 1, LatestDeploymentStatus: "succeeded"}},
 		Reconciliation:       []store.AIAuditReconciliationPosture{{ComposeServiceID: serviceID, State: "degraded", ConsecutiveFailures: 2, LastCheckedAt: now}},
 	}
@@ -241,8 +242,38 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	if !titles["Backup destination permits plaintext object-store transport"] {
 		t.Errorf("missing plaintext backup destination finding in %#v", findings)
 	}
-	if len(findings) != 28 {
-		t.Fatalf("findings=%d, want 28: %#v", len(findings), findings)
+	if !titles["Resource deletion finalizer requires intervention"] {
+		t.Errorf("missing failed resource finalizer finding in %#v", findings)
+	}
+	if len(findings) != 29 {
+		t.Fatalf("findings=%d, want 29: %#v", len(findings), findings)
+	}
+}
+
+func TestDeterministicAuditDetectsStuckFinalizers(t *testing.T) {
+	now := time.Now().UTC()
+	recent, stale := now.Add(-time.Minute), now.Add(-finalizerStallThreshold-time.Second)
+	for _, test := range []struct {
+		name    string
+		posture store.AIAuditFinalizerPosture
+		want    string
+	}{
+		{name: "healthy active finalizer", posture: store.AIAuditFinalizerPosture{DeletingServices: 1, PendingJobs: 1, OldestRequestedAt: &recent}},
+		{name: "stalled active finalizer", posture: store.AIAuditFinalizerPosture{DeletingServices: 1, RunningJobs: 1, OldestRequestedAt: &stale}, want: "Resource deletion finalizer is stalled"},
+		{name: "failed finalizer", posture: store.AIAuditFinalizerPosture{DeletingClusters: 1, FailedJobs: 1, ResourcesWithoutActiveJob: 1, OldestRequestedAt: &stale}, want: "Resource deletion finalizer requires intervention"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := store.AIAuditSnapshot{
+				Organization:        uuid.New(),
+				IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+				NotificationPosture: fullyCoveredNotifications(),
+				FinalizerPosture:    test.posture,
+			}
+			findings := deterministicAuditFindings(snapshot, now)
+			if test.want == "" && len(findings) != 0 || test.want != "" && (len(findings) != 1 || findings[0].Title != test.want) {
+				t.Fatalf("findings=%#v", findings)
+			}
+		})
 	}
 }
 
