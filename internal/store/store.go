@@ -692,22 +692,32 @@ func (s *Store) GetOrganizationAuthSettings(ctx context.Context, organizationID 
 }
 
 func (s *Store) SetOrganizationAuthSettings(ctx context.Context, organizationID uuid.UUID, requireSSO bool) (OrganizationAuthSettings, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	defer tx.Rollback(ctx)
+	var organizationExists bool
+	if err = tx.QueryRow(ctx, `SELECT true FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&organizationExists); errors.Is(err, pgx.ErrNoRows) {
+		return OrganizationAuthSettings{}, ErrNotFound
+	} else if err != nil {
+		return OrganizationAuthSettings{}, err
+	}
 	var settings OrganizationAuthSettings
-	err := s.Pool.QueryRow(ctx, `INSERT INTO organization_auth_settings(organization_id,require_sso)
+	err = tx.QueryRow(ctx, `INSERT INTO organization_auth_settings(organization_id,require_sso)
 		SELECT o.id,$2 FROM organizations o WHERE o.id=$1 AND (NOT $2 OR EXISTS(SELECT 1 FROM oidc_providers WHERE organization_id=$1 AND enabled) OR EXISTS(SELECT 1 FROM saml_providers WHERE organization_id=$1 AND enabled))
 		ON CONFLICT(organization_id) DO UPDATE SET require_sso=excluded.require_sso,updated_at=now()
 		RETURNING require_sso,updated_at`, organizationID, requireSSO).Scan(&settings.RequireSSO, &settings.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		var exists bool
-		if lookupErr := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1)`, organizationID).Scan(&exists); lookupErr != nil {
-			return OrganizationAuthSettings{}, lookupErr
-		}
-		if exists && requireSSO {
+		if requireSSO {
 			return OrganizationAuthSettings{}, ErrSSOProviderRequired
 		}
 		return OrganizationAuthSettings{}, ErrNotFound
 	}
-	return settings, err
+	if err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	return settings, tx.Commit(ctx)
 }
 
 func (s *Store) CreateProject(ctx context.Context, organizationID uuid.UUID, name, slug, description string) (Project, error) {
@@ -2307,25 +2317,11 @@ func (s *Store) ListOIDCProviders(ctx context.Context, organizationID uuid.UUID)
 	return items, rows.Err()
 }
 func (s *Store) DisableOIDCProvider(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE oidc_providers SET enabled=false WHERE id=$1 AND organization_id=$2`, id, organizationID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.setSSOProviderEnabled(ctx, organizationID, id, "oidc", false)
 }
 
 func (s *Store) SetOIDCProviderEnabled(ctx context.Context, organizationID, id uuid.UUID, enabled bool) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE oidc_providers SET enabled=$3 WHERE id=$1 AND organization_id=$2`, id, organizationID, enabled)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.setSSOProviderEnabled(ctx, organizationID, id, "oidc", enabled)
 }
 
 func (s *Store) DiscoverOIDC(ctx context.Context, domain string) ([]OIDCProvider, error) {
@@ -2535,25 +2531,11 @@ func (s *Store) DiscoverSAML(ctx context.Context, domain string) ([]SAMLProvider
 }
 
 func (s *Store) DisableSAMLProvider(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET enabled=false WHERE id=$1 AND organization_id=$2`, id, organizationID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.setSSOProviderEnabled(ctx, organizationID, id, "saml", false)
 }
 
 func (s *Store) SetSAMLProviderEnabled(ctx context.Context, organizationID, id uuid.UUID, enabled bool) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET enabled=$3 WHERE id=$1 AND organization_id=$2`, id, organizationID, enabled)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.setSSOProviderEnabled(ctx, organizationID, id, "saml", enabled)
 }
 
 func (s *Store) CreateSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID, requestID string) error {

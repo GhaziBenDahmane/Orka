@@ -42,7 +42,11 @@ project and environment grants can narrow access without bypassing the parent
 organization. Owner changes are serialized and retain an active owner. Auditor
 accounts are denied normal workload APIs. Tests exercise cross-tenant access,
 concurrent last-owner changes, federated session binding, SCIM ownership, and
-service-account revocation.
+service-account revocation. Mandatory-SSO policy and OIDC/SAML provider state
+changes serialize on the organization row, preventing sequential or concurrent
+operations from disabling the final enabled provider. The AI baseline reports
+a critical lockout finding if legacy or manually altered state violates that
+invariant.
 
 The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,

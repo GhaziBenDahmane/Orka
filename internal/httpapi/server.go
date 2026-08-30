@@ -2762,6 +2762,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "saml_certificate_rotation_pending", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrSSOProviderRequired) {
+		writeError(w, http.StatusConflict, "sso_provider_required", err.Error())
+		return
+	}
 	if errors.Is(err, store.ErrMaintenance) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, http.StatusServiceUnavailable, "maintenance_mode", "resource is in maintenance mode")

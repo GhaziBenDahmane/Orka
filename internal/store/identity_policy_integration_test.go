@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,13 +46,32 @@ func TestMandatorySSOAndSessionAdministration(t *testing.T) {
 	if allowed, allowErr := db.LocalLoginAllowed(ctx, developerID); allowErr != nil || !allowed {
 		t.Fatalf("local login before enforcement = %v, err = %v", allowed, allowErr)
 	}
-	_, err = db.CreateSAMLProvider(ctx, SAMLProvider{OrganizationID: orgID, Name: "workforce", IDPMetadata: "metadata", CertificatePEM: "certificate", EncryptedPrivateKey: "ciphertext", Domains: []string{"example.test"}, EmailAttribute: "mail", NameAttribute: "name", DefaultRole: "developer"})
+	samlProvider, err := db.CreateSAMLProvider(ctx, SAMLProvider{OrganizationID: orgID, Name: "workforce", IDPMetadata: "metadata", CertificatePEM: "certificate", EncryptedPrivateKey: "ciphertext", Domains: []string{"example.test"}, EmailAttribute: "mail", NameAttribute: "name", DefaultRole: "developer"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	settings, err := db.SetOrganizationAuthSettings(ctx, orgID, true)
 	if err != nil || !settings.RequireSSO {
 		t.Fatalf("settings = %#v, err = %v", settings, err)
+	}
+	if err = db.DisableSAMLProvider(ctx, orgID, samlProvider.ID); !errors.Is(err, ErrSSOProviderRequired) {
+		t.Fatalf("disabling final SAML provider error = %v", err)
+	}
+	oidcProvider, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: orgID, Name: "fallback", Issuer: "https://identity.example.test", ClientID: "client", EncryptedClientSecret: "ciphertext", Domains: []string{"example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DisableSAMLProvider(ctx, orgID, samlProvider.ID); err != nil {
+		t.Fatalf("disabling SAML with OIDC fallback: %v", err)
+	}
+	if err = db.DisableOIDCProvider(ctx, orgID, oidcProvider.ID); !errors.Is(err, ErrSSOProviderRequired) {
+		t.Fatalf("disabling final OIDC provider error = %v", err)
+	}
+	if err = db.SetSAMLProviderEnabled(ctx, orgID, samlProvider.ID, true); err != nil {
+		t.Fatalf("re-enabling SAML provider: %v", err)
+	}
+	if err = db.DisableOIDCProvider(ctx, orgID, oidcProvider.ID); err != nil {
+		t.Fatalf("disabling OIDC with SAML fallback: %v", err)
 	}
 	if allowed, allowErr := db.LocalLoginAllowed(ctx, ownerID); allowErr != nil || !allowed {
 		t.Fatalf("owner break-glass login after enforcement = %v, err = %v", allowed, allowErr)
@@ -107,5 +127,71 @@ func TestMandatorySSOAndSessionAdministration(t *testing.T) {
 	}
 	if err = db.RevokeSession(ctx, developerID, samlID, &orgID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMandatorySSOConcurrentProviderDisableKeepsOneProvider(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Concurrent SSO policy',$2)`, organizationID, "concurrent-sso-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	oidc, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: organizationID, Name: "OIDC", Issuer: "https://oidc.example.test", ClientID: "client", EncryptedClientSecret: "ciphertext", Domains: []string{"example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saml, err := db.CreateSAMLProvider(ctx, SAMLProvider{OrganizationID: organizationID, Name: "SAML", IDPMetadata: "metadata", CertificatePEM: "certificate", EncryptedPrivateKey: "ciphertext", Domains: []string{"example.test"}, EmailAttribute: "mail", NameAttribute: "name", DefaultRole: "developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.SetOrganizationAuthSettings(ctx, organizationID, true); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() {
+		defer workers.Done()
+		<-start
+		results <- db.DisableOIDCProvider(ctx, organizationID, oidc.ID)
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		results <- db.DisableSAMLProvider(ctx, organizationID, saml.ID)
+	}()
+	close(start)
+	workers.Wait()
+	close(results)
+	succeeded, rejected := 0, 0
+	for result := range results {
+		if result == nil {
+			succeeded++
+		} else if errors.Is(result, ErrSSOProviderRequired) {
+			rejected++
+		} else {
+			t.Fatalf("unexpected disable error: %v", result)
+		}
+	}
+	var enabledProviders int
+	if err = db.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM oidc_providers WHERE organization_id=$1 AND enabled) + (SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND enabled)`, organizationID).Scan(&enabledProviders); err != nil {
+		t.Fatal(err)
+	}
+	if succeeded != 1 || rejected != 1 || enabledProviders != 1 {
+		t.Fatalf("disable results succeeded=%d rejected=%d enabled=%d", succeeded, rejected, enabledProviders)
 	}
 }

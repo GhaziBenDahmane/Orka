@@ -31,7 +31,9 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	if snapshot.IdentityPosture.ActiveOwners == 0 {
 		add(modelFinding{Severity: "critical", Category: "identity", Title: "Organization has no active owner", Description: "No active owner can perform break-glass administration or recover organization policy.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeOwners": 0}, Remediation: "Restore or provision an active owner through the documented recovery procedure."})
 	}
-	if !snapshot.IdentityPosture.RequireSSO {
+	if snapshot.IdentityPosture.RequireSSO && snapshot.IdentityPosture.ActiveMembers > 0 && snapshot.IdentityPosture.EnabledOIDCProviders+snapshot.IdentityPosture.EnabledSAMLProviders == 0 {
+		add(modelFinding{Severity: "critical", Category: "identity", Title: "Mandatory SSO has no enabled provider", Description: "Non-owner members are required to use SSO, but the organization has no enabled OIDC or SAML provider.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"requireSso": true, "enabledOidcProviders": 0, "enabledSamlProviders": 0, "activeMembers": snapshot.IdentityPosture.ActiveMembers}, Remediation: "Use owner break-glass access to enable and validate an SSO provider before restoring normal user access."})
+	} else if !snapshot.IdentityPosture.RequireSSO {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Mandatory SSO is disabled", Description: "Non-owner users can continue using local authentication instead of the configured workforce identity boundary.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"requireSso": false}, Remediation: "Complete provider and break-glass testing, then enable mandatory SSO."})
 	}
 	if snapshot.IdentityPosture.PendingSAMLCertificateRotations > 0 && snapshot.IdentityPosture.OldestPendingSAMLRotationAt != nil && now.Sub(*snapshot.IdentityPosture.OldestPendingSAMLRotationAt) > 7*24*time.Hour {

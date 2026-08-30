@@ -84,12 +84,14 @@ are recorded in the tenant audit chain.
 | GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
 | PUT | `/v1/sso/oidc-providers/{id}` | Update discovery settings and optionally rotate the encrypted client secret |
 | POST | `/v1/sso/oidc-providers/{id}/enable` | Re-enable a disabled OIDC provider |
+| DELETE | `/v1/sso/oidc-providers/{id}` | Disable an OIDC provider unless mandatory SSO depends on it as the final provider |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
 | GET | `/v1/auth/sso/callback` | Verify the ID token and create a session |
 | GET/POST | `/v1/sso/saml-providers` | List or configure SAML identity providers |
 | PUT | `/v1/sso/saml-providers/{id}` | Refresh IdP metadata and mappings while preserving the SP key and entity ID |
 | POST | `/v1/sso/saml-providers/{id}/enable` | Re-enable a disabled SAML provider |
+| DELETE | `/v1/sso/saml-providers/{id}` | Disable a SAML provider unless mandatory SSO depends on it as the final provider |
 | POST/DELETE | `/v1/sso/saml-providers/{id}/certificate-rotation` | Publish or cancel a pending SP signing certificate |
 | POST | `/v1/sso/saml-providers/{id}/certificate-rotation/promote` | Promote the published certificate after the IdP imports it |
 | GET | `/v1/auth/saml/discover?email=…` | Discover SAML providers by email domain |

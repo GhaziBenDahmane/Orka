@@ -162,7 +162,9 @@ deploying the recurring Swarm auditor services.
 OIDC providers can be created, rotated, enabled, and disabled with dedicated
 CLI commands or managed declaratively with `dockyard_oidc_provider` in
 Terraform/OpenTofu. `dockyard_auth_settings` controls mandatory SSO. Client
-secrets remain sensitive write-only state.
+secrets remain sensitive write-only state. While mandatory SSO is enabled,
+sequential and concurrent provider changes cannot disable the final enabled
+OIDC or SAML provider; owner break-glass access remains available.
 
 SAML providers likewise have dedicated CLI and Terraform/OpenTofu management.
 Signing-certificate creation stays server-side; rotation uses explicit

@@ -21,6 +21,7 @@ func TestWriteStoreErrorClassifiesRemoteClusterAvailability(t *testing.T) {
 		{name: "capacity", err: store.ErrNoCapacity, status: http.StatusConflict, code: "no_cluster_capacity"},
 		{name: "AI finding limit", err: store.ErrAIAuditFindingLimit, status: http.StatusConflict, code: "ai_audit_finding_limit"},
 		{name: "rollback unavailable", err: store.ErrRollbackUnavailable, status: http.StatusConflict, code: "rollback_unavailable"},
+		{name: "SSO provider required", err: store.ErrSSOProviderRequired, status: http.StatusConflict, code: "sso_provider_required"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

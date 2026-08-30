@@ -496,6 +496,27 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsMandatorySSOLockout(t *testing.T) {
+	organizationID := uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization: organizationID,
+		IdentityPosture: store.AIAuditIdentityPosture{
+			RequireSSO:    true,
+			ActiveMembers: 3,
+			ActiveOwners:  1,
+		},
+		NotificationPosture: fullyCoveredNotifications(),
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 1 || findings[0].Title != "Mandatory SSO has no enabled provider" || findings[0].Severity != "critical" || findings[0].ResourceID != organizationID.String() {
+		t.Fatalf("SSO lockout findings=%#v", findings)
+	}
+	snapshot.IdentityPosture.EnabledOIDCProviders = 1
+	if findings = deterministicAuditFindings(snapshot, time.Now().UTC()); len(findings) != 0 {
+		t.Fatalf("enabled SSO provider produced findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsMutableRemoteAgentImages(t *testing.T) {
 	now := time.Now().UTC()
 	missingID, mutableID := uuid.New(), uuid.New()
