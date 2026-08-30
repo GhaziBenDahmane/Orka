@@ -178,6 +178,93 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 	}
 }
 
+func TestServiceDeletionFencesConfigurationMutations(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	organizationID, userID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Deletion configuration fence',$2)`, []any{organizationID, "deletion-configuration-fence-" + organizationID.String()}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, []any{userID, userID.String() + "@example.test"}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Application','application',$3,'services: {}')`, []any{serviceID, environmentID, "deletion-configuration-fence-" + serviceID.String()}},
+	}
+	for _, statement := range statements {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$1`, serviceID.String())
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+
+	blocker, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if err = blocker.QueryRow(ctx, `SELECT id FROM compose_services WHERE id=$1 FOR UPDATE`, serviceID).Scan(new(uuid.UUID)); err != nil {
+		t.Fatal(err)
+	}
+	deleteResult := make(chan error, 1)
+	go func() { deleteResult <- db.QueueServiceDeletion(ctx, organizationID, serviceID) }()
+	waitForBlockedStoreQuery(t, ctx, db, "SELECT s.stack_name,s.deletion_requested_at IS NOT NULL FROM compose_services")
+	type routeResult struct {
+		route Route
+		err   error
+	}
+	routeResultChannel := make(chan routeResult, 1)
+	go func() {
+		route, routeErr := db.AddRoute(ctx, organizationID, Route{ComposeServiceID: serviceID, ServiceName: "web", Host: "race.example.test", TargetPort: 8080, TLS: true})
+		routeResultChannel <- routeResult{route: route, err: routeErr}
+	}()
+	waitForBlockedStoreQuery(t, ctx, db, "SELECT project.id,environment.id FROM compose_services service")
+	if err = blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-deleteResult; err != nil {
+		t.Fatalf("service deletion during route race: %v", err)
+	}
+	concurrentRoute := <-routeResultChannel
+	if concurrentRoute.err != nil && !errors.Is(concurrentRoute.err, ErrNotFound) {
+		t.Fatalf("concurrent route mutation error=%v", concurrentRoute.err)
+	}
+
+	assertNotFound := func(operation string, operationErr error) {
+		t.Helper()
+		if !errors.Is(operationErr, ErrNotFound) {
+			t.Fatalf("%s after deletion request error=%v, want ErrNotFound", operation, operationErr)
+		}
+	}
+	_, err = db.UpdateComposeService(ctx, organizationID, serviceID, "services: {}", "")
+	assertNotFound("compose update", err)
+	_, err = db.UpsertApplicationSource(ctx, organizationID, ApplicationSource{ComposeServiceID: serviceID, SourceType: "git", RepositoryURL: "https://example.test/repository.git"})
+	assertNotFound("application source update", err)
+	_, err = db.UpsertApplicationArtifact(ctx, organizationID, ApplicationArtifact{ComposeServiceID: serviceID, EncryptedArchive: "encrypted", Filename: "source.zip", SHA256: "sha256", CompressedSize: 1})
+	assertNotFound("application artifact update", err)
+	_, err = db.AddRoute(ctx, organizationID, Route{ComposeServiceID: serviceID, ServiceName: "web", Host: "late.example.test", TargetPort: 8080, TLS: true})
+	assertNotFound("route creation", err)
+	_, err = db.CreateDeployToken(ctx, organizationID, serviceID, userID, "late", []byte("digest"), time.Now().Add(time.Hour))
+	assertNotFound("deployment-hook creation", err)
+	_, err = db.CreateWebhookIntegration(ctx, organizationID, WebhookIntegration{ComposeServiceID: serviceID, Name: "late", Provider: "github", Branch: "main", EncryptedSecret: "encrypted"})
+	assertNotFound("provider-webhook creation", err)
+}
+
 func assertServiceDeletionBusy(t *testing.T, ctx context.Context, db *Store, organizationID, serviceID uuid.UUID, operation string) {
 	t.Helper()
 	if err := db.QueueServiceDeletion(ctx, organizationID, serviceID); !errors.Is(err, ErrBusy) {

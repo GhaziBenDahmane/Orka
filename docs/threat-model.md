@@ -194,7 +194,10 @@ between configuration changes and retirement of protected state.
 Service deletion uses the same service-row boundary: active deployments,
 database migrations, backups, and restores reject deletion, while new manual
 or scheduled data operations, webhook deployments, template upgrades, and
-backup-policy writes reject a service whose deletion has been queued.
+backup-policy writes reject a service whose deletion has been queued. Compose
+revisions, source and uploaded-artifact changes, routes, deployment hooks, and
+provider-webhook records also take that service lock, preventing configuration
+from being created inside an in-flight deletion transaction.
 Environment and project cascades lock their descendants in
 parent-to-environment-to-database-to-service order, apply the same
 active-operation barrier to linked and unbound database records, and serialize

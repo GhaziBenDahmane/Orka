@@ -86,6 +86,15 @@ func servicePolicyScope(ctx context.Context, tx pgx.Tx, organizationID, serviceI
 	return projectID, environmentID, err
 }
 
+func lockActiveServiceForMutation(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID) (uuid.UUID, uuid.UUID, error) {
+	var projectID, environmentID uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT project.id,environment.id FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.id=$1 AND project.organization_id=$2 AND service.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL FOR UPDATE OF service`, serviceID, organizationID).Scan(&projectID, &environmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, uuid.Nil, ErrNotFound
+	}
+	return projectID, environmentID, err
+}
+
 func ensureEnvironmentClusterWritable(ctx context.Context, tx pgx.Tx, environmentID uuid.UUID) error {
 	var local, writable, fresh, capacity bool
 	err := tx.QueryRow(ctx, `SELECT

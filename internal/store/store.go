@@ -1137,15 +1137,11 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 		return ComposeService{}, err
 	}
 	defer tx.Rollback(ctx)
-	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, id)
+	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, id)
 	if err != nil {
 		return ComposeService{}, err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
-		return ComposeService{}, err
-	}
-	var locked bool
-	if err = tx.QueryRow(ctx, `SELECT true FROM compose_services WHERE id=$1 FOR UPDATE`, id).Scan(&locked); err != nil {
 		return ComposeService{}, err
 	}
 	if err = ensureProtectedVolumesDeclared(ctx, tx, id, composeYAML); err != nil {
@@ -1171,7 +1167,7 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 		return ApplicationSource{}, err
 	}
 	defer tx.Rollback(ctx)
-	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, source.ComposeServiceID)
+	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, source.ComposeServiceID)
 	if err != nil {
 		return ApplicationSource{}, err
 	}
@@ -1220,7 +1216,7 @@ func (s *Store) UpsertApplicationArtifact(ctx context.Context, organizationID uu
 		return ApplicationArtifact{}, err
 	}
 	defer tx.Rollback(ctx)
-	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, artifact.ComposeServiceID)
+	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, artifact.ComposeServiceID)
 	if err != nil {
 		return ApplicationArtifact{}, err
 	}
@@ -1330,7 +1326,7 @@ func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route)
 		return Route{}, err
 	}
 	defer tx.Rollback(ctx)
-	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, r.ComposeServiceID)
+	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, r.ComposeServiceID)
 	if err != nil {
 		return Route{}, err
 	}
@@ -1494,15 +1490,26 @@ func (s *Store) CancelDeployment(ctx context.Context, organizationID, deployment
 }
 
 func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID, userID uuid.UUID, name string, tokenHash []byte, expiresAt time.Time) (DeployToken, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return DeployToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, _, err = lockActiveServiceForMutation(ctx, tx, organizationID, serviceID); err != nil {
+		return DeployToken{}, err
+	}
 	item := DeployToken{ID: uuid.New(), ComposeServiceID: serviceID, Name: name, ExpiresAt: expiresAt}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at)
+	err = tx.QueryRow(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at)
 		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$7
 		RETURNING created_at`, item.ID, serviceID, tokenHash, name, nullableUUID(userID), expiresAt, organizationID).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DeployToken{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return DeployToken{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) ListDeployTokens(ctx context.Context, organizationID, serviceID uuid.UUID) ([]DeployToken, error) {
@@ -1538,17 +1545,28 @@ func (s *Store) RevokeDeployToken(ctx context.Context, organizationID, serviceID
 }
 
 func (s *Store) CreateWebhookIntegration(ctx context.Context, organizationID uuid.UUID, item WebhookIntegration) (WebhookIntegration, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return WebhookIntegration{}, err
+	}
+	defer tx.Rollback(ctx)
+	if _, _, err = lockActiveServiceForMutation(ctx, tx, organizationID, item.ComposeServiceID); err != nil {
+		return WebhookIntegration{}, err
+	}
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret)
+	err = tx.QueryRow(ctx, `INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret)
 		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$7
 		RETURNING enabled,created_at,updated_at`, item.ID, item.ComposeServiceID, item.Name, item.Provider, item.Branch, item.EncryptedSecret, organizationID).Scan(&item.Enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WebhookIntegration{}, ErrNotFound
 	}
 	item.OrganizationID = organizationID
-	return item, err
+	if err != nil {
+		return WebhookIntegration{}, err
+	}
+	return item, tx.Commit(ctx)
 }
 
 func (s *Store) ListWebhookIntegrations(ctx context.Context, organizationID, serviceID uuid.UUID) ([]WebhookIntegration, error) {

@@ -382,6 +382,9 @@ Project and environment deletion is asynchronous and cascades through service
 stack finalizers. Cascades lock every child database and service, reject active
 deployment or data work (including databases without a linked Compose service),
 and prevent concurrent child creation from escaping the deletion.
+Service deletion also serializes with revisions, source and uploaded-artifact
+changes, route creation, deployment-hook issuance, and provider-webhook
+creation; once deletion wins, those mutations return not found.
 Repeating a delete safely resumes failed finalizers. Cluster
 deletion revokes its agent certificate and queued commands and is allowed only
 after environments have been moved or deleted. Named volumes are retained by
