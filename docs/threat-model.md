@@ -105,6 +105,16 @@ Ed25519 signer and are replaced transactionally only after archive and
 signature validation. Private catalog downloads refuse redirects rather than
 risk forwarding a GitHub token to a substituted host. Releases produce
 SBOM/provenance attestations and are keylessly signed.
+Tenant-configured Git, OIDC, notification, SMTP, backup, and catalog clients use
+a shared egress policy. DNS answers are checked again in the dial path and any
+answer in loopback, link-local, shared, or private address space is rejected by
+default, which prevents DNS rebinding into manager services and cloud metadata
+endpoints. Operators may allow only explicit private CIDRs for intentional
+self-hosted dependencies; remote-agent artifact transfers apply the same rule.
+Proxy environment variables are not honored on these HTTP paths because a
+proxy would move destination resolution outside the policy boundary. Docker
+image pulls, build steps, and deployed workloads remain outside this
+process-level control and require node firewall or network-policy enforcement.
 
 ### Replay, stale work, and split brain
 

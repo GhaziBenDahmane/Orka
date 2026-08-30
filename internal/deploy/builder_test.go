@@ -3,15 +3,23 @@ package deploy
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
+
+type builderResolver map[string][]netip.Addr
+
+func (r builderResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	return r[host], nil
+}
 
 func TestSafeJoin(t *testing.T) {
 	root := t.TempDir()
@@ -21,6 +29,36 @@ func TestSafeJoin(t *testing.T) {
 	path, err := safeJoin(root, "app/Dockerfile")
 	if err != nil || !strings.HasPrefix(path, root) {
 		t.Fatalf("unexpected safe path %q: %v", path, err)
+	}
+}
+
+func TestBuildRejectsPrivateRepositoryDestination(t *testing.T) {
+	source := store.ApplicationSource{RepositoryURL: "https://127.0.0.1/repository.git", GitRef: "main", ContextDirectory: ".", BuildType: "dockerfile", RegistryImage: "registry.example.test/acme/app"}
+	_, _, err := (Builder{EgressPolicy: &netpolicy.Policy{}}).Build(context.Background(), source, uuid.New(), BuildCredentials{})
+	if err == nil || !strings.Contains(err.Error(), "egress policy blocks") {
+		t.Fatalf("private repository error=%v", err)
+	}
+}
+
+func TestBuildPinsHTTPSGitToPolicyResolution(t *testing.T) {
+	directory := t.TempDir()
+	gitPath, dockerPath, logPath := filepath.Join(directory, "git"), filepath.Join(directory, "docker"), filepath.Join(directory, "git-environment")
+	t.Setenv("DOCKYARD_BUILD_TEST_LOG", logPath)
+	gitScript := "#!/bin/sh\nprintf '%s' \"$GIT_CONFIG_VALUE_0\" >\"$DOCKYARD_BUILD_TEST_LOG\"\nfor destination do :; done\nmkdir -p \"$destination\"\nprintf 'FROM scratch\\n' >\"$destination/Dockerfile\"\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dockerPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := &netpolicy.Policy{Resolver: builderResolver{"git.example.test": {netip.MustParseAddr("93.184.216.34")}}}
+	source := store.ApplicationSource{RepositoryURL: "https://git.example.test/acme/repository.git", GitRef: "main", ContextDirectory: ".", BuildType: "dockerfile", Dockerfile: "Dockerfile", RegistryImage: "registry.example.test/acme/app"}
+	if _, _, err := (Builder{GitBin: gitPath, DockerBin: dockerPath, EgressPolicy: policy}).Build(context.Background(), source, uuid.New(), BuildCredentials{}); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := os.ReadFile(logPath)
+	if err != nil || string(pinned) != "git.example.test:443:93.184.216.34" {
+		t.Fatalf("Git resolution pin=%q error=%v", pinned, err)
 	}
 }
 

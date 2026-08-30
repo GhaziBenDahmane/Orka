@@ -16,12 +16,16 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
-type Builder struct{ GitBin, DockerBin, NixpacksBin, RailpackBin, PackBin, RailpackFrontend, BuildpackBuilder, HerokuBuilder, StaticImage string }
+type Builder struct {
+	GitBin, DockerBin, NixpacksBin, RailpackBin, PackBin, RailpackFrontend, BuildpackBuilder, HerokuBuilder, StaticImage string
+	EgressPolicy                                                                                                         *netpolicy.Policy
+}
 
 type Credential struct {
 	Kind       string `json:"kind"`
@@ -147,12 +151,36 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if credentials.Git.Secret != "" && !strings.EqualFold(repo.Hostname(), credentials.Git.Server) {
 		return "", "", fmt.Errorf("Git credential server does not match repository host")
 	}
+	resolvedAddresses := []string(nil)
+	if b.EgressPolicy != nil {
+		addresses, resolveErr := b.EgressPolicy.ResolveHost(ctx, repo.Hostname())
+		if resolveErr != nil {
+			err = resolveErr
+			return "", "", fmt.Errorf("repository URL violates egress policy: %w", err)
+		}
+		for _, address := range addresses {
+			value := address.String()
+			if address.Is6() {
+				value = "[" + value + "]"
+			}
+			resolvedAddresses = append(resolvedAddresses, value)
+		}
+	}
 	directory, err := os.MkdirTemp("", "dockyard-build-*")
 	if err != nil {
 		return "", "", err
 	}
 	defer os.RemoveAll(directory)
 	gitEnvironment := map[string]string{"GIT_TERMINAL_PROMPT": "0"}
+	if len(resolvedAddresses) > 0 && repo.Scheme == "https" {
+		port := repo.Port()
+		if port == "" {
+			port = "443"
+		}
+		gitEnvironment["GIT_CONFIG_COUNT"] = "1"
+		gitEnvironment["GIT_CONFIG_KEY_0"] = "http.curloptResolve"
+		gitEnvironment["GIT_CONFIG_VALUE_0"] = repo.Hostname() + ":" + port + ":" + strings.Join(resolvedAddresses, ",")
+	}
 	if repo.Scheme == "ssh" {
 		if credentials.Git.Kind != "git-ssh" || credentials.Git.Secret == "" || credentials.Git.KnownHosts == "" {
 			return "", "", errors.New("SSH repository requires a git-ssh credential with pinned host keys")
@@ -166,6 +194,9 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		}
 		defer os.RemoveAll(sshDirectory)
 		gitEnvironment["GIT_SSH_COMMAND"] = "ssh -F /dev/null -i " + filepath.Join(sshDirectory, "key") + " -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=" + filepath.Join(sshDirectory, "known_hosts")
+		if len(resolvedAddresses) > 0 {
+			gitEnvironment["GIT_SSH_COMMAND"] += " -o HostName=" + strings.Trim(resolvedAddresses[0], "[]") + " -o HostKeyAlias=" + repo.Hostname()
+		}
 	} else if credentials.Git.Secret != "" {
 		askPass, createErr := writeAskPass()
 		if createErr != nil {

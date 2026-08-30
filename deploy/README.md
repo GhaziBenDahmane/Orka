@@ -102,6 +102,19 @@ The manifests give the controller, agent, routing, and AI processes 30 seconds
 to stop cleanly, and PostgreSQL one minute to checkpoint, before Swarm sends a
 hard kill. Keep these periods longer than the controller's internal 15-second
 HTTP shutdown deadline when maintaining custom overlays.
+Tenant-configured outbound HTTP, HTTPS, SMTP, S3, OIDC, Git, and template
+destinations cannot resolve to loopback, link-local, shared, or private address
+space by default. If a private Git forge, identity provider, SMTP relay, or
+object store is intentional, set `DOCKYARD_EGRESS_PRIVATE_CIDRS` for both the
+controller and any remote agent stack to the narrow
+comma-separated CIDRs it occupies (for example `10.40.12.0/24,fd00:40:12::/64`).
+The policy resolves every address before connecting and repeats resolution at
+connection time. HTTP proxy environment variables are deliberately ignored so
+they cannot bypass destination checks. Treat this allowlist as manager-level
+network authority and do not use broad ranges when a service subnet suffices.
+This control applies to control-plane clients and remote-agent artifact
+transfers. Docker image pulls, build steps, and deployed workloads use Docker's
+network path and still require node firewall and egress-policy enforcement.
 All bundled services use Docker's bounded `local` logging driver with five
 20-MiB files by default. Set `DOCKYARD_CONTAINER_LOG_MAX_SIZE` and
 `DOCKYARD_CONTAINER_LOG_MAX_FILES` before rendering any platform, agent, or AI

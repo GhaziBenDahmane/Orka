@@ -25,6 +25,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 )
@@ -116,6 +117,27 @@ func TestAgentHTTPClientsRejectRedirects(t *testing.T) {
 	}
 	if targetCalls != 0 {
 		t.Fatalf("redirect target received %d credential-bearing requests", targetCalls)
+	}
+}
+
+func TestArtifactTransferEnforcesPrivateEgressPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("artifact")) }))
+	defer server.Close()
+	blockedPath := filepath.Join(t.TempDir(), "blocked")
+	if err := transfer(context.Background(), http.MethodGet, server.URL, blockedPath, &netpolicy.Policy{}); err == nil || !strings.Contains(err.Error(), "egress policy blocks") {
+		t.Fatalf("private artifact transfer error=%v", err)
+	}
+	allowed, err := netpolicy.ParseAllowedCIDRs("127.0.0.0/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowedPath := filepath.Join(t.TempDir(), "allowed")
+	if err = transfer(context.Background(), http.MethodGet, server.URL, allowedPath, &netpolicy.Policy{Allowed: allowed}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(allowedPath)
+	if err != nil || string(data) != "artifact" {
+		t.Fatalf("artifact=%q error=%v", data, err)
 	}
 }
 

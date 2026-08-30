@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -21,6 +22,7 @@ type S3Config struct {
 	Endpoint, Region, Bucket, Prefix   string
 	AccessKey, SecretKey, SessionToken string
 	UseTLS                             bool
+	Transport                          http.RoundTripper
 }
 
 type S3 struct {
@@ -31,7 +33,7 @@ type S3 struct {
 
 func NewS3(config S3Config) (*S3, error) {
 	parsed, err := url.Parse(config.Endpoint)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Path != "" && parsed.Path != "/" {
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.Path != "" && parsed.Path != "/" {
 		return nil, errors.New("S3 endpoint must be an HTTP(S) origin without a path")
 	}
 	if config.UseTLS && parsed.Scheme != "https" || !config.UseTLS && parsed.Scheme != "http" {
@@ -40,7 +42,7 @@ func NewS3(config S3Config) (*S3, error) {
 	if strings.TrimSpace(config.Bucket) == "" || strings.Contains(config.Prefix, "..") || config.AccessKey == "" || config.SecretKey == "" {
 		return nil, errors.New("invalid S3 bucket or prefix")
 	}
-	client, err := minio.New(parsed.Host, &minio.Options{Creds: credentials.NewStaticV4(config.AccessKey, config.SecretKey, config.SessionToken), Secure: config.UseTLS, Region: config.Region})
+	client, err := minio.New(parsed.Host, &minio.Options{Creds: credentials.NewStaticV4(config.AccessKey, config.SecretKey, config.SessionToken), Secure: config.UseTLS, Region: config.Region, Transport: config.Transport})
 	if err != nil {
 		return nil, err
 	}

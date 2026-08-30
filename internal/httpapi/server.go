@@ -46,6 +46,7 @@ type Server struct {
 	Logger                     *slog.Logger
 	PublicURL                  string
 	OIDCHTTPClient             *http.Client
+	EgressTransport            http.RoundTripper
 	Metrics                    *observability.Metrics
 	MetricsTokenHash           []byte
 	AgentCACertificate         []byte
@@ -1360,7 +1361,7 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "invalid_destination", "name, accessKey, and secretKey are required")
 		return
 	}
-	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS})
+	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS, Transport: s.EgressTransport})
 	if err != nil {
 		writeError(w, 400, "invalid_destination", err.Error())
 		return
@@ -1407,7 +1408,7 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, err)
 		return
 	}
-	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS})
+	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS, Transport: s.EgressTransport})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_destination", err.Error())
 		return

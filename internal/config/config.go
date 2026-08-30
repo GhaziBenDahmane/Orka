@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 )
 
 type Config struct {
@@ -47,6 +49,7 @@ type Config struct {
 	AgentServerKeyFile         string
 	DatabaseDriverDirectory    string
 	TrustedProxyCIDRs          []*net.IPNet
+	EgressPrivateCIDRs         []netip.Prefix
 }
 
 var swarmNetworkName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
@@ -139,6 +142,10 @@ func Load() (Config, error) {
 	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("DOCKYARD_TRUSTED_PROXY_CIDRS"))
 	if err != nil {
 		return Config{}, err
+	}
+	egressPrivateCIDRs, err := netpolicy.ParseAllowedCIDRs(os.Getenv("DOCKYARD_EGRESS_PRIVATE_CIDRS"))
+	if err != nil {
+		return Config{}, fmt.Errorf("DOCKYARD_EGRESS_PRIVATE_CIDRS: %w", err)
 	}
 	agentCACertificate, err := secretEnv("DOCKYARD_AGENT_CA_CERT")
 	if err != nil {
@@ -239,6 +246,7 @@ func Load() (Config, error) {
 		AgentServerKeyFile:         agentServerKeyFile,
 		DatabaseDriverDirectory:    driverDirectory,
 		TrustedProxyCIDRs:          trustedProxyCIDRs,
+		EgressPrivateCIDRs:         egressPrivateCIDRs,
 	}, nil
 }
 

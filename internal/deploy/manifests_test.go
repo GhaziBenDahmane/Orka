@@ -161,6 +161,15 @@ func TestPrivilegedControlProcessesHaveHardenedContainers(t *testing.T) {
 	}
 }
 
+func TestControllerManifestExposesPrivateEgressAllowlist(t *testing.T) {
+	for path, serviceName := range map[string]string{"../../deploy/swarm.yml": "dockyard", "../../deploy/agent-swarm.yml": "agent"} {
+		service := readDeploymentManifest(t, path).Services[serviceName]
+		if service.Environment["DOCKYARD_EGRESS_PRIVATE_CIDRS"] != "${DOCKYARD_EGRESS_PRIVATE_CIDRS:-}" {
+			t.Errorf("%s private egress allowlist=%q", path, service.Environment["DOCKYARD_EGRESS_PRIVATE_CIDRS"])
+		}
+	}
+}
+
 func TestProductionServicesHaveExplicitStopGracePeriods(t *testing.T) {
 	for path, minimums := range map[string]map[string]time.Duration{
 		"../../deploy/swarm.yml": {

@@ -25,6 +25,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/httpapi"
 	dockyardmigrate "github.com/bendahma/dokploy-go/internal/migrate"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/releaseevidence"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -253,6 +254,10 @@ func readRestrictedMasterKey(path string) ([]byte, error) {
 func runAgent() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	allowedEgress, err := netpolicy.ParseAllowedCIDRs(os.Getenv("DOCKYARD_EGRESS_PRIVATE_CIDRS"))
+	if err != nil {
+		return fmt.Errorf("DOCKYARD_EGRESS_PRIVATE_CIDRS: %w", err)
+	}
 	return agent.Run(ctx, agent.Config{
 		EnrollmentURL:       os.Getenv("DOCKYARD_CONTROL_PLANE_URL"),
 		AgentURL:            os.Getenv("DOCKYARD_AGENT_URL"),
@@ -263,6 +268,7 @@ func runAgent() error {
 		Network:             envDefault("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
 		Version:             version,
 		ServiceName:         envDefault("DOCKYARD_AGENT_SERVICE_NAME", "dockyard-agent_agent"),
+		EgressPolicy:        &netpolicy.Policy{Allowed: allowedEgress},
 	})
 }
 
@@ -537,13 +543,16 @@ func serve() error {
 	metrics.SetCertificateExpiry("agent_ca", cfg.AgentCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_previous_ca", cfg.AgentPreviousCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_server", cfg.AgentServerCertExpiresAt)
-	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
+	egressPolicy := &netpolicy.Policy{Allowed: cfg.EgressPrivateCIDRs}
+	egressTransport := egressPolicy.Transport()
+	notificationClient := &http.Client{Transport: egressTransport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("notification redirects are disabled") }}
+	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin, EgressPolicy: egressPolicy}, Metrics: metrics, NotificationClient: notificationClient, EgressPolicy: egressPolicy, EgressTransport: egressTransport}
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
 		return deploy.RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 45 * time.Minute}
 	}
 	go worker.Run(ctx)
-	go templates.RunRepositorySyncScheduler(ctx, db, box, nil, logger, worker.ID)
-	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, MetricsTokenHash: cryptox.Digest(cfg.MetricsToken), AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
+	go templates.RunRepositorySyncScheduler(ctx, db, box, &http.Client{Transport: egressTransport, Timeout: 45 * time.Second}, logger, worker.ID)
+	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, OIDCHTTPClient: &http.Client{Transport: egressTransport, Timeout: 15 * time.Second}, EgressTransport: egressTransport, Metrics: metrics, MetricsTokenHash: cryptox.Digest(cfg.MetricsToken), AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
 	httpServer := newPlatformHTTPServer(cfg.ListenAddr, api.Handler(), 30*time.Second)
 	servers := []*http.Server{httpServer}
 	var agentServer *http.Server

@@ -26,6 +26,7 @@ import (
 	backupstore "github.com/bendahma/dokploy-go/internal/backup"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
@@ -46,6 +47,8 @@ type Worker struct {
 	Builder            Builder
 	Metrics            *observability.Metrics
 	NotificationClient *http.Client
+	EgressPolicy       *netpolicy.Policy
+	EgressTransport    http.RoundTripper
 	// notificationTLS lets conformance tests trust an isolated SMTP server
 	// without weakening the system trust store used in production.
 	notificationTLS *tls.Config
@@ -2032,7 +2035,7 @@ func (w *Worker) s3(ctx context.Context, id uuid.UUID) (*backupstore.S3, error) 
 	if err = json.Unmarshal(plain, &credentials); err != nil {
 		return nil, err
 	}
-	return backupstore.NewS3(backupstore.S3Config{Endpoint: endpoint, Region: region, Bucket: bucket, Prefix: prefix, UseTLS: useTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"]})
+	return backupstore.NewS3(backupstore.S3Config{Endpoint: endpoint, Region: region, Bucket: bucket, Prefix: prefix, UseTLS: useTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"], Transport: w.EgressTransport})
 }
 func (w *Worker) failRestore(ctx context.Context, j job, id uuid.UUID, restoreErr error) error {
 	query := `UPDATE database_restores SET status='failed',error=$2,finished_at=now() WHERE id=$1`
@@ -2145,7 +2148,7 @@ func (w *Worker) deliverNotification(ctx context.Context, j job) error {
 	case "pagerduty", "opsgenie":
 		code, err = sendIncidentNotification(ctx, w.notificationClient(), endpoint.Kind, string(urlBytes), string(secret), delivery)
 	case "smtp":
-		code, err = sendSMTPNotificationWithTLS(ctx, string(urlBytes), secret, delivery, w.notificationTLS)
+		code, err = sendSMTPNotificationWithTLS(ctx, string(urlBytes), secret, delivery, w.notificationTLS, w.EgressPolicy)
 	default:
 		err = fmt.Errorf("unsupported notification endpoint kind %q", endpoint.Kind)
 	}

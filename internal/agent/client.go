@@ -31,6 +31,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/google/uuid"
 )
 
@@ -44,6 +45,7 @@ type Config struct {
 	Network             string
 	Version             string
 	ServiceName         string
+	EgressPolicy        *netpolicy.Policy
 }
 
 type Client struct {
@@ -772,7 +774,7 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 	plainPath := filepath.Join(directory, job.ArtifactName)
 	encryptedPath := plainPath + ".enc"
 	if job.Mode == "download" {
-		if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath); err != nil {
+		if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath, c.cfg.EgressPolicy); err != nil {
 			return "", err
 		}
 		if sum, size, hashErr := fileHash(encryptedPath); hashErr != nil || sum != job.SHA256 || (job.SizeBytes > 0 && size != job.SizeBytes) {
@@ -805,7 +807,7 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 			result.SHA256, result.SizeBytes, err = fileHash(encryptedPath)
 		}
 		if err == nil {
-			err = transfer(ctx, http.MethodPut, job.TransferURL, encryptedPath)
+			err = transfer(ctx, http.MethodPut, job.TransferURL, encryptedPath, c.cfg.EgressPolicy)
 		}
 		if err != nil {
 			return output, err
@@ -815,7 +817,7 @@ func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (s
 	return string(encoded), err
 }
 
-func transfer(ctx context.Context, method, rawURL, filename string) error {
+func transfer(ctx context.Context, method, rawURL, filename string, policy *netpolicy.Policy) error {
 	var body io.ReadCloser
 	if method == http.MethodPut {
 		file, err := os.Open(filename)
@@ -841,6 +843,9 @@ func transfer(ctx context.Context, method, rawURL, filename string) error {
 		defer body.Close()
 	}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("artifact redirects are disabled") }}
+	if policy != nil {
+		client.Transport = policy.Transport()
+	}
 	response, err := client.Do(req)
 	if err != nil {
 		return err

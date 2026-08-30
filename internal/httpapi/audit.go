@@ -79,7 +79,7 @@ func (s *Server) createAuditArchive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "decryption_failed", "backup destination is invalid")
 		return
 	}
-	archive, err := backupstore.NewS3(backupstore.S3Config{Endpoint: destination.Endpoint, Region: destination.Region, Bucket: destination.Bucket, Prefix: destination.Prefix, UseTLS: destination.UseTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"]})
+	archive, err := backupstore.NewS3(backupstore.S3Config{Endpoint: destination.Endpoint, Region: destination.Region, Bucket: destination.Bucket, Prefix: destination.Prefix, UseTLS: destination.UseTLS, AccessKey: credentials["accessKey"], SecretKey: credentials["secretKey"], SessionToken: credentials["sessionToken"], Transport: s.EgressTransport})
 	if err != nil {
 		writeError(w, 400, "invalid_audit_archive", err.Error())
 		return

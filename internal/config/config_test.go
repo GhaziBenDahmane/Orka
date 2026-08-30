@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,24 @@ func TestLoadValidatesTrustedProxyNetworks(t *testing.T) {
 			setRequiredConfig(t)
 			t.Setenv("DOCKYARD_TRUSTED_PROXY_CIDRS", value)
 			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_TRUSTED_PROXY_CIDRS") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestLoadValidatesPrivateEgressNetworks(t *testing.T) {
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_EGRESS_PRIVATE_CIDRS", "10.40.0.0/16, fd00:1234::/48")
+	cfg, err := Load()
+	if err != nil || len(cfg.EgressPrivateCIDRs) != 2 || !cfg.EgressPrivateCIDRs[0].Contains(netip.MustParseAddr("10.40.2.3")) || !cfg.EgressPrivateCIDRs[1].Contains(netip.MustParseAddr("fd00:1234::2")) {
+		t.Fatalf("private egress networks=%v error=%v", cfg.EgressPrivateCIDRs, err)
+	}
+	for _, value := range []string{"not-a-network", "10.0.0.1", "10.0.0.0/8,10.0.0.0/8"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_EGRESS_PRIVATE_CIDRS", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_EGRESS_PRIVATE_CIDRS") {
 				t.Fatalf("error=%v", err)
 			}
 		})

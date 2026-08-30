@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/store"
 )
 
@@ -80,10 +81,10 @@ type smtpMaterial struct {
 }
 
 func sendSMTPNotification(ctx context.Context, endpoint string, encryptedMaterial []byte, delivery store.NotificationDelivery) (int, error) {
-	return sendSMTPNotificationWithTLS(ctx, endpoint, encryptedMaterial, delivery, nil)
+	return sendSMTPNotificationWithTLS(ctx, endpoint, encryptedMaterial, delivery, nil, nil)
 }
 
-func sendSMTPNotificationWithTLS(ctx context.Context, endpoint string, encryptedMaterial []byte, delivery store.NotificationDelivery, configuredTLS *tls.Config) (int, error) {
+func sendSMTPNotificationWithTLS(ctx context.Context, endpoint string, encryptedMaterial []byte, delivery store.NotificationDelivery, configuredTLS *tls.Config, policy *netpolicy.Policy) (int, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "smtp+tls" && parsed.Scheme != "smtp+starttls") || parsed.Hostname() == "" || parsed.Port() == "" || parsed.User != nil || parsed.Path != "" {
 		return 0, errors.New("invalid SMTP endpoint")
@@ -113,10 +114,16 @@ func sendSMTPNotificationWithTLS(ctx context.Context, endpoint string, encrypted
 	}
 	var client *smtp.Client
 	if parsed.Scheme == "smtp+tls" {
-		connection, dialErr := (&tls.Dialer{NetDialer: dialer, Config: tlsConfig}).DialContext(ctx, "tcp", parsed.Host)
+		connection, dialErr := dialSMTP(ctx, dialer, policy, parsed.Host)
 		if dialErr != nil {
 			return 0, dialErr
 		}
+		tlsConnection := tls.Client(connection, tlsConfig)
+		if dialErr = tlsConnection.HandshakeContext(ctx); dialErr != nil {
+			_ = connection.Close()
+			return 0, dialErr
+		}
+		connection = tlsConnection
 		_ = connection.SetDeadline(deadline)
 		client, err = smtp.NewClient(connection, parsed.Hostname())
 		if err != nil {
@@ -124,7 +131,7 @@ func sendSMTPNotificationWithTLS(ctx context.Context, endpoint string, encrypted
 			return 0, err
 		}
 	} else {
-		connection, dialErr := dialer.DialContext(ctx, "tcp", parsed.Host)
+		connection, dialErr := dialSMTP(ctx, dialer, policy, parsed.Host)
 		if dialErr != nil {
 			return 0, dialErr
 		}
@@ -169,6 +176,13 @@ func sendSMTPNotificationWithTLS(ctx context.Context, endpoint string, encrypted
 		return 0, err
 	}
 	return 250, nil
+}
+
+func dialSMTP(ctx context.Context, dialer *net.Dialer, policy *netpolicy.Policy, address string) (net.Conn, error) {
+	if policy != nil {
+		return policy.DialContext(ctx, "tcp", address)
+	}
+	return dialer.DialContext(ctx, "tcp", address)
 }
 
 func smtpMessage(delivery store.NotificationDelivery, material smtpMaterial) ([]byte, string, []string, error) {
