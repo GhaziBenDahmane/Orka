@@ -80,6 +80,10 @@ type smtpMaterial struct {
 }
 
 func sendSMTPNotification(ctx context.Context, endpoint string, encryptedMaterial []byte, delivery store.NotificationDelivery) (int, error) {
+	return sendSMTPNotificationWithTLS(ctx, endpoint, encryptedMaterial, delivery, nil)
+}
+
+func sendSMTPNotificationWithTLS(ctx context.Context, endpoint string, encryptedMaterial []byte, delivery store.NotificationDelivery, configuredTLS *tls.Config) (int, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "smtp+tls" && parsed.Scheme != "smtp+starttls") || parsed.Hostname() == "" || parsed.Port() == "" || parsed.User != nil || parsed.Path != "" {
 		return 0, errors.New("invalid SMTP endpoint")
@@ -94,6 +98,15 @@ func sendSMTPNotification(ctx context.Context, endpoint string, encryptedMateria
 	}
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: parsed.Hostname()}
+	if configuredTLS != nil {
+		tlsConfig = configuredTLS.Clone()
+		if tlsConfig.MinVersion < tls.VersionTLS12 {
+			tlsConfig.MinVersion = tls.VersionTLS12
+		}
+		if tlsConfig.ServerName == "" {
+			tlsConfig.ServerName = parsed.Hostname()
+		}
+	}
 	deadline := time.Now().Add(15 * time.Second)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline

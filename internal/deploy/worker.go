@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -44,6 +45,9 @@ type Worker struct {
 	Builder            Builder
 	Metrics            *observability.Metrics
 	NotificationClient *http.Client
+	// notificationTLS lets conformance tests trust an isolated SMTP server
+	// without weakening the system trust store used in production.
+	notificationTLS    *tls.Config
 	RemoteScheduler    func(uuid.UUID) Scheduler
 }
 
@@ -1561,7 +1565,7 @@ func (w *Worker) deliverNotification(ctx context.Context, j job) error {
 	case "pagerduty", "opsgenie":
 		code, err = sendIncidentNotification(ctx, w.notificationClient(), endpoint.Kind, string(urlBytes), string(secret), delivery)
 	case "smtp":
-		code, err = sendSMTPNotification(ctx, string(urlBytes), secret, delivery)
+		code, err = sendSMTPNotificationWithTLS(ctx, string(urlBytes), secret, delivery, w.notificationTLS)
 	default:
 		err = fmt.Errorf("unsupported notification endpoint kind %q", endpoint.Kind)
 	}
