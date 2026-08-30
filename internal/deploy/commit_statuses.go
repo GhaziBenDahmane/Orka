@@ -7,13 +7,30 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
-	"path"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
+)
+
+const (
+	maxCommitStatusRepositoryURLBytes = 16 << 10
+	maxCommitStatusServerBytes        = 512
+	maxCommitStatusTokenBytes         = 16 << 10
+	maxCommitStatusUsernameBytes      = 4 << 10
+	maxCommitStatusContextBytes       = 100
+	maxCommitStatusRepositoryPath     = 4 << 10
+	maxCommitStatusPathSegmentBytes   = 255
+)
+
+var (
+	commitStatusHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+	commitStatusContextPattern       = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 )
 
 func (w *Worker) deliverCommitStatus(ctx context.Context, j job) error {
@@ -57,17 +74,30 @@ func (w *Worker) deliverCommitStatus(ctx context.Context, j job) error {
 }
 
 func commitStatusRequest(ctx context.Context, delivery store.CommitStatusDelivery, token string) (*http.Request, error) {
-	repository, err := url.Parse(delivery.RepositoryURL)
-	if err != nil || (repository.Scheme != "https" && repository.Scheme != "ssh") || repository.Hostname() == "" || repository.User != nil && repository.Scheme == "https" || repository.RawQuery != "" || repository.Fragment != "" {
+	if !validCommitForStatus(delivery.CommitSHA) || token == "" || len(token) > maxCommitStatusTokenBytes || strings.ContainsAny(token, "\x00\r\n") || len(delivery.Context) > maxCommitStatusContextBytes || !commitStatusContextPattern.MatchString(delivery.Context) || !containsCommitStatusState(delivery.State) || len(delivery.CredentialUsername) > maxCommitStatusUsernameBytes || strings.ContainsAny(delivery.CredentialUsername, "\x00\r\n") {
+		return nil, errors.New("commit status has invalid credentials, state, context, or commit SHA")
+	}
+	repositoryURL := strings.TrimSpace(delivery.RepositoryURL)
+	repository, err := url.Parse(repositoryURL)
+	if err != nil || repositoryURL != delivery.RepositoryURL || len(repositoryURL) > maxCommitStatusRepositoryURLBytes || (repository.Scheme != "https" && repository.Scheme != "ssh") || !validCommitStatusURLHost(repository) || repository.User != nil && repository.Scheme == "https" || repository.RawQuery != "" || repository.Fragment != "" || repository.Opaque != "" {
 		return nil, errors.New("repository URL cannot be mapped to a provider API")
 	}
-	credentialHost := strings.ToLower(strings.TrimSpace(strings.Split(delivery.CredentialServer, ":")[0]))
+	if repository.User != nil {
+		_, hasPassword := repository.User.Password()
+		if repository.User.Username() == "" || hasPassword {
+			return nil, errors.New("repository URL cannot contain embedded credentials")
+		}
+	}
+	credentialAuthority, credentialHost, err := parseCommitStatusServer(delivery.CredentialServer)
+	if err != nil {
+		return nil, err
+	}
 	if !strings.EqualFold(repository.Hostname(), credentialHost) {
 		return nil, errors.New("status credential server does not match repository host")
 	}
 	repositoryPath := strings.TrimSuffix(strings.Trim(repository.Path, "/"), ".git")
 	parts := strings.Split(repositoryPath, "/")
-	if len(parts) < 2 || strings.Contains(repositoryPath, "..") {
+	if len(repositoryPath) == 0 || len(repositoryPath) > maxCommitStatusRepositoryPath || len(parts) < 2 || !validCommitStatusPath(parts) {
 		return nil, errors.New("repository URL has no owner and repository path")
 	}
 	description := "Dockyard deployment " + delivery.State
@@ -77,7 +107,7 @@ func commitStatusRequest(ctx context.Context, delivery store.CommitStatusDeliver
 	state := delivery.State
 	switch delivery.Provider {
 	case "github":
-		if credentialHost != "github.com" || len(parts) != 2 {
+		if !strings.EqualFold(credentialAuthority, "github.com") || len(parts) != 2 {
 			return nil, errors.New("GitHub statuses require a github.com owner/repository URL")
 		}
 		endpoint = "https://api.github.com/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/statuses/" + delivery.CommitSHA
@@ -86,17 +116,17 @@ func commitStatusRequest(ctx context.Context, delivery store.CommitStatusDeliver
 		if len(parts) != 2 {
 			return nil, errors.New("Gitea statuses require an owner/repository URL")
 		}
-		endpoint = "https://" + delivery.CredentialServer + "/api/v1/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/statuses/" + delivery.CommitSHA
+		endpoint = "https://" + credentialAuthority + "/api/v1/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/statuses/" + delivery.CommitSHA
 		body, _ = json.Marshal(map[string]string{"state": state, "context": delivery.Context, "description": description})
 	case "gitlab":
-		endpoint = "https://" + delivery.CredentialServer + "/api/v4/projects/" + url.PathEscape(repositoryPath) + "/statuses/" + delivery.CommitSHA
+		endpoint = "https://" + credentialAuthority + "/api/v4/projects/" + url.PathEscape(repositoryPath) + "/statuses/" + delivery.CommitSHA
 		values := url.Values{"state": {map[string]string{"failure": "failed", "error": "failed"}[state]}, "name": {delivery.Context}, "description": {description}}
 		if state == "pending" || state == "success" {
 			values.Set("state", state)
 		}
 		body, contentType = []byte(values.Encode()), "application/x-www-form-urlencoded"
 	case "bitbucket":
-		if credentialHost != "bitbucket.org" || len(parts) != 2 {
+		if !strings.EqualFold(credentialAuthority, "bitbucket.org") || len(parts) != 2 {
 			return nil, errors.New("Bitbucket statuses require a bitbucket.org workspace/repository URL")
 		}
 		endpoint = "https://api.bitbucket.org/2.0/repositories/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/commit/" + delivery.CommitSHA + "/statuses/build"
@@ -108,9 +138,6 @@ func commitStatusRequest(ctx context.Context, delivery store.CommitStatusDeliver
 		body, _ = json.Marshal(map[string]string{"state": mapped, "key": key, "name": delivery.Context, "description": description})
 	default:
 		return nil, errors.New("unsupported commit status provider")
-	}
-	if !validCommitForStatus(delivery.CommitSHA) || token == "" {
-		return nil, errors.New("commit status has invalid credentials or commit SHA")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -133,7 +160,7 @@ func commitStatusRequest(ctx context.Context, delivery store.CommitStatusDeliver
 }
 
 func validCommitForStatus(value string) bool {
-	if (len(value) != 40 && len(value) != 64) || path.Clean(value) != value {
+	if len(value) != 40 && len(value) != 64 {
 		return false
 	}
 	for _, char := range value {
@@ -142,4 +169,57 @@ func validCommitForStatus(value string) bool {
 		}
 	}
 	return strings.Trim(value, "0") != ""
+}
+
+func containsCommitStatusState(state string) bool {
+	return state == "pending" || state == "success" || state == "failure" || state == "error"
+}
+
+func parseCommitStatusServer(raw string) (authority, hostname string, err error) {
+	if raw == "" || raw != strings.TrimSpace(raw) || len(raw) > maxCommitStatusServerBytes || strings.ContainsAny(raw, "\x00\r\n") {
+		return "", "", errors.New("status credential server is invalid")
+	}
+	endpoint, parseErr := url.Parse("https://" + raw)
+	if parseErr != nil || endpoint.Scheme != "https" || !validCommitStatusURLHost(endpoint) || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" {
+		return "", "", errors.New("status credential server is invalid")
+	}
+	return endpoint.Host, strings.ToLower(endpoint.Hostname()), nil
+}
+
+func validCommitStatusURLHost(endpoint *url.URL) bool {
+	if endpoint == nil || !validCommitStatusHostname(endpoint.Hostname()) || strings.HasSuffix(endpoint.Host, ":") {
+		return false
+	}
+	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(endpoint.Hostname()) == nil {
+		return false
+	}
+	if port := endpoint.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		return err == nil && value >= 1 && value <= 65535
+	}
+	return true
+}
+
+func validCommitStatusHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || !commitStatusHostnameLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func validCommitStatusPath(parts []string) bool {
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || len(part) > maxCommitStatusPathSegmentBytes || strings.ContainsAny(part, "\x00\r\n") {
+			return false
+		}
+	}
+	return true
 }
