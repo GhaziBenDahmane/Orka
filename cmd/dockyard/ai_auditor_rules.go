@@ -11,6 +11,8 @@ import (
 
 const maxDeterministicAuditFindings = 100
 
+const auditArchiveSchedulerGrace = 5 * time.Minute
+
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
 	truncated := false
@@ -35,6 +37,26 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	}
 	if snapshot.IdentityPosture.ActiveSCIMTokens > 0 && snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt != nil && now.Sub(*snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt) > 180*24*time.Hour {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Long-lived SCIM credential requires rotation", Description: "The oldest active SCIM token is more than 180 days old.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeScimTokens": snapshot.IdentityPosture.ActiveSCIMTokens, "oldestCreatedAt": snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.UTC().Format(time.RFC3339)}, Remediation: "Issue a replacement SCIM token, update the identity provider, verify synchronization, and revoke the old token."})
+	}
+	if snapshot.AuditLogPosture.RetentionDays > 0 {
+		if snapshot.AuditLogPosture.EnabledArchives == 0 {
+			add(modelFinding{Severity: "medium", Category: "audit", Title: "Immutable audit archive is not enabled", Description: "Audit events exist only in the mutable control-plane database and its configured retention window.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"retentionDays": snapshot.AuditLogPosture.RetentionDays, "disabledArchives": snapshot.AuditLogPosture.DisabledArchives}, Remediation: "Configure and verify an enabled TLS S3 destination with Object Lock COMPLIANCE retention."})
+		}
+		for _, archive := range snapshot.AuditLogPosture.Destinations {
+			if !archive.Enabled {
+				continue
+			}
+			if archive.LatestBatchStatus == "failed" {
+				evidence := map[string]any{"latestBatchStatus": archive.LatestBatchStatus, "retentionDays": archive.RetentionDays}
+				if archive.LatestBatchFinishedAt != nil {
+					evidence["latestBatchFinishedAt"] = archive.LatestBatchFinishedAt.UTC().Format(time.RFC3339)
+				}
+				add(modelFinding{Severity: "high", Category: "audit", Title: "Immutable audit archive delivery failed", Description: "The latest batch for an enabled immutable archive did not complete successfully.", ResourceType: "audit_archive", ResourceID: archive.ID.String(), Evidence: evidence, Remediation: "Inspect the archive worker and destination, retry the failed batch, and verify the resulting immutable object and chain checkpoint."})
+			}
+			if archive.UnarchivedEvents > 0 && archive.OldestUnarchivedAt != nil && now.Sub(*archive.OldestUnarchivedAt) > auditArchiveSchedulerGrace {
+				add(modelFinding{Severity: "high", Category: "audit", Title: "Immutable audit archive is behind", Description: "Tenant audit events have remained outside this enabled immutable archive beyond the scheduler grace window.", ResourceType: "audit_archive", ResourceID: archive.ID.String(), Evidence: map[string]any{"unarchivedEvents": archive.UnarchivedEvents, "oldestUnarchivedAt": archive.OldestUnarchivedAt.UTC().Format(time.RFC3339), "maximumLagSeconds": int64(auditArchiveSchedulerGrace / time.Second), "lastArchivedId": archive.LastArchivedID, "currentMaxEventId": snapshot.AuditLogPosture.CurrentMaxEventID}, Remediation: "Restore archive scheduling and delivery, then confirm the destination checkpoint catches up to the tenant audit log."})
+			}
+		}
 	}
 	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
 	unusableDatabaseDrivers := make(map[uuid.UUID]bool)

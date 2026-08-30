@@ -44,6 +44,11 @@ keys make it a privileged service.
   only jobs with a resource key that resolves through the requesting
   organization; unscoped platform jobs and another organization's jobs are
   never included.
+- Audit-log posture reports the effective retention period, enabled and
+  disabled immutable archive counts, the tenant's current maximum event ID,
+  and per-destination checkpoint, backlog, and latest batch status/timestamps.
+  Destination names, storage configuration, object keys, chain hashes,
+  credentials, and delivery errors remain outside the agent boundary.
 - Dokploy migration posture is grouped by source organization and reports
   imported versus unresolved resources plus successful native database
   transfers. Up to 200 unresolved parity records include their source kind,
@@ -92,7 +97,9 @@ keys make it a privileged service.
   notification coverage gaps, unavailable, unbound, mismatched, or
   recovery-incapable database drivers, unhealthy reconciliation, unsigned,
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
-  incomplete Dokploy migrations. These findings survive a model gateway
+  incomplete Dokploy migrations. It also reports a missing immutable audit
+  archive, a failed latest archive delivery, or tenant events left unarchived
+  for more than five minutes. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and

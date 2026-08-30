@@ -29,6 +29,7 @@ type AIAuditSnapshot struct {
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
 	VolumeBackupPosture  []AIAuditVolumeBackupPosture    `json:"volumeBackupPosture"`
 	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
+	AuditLogPosture      AIAuditLogPosture               `json:"auditLogPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
@@ -117,6 +118,26 @@ type AIAuditResourcePolicyPosture struct {
 	CurrentServices     int       `json:"currentServices"`
 	CurrentDatabases    int       `json:"currentDatabases"`
 	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+type AIAuditLogPosture struct {
+	RetentionDays     int                     `json:"retentionDays"`
+	CurrentMaxEventID int64                   `json:"currentMaxEventId"`
+	EnabledArchives   int64                   `json:"enabledArchives"`
+	DisabledArchives  int64                   `json:"disabledArchives"`
+	Destinations      []AIAuditArchivePosture `json:"destinations"`
+}
+
+type AIAuditArchivePosture struct {
+	ID                    uuid.UUID  `json:"id"`
+	Enabled               bool       `json:"enabled"`
+	RetentionDays         int        `json:"retentionDays"`
+	LastArchivedID        int64      `json:"lastArchivedId"`
+	UnarchivedEvents      int64      `json:"unarchivedEvents"`
+	OldestUnarchivedAt    *time.Time `json:"oldestUnarchivedAt,omitempty"`
+	LatestBatchStatus     string     `json:"latestBatchStatus,omitempty"`
+	LatestBatchCreatedAt  *time.Time `json:"latestBatchCreatedAt,omitempty"`
+	LatestBatchFinishedAt *time.Time `json:"latestBatchFinishedAt,omitempty"`
 }
 
 type AIAuditDatabaseEngineInfo struct {
@@ -209,7 +230,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -295,6 +316,9 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 }
 
 func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
+	if err := s.loadAIAuditLogPosture(ctx, organizationID, &snapshot.AuditLogPosture); err != nil {
+		return err
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT scope_type,scope_id,maintenance_enabled,max_projects,max_environments,max_services,max_databases,updated_at
 		FROM resource_policies WHERE organization_id=$1 ORDER BY scope_type,scope_id`, organizationID)
@@ -581,6 +605,47 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	rows.Close()
 	return nil
+}
+
+func (s *Store) loadAIAuditLogPosture(ctx context.Context, organizationID uuid.UUID, posture *AIAuditLogPosture) error {
+	if err := s.Pool.QueryRow(ctx, `SELECT
+		COALESCE((SELECT retention_days FROM audit_retention_policies WHERE organization_id=$1),365),
+		COALESCE((SELECT max(id) FROM audit_events WHERE organization_id=$1),0),
+		(SELECT count(*) FROM audit_archive_destinations WHERE organization_id=$1 AND enabled),
+		(SELECT count(*) FROM audit_archive_destinations WHERE organization_id=$1 AND NOT enabled)`, organizationID).Scan(
+		&posture.RetentionDays,
+		&posture.CurrentMaxEventID,
+		&posture.EnabledArchives,
+		&posture.DisabledArchives,
+	); err != nil {
+		return err
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT destination.id,destination.enabled,destination.retention_days,destination.last_archived_id,
+		(SELECT count(*) FROM audit_events event WHERE event.organization_id=$1 AND event.id>destination.last_archived_id),
+		(SELECT min(event.created_at) FROM audit_events event WHERE event.organization_id=$1 AND event.id>destination.last_archived_id),
+		COALESCE(latest.status,''),latest.created_at,latest.finished_at
+		FROM audit_archive_destinations destination
+		LEFT JOIN LATERAL (
+			SELECT batch.status,batch.created_at,batch.finished_at
+			FROM audit_archive_batches batch
+			WHERE batch.destination_id=destination.id
+			ORDER BY batch.created_at DESC,batch.id DESC
+			LIMIT 1
+		) latest ON true
+		WHERE destination.organization_id=$1
+		ORDER BY destination.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item AIAuditArchivePosture
+		if err = rows.Scan(&item.ID, &item.Enabled, &item.RetentionDays, &item.LastArchivedID, &item.UnarchivedEvents, &item.OldestUnarchivedAt, &item.LatestBatchStatus, &item.LatestBatchCreatedAt, &item.LatestBatchFinishedAt); err != nil {
+			return err
+		}
+		posture.Destinations = append(posture.Destinations, item)
+	}
+	return rows.Err()
 }
 
 func populateAIAuditPolicyUsage(snapshot *AIAuditSnapshot) {

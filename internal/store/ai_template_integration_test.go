@@ -233,6 +233,8 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	backupID, policyID := uuid.New(), uuid.New()
+	auditArchiveID, disabledAuditArchiveID, otherAuditArchiveID := uuid.New(), uuid.New(), uuid.New()
+	auditBackupDestinationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID := uuid.New(), uuid.New(), uuid.New()
 	latestDeploymentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 	oldestPendingAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	for _, statement := range []struct {
@@ -283,6 +285,27 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var archivedAuditEventID, unarchivedAuditEventID int64
+	if err = pool.QueryRow(ctx, `INSERT INTO audit_events(organization_id,action,resource_type,created_at) VALUES($1,'archive-fixture','test',now()-interval '11 minutes') RETURNING id`, organizationID).Scan(&archivedAuditEventID); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `INSERT INTO audit_events(organization_id,action,resource_type,metadata,created_at) VALUES($1,'archive-pending','test','{"secret":"target-audit-metadata-secret"}',now()-interval '10 minutes') RETURNING id`, organizationID).Scan(&unarchivedAuditEventID); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO audit_retention_policies(organization_id,retention_days) VALUES($1,730)`, []any{organizationID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'target-archive-secret-name','https://s3.example.test','target-secret-bucket',true,'target-archive-credentials-secret'),($3,$2,'disabled-archive-secret-name','https://s3.example.test','disabled-secret-bucket',true,'disabled-archive-credentials-secret'),($4,$5,'other-archive-secret-name','https://s3.example.test','other-secret-bucket',true,'other-archive-credentials-secret')`, []any{auditBackupDestinationID, organizationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID, otherOrganizationID}},
+		{`INSERT INTO audit_archive_destinations(id,organization_id,backup_destination_id,name,object_prefix,retention_days,enabled,last_archived_id,last_chain_hash) VALUES($1,$2,$3,'target-archive-secret-name','target-secret-prefix',730,true,$4,'target-chain-secret'),($5,$2,$6,'disabled-archive-secret-name','disabled-secret-prefix',365,false,0,'disabled-chain-secret'),($7,$8,$9,'other-archive-secret-name','other-secret-prefix',365,true,0,'other-chain-secret')`, []any{auditArchiveID, organizationID, auditBackupDestinationID, archivedAuditEventID, disabledAuditArchiveID, disabledAuditBackupDestinationID, otherAuditArchiveID, otherOrganizationID, otherAuditBackupDestinationID}},
+		{`INSERT INTO audit_archive_batches(id,destination_id,first_event_id,last_event_id,previous_sha256,object_key,status,last_error,created_at,finished_at) VALUES($1,$2,$3,$3,'target-chain-secret','target-secret-object','failed','target-archive-error-secret',now()-interval '9 minutes',now()-interval '8 minutes')`, []any{uuid.New(), auditArchiveID, unarchivedAuditEventID}},
+		{`INSERT INTO audit_events(organization_id,action,resource_type,metadata,created_at) VALUES($1,'other-archive-pending','test','{"secret":"other-audit-metadata-secret"}',now()-interval '1 day')`, []any{otherOrganizationID}},
+	} {
+		if _, err = pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
 	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
 	if err != nil || snapshot.Organization != organizationID {
 		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
@@ -292,6 +315,19 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	if len(snapshot.ResourcePolicies) != 1 || snapshot.ResourcePolicies[0].ScopeID != organizationID || !snapshot.ResourcePolicies[0].Maintenance || snapshot.ResourcePolicies[0].CurrentProjects != 1 || snapshot.ResourcePolicies[0].CurrentEnvironments != 1 || snapshot.ResourcePolicies[0].CurrentServices != 1 || snapshot.ResourcePolicies[0].CurrentDatabases != 1 {
 		t.Fatalf("resource policy posture=%#v", snapshot.ResourcePolicies)
+	}
+	if snapshot.AuditLogPosture.RetentionDays != 730 || snapshot.AuditLogPosture.CurrentMaxEventID != unarchivedAuditEventID || snapshot.AuditLogPosture.EnabledArchives != 1 || snapshot.AuditLogPosture.DisabledArchives != 1 || len(snapshot.AuditLogPosture.Destinations) != 2 {
+		t.Fatalf("audit log posture=%#v", snapshot.AuditLogPosture)
+	}
+	archivePosture := map[uuid.UUID]AIAuditArchivePosture{}
+	for _, item := range snapshot.AuditLogPosture.Destinations {
+		archivePosture[item.ID] = item
+	}
+	if item := archivePosture[auditArchiveID]; !item.Enabled || item.RetentionDays != 730 || item.LastArchivedID != archivedAuditEventID || item.UnarchivedEvents != 1 || item.OldestUnarchivedAt == nil || item.LatestBatchStatus != "failed" || item.LatestBatchCreatedAt == nil || item.LatestBatchFinishedAt == nil {
+		t.Fatalf("enabled audit archive posture=%#v", item)
+	}
+	if item := archivePosture[disabledAuditArchiveID]; item.Enabled || item.RetentionDays != 365 {
+		t.Fatalf("disabled audit archive posture=%#v", item)
 	}
 	if len(snapshot.AgentUpgradePosture) != 1 || snapshot.AgentUpgradePosture[0].ClusterID != clusterID || snapshot.AgentUpgradePosture[0].CommandID != upgradeID || snapshot.AgentUpgradePosture[0].Status != "verifying" || !snapshot.AgentUpgradePosture[0].VerificationOverdue || snapshot.AgentUpgradePosture[0].VerificationDeadline == nil {
 		t.Fatalf("agent upgrade posture=%#v", snapshot.AgentUpgradePosture)
@@ -327,12 +363,12 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "SECRET_COMPOSE_VALUE", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-migration-secret", "other-source-org"} {
+	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "SECRET_COMPOSE_VALUE", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-migration-secret", "other-source-org", "target-archive-secret-name", "target-secret-bucket", "target-archive-credentials-secret", "target-secret-prefix", "target-chain-secret", "target-secret-object", "target-archive-error-secret", "target-audit-metadata-secret", "disabled-archive-secret-name", "disabled-secret-bucket", "disabled-archive-credentials-secret", "disabled-secret-prefix", "disabled-chain-secret", "other-archive-secret-name", "other-secret-bucket", "other-archive-credentials-secret", "other-secret-prefix", "other-chain-secret", "other-audit-metadata-secret"} {
 		if strings.Contains(string(encodedSnapshot), secret) {
 			t.Fatalf("snapshot leaked %q: body=%s", secret, encodedSnapshot)
 		}
 	}
-	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID} {
+	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherAuditArchiveID, otherAuditBackupDestinationID} {
 		if strings.Contains(string(encodedSnapshot), otherTenantID.String()) {
 			t.Fatalf("snapshot leaked cross-tenant resource %s: body=%s", otherTenantID, encodedSnapshot)
 		}

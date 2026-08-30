@@ -186,7 +186,11 @@ renewal/completion is fenced by a per-attempt UUID.
 
 The snapshot includes tenant-scoped maintenance and quota posture with current
 resource counts. Operator-authored maintenance reasons are intentionally
-excluded from the model boundary.
+excluded from the model boundary. It also includes effective audit retention
+and redacted immutable-archive health: destination IDs, enabled state,
+retention, event checkpoints/backlog, and latest batch status/timestamps.
+Destination names, storage details, object keys, chain hashes, credentials,
+and failure text are excluded.
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a

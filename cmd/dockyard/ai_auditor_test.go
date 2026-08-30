@@ -292,6 +292,47 @@ func TestDeterministicAuditDetectsMaintenanceAndQuotaPressure(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsAuditArchiveDurabilityGaps(t *testing.T) {
+	now := time.Now().UTC()
+	failedAt, staleEvent, recentEvent := now.Add(-time.Minute), now.Add(-6*time.Minute), now.Add(-4*time.Minute)
+	failedID, recentID, disabledID := uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		AuditLogPosture: store.AIAuditLogPosture{
+			RetentionDays: 730, CurrentMaxEventID: 42, EnabledArchives: 2, DisabledArchives: 1,
+			Destinations: []store.AIAuditArchivePosture{
+				{ID: failedID, Enabled: true, RetentionDays: 730, LastArchivedID: 40, UnarchivedEvents: 2, OldestUnarchivedAt: &staleEvent, LatestBatchStatus: "failed", LatestBatchFinishedAt: &failedAt},
+				{ID: recentID, Enabled: true, RetentionDays: 730, LastArchivedID: 41, UnarchivedEvents: 1, OldestUnarchivedAt: &recentEvent, LatestBatchStatus: "pending"},
+				{ID: disabledID, RetentionDays: 730, UnarchivedEvents: 100, OldestUnarchivedAt: &staleEvent, LatestBatchStatus: "failed"},
+			},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 2 || findings[0].Title != "Immutable audit archive delivery failed" || findings[1].Title != "Immutable audit archive is behind" {
+		t.Fatalf("archive findings=%#v", findings)
+	}
+	for _, finding := range findings {
+		if finding.ResourceID != failedID.String() {
+			t.Fatalf("unexpected archive resource: %#v", finding)
+		}
+	}
+}
+
+func TestDeterministicAuditDetectsMissingImmutableAuditArchive(t *testing.T) {
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		AuditLogPosture:     store.AIAuditLogPosture{RetentionDays: 365, DisabledArchives: 1},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 1 || findings[0].Title != "Immutable audit archive is not enabled" || findings[0].Severity != "medium" {
+		t.Fatalf("missing archive findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()
