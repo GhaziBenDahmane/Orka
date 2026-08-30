@@ -222,7 +222,12 @@ func (s *Server) templateRepositoryWebhook(w http.ResponseWriter, r *http.Reques
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, 400, "invalid_payload", "webhook body is too large")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "webhook body exceeds 2 MiB")
+		} else {
+			writeError(w, 400, "invalid_payload", "webhook body could not be read")
+		}
 		return
 	}
 	deliveryID, refs, err := verifyProviderWebhook("github", string(secret), r.Header, body)

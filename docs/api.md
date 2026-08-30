@@ -8,6 +8,12 @@ fleet-wide state, it accepts only the dedicated operator credential configured
 with `DOCKYARD_METRICS_TOKEN`; tenant sessions and service-account tokens are
 never accepted there.
 
+JSON request bodies must use `application/json` or an `application/*+json`
+media type such as `application/scim+json`; unsupported or missing media types
+return 415. JSON is limited to 3 MiB, signed provider and template webhooks and
+SAML form responses to 2 MiB, and uploaded ZIP source archives to 25 MiB.
+Limit violations return 413 before application parsing or persistence.
+
 `GET /healthz` is the unauthenticated liveness probe and only reports whether
 the HTTP process can answer. `GET /readyz` is the unauthenticated readiness
 probe; it performs a database ping with a two-second upper bound and returns

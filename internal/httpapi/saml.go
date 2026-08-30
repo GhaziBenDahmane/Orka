@@ -448,7 +448,12 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 	if err = r.ParseForm(); err != nil {
-		writeError(w, 400, "invalid_callback", "invalid SAML response")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "SAML response exceeds 2 MiB")
+		} else {
+			writeError(w, 400, "invalid_callback", "invalid SAML response")
+		}
 		return
 	}
 	relayState := r.Form.Get("RelayState")

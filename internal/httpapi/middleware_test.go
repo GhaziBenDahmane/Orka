@@ -39,6 +39,32 @@ func TestRequestIDMiddleware(t *testing.T) {
 	}
 }
 
+func TestDecodeEnforcesJSONMediaTypeAndBodyLimit(t *testing.T) {
+	for _, mediaType := range []string{"application/json", "application/json; charset=utf-8", "application/scim+json"} {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"value":"ok"}`))
+		request.Header.Set("Content-Type", mediaType)
+		response := httptest.NewRecorder()
+		var target struct{ Value string }
+		if !decode(response, request, &target) || target.Value != "ok" {
+			t.Errorf("media type %q rejected: status=%d body=%s", mediaType, response.Code, response.Body.String())
+		}
+	}
+	for _, mediaType := range []string{"", "text/plain", "application/xml", "image/example+json", "application/json; bad"} {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+		request.Header.Set("Content-Type", mediaType)
+		response := httptest.NewRecorder()
+		if decode(response, request, &struct{}{}) || response.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("media type %q status=%d body=%s", mediaType, response.Code, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"value":"`+strings.Repeat("x", 3<<20)+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	if decode(response, request, &struct{ Value string }{}) || response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), `"code":"request_too_large"`) {
+		t.Fatalf("oversized JSON status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestHandlerSetsSecurityHeadersOnAPIAndConsole(t *testing.T) {
 	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, route := range []string{"/v1/projects", "/"} {

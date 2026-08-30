@@ -311,6 +311,7 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", strings.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
 		request = request.WithContext(context.WithValue(request.Context(), clusterIDKey, clusterID))
 		api.agentHeartbeat(recorder, request)
 		if recorder.Code != http.StatusBadRequest {
@@ -414,6 +415,7 @@ func postAgentHeartbeat(t *testing.T, api *Server, clusterID uuid.UUID, payload 
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	request = request.WithContext(context.WithValue(request.Context(), clusterIDKey, clusterID))
 	api.agentHeartbeat(recorder, request)
 	if recorder.Code != http.StatusOK {
