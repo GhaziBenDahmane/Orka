@@ -156,3 +156,35 @@ func TestTemplateRepositoryCredentialRotationFencesButRetainsCatalog(t *testing.
 		t.Fatalf("replacement attempt=%#v err=%v", replacement, err)
 	}
 }
+
+func TestTemplateRepositorySettingsRequireExactGitHubCredentialAuthority(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Catalog credential scope',$2)`, organizationID, "catalog-credential-scope-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Catalog", Slug: "catalog", RepositoryURL: "https://github.com/acme/catalog", GitRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range []string{"github.com:443", "github.com.attacker.test"} {
+		credentialID := uuid.New()
+		if _, err = db.CreateSourceCredential(ctx, SourceCredential{ID: credentialID, OrganizationID: organizationID, Kind: "git", Name: server, Server: server, Username: "token", EncryptedSecret: "ciphertext"}); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.UpdateTemplateRepositorySettings(ctx, organizationID, repository.ID, "", false, &credentialID, 0); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("credential authority %q was accepted: %v", server, err)
+		}
+	}
+	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.CredentialID != nil {
+		t.Fatalf("rejected credential was persisted: %v", *loaded.CredentialID)
+	}
+}

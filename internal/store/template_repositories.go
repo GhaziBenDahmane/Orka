@@ -209,7 +209,7 @@ func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizati
 	}
 	if credentialID != nil {
 		var lockedCredential uuid.UUID
-		err = tx.QueryRow(ctx, `SELECT id FROM source_credentials WHERE id=$1 AND organization_id=$2 AND kind='git' AND lower(split_part(server,':',1))='github.com' FOR KEY SHARE`, *credentialID, organizationID).Scan(&lockedCredential)
+		err = tx.QueryRow(ctx, `SELECT id FROM source_credentials WHERE id=$1 AND organization_id=$2 AND kind='git' AND lower(server)='github.com' FOR KEY SHARE`, *credentialID, organizationID).Scan(&lockedCredential)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
