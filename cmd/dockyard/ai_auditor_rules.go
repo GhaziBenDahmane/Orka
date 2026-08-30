@@ -16,6 +16,7 @@ const auditArchiveSchedulerGrace = 5 * time.Minute
 const minimumOperationalSignalSample = 4
 const finalizerStallThreshold = 15 * time.Minute
 const jobHeartbeatStallThreshold = 2 * time.Minute
+const agentCommandStallThreshold = 2 * time.Minute
 
 var immutableAuditImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
@@ -296,6 +297,15 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	for _, upgrade := range snapshot.AgentUpgradePosture {
 		if upgrade.VerificationOverdue || upgrade.Status == "failed" {
 			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote agent upgrade requires intervention", Description: "The latest agent upgrade failed or did not confirm its immutable target before the verification deadline.", ResourceType: "cluster", ResourceID: upgrade.ClusterID.String(), Evidence: map[string]any{"status": upgrade.Status, "verificationOverdue": upgrade.VerificationOverdue, "targetImage": upgrade.TargetImage}, Remediation: "Inspect Swarm update state and agent logs, then retry only with a verified digest."})
+		}
+	}
+	for _, queue := range snapshot.AgentCommandPosture {
+		resourceID := queue.ClusterID.String() + "/" + queue.Kind
+		if queue.OldestDueAt != nil && now.Sub(*queue.OldestDueAt) > agentCommandStallThreshold {
+			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote command queue is stalled", Description: "An outbound command has remained ready for pickup by the cluster agent for more than two minutes.", ResourceType: "cluster_command_queue", ResourceID: resourceID, Evidence: map[string]any{"clusterId": queue.ClusterID.String(), "kind": queue.Kind, "pendingCommands": queue.PendingCommands, "dueCommands": queue.DueCommands, "oldestDueAt": queue.OldestDueAt.UTC().Format(time.RFC3339)}, Remediation: "Restore agent polling and certificate connectivity, then verify the queued command is claimed or safely cancelled."})
+		}
+		if queue.OldestExpiredLeaseAt != nil && now.Sub(*queue.OldestExpiredLeaseAt) > agentCommandStallThreshold {
+			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote command lease recovery is stalled", Description: "An outbound command lease expired more than two minutes ago without being recovered by the cluster agent.", ResourceType: "cluster_command_queue", ResourceID: resourceID, Evidence: map[string]any{"clusterId": queue.ClusterID.String(), "kind": queue.Kind, "leasedCommands": queue.LeasedCommands, "expiredLeases": queue.ExpiredLeases, "oldestExpiredLeaseAt": queue.OldestExpiredLeaseAt.UTC().Format(time.RFC3339)}, Remediation: "Restore agent polling so expired leases are fenced and retried, and confirm no superseded command can report a terminal result."})
 		}
 	}
 	for _, repository := range snapshot.TemplateRepositories {

@@ -35,6 +35,7 @@ type AIAuditSnapshot struct {
 	Clusters             []AIAuditClusterInfo            `json:"clusters"`
 	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
+	AgentCommandPosture  []AIAuditAgentCommandPosture    `json:"agentCommandPosture"`
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
 	VolumeBackupPosture  []AIAuditVolumeBackupPosture    `json:"volumeBackupPosture"`
 	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
@@ -305,6 +306,18 @@ type AIAuditAgentUpgradePosture struct {
 	FinishedAt           *time.Time `json:"finishedAt,omitempty"`
 }
 
+type AIAuditAgentCommandPosture struct {
+	ClusterID            uuid.UUID  `json:"clusterId"`
+	ClusterName          string     `json:"clusterName"`
+	Kind                 string     `json:"kind"`
+	PendingCommands      int64      `json:"pendingCommands"`
+	LeasedCommands       int64      `json:"leasedCommands"`
+	DueCommands          int64      `json:"dueCommands"`
+	ExpiredLeases        int64      `json:"expiredLeases"`
+	OldestDueAt          *time.Time `json:"oldestDueAt,omitempty"`
+	OldestExpiredLeaseAt *time.Time `json:"oldestExpiredLeaseAt,omitempty"`
+}
+
 // AIAuditReconciliationPosture deliberately excludes Detail. Reconciliation
 // detail is produced from Docker/agent errors and may echo workload-controlled
 // strings or secret values that must not cross the model trust boundary.
@@ -450,7 +463,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -745,6 +758,36 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 			return err
 		}
 		snapshot.AgentUpgradePosture = append(snapshot.AgentUpgradePosture, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `
+		SELECT cluster.id,cluster.name,command.kind,
+			count(*) FILTER (WHERE command.status='pending'),
+			count(*) FILTER (WHERE command.status='leased'),
+			count(*) FILTER (WHERE command.status='pending' AND command.run_after<=now()),
+			count(*) FILTER (WHERE command.status='leased' AND command.lease_expires_at<=now()),
+			min(command.run_after) FILTER (WHERE command.status='pending' AND command.run_after<=now()),
+			min(command.lease_expires_at) FILTER (WHERE command.status='leased' AND command.lease_expires_at<=now())
+		FROM cluster_commands command
+		JOIN clusters cluster ON cluster.id=command.cluster_id
+		WHERE cluster.organization_id=$1 AND command.status IN ('pending','leased')
+		GROUP BY cluster.id,cluster.name,command.kind
+		ORDER BY cluster.name,cluster.id,command.kind`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditAgentCommandPosture
+		if err = rows.Scan(&item.ClusterID, &item.ClusterName, &item.Kind, &item.PendingCommands, &item.LeasedCommands, &item.DueCommands, &item.ExpiredLeases, &item.OldestDueAt, &item.OldestExpiredLeaseAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.AgentCommandPosture = append(snapshot.AgentCommandPosture, item)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()

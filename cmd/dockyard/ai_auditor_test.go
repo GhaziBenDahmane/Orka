@@ -517,6 +517,30 @@ func TestDeterministicAuditDetectsMandatorySSOLockout(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsStalledRemoteCommands(t *testing.T) {
+	now := time.Now().UTC()
+	clusterID := uuid.New()
+	staleDue, staleLease := now.Add(-3*time.Minute), now.Add(-4*time.Minute)
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		AgentCommandPosture: []store.AIAuditAgentCommandPosture{
+			{ClusterID: clusterID, Kind: "swarm.deploy", PendingCommands: 1, DueCommands: 1, OldestDueAt: &staleDue},
+			{ClusterID: clusterID, Kind: "database.utility", LeasedCommands: 1, ExpiredLeases: 1, OldestExpiredLeaseAt: &staleLease},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 2 || findings[0].Title != "Remote command queue is stalled" || findings[0].ResourceID != clusterID.String()+"/swarm.deploy" || findings[1].Title != "Remote command lease recovery is stalled" || findings[1].ResourceID != clusterID.String()+"/database.utility" {
+		t.Fatalf("remote command findings=%#v", findings)
+	}
+	fresh := now.Add(-time.Minute)
+	snapshot.AgentCommandPosture = []store.AIAuditAgentCommandPosture{{ClusterID: clusterID, Kind: "swarm.logs", PendingCommands: 1, DueCommands: 1, OldestDueAt: &fresh}}
+	if findings = deterministicAuditFindings(snapshot, now); len(findings) != 0 {
+		t.Fatalf("fresh remote command produced findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsMutableRemoteAgentImages(t *testing.T) {
 	now := time.Now().UTC()
 	missingID, mutableID := uuid.New(), uuid.New()

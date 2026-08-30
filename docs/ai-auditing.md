@@ -64,7 +64,10 @@ keys make it a privileged service.
   excluding operator-supplied maintenance reasons. Each cluster exposes its
   reported agent runtime image, and the latest agent upgrade includes its
   immutable target, state, attempt count, deadline, and overdue flag, but never
-  its encrypted command, result, or raw failure text.
+  its encrypted command, result, or raw failure text. Pending and leased
+  outbound agent commands are grouped by cluster and kind with due-pending and
+  expired-lease counts and timestamps, while their encrypted payloads, results,
+  errors, and lease identities remain excluded.
   Reconciliation posture includes only state, failure count, and timestamps;
   raw Docker and agent detail stays outside the model boundary. Queue scoping
   follows validated resource relationships; job payloads, errors, worker names,
@@ -162,7 +165,8 @@ keys make it a privileged service.
   expiring service-account and deployment-hook credentials, stale SCIM credentials,
   unrevoked expired deployment hooks, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues or
-  stale running-job lease heartbeats,
+  stale running-job lease heartbeats, unclaimed remote commands, expired remote
+  command leases that are not recovering,
   notification coverage gaps, unavailable, unbound, mismatched, or
   recovery-incapable database drivers, unhealthy reconciliation, unsigned,
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
