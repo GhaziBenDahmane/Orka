@@ -224,6 +224,9 @@ func TestCompileRejectsHostMount(t *testing.T) {
 func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 	tests := map[string]string{
 		"device":                  "services:\n  app:\n    image: alpine\n    devices: [/dev/kvm:/dev/kvm]\n",
+		"reserved device":         "services:\n  app:\n    image: alpine\n    deploy:\n      resources:\n        reservations:\n          devices:\n            - capabilities: [gpu]\n",
+		"gpu":                     "services:\n  app:\n    image: alpine\n    gpus: all\n",
+		"custom runtime":          "services:\n  app:\n    image: alpine\n    runtime: nvidia\n",
 		"capability":              "services:\n  app:\n    image: alpine\n    cap_add: [SYS_ADMIN]\n",
 		"container network":       "services:\n  app:\n    image: alpine\n    network_mode: container:control-plane\n",
 		"service process":         "services:\n  app:\n    image: alpine\n    pid: service:other\n",
@@ -234,6 +237,9 @@ func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 		"host cgroup namespace":   "services:\n  app:\n    image: alpine\n    cgroup: host\n",
 		"unconfined profile":      "services:\n  app:\n    image: alpine\n    security_opt: [seccomp=unconfined]\n",
 		"host env file":           "services:\n  app:\n    image: alpine\n    env_file: /etc/environment\n",
+		"host label file":         "services:\n  app:\n    image: alpine\n    label_file: /etc/environment\n",
+		"external compose":        "services:\n  app:\n    extends:\n      file: /etc/compose.yml\n      service: app\n",
+		"compose provider":        "services:\n  app:\n    provider:\n      type: host-plugin\n",
 		"compose secret":          "services:\n  app:\n    image: alpine\n    secrets: [host]\nsecrets:\n  host:\n    file: /etc/shadow\n",
 		"external volume":         "services:\n  app:\n    image: alpine\n    volumes: [shared:/data]\nvolumes:\n  shared:\n    external: true\n",
 		"volume driver options":   "services:\n  app:\n    image: alpine\n    volumes: [host:/data]\nvolumes:\n  host:\n    driver_opts:\n      type: none\n      o: bind\n      device: /etc\n",

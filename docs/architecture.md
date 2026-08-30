@@ -60,13 +60,14 @@ allowed to finish before deletion can begin.
 - Compose validation rejects privileged containers, custom namespace sharing
   (with `network_mode: none` as the disabled-network exception), host mounts,
   cluster/named-pipe mounts, custom volume drivers, device/capability access,
-  unsafe security profiles, controller-local environment files,
-  Compose-managed secrets/configs, cross-stack volumes or networks, direct
-  port publishing, and caller-supplied Traefik labels unless an administrator
-  explicitly enables unsafe workloads. The configured public overlay network
-  is reserved: safe Compose input cannot declare or attach it, and the compiler
-  attaches it only to services with approved routes. Routing labels are
-  generated only from tenant-scoped route records.
+  GPU/runtime plugins, unsafe security profiles, controller-local environment,
+  label, or extended Compose files, Compose-managed secrets/configs,
+  cross-stack volumes or networks, direct port publishing, and caller-supplied
+  Traefik labels unless an administrator explicitly enables unsafe workloads.
+  The configured public overlay network is reserved: safe Compose input cannot
+  declare or attach it, and the compiler attaches it only to services with
+  approved routes. Routing labels are generated only from tenant-scoped route
+  records.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

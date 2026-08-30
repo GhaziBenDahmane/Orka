@@ -203,10 +203,17 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 			return fmt.Errorf("service %q requests custom network namespace access", name)
 		}
 	}
-	for _, key := range []string{"devices", "device_cgroup_rules", "volumes_from", "env_file", "secrets", "configs", "credential_spec", "use_api_socket"} {
+	for _, key := range []string{
+		"devices", "device_cgroup_rules", "volumes_from", "gpus", "runtime", "isolation",
+		"env_file", "label_file", "extends", "develop", "provider",
+		"secrets", "configs", "credential_spec", "use_api_socket",
+	} {
 		if value, exists := service[key]; exists && value != nil {
 			return fmt.Errorf("service %q requests forbidden %s access", name, key)
 		}
+	}
+	if devices := nestedValue(service, "deploy", "resources", "reservations", "devices"); devices != nil {
+		return fmt.Errorf("service %q requests reserved device access", name)
 	}
 	if capabilities, exists := service["cap_add"]; exists && capabilities != nil {
 		return fmt.Errorf("service %q requests added Linux capabilities", name)
