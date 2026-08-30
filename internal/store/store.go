@@ -1742,8 +1742,8 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
 		return Deployment{}, err
 	}
-	var compose, encrypted string
-	err = tx.QueryRow(ctx, `SELECT d.effective_compose,d.env_snapshot FROM deployments d WHERE d.compose_service_id=$1 AND d.status='succeeded' AND d.effective_compose<>'' ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, serviceID).Scan(&compose, &encrypted)
+	var desiredCompose, effectiveCompose, encrypted string
+	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.effective_compose,d.env_snapshot FROM deployments d WHERE d.compose_service_id=$1 AND d.status='succeeded' AND d.effective_compose<>'' ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, serviceID).Scan(&desiredCompose, &effectiveCompose, &encrypted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrRollbackUnavailable
 	}
@@ -1754,11 +1754,11 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	var revision int64
-	if err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$2,encrypted_env=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision`, serviceID, compose, encrypted).Scan(&revision); err != nil {
+	if err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$2,encrypted_env=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision`, serviceID, desiredCompose, encrypted).Scan(&revision); err != nil {
 		return Deployment{}, err
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "rollback"}
-	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued','rollback',$6) RETURNING created_at`, d.ID, serviceID, revision, compose, encrypted, nullableUUID(actorID)).Scan(&d.CreatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$4,$5,'queued','rollback',$6) RETURNING created_at`, d.ID, serviceID, revision, effectiveCompose, encrypted, nullableUUID(actorID)).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})

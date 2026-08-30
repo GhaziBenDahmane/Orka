@@ -122,7 +122,7 @@ func TestRollbackUsesLastImmutableEffectiveSnapshot(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT s.compose_yaml,d.compose_snapshot,d.env_snapshot FROM compose_services s JOIN deployments d ON d.compose_service_id=s.id WHERE d.id=$1`, rollback.ID).Scan(&serviceCompose, &snapshot, &environment); err != nil {
 		t.Fatal(err)
 	}
-	if rollback.Trigger != "rollback" || serviceCompose != effective || snapshot != effective || environment != "old-secret" {
+	if rollback.Trigger != "rollback" || serviceCompose != desired || snapshot != effective || environment != "old-secret" {
 		t.Fatalf("rollback=%#v service=%q snapshot=%q environment=%q", rollback, serviceCompose, snapshot, environment)
 	}
 
