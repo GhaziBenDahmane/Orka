@@ -123,3 +123,11 @@ auditor token was created. The default Swarm schedule is 24 hours, so the
 48-hour threshold tolerates one missed execution before alerting. Failed runs
 also enqueue the durable `ai.audit.failed` notification event in the same
 transaction as their terminal state, for any subscribed organization endpoint.
+
+`make test-ai-audit-conformance` runs the built-in auditor against the real
+Dockyard API and PostgreSQL store with a disposable OpenAI-compatible model
+endpoint. The release-blocking check proves the snapshot reaches the model
+without Compose or encrypted environment secrets, deterministic and model
+findings are persisted, the durable run and audit trail complete, and the
+auditor token is denied access to normal workload APIs. A production release
+must still exercise its configured external model gateway and credentials.

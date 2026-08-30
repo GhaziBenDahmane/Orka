@@ -1,0 +1,38 @@
+name: AI audit conformance
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "31 4 * * 1"
+permissions:
+  contents: read
+jobs:
+  ai-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+      - name: Exercise the least-privilege AI audit lifecycle
+        run: make test-ai-audit-conformance | tee ai-audit-conformance.log
+      - name: Validate AI audit evidence
+        run: |
+          jq -e --arg sourceCommit "$GITHUB_SHA" '
+            .sourceCommit == $sourceCommit and .status == "passed" and
+            .realPlatformAPI and .openAICompatibleGateway and
+            .snapshotSecretsRedacted and .promptInjectionBoundaryPresent and
+            .deterministicFindingsPersisted and .modelFindingsPersisted and
+            .durableRunCompleted and .lifecycleAudited and
+            .auditorLeastPrivilege
+          ' ai-audit-conformance.json >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: ai-audit-conformance
+          path: |
+            ai-audit-conformance.log
+            ai-audit-conformance.json
+          if-no-files-found: error

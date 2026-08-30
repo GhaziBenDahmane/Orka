@@ -8,10 +8,11 @@ links for every item below.
 
 - Release publication is blocked on the complete reusable CI, ten-engine
   database recovery, real Keycloak SSO, disposable three-manager Swarm HA,
-  joined deployment lifecycle, drift reconciliation, and previous-image
-  upgrade conformance workflows. Tag pushes do not run detached copies: the
-  release workflow invokes all gates directly and publishes only after every
-  job succeeds.
+  joined deployment lifecycle, drift reconciliation, real-mTLS agent
+  certificate rotation, AI audit lifecycle, and previous-image upgrade
+  conformance workflows. Tag pushes do not run detached copies: the release
+  workflow invokes all gates directly and publishes only after every job
+  succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
   checkpoint-upgrade tests, high-contention exactly-once queue claiming across
@@ -75,6 +76,12 @@ links for every item below.
   expired, and mismatched-key identities. It also verifies that active-expiry
   and pending-rotation metrics converge, and attaches
   `agent-certificate-conformance.json`.
+- `make test-ai-audit-conformance` runs the built-in auditor through the real
+  tenant API and PostgreSQL store against a disposable OpenAI-compatible
+  endpoint. It proves snapshot secret redaction, prompt trust boundaries,
+  durable deterministic and model findings, audited completion, and denial of
+  normal workload APIs to the auditor identity. The release attaches
+  `ai-audit-conformance.json`.
 
 ## Staging gates
 
@@ -149,9 +156,9 @@ links for every item below.
   `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
-  `agent-certificate-conformance.json`, `upgrade-conformance.json`, and
-  `release-soak-evidence.json`; the same files remain available as a workflow
-  artifact. Upgrade evidence records the
+  `agent-certificate-conformance.json`, `ai-audit-conformance.json`,
+  `upgrade-conformance.json`, and `release-soak-evidence.json`; the same files
+  remain available as a workflow artifact. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence
   records the exact promoted digest, observation count, and automatic rollback

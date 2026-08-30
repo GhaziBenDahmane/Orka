@@ -263,6 +263,13 @@ HTTPS Git credentials without copying tokens. GitHub push webhooks use
 repository-specific encrypted secrets, ref matching, and 30-day delivery replay
 protection to queue refresh through the same singleton scheduler.
 
+A release-blocking conformance test now runs the built-in auditor through the
+real tenant-scoped HTTP API and PostgreSQL lifecycle against a disposable
+OpenAI-compatible endpoint. It verifies secret redaction, prompt trust
+boundaries, deterministic and model finding persistence, lifecycle auditing,
+and denial of normal workload access. External 9Router or provider-backed
+model credentials remain a staging requirement.
+
 ## Release policy
 
 Do not describe the project as production-ready until all release-blocking
