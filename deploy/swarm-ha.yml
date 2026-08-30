@@ -30,7 +30,15 @@ services:
       replicas: 3
 
 secrets:
-  dockyard_agent_ca_cert: {external: true}
-  dockyard_agent_ca_key: {external: true}
-  dockyard_agent_server_cert: {external: true}
-  dockyard_agent_server_key: {external: true}
+  dockyard_agent_ca_cert:
+    external: true
+    name: ${DOCKYARD_AGENT_CA_CERT_SECRET:-dockyard_agent_ca_cert}
+  dockyard_agent_ca_key:
+    external: true
+    name: ${DOCKYARD_AGENT_CA_KEY_SECRET:-dockyard_agent_ca_key}
+  dockyard_agent_server_cert:
+    external: true
+    name: ${DOCKYARD_AGENT_SERVER_CERT_SECRET:-dockyard_agent_server_cert}
+  dockyard_agent_server_key:
+    external: true
+    name: ${DOCKYARD_AGENT_SERVER_KEY_SECRET:-dockyard_agent_server_key}

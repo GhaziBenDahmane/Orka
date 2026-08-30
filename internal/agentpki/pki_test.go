@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"testing"
 	"time"
 
@@ -108,5 +109,42 @@ func TestValidateServerCredentials(t *testing.T) {
 	}
 	if _, _, err = ValidateServerCredentials(caPEM, caKeyPEM, serverPEM, serverKeyPEM, now.Add(13*time.Hour)); err == nil {
 		t.Fatal("expired server certificate was accepted")
+	}
+}
+
+func TestValidateServerCredentialsWithDualTrust(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	oldCA, oldKey, err := NewCA(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCA, newKey, err := NewCA(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCertificate, oldPrivateKey, err := parseCA(oldCA, oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(42), Subject: pkix.Name{CommonName: "agents.example.test"}, DNSNames: []string{"agents.example.test"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	encoded, err := x509.CreateCertificate(rand.Reader, template, oldCertificate, &serverKey.PublicKey, oldPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: encoded})
+	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey)})
+	bundle := append(append([]byte{}, newCA...), oldCA...)
+	if _, _, err = ValidateServerCredentialsWithTrust(newCA, newKey, bundle, serverPEM, serverKeyPEM, now); err != nil {
+		t.Fatalf("old listener under dual trust: %v", err)
+	}
+	if _, _, err = ValidateServerCredentialsWithTrust(newCA, newKey, newCA, serverPEM, serverKeyPEM, now); err == nil {
+		t.Fatal("old listener certificate was accepted after removing the old CA")
+	}
+	if _, _, err = ValidateTrustBundle(append(bundle, []byte("not pem")...), now); err == nil {
+		t.Fatal("malformed trailing trust data was accepted")
 	}
 }

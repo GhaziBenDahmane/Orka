@@ -16,23 +16,25 @@ var ErrLeaseLost = errors.New("command lease is no longer valid")
 const expireAgentUpgradeVerifications = `UPDATE cluster_commands SET status='failed',last_error='replacement agent did not confirm the requested image before the verification deadline',finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' AND run_after<=now()`
 
 type Cluster struct {
-	ID                  uuid.UUID      `json:"id"`
-	OrganizationID      uuid.UUID      `json:"organizationId"`
-	Name                string         `json:"name"`
-	Slug                string         `json:"slug"`
-	State               string         `json:"state"`
-	Labels              map[string]any `json:"labels"`
-	Capacity            map[string]any `json:"capacity"`
-	AgentVersion        string         `json:"agentVersion"`
-	AgentImage          string         `json:"agentImage"`
-	AgentUpdateState    string         `json:"agentUpdateState"`
-	DockerVersion       string         `json:"dockerVersion"`
-	CertificateNotAfter *time.Time     `json:"certificateNotAfter,omitempty"`
-	LastSeenAt          *time.Time     `json:"lastSeenAt,omitempty"`
-	MaintenanceStartsAt *time.Time     `json:"maintenanceStartsAt,omitempty"`
-	MaintenanceEndsAt   *time.Time     `json:"maintenanceEndsAt,omitempty"`
-	CreatedAt           time.Time      `json:"createdAt"`
-	UpdatedAt           time.Time      `json:"updatedAt"`
+	ID                                     uuid.UUID      `json:"id"`
+	OrganizationID                         uuid.UUID      `json:"organizationId"`
+	Name                                   string         `json:"name"`
+	Slug                                   string         `json:"slug"`
+	State                                  string         `json:"state"`
+	Labels                                 map[string]any `json:"labels"`
+	Capacity                               map[string]any `json:"capacity"`
+	AgentVersion                           string         `json:"agentVersion"`
+	AgentImage                             string         `json:"agentImage"`
+	AgentUpdateState                       string         `json:"agentUpdateState"`
+	DockerVersion                          string         `json:"dockerVersion"`
+	CertificateAuthorityFingerprint        string         `json:"certificateAuthorityFingerprint,omitempty"`
+	PendingCertificateAuthorityFingerprint string         `json:"pendingCertificateAuthorityFingerprint,omitempty"`
+	CertificateNotAfter                    *time.Time     `json:"certificateNotAfter,omitempty"`
+	LastSeenAt                             *time.Time     `json:"lastSeenAt,omitempty"`
+	MaintenanceStartsAt                    *time.Time     `json:"maintenanceStartsAt,omitempty"`
+	MaintenanceEndsAt                      *time.Time     `json:"maintenanceEndsAt,omitempty"`
+	CreatedAt                              time.Time      `json:"createdAt"`
+	UpdatedAt                              time.Time      `json:"updatedAt"`
 }
 
 type ClusterCommand struct {
@@ -62,7 +64,7 @@ func (s *Store) CreateCluster(ctx context.Context, item Cluster) (Cluster, error
 }
 
 func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]Cluster, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +74,7 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 		var item Cluster
 		var labels []byte
 		var capacity []byte
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(labels, &item.Labels)
@@ -85,7 +87,7 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 func (s *Store) GetCluster(ctx context.Context, organizationID, clusterID uuid.UUID) (Cluster, error) {
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -107,7 +109,7 @@ func (s *Store) UpdateClusterConfiguration(ctx context.Context, organizationID, 
 	}
 	var item Cluster
 	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -134,7 +136,7 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 		return ErrBusy
 	}
 	if !deleting {
-		_, err = tx.Exec(ctx, `UPDATE clusters SET state='disabled',deletion_requested_at=now(),certificate_serial='',certificate_not_after=NULL,pending_certificate_serial='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID)
+		_, err = tx.Exec(ctx, `UPDATE clusters SET state='disabled',deletion_requested_at=now(),certificate_serial='',certificate_ca_fingerprint='',certificate_not_after=NULL,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID)
 	}
 	if err != nil {
 		return err
@@ -152,7 +154,7 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uuid.UUID, serial string) error {
 	var valid bool
 	err := s.Pool.QueryRow(ctx, `WITH promoted AS (
-		UPDATE clusters SET certificate_serial=pending_certificate_serial,certificate_not_after=pending_certificate_not_after,pending_certificate_serial='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now()
+		UPDATE clusters SET certificate_serial=pending_certificate_serial,certificate_ca_fingerprint=pending_certificate_ca_fingerprint,certificate_not_after=pending_certificate_not_after,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now()
 		WHERE id=$1 AND state IN ('active','draining') AND pending_certificate_serial=$2 AND pending_certificate_not_after>now()
 		RETURNING 1
 	) SELECT EXISTS(SELECT 1 FROM promoted) OR EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND state IN ('active','draining') AND certificate_serial=$2 AND certificate_not_after>now())`, clusterID, serial).Scan(&valid)
@@ -165,8 +167,8 @@ func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uu
 	return nil
 }
 
-func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUID, oldSerial, newSerial string, notAfter time.Time) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE clusters SET pending_certificate_serial=$3,pending_certificate_not_after=$4,pending_certificate_created_at=now(),updated_at=now() WHERE id=$1 AND certificate_serial=$2 AND certificate_not_after>now() AND state IN ('active','draining')`, clusterID, oldSerial, newSerial, notAfter)
+func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUID, oldSerial, newSerial string, notAfter time.Time, caFingerprint string) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE clusters SET pending_certificate_serial=$3,pending_certificate_not_after=$4,pending_certificate_ca_fingerprint=$5,pending_certificate_created_at=now(),updated_at=now() WHERE id=$1 AND certificate_serial=$2 AND certificate_not_after>now() AND state IN ('active','draining')`, clusterID, oldSerial, newSerial, notAfter, caFingerprint)
 	if err != nil {
 		return err
 	}
@@ -430,7 +432,7 @@ func (s *Store) LookupClusterEnrollmentToken(ctx context.Context, tokenHash []by
 	return item, err
 }
 
-func (s *Store) ConsumeClusterEnrollmentToken(ctx context.Context, tokenHash []byte, serial string, notAfter time.Time) error {
+func (s *Store) ConsumeClusterEnrollmentToken(ctx context.Context, tokenHash []byte, serial string, notAfter time.Time, caFingerprint string) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -444,7 +446,7 @@ func (s *Store) ConsumeClusterEnrollmentToken(ctx context.Context, tokenHash []b
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,pending_certificate_serial='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID, serial, notAfter); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,certificate_ca_fingerprint=$4,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1`, clusterID, serial, notAfter, caFingerprint); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

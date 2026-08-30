@@ -1,8 +1,10 @@
 package agentpki
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -92,7 +94,26 @@ func ClusterIdentity(cert *x509.Certificate) (uuid.UUID, error) {
 	return id, nil
 }
 
+func CertificateFingerprint(certificatePEM []byte) (string, error) {
+	block, rest := pem.Decode(certificatePEM)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return "", errors.New("invalid certificate PEM")
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return "", errors.New("invalid certificate")
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return fmt.Sprintf("sha256:%x", sum[:]), nil
+}
+
 func ValidateServerCredentials(caCertPEM, caKeyPEM, serverCertPEM, serverKeyPEM []byte, now time.Time) (*x509.Certificate, *x509.Certificate, error) {
+	return ValidateServerCredentialsWithTrust(caCertPEM, caKeyPEM, caCertPEM, serverCertPEM, serverKeyPEM, now)
+}
+
+// ValidateServerCredentialsWithTrust verifies that the active signing CA and
+// key match while allowing the listener certificate to chain to any currently
+// trusted CA. This enables a bounded dual-trust CA rollover.
+func ValidateServerCredentialsWithTrust(caCertPEM, caKeyPEM, trustBundlePEM, serverCertPEM, serverKeyPEM []byte, now time.Time) (*x509.Certificate, *x509.Certificate, error) {
 	ca, err := ValidateAuthority(caCertPEM, caKeyPEM, now)
 	if err != nil {
 		return nil, nil, err
@@ -106,8 +127,10 @@ func ValidateServerCredentials(caCertPEM, caKeyPEM, serverCertPEM, serverKeyPEM 
 	if err != nil {
 		return nil, nil, errors.New("invalid agent server certificate")
 	}
-	roots := x509.NewCertPool()
-	roots.AddCert(ca)
+	roots, _, err := ValidateTrustBundle(trustBundlePEM, now)
+	if err != nil {
+		return nil, nil, err
+	}
 	intermediates := x509.NewCertPool()
 	for _, encoded := range pair.Certificate[1:] {
 		certificate, parseErr := x509.ParseCertificate(encoded)
@@ -120,6 +143,31 @@ func ValidateServerCredentials(caCertPEM, caKeyPEM, serverCertPEM, serverKeyPEM 
 		return nil, nil, fmt.Errorf("verify agent server certificate: %w", err)
 	}
 	return ca, server, nil
+}
+
+// ValidateTrustBundle accepts one or more currently valid, self-signed CA
+// certificates and returns a pool suitable for mutual TLS verification.
+func ValidateTrustBundle(bundle []byte, now time.Time) (*x509.CertPool, []*x509.Certificate, error) {
+	pool := x509.NewCertPool()
+	certificates := []*x509.Certificate{}
+	rest := bundle
+	for len(bytes.TrimSpace(rest)) != 0 {
+		block, remaining := pem.Decode(rest)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return nil, nil, errors.New("invalid agent CA trust bundle")
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil || !certificate.IsCA || certificate.KeyUsage&x509.KeyUsageCertSign == 0 || now.Before(certificate.NotBefore) || !now.Before(certificate.NotAfter) || certificate.CheckSignatureFrom(certificate) != nil {
+			return nil, nil, errors.New("agent CA trust bundle contains an invalid authority")
+		}
+		pool.AddCert(certificate)
+		certificates = append(certificates, certificate)
+		rest = remaining
+	}
+	if len(certificates) == 0 {
+		return nil, nil, errors.New("agent CA trust bundle is empty")
+	}
+	return pool, certificates, nil
 }
 
 func ValidateAuthority(caCertPEM, caKeyPEM []byte, now time.Time) (*x509.Certificate, error) {

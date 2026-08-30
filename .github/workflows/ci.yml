@@ -86,6 +86,7 @@ jobs:
           scripts/ci/check-image-digests.sh agent
           DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml >/dev/null
           DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml -c deploy/swarm-ha.yml >/dev/null
+          DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml -c deploy/swarm-ha.yml -c deploy/swarm-agent-ca-rollover.yml >/dev/null
 
   smoke:
     runs-on: ubuntu-latest

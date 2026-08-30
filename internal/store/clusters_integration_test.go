@@ -43,7 +43,7 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if err != nil || lookedUp.ID != cluster.ID {
 		t.Fatalf("cluster=%#v err=%v", lookedUp, err)
 	}
-	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "012345", time.Now().Add(time.Hour)); err != nil {
+	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "012345", time.Now().Add(time.Hour), "sha256:"+strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "012345"); err != nil {
@@ -52,7 +52,7 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "superseded"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("superseded certificate error = %v", err)
 	}
-	if err = db.RotateClusterCertificate(ctx, cluster.ID, "012345", "6789ab", time.Now().Add(2*time.Hour)); err != nil {
+	if err = db.RotateClusterCertificate(ctx, cluster.ID, "012345", "6789ab", time.Now().Add(2*time.Hour), "sha256:"+strings.Repeat("b", 64)); err != nil {
 		t.Fatal(err)
 	}
 	var currentSerial, pendingSerial string
@@ -68,10 +68,10 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "012345"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("old certificate remained valid after replacement confirmation: %v", err)
 	}
-	if err = db.RotateClusterCertificate(ctx, cluster.ID, "6789ab", "abcdef", time.Now().Add(2*time.Hour)); err != nil {
+	if err = db.RotateClusterCertificate(ctx, cluster.ID, "6789ab", "abcdef", time.Now().Add(2*time.Hour), "sha256:"+strings.Repeat("c", 64)); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.RotateClusterCertificate(ctx, cluster.ID, "6789ab", "fedcba", time.Now().Add(2*time.Hour)); err != nil {
+	if err = db.RotateClusterCertificate(ctx, cluster.ID, "6789ab", "fedcba", time.Now().Add(2*time.Hour), "sha256:"+strings.Repeat("d", 64)); err != nil {
 		t.Fatalf("retry rotation with still-current certificate: %v", err)
 	}
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "abcdef"); !errors.Is(err, ErrNotFound) {
@@ -146,7 +146,7 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if _, err = db.UpdateClusterState(ctx, orgID, cluster.ID, "active"); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "other", time.Now().Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+	if err = db.ConsumeClusterEnrollmentToken(ctx, tokenHash, "other", time.Now().Add(time.Hour), "sha256:"+strings.Repeat("e", 64)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("replay error = %v", err)
 	}
 	items, err := db.ListClusters(ctx, orgID)

@@ -172,6 +172,94 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 	})
 }
 
+func TestHeartbeatMigratesAgentToNewCertificateAuthority(t *testing.T) {
+	now := time.Now().UTC()
+	oldCA, oldCAKey, err := agentpki.NewCA(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCA, newCAKey, err := agentpki.NewCA(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterID := uuid.New()
+	state := t.TempDir()
+	oldKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCSR, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "dockyard-agent"}}, oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCertificate, _, err := agentpki.SignAgentCSR(oldCA, oldCAKey, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: oldCSR}), clusterID, now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := append(append([]byte{}, oldCertificate...), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(oldKey)})...)
+	certPath, _, caPath := identityPaths(state)
+	if err = writeIdentityFile(certPath, identity, 0600); err == nil {
+		err = writeIdentityFile(caPath, oldCA, 0644)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := append(append([]byte{}, newCA...), oldCA...)
+	rotationCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/agent/heartbeat":
+			_ = json.NewEncoder(w).Encode(map[string]string{"caCertificate": string(bundle), "signingCaCertificate": string(newCA)})
+		case "/v1/agent/rotate":
+			rotationCalls++
+			var input struct {
+				CSR string `json:"csr"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			certificate, _, signErr := agentpki.SignAgentCSR(newCA, newCAKey, []byte(input.CSR), clusterID, time.Now(), 24*time.Hour)
+			if signErr != nil {
+				t.Error(signErr)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"certificate": string(certificate), "caCertificate": string(bundle), "signingCaCertificate": string(newCA)})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := &Client{cfg: Config{StateDirectory: state, AgentURL: server.URL, Version: "test"}, http: server.Client(), swarm: &fakeScheduler{}}
+	if err := client.heartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rotationCalls != 1 {
+		t.Fatalf("rotation calls=%d, want 1", rotationCalls)
+	}
+	pair, err := tls.LoadX509KeyPair(certPath, certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, activeAuthorities, err := agentpki.ValidateTrustBundle(newCA, time.Now())
+	if err != nil || rotated.CheckSignatureFrom(activeAuthorities[0]) != nil {
+		t.Fatalf("replacement was not signed by the active CA: %v", err)
+	}
+	savedBundle, err := os.ReadFile(caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, authorities, err := agentpki.ValidateTrustBundle(savedBundle, time.Now()); err != nil || len(authorities) != 2 {
+		t.Fatalf("saved trust authorities=%d err=%v", len(authorities), err)
+	}
+}
+
 func (f *fakeScheduler) Status(context.Context, string) (deploy.StackStatus, error) {
 	return f.status, nil
 }

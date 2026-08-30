@@ -58,6 +58,11 @@ type command struct {
 	LeaseExpiresAt time.Time       `json:"leaseExpiresAt"`
 }
 
+type agentTrustUpdate struct {
+	CACertificate        string `json:"caCertificate"`
+	SigningCACertificate string `json:"signingCaCertificate"`
+}
+
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.EnrollmentURL == "" || cfg.AgentURL == "" || !filepath.IsAbs(cfg.StateDirectory) {
 		return errors.New("agent enrollment URL, agent URL, and absolute state directory are required")
@@ -94,6 +99,10 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*http.Client, error) {
+	return rotateCertificate(ctx, cfg, current, false, nil)
+}
+
+func rotateCertificate(ctx context.Context, cfg Config, current *http.Client, force bool, expectedSigningCA []byte) (*http.Client, error) {
 	certPath, keyPath, caPath := identityPaths(cfg.StateDirectory)
 	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -113,7 +122,7 @@ func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*htt
 	if rotationWindow < time.Minute {
 		rotationWindow = time.Minute
 	}
-	if time.Until(certificate.NotAfter) > rotationWindow {
+	if !force && time.Until(certificate.NotAfter) > rotationWindow {
 		return current, nil
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 3072)
@@ -140,13 +149,33 @@ func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*htt
 		return current, fmt.Errorf("agent certificate rotation returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
 	}
 	var rotated struct {
-		Certificate string `json:"certificate"`
+		Certificate          string `json:"certificate"`
+		CACertificate        string `json:"caCertificate"`
+		SigningCACertificate string `json:"signingCaCertificate"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&rotated); err != nil {
 		return current, err
 	}
-	if err := validateRotatedCertificate([]byte(rotated.Certificate), key, certificate, caPath); err != nil {
+	verificationCA := expectedSigningCA
+	if len(verificationCA) == 0 && rotated.SigningCACertificate != "" {
+		verificationCA = []byte(rotated.SigningCACertificate)
+	}
+	if len(verificationCA) == 0 {
+		verificationCA, err = os.ReadFile(caPath)
+		if err != nil {
+			return current, fmt.Errorf("read saved agent CA: %w", err)
+		}
+	}
+	if err := validateRotatedCertificate([]byte(rotated.Certificate), key, certificate, verificationCA); err != nil {
 		return current, err
+	}
+	if rotated.CACertificate != "" {
+		if err := validateTrustUpdate([]byte(rotated.CACertificate), verificationCA); err != nil {
+			return current, err
+		}
+		if err := writeIdentityFile(caPath, []byte(rotated.CACertificate), 0644); err != nil {
+			return current, err
+		}
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	identityPEM := append([]byte(rotated.Certificate), keyPEM...)
@@ -156,7 +185,7 @@ func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*htt
 	return mTLSClient(cfg.StateDirectory)
 }
 
-func validateRotatedCertificate(certificatePEM []byte, key *rsa.PrivateKey, previous *x509.Certificate, caPath string) error {
+func validateRotatedCertificate(certificatePEM []byte, key *rsa.PrivateKey, previous *x509.Certificate, caPEM []byte) error {
 	block, rest := pem.Decode(certificatePEM)
 	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
 		return errors.New("agent rotation returned an invalid certificate")
@@ -176,10 +205,6 @@ func validateRotatedCertificate(certificatePEM []byte, key *rsa.PrivateKey, prev
 	rotatedCluster, err := agentpki.ClusterIdentity(certificate)
 	if err != nil || rotatedCluster != previousCluster {
 		return errors.New("rotated agent certificate changed the cluster identity")
-	}
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		return fmt.Errorf("read saved agent CA: %w", err)
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caPEM) {
@@ -352,7 +377,66 @@ func (c *Client) heartbeat(ctx context.Context) error {
 			capacity["managers"] = capacity["managers"].(int) + 1
 		}
 	}
-	return c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "agentImage": agentImage, "agentUpdateState": agentUpdateState, "dockerVersion": dockerVersion, "capacity": capacity}, nil, "")
+	var trust agentTrustUpdate
+	if err := c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "agentImage": agentImage, "agentUpdateState": agentUpdateState, "dockerVersion": dockerVersion, "capacity": capacity}, &trust, ""); err != nil {
+		return err
+	}
+	if trust.CACertificate == "" && trust.SigningCACertificate == "" {
+		return nil
+	}
+	client, err := reconcileAgentTrust(ctx, c.cfg, c.http, []byte(trust.CACertificate), []byte(trust.SigningCACertificate))
+	if err != nil {
+		return err
+	}
+	c.http = client
+	return nil
+}
+
+func reconcileAgentTrust(ctx context.Context, cfg Config, current *http.Client, trustBundle, signingCA []byte) (*http.Client, error) {
+	if err := validateTrustUpdate(trustBundle, signingCA); err != nil {
+		return current, err
+	}
+	_, signingAuthorities, _ := agentpki.ValidateTrustBundle(signingCA, time.Now())
+	certPath, _, caPath := identityPaths(cfg.StateDirectory)
+	pair, err := tls.LoadX509KeyPair(certPath, certPath)
+	if err != nil || len(pair.Certificate) == 0 {
+		return current, errors.New("load current agent identity")
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return current, errors.New("parse current agent identity")
+	}
+	existing, readErr := os.ReadFile(caPath)
+	if readErr != nil || !bytes.Equal(bytes.TrimSpace(existing), bytes.TrimSpace(trustBundle)) {
+		if err = writeIdentityFile(caPath, trustBundle, 0644); err != nil {
+			return current, fmt.Errorf("save agent CA trust bundle: %w", err)
+		}
+		current, err = mTLSClient(cfg.StateDirectory)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if certificate.CheckSignatureFrom(signingAuthorities[0]) == nil {
+		return current, nil
+	}
+	return rotateCertificate(ctx, cfg, current, true, signingCA)
+}
+
+func validateTrustUpdate(trustBundle, signingCA []byte) error {
+	_, trusted, err := agentpki.ValidateTrustBundle(trustBundle, time.Now())
+	if err != nil {
+		return fmt.Errorf("validate agent CA trust update: %w", err)
+	}
+	_, signing, err := agentpki.ValidateTrustBundle(signingCA, time.Now())
+	if err != nil || len(signing) != 1 {
+		return errors.New("agent trust update has an invalid signing CA")
+	}
+	for _, certificate := range trusted {
+		if certificate.Equal(signing[0]) {
+			return nil
+		}
+	}
+	return errors.New("agent trust update does not contain its signing CA")
 }
 
 func (c *Client) inspectServiceState(ctx context.Context) (string, string, error) {
@@ -674,8 +758,11 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNoContent && method == http.MethodGet {
-		return errNoCommand
+	if response.StatusCode == http.StatusNoContent {
+		if method == http.MethodGet {
+			return errNoCommand
+		}
+		return nil
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(response.Body, 4096))

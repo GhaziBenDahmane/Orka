@@ -230,6 +230,22 @@ for secret in dockyard_agent_ca_cert dockyard_agent_ca_key dockyard_agent_server
   grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
 done
 
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Dockyard Replacement CA' \
+  -keyout "$temporary/secrets/agent-ca-new.key" -out "$temporary/secrets/agent-ca-new.crt" >/dev/null 2>&1
+chmod 0600 "$temporary/secrets/agent-ca-new.key" "$temporary/secrets/agent-ca-new.crt"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
+  DOCKYARD_AGENT_CA_CERT_FILE="$temporary/secrets/agent-ca-new.crt" \
+  DOCKYARD_AGENT_CA_KEY_FILE="$temporary/secrets/agent-ca-new.key" \
+  DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE="$temporary/secrets/agent-ca.crt" \
+  DOCKYARD_AGENT_CA_CERT_SECRET='dockyard_agent_ca_cert_v2' \
+  DOCKYARD_AGENT_CA_KEY_SECRET='dockyard_agent_ca_key_v2' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q "stack config -c $root/deploy/swarm.yml -c $root/deploy/swarm-ha.yml -c $root/deploy/swarm-agent-ca-rollover.yml" "$DOCKYARD_INSTALL_TEST_LOG"
+for secret in dockyard_agent_ca_cert_v2 dockyard_agent_ca_key_v2 dockyard_agent_previous_ca_cert; do
+  grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
+done
+
 openssl x509 -req -days 1 -CA "$temporary/secrets/agent-ca.crt" -CAkey "$temporary/secrets/agent-ca.key" \
   -set_serial 2 -copy_extensions copy -in "$temporary/agent-server.csr" \
   -out "$temporary/secrets/agent-server-short.crt" >/dev/null 2>&1

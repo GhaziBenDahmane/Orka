@@ -46,6 +46,7 @@ type Server struct {
 	PublicURL           string
 	Metrics             *observability.Metrics
 	AgentCACertificate  []byte
+	AgentCATrustBundle  []byte
 	AgentCAKey          []byte
 	AgentCertificateTTL time.Duration
 	ReadinessCheck      func(context.Context) error

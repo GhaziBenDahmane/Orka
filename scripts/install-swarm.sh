@@ -6,6 +6,11 @@ mode=${DOCKYARD_INSTALL_MODE:-single}
 stack=${DOCKYARD_STACK_NAME:-dockyard}
 network=dockyard-public
 master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
+agent_ca_cert_secret=${DOCKYARD_AGENT_CA_CERT_SECRET:-dockyard_agent_ca_cert}
+agent_ca_key_secret=${DOCKYARD_AGENT_CA_KEY_SECRET:-dockyard_agent_ca_key}
+agent_server_cert_secret=${DOCKYARD_AGENT_SERVER_CERT_SECRET:-dockyard_agent_server_cert}
+agent_server_key_secret=${DOCKYARD_AGENT_SERVER_KEY_SECRET:-dockyard_agent_server_key}
+agent_previous_ca_cert_secret=${DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET:-dockyard_agent_previous_ca_cert}
 reuse=${DOCKYARD_REUSE_EXISTING_SECRETS:-false}
 dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
@@ -46,6 +51,9 @@ validate_email() {
 case "$mode" in single|ha) ;; *) fail "DOCKYARD_INSTALL_MODE must be single or ha" ;; esac
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_STACK_NAME" ;; esac
 case "$master_key_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_MASTER_KEY_SECRET" ;; esac
+for secret_name in "$agent_ca_cert_secret" "$agent_ca_key_secret" "$agent_server_cert_secret" "$agent_server_key_secret" "$agent_previous_ca_cert_secret"; do
+  case "$secret_name" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid agent TLS Docker secret name" ;; esac
+done
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
 case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
@@ -66,6 +74,7 @@ DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
 POSTGRES_IMAGE=${POSTGRES_IMAGE:-}
 TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
 export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_MASTER_KEY_SECRET
+export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT_SERVER_CERT_SECRET DOCKYARD_AGENT_SERVER_KEY_SECRET DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET
 "$root/scripts/ci/check-image-digests.sh" controller
 
 swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}')
@@ -130,7 +139,6 @@ if [ "$mode" = ha ]; then
   validate_secret_file DOCKYARD_AGENT_SERVER_KEY_FILE "${DOCKYARD_AGENT_SERVER_KEY_FILE:-}"
   [ -n "${DOCKYARD_AGENT_HOST:-}" ] || fail "DOCKYARD_AGENT_HOST is required for HA installation"
   is_dns_hostname "$DOCKYARD_AGENT_HOST" || fail "DOCKYARD_AGENT_HOST must be a DNS hostname"
-  openssl verify -CAfile "$DOCKYARD_AGENT_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate verification failed"
   openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_CA_CERT_FILE" >/dev/null || fail "agent CA certificate must remain valid for at least 7 days"
   openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate must remain valid for at least 7 days"
   ca_public=$(openssl pkey -in "$DOCKYARD_AGENT_CA_KEY_FILE" -pubout 2>/dev/null) || fail "invalid agent CA private key"
@@ -140,11 +148,29 @@ if [ "$mode" = ha ]; then
   server_certificate_public=$(openssl x509 -in "$DOCKYARD_AGENT_SERVER_CERT_FILE" -pubkey -noout 2>/dev/null) || fail "invalid agent server certificate"
   [ "$server_public" = "$server_certificate_public" ] || fail "agent server certificate and private key do not match"
   unset ca_public ca_certificate_public server_public server_certificate_public
+  if [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
+    validate_secret_file DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE"
+    openssl verify -CAfile "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" >/dev/null || fail "previous agent CA must be a valid self-signed certificate"
+    openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" >/dev/null || fail "previous agent CA certificate must remain valid for at least 7 days"
+    active_ca_fingerprint=$(openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -noout -fingerprint -sha256)
+    previous_ca_fingerprint=$(openssl x509 -in "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" -noout -fingerprint -sha256)
+    [ "$active_ca_fingerprint" != "$previous_ca_fingerprint" ] || fail "previous agent CA must differ from the active agent CA"
+    unset active_ca_fingerprint previous_ca_fingerprint
+  fi
+  if ! openssl verify -CAfile "$DOCKYARD_AGENT_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null 2>&1; then
+    [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ] && openssl verify -CAfile "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate verification failed against active and previous CAs"
+  fi
   secret_specs="$secret_specs
-dockyard_agent_ca_cert:${DOCKYARD_AGENT_CA_CERT_FILE}
-dockyard_agent_ca_key:${DOCKYARD_AGENT_CA_KEY_FILE}
-dockyard_agent_server_cert:${DOCKYARD_AGENT_SERVER_CERT_FILE}
-dockyard_agent_server_key:${DOCKYARD_AGENT_SERVER_KEY_FILE}"
+${agent_ca_cert_secret}:${DOCKYARD_AGENT_CA_CERT_FILE}
+${agent_ca_key_secret}:${DOCKYARD_AGENT_CA_KEY_FILE}
+${agent_server_cert_secret}:${DOCKYARD_AGENT_SERVER_CERT_FILE}
+${agent_server_key_secret}:${DOCKYARD_AGENT_SERVER_KEY_FILE}"
+  if [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
+    secret_specs="$secret_specs
+${agent_previous_ca_cert_secret}:${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE}"
+  fi
+elif [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
+  fail "DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE requires DOCKYARD_INSTALL_MODE=ha"
 fi
 
 existing=""
@@ -161,7 +187,9 @@ if [ -n "$existing" ] && [ "$reuse" != true ]; then
 fi
 
 # Render and validate the complete stack before creating any resource.
-if [ "$mode" = ha ]; then
+if [ "$mode" = ha ] && [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
+  docker stack config -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" -c "$root/deploy/swarm-agent-ca-rollover.yml" >/dev/null
+elif [ "$mode" = ha ]; then
   docker stack config -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" >/dev/null
 else
   docker stack config -c "$root/deploy/swarm.yml" >/dev/null
@@ -188,7 +216,9 @@ $secret_specs
 EOF
 
 deployment_started=true
-if [ "$mode" = ha ]; then
+if [ "$mode" = ha ] && [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
+  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" -c "$root/deploy/swarm-agent-ca-rollover.yml" "$stack"
+elif [ "$mode" = ha ]; then
   docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" "$stack"
 else
   docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" "$stack"

@@ -140,6 +140,27 @@ func TestLoadValidatesAgentTLSCredentialsAndRecordsExpiry(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsDualTrustAgentCARollover(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	oldCA, _, certFile, keyFile, oldExpiry, serverExpiry := testAgentCredentials(t, now.Add(-time.Minute), now.Add(24*time.Hour))
+	newCA, newKey, err := agentpki.NewCA(now, 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setAgentConfig(t, newCA, newKey, certFile, keyFile)
+	t.Setenv("DOCKYARD_AGENT_PREVIOUS_CA_CERT", string(oldCA))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentPreviousCAExpiresAt.IsZero() || !cfg.AgentPreviousCAExpiresAt.Equal(oldExpiry) || !cfg.AgentServerCertExpiresAt.Equal(serverExpiry) {
+		t.Fatalf("previous CA expiry=%v server expiry=%v", cfg.AgentPreviousCAExpiresAt, cfg.AgentServerCertExpiresAt)
+	}
+	if _, authorities, err := agentpki.ValidateTrustBundle(cfg.AgentCATrustBundle, now); err != nil || len(authorities) != 2 {
+		t.Fatalf("trust authorities=%d err=%v", len(authorities), err)
+	}
+}
+
 func TestLoadRejectsInvalidAgentTLSCredentials(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	t.Run("mismatched server key", func(t *testing.T) {

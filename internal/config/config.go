@@ -15,30 +15,33 @@ import (
 )
 
 type Config struct {
-	ListenAddr               string
-	DatabaseURL              string
-	RequireDatabaseTLS       bool
-	MasterKey                []byte
-	DockerBin                string
-	WorkerConcurrency        int
-	SessionTTL               time.Duration
-	TraefikNetwork           string
-	UnsafeWorkloads          bool
-	PublicURL                string
-	BackupDirectory          string
-	RequireRemoteBackups     bool
-	OTLPEndpoint             string
-	OTLPInsecure             bool
-	ServiceName              string
-	AgentCACertificate       []byte
-	AgentCAKey               []byte
-	AgentCertificateTTL      time.Duration
-	AgentCAExpiresAt         time.Time
-	AgentServerCertExpiresAt time.Time
-	AgentListenAddr          string
-	AgentServerCertFile      string
-	AgentServerKeyFile       string
-	DatabaseDriverDirectory  string
+	ListenAddr                 string
+	DatabaseURL                string
+	RequireDatabaseTLS         bool
+	MasterKey                  []byte
+	DockerBin                  string
+	WorkerConcurrency          int
+	SessionTTL                 time.Duration
+	TraefikNetwork             string
+	UnsafeWorkloads            bool
+	PublicURL                  string
+	BackupDirectory            string
+	RequireRemoteBackups       bool
+	OTLPEndpoint               string
+	OTLPInsecure               bool
+	ServiceName                string
+	AgentCACertificate         []byte
+	AgentCAKey                 []byte
+	AgentPreviousCACertificate []byte
+	AgentCATrustBundle         []byte
+	AgentCertificateTTL        time.Duration
+	AgentCAExpiresAt           time.Time
+	AgentPreviousCAExpiresAt   time.Time
+	AgentServerCertExpiresAt   time.Time
+	AgentListenAddr            string
+	AgentServerCertFile        string
+	AgentServerKeyFile         string
+	DatabaseDriverDirectory    string
 }
 
 func Load() (Config, error) {
@@ -115,6 +118,13 @@ func Load() (Config, error) {
 	if (agentCACertificate == "") != (agentCAKey == "") {
 		return Config{}, errors.New("DOCKYARD_AGENT_CA_CERT and DOCKYARD_AGENT_CA_KEY must be configured together")
 	}
+	agentPreviousCACertificate, err := secretEnv("DOCKYARD_AGENT_PREVIOUS_CA_CERT")
+	if err != nil {
+		return Config{}, err
+	}
+	if agentPreviousCACertificate != "" && agentCACertificate == "" {
+		return Config{}, errors.New("DOCKYARD_AGENT_PREVIOUS_CA_CERT requires an active agent CA certificate and key")
+	}
 	agentListenAddr := strings.TrimSpace(os.Getenv("DOCKYARD_AGENT_LISTEN_ADDR"))
 	agentServerCertFile := strings.TrimSpace(os.Getenv("DOCKYARD_AGENT_SERVER_CERT_FILE"))
 	agentServerKeyFile := strings.TrimSpace(os.Getenv("DOCKYARD_AGENT_SERVER_KEY_FILE"))
@@ -125,13 +135,29 @@ func Load() (Config, error) {
 	if err != nil || agentCertificateTTL < 5*time.Minute || agentCertificateTTL > 30*24*time.Hour {
 		return Config{}, errors.New("DOCKYARD_AGENT_CERTIFICATE_TTL must be between 5m and 720h")
 	}
-	var agentCAExpiresAt, agentServerCertExpiresAt time.Time
+	var agentCAExpiresAt, agentPreviousCAExpiresAt, agentServerCertExpiresAt time.Time
+	var agentCATrustBundle []byte
 	if agentCACertificate != "" {
 		authority, validationErr := agentpki.ValidateAuthority([]byte(agentCACertificate), []byte(agentCAKey), time.Now())
 		if validationErr != nil {
 			return Config{}, fmt.Errorf("validate agent CA: %w", validationErr)
 		}
 		agentCAExpiresAt = authority.NotAfter
+		agentCATrustBundle = append([]byte(agentCACertificate), '\n')
+		if agentPreviousCACertificate != "" {
+			agentCATrustBundle = append(agentCATrustBundle, []byte(agentPreviousCACertificate)...)
+			_, authorities, trustErr := agentpki.ValidateTrustBundle(agentCATrustBundle, time.Now())
+			if trustErr != nil {
+				return Config{}, fmt.Errorf("validate previous agent CA: %w", trustErr)
+			}
+			if len(authorities) != 2 {
+				return Config{}, errors.New("agent CA rollover trust bundle must contain exactly two authorities")
+			}
+			if authorities[0].Equal(authorities[1]) {
+				return Config{}, errors.New("previous agent CA must differ from the active agent CA")
+			}
+			agentPreviousCAExpiresAt = authorities[1].NotAfter
+		}
 	}
 	if agentListenAddr != "" {
 		serverCertificate, readErr := os.ReadFile(agentServerCertFile)
@@ -142,7 +168,7 @@ func Load() (Config, error) {
 		if readErr != nil {
 			return Config{}, fmt.Errorf("read DOCKYARD_AGENT_SERVER_KEY_FILE: %w", readErr)
 		}
-		authority, server, validationErr := agentpki.ValidateServerCredentials([]byte(agentCACertificate), []byte(agentCAKey), serverCertificate, serverKey, time.Now())
+		authority, server, validationErr := agentpki.ValidateServerCredentialsWithTrust([]byte(agentCACertificate), []byte(agentCAKey), agentCATrustBundle, serverCertificate, serverKey, time.Now())
 		if validationErr != nil {
 			return Config{}, fmt.Errorf("validate agent TLS credentials: %w", validationErr)
 		}
@@ -150,30 +176,33 @@ func Load() (Config, error) {
 		agentServerCertExpiresAt = server.NotAfter
 	}
 	return Config{
-		ListenAddr:               env("DOCKYARD_LISTEN_ADDR", ":8080"),
-		DatabaseURL:              databaseURL,
-		RequireDatabaseTLS:       requireDatabaseTLS,
-		MasterKey:                key,
-		DockerBin:                env("DOCKYARD_DOCKER_BIN", "docker"),
-		WorkerConcurrency:        concurrency,
-		SessionTTL:               ttl,
-		TraefikNetwork:           env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
-		UnsafeWorkloads:          unsafeWorkloads,
-		PublicURL:                publicURL,
-		BackupDirectory:          filepath.Clean(backupDirectory),
-		RequireRemoteBackups:     requireRemoteBackups,
-		OTLPEndpoint:             otlpEndpoint,
-		OTLPInsecure:             otlpInsecure,
-		ServiceName:              env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
-		AgentCACertificate:       []byte(agentCACertificate),
-		AgentCAKey:               []byte(agentCAKey),
-		AgentCertificateTTL:      agentCertificateTTL,
-		AgentCAExpiresAt:         agentCAExpiresAt,
-		AgentServerCertExpiresAt: agentServerCertExpiresAt,
-		AgentListenAddr:          agentListenAddr,
-		AgentServerCertFile:      agentServerCertFile,
-		AgentServerKeyFile:       agentServerKeyFile,
-		DatabaseDriverDirectory:  driverDirectory,
+		ListenAddr:                 env("DOCKYARD_LISTEN_ADDR", ":8080"),
+		DatabaseURL:                databaseURL,
+		RequireDatabaseTLS:         requireDatabaseTLS,
+		MasterKey:                  key,
+		DockerBin:                  env("DOCKYARD_DOCKER_BIN", "docker"),
+		WorkerConcurrency:          concurrency,
+		SessionTTL:                 ttl,
+		TraefikNetwork:             env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		UnsafeWorkloads:            unsafeWorkloads,
+		PublicURL:                  publicURL,
+		BackupDirectory:            filepath.Clean(backupDirectory),
+		RequireRemoteBackups:       requireRemoteBackups,
+		OTLPEndpoint:               otlpEndpoint,
+		OTLPInsecure:               otlpInsecure,
+		ServiceName:                env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
+		AgentCACertificate:         []byte(agentCACertificate),
+		AgentCAKey:                 []byte(agentCAKey),
+		AgentPreviousCACertificate: []byte(agentPreviousCACertificate),
+		AgentCATrustBundle:         agentCATrustBundle,
+		AgentCertificateTTL:        agentCertificateTTL,
+		AgentCAExpiresAt:           agentCAExpiresAt,
+		AgentPreviousCAExpiresAt:   agentPreviousCAExpiresAt,
+		AgentServerCertExpiresAt:   agentServerCertExpiresAt,
+		AgentListenAddr:            agentListenAddr,
+		AgentServerCertFile:        agentServerCertFile,
+		AgentServerKeyFile:         agentServerKeyFile,
+		DatabaseDriverDirectory:    driverDirectory,
 	}, nil
 }
 

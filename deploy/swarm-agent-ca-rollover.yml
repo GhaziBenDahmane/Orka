@@ -1,0 +1,12 @@
+# Temporary HA overlay used only during an agent CA dual-trust migration.
+services:
+  dockyard:
+    environment:
+      DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE: /run/secrets/dockyard_agent_previous_ca_cert
+    secrets:
+      - dockyard_agent_previous_ca_cert
+
+secrets:
+  dockyard_agent_previous_ca_cert:
+    external: true
+    name: ${DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET:-dockyard_agent_previous_ca_cert}

@@ -53,12 +53,17 @@ func (s *Server) agentRotateCertificate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid_csr", err.Error())
 		return
 	}
+	caFingerprint, err := agentpki.CertificateFingerprint(s.AgentCACertificate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agent_ca_invalid", "agent certificate authority is invalid")
+		return
+	}
 	oldSerial := hex.EncodeToString(r.TLS.PeerCertificates[0].SerialNumber.Bytes())
-	if err = s.Store.RotateClusterCertificate(r.Context(), clusterID, oldSerial, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter); err != nil {
+	if err = s.Store.RotateClusterCertificate(r.Context(), clusterID, oldSerial, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter, caFingerprint); err != nil {
 		writeError(w, http.StatusConflict, "certificate_superseded", "agent certificate was already superseded")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"certificate": string(certificate), "expiresAt": parsed.NotAfter})
+	writeJSON(w, 200, map[string]any{"certificate": string(certificate), "caCertificate": string(s.agentTrustBundle()), "signingCaCertificate": string(s.AgentCACertificate), "signingCaFingerprint": caFingerprint, "expiresAt": parsed.NotAfter})
 }
 
 func (s *Server) agentNextCommand(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +191,8 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	caFingerprint, _ := agentpki.CertificateFingerprint(s.AgentCACertificate)
+	writeJSON(w, http.StatusOK, map[string]any{"caCertificate": string(s.agentTrustBundle()), "signingCaCertificate": string(s.AgentCACertificate), "signingCaFingerprint": caFingerprint})
 }
 
 func AgentTLSConfig(caCertificate []byte) (*x509.CertPool, error) {
@@ -195,6 +201,13 @@ func AgentTLSConfig(caCertificate []byte) (*x509.CertPool, error) {
 		return nil, errors.New("invalid agent CA certificate")
 	}
 	return pool, nil
+}
+
+func (s *Server) agentTrustBundle() []byte {
+	if len(s.AgentCATrustBundle) != 0 {
+		return s.AgentCATrustBundle
+	}
+	return s.AgentCACertificate
 }
 
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
@@ -457,10 +470,15 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_csr", err.Error())
 		return
 	}
-	if err = s.Store.ConsumeClusterEnrollmentToken(r.Context(), tokenHash, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter); err != nil {
+	caFingerprint, err := agentpki.CertificateFingerprint(s.AgentCACertificate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "agent_ca_invalid", "agent certificate authority is invalid")
+		return
+	}
+	if err = s.Store.ConsumeClusterEnrollmentToken(r.Context(), tokenHash, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter, caFingerprint); err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
 		return
 	}
 	s.Store.AuditOrganization(r.Context(), cluster.OrganizationID, "cluster.enroll", "cluster", cluster.ID.String(), r.RemoteAddr, map[string]any{"certificateNotAfter": parsed.NotAfter})
-	writeJSON(w, 200, map[string]any{"clusterId": cluster.ID, "certificate": string(certificate), "caCertificate": string(s.AgentCACertificate), "expiresAt": parsed.NotAfter})
+	writeJSON(w, 200, map[string]any{"clusterId": cluster.ID, "certificate": string(certificate), "caCertificate": string(s.agentTrustBundle()), "signingCaCertificate": string(s.AgentCACertificate), "signingCaFingerprint": caFingerprint, "expiresAt": parsed.NotAfter})
 }

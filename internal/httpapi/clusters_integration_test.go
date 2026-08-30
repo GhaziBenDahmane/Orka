@@ -107,7 +107,7 @@ func TestAgentCertificateRotationPromotesOnlyAfterReplacementAuthentication(t *t
 	request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{newCertificate}, VerifiedChains: [][]*x509.Certificate{{newCertificate}}}
 	recorder = httptest.NewRecorder()
 	api.AgentHandler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusNoContent {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("replacement authentication status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	request = httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", bytes.NewReader(heartbeat))
@@ -336,7 +336,7 @@ func postAgentHeartbeat(t *testing.T, api *Server, clusterID uuid.UUID, payload 
 	request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", bytes.NewReader(body))
 	request = request.WithContext(context.WithValue(request.Context(), clusterIDKey, clusterID))
 	api.agentHeartbeat(recorder, request)
-	if recorder.Code != http.StatusNoContent {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("heartbeat status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

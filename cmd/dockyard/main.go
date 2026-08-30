@@ -465,6 +465,7 @@ func serve() error {
 	}
 	metrics := observability.NewMetrics()
 	metrics.SetCertificateExpiry("agent_ca", cfg.AgentCAExpiresAt)
+	metrics.SetCertificateExpiry("agent_previous_ca", cfg.AgentPreviousCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_server", cfg.AgentServerCertExpiresAt)
 	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin}, Metrics: metrics}
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
@@ -472,12 +473,12 @@ func serve() error {
 	}
 	go worker.Run(ctx)
 	go templates.RunRepositorySyncScheduler(ctx, db, box, nil, logger, worker.ID)
-	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, AgentCACertificate: cfg.AgentCACertificate, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL}
+	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, AgentCACertificate: cfg.AgentCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL}
 	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	servers := []*http.Server{httpServer}
 	var agentServer *http.Server
 	if cfg.AgentListenAddr != "" {
-		clientCAs, tlsErr := httpapi.AgentTLSConfig(cfg.AgentCACertificate)
+		clientCAs, tlsErr := httpapi.AgentTLSConfig(cfg.AgentCATrustBundle)
 		if tlsErr != nil {
 			return tlsErr
 		}

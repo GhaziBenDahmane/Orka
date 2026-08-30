@@ -86,7 +86,7 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 	oldClient := conformanceMTLSClient(t, caPEM, oldCertificatePEM, oldKeyPEM)
 	heartbeat := []byte(`{"agentVersion":"conformance","dockerVersion":"29.0.0","capacity":{"nodes":1}}`)
 	status, body, err := conformanceAgentRequest(ctx, oldClient, http.MethodPost, tlsServer.URL+"/v1/agent/heartbeat", heartbeat)
-	if err != nil || status != http.StatusNoContent {
+	if err != nil || status != http.StatusOK {
 		t.Fatalf("initial old-certificate heartbeat status=%d body=%s err=%v", status, body, err)
 	}
 
@@ -141,14 +141,14 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 	}
 
 	status, body, err = conformanceAgentRequest(ctx, oldClient, http.MethodPost, tlsServer.URL+"/v1/agent/heartbeat", heartbeat)
-	if err != nil || status != http.StatusNoContent {
+	if err != nil || status != http.StatusOK {
 		t.Fatalf("old certificate was revoked before replacement confirmation: status=%d body=%s err=%v", status, body, err)
 	}
 
 	replacementKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(replacementKey)})
 	replacementClient := conformanceMTLSClient(t, caPEM, []byte(rotation.Certificate), replacementKeyPEM)
 	status, body, err = conformanceAgentRequest(ctx, replacementClient, http.MethodPost, tlsServer.URL+"/v1/agent/heartbeat", heartbeat)
-	if err != nil || status != http.StatusNoContent {
+	if err != nil || status != http.StatusOK {
 		t.Fatalf("replacement confirmation status=%d body=%s err=%v", status, body, err)
 	}
 	if err = db.Pool.QueryRow(ctx, `SELECT certificate_serial,pending_certificate_serial FROM clusters WHERE id=$1`, clusterID).Scan(&activeSerial, &pendingSerial); err != nil {
@@ -194,6 +194,59 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 		t.Fatal("mismatched replacement certificate and private key were accepted")
 	}
 
+	newCAPEM, newCAKeyPEM, err := agentpki.NewCA(now, 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustBundle := append(append([]byte{}, newCAPEM...), caPEM...)
+	rolloverAPI := &Server{Store: db, AgentCACertificate: newCAPEM, AgentCATrustBundle: trustBundle, AgentCAKey: newCAKeyPEM, AgentCertificateTTL: 7 * 24 * time.Hour}
+	rolloverRoots, err := AgentTLSConfig(trustBundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolloverServer := httptest.NewUnstartedServer(rolloverAPI.AgentHandler())
+	rolloverServer.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{serverPair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: rolloverRoots}
+	rolloverServer.StartTLS()
+	defer rolloverServer.Close()
+	status, body, err = conformanceAgentRequest(ctx, replacementClient, http.MethodPost, rolloverServer.URL+"/v1/agent/heartbeat", heartbeat)
+	var rolloverTrust struct {
+		CACertificate        string `json:"caCertificate"`
+		SigningCACertificate string `json:"signingCaCertificate"`
+	}
+	decodeTrustErr := json.Unmarshal(body, &rolloverTrust)
+	if err != nil || status != http.StatusOK || decodeTrustErr != nil || rolloverTrust.SigningCACertificate != string(newCAPEM) || rolloverTrust.CACertificate != string(trustBundle) {
+		t.Fatalf("dual-trust heartbeat status=%d body=%s err=%v", status, body, err)
+	}
+	caReplacementKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caReplacementCSR, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "dockyard-agent"}}, caReplacementKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caRotationBody, _ := json.Marshal(map[string]string{"csr": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: caReplacementCSR}))})
+	status, body, err = conformanceAgentRequest(ctx, replacementClient, http.MethodPost, rolloverServer.URL+"/v1/agent/rotate", caRotationBody)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("CA rollover issuance status=%d body=%s err=%v", status, body, err)
+	}
+	var caRotation struct {
+		Certificate string `json:"certificate"`
+	}
+	if err = json.Unmarshal(body, &caRotation); err != nil {
+		t.Fatal(err)
+	}
+	caReplacementKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caReplacementKey)})
+	caReplacementClient := conformanceMTLSClient(t, trustBundle, []byte(caRotation.Certificate), caReplacementKeyPEM)
+	status, body, err = conformanceAgentRequest(ctx, caReplacementClient, http.MethodPost, rolloverServer.URL+"/v1/agent/heartbeat", heartbeat)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("new-CA confirmation status=%d body=%s err=%v", status, body, err)
+	}
+	status, body, err = conformanceAgentRequest(ctx, replacementClient, http.MethodPost, rolloverServer.URL+"/v1/agent/heartbeat", heartbeat)
+	if err != nil || status != http.StatusUnauthorized || !bytes.Contains(body, []byte(`"code":"invalid_agent_certificate"`)) {
+		t.Fatalf("old-CA identity after promotion status=%d body=%s err=%v", status, body, err)
+	}
+
 	evidence, _ := json.Marshal(map[string]any{
 		"status":                         "passed",
 		"tlsVersion":                     "1.3",
@@ -207,6 +260,7 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 		"expiredCertificateRejected":     true,
 		"mismatchedKeyRejected":          true,
 		"pendingMetricsConverged":        true,
+		"caDualTrustMigrationVerified":   true,
 	})
 	fmt.Printf("AGENT_CERTIFICATE_EVIDENCE %s\n", evidence)
 }
