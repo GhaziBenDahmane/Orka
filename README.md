@@ -182,6 +182,12 @@ one-time agent credential. Terraform/OpenTofu can own registration and observe
 agent posture with `dockyard_cluster`, while drain/activate transitions remain
 explicit operational actions.
 
+Failure notification endpoints can be listed, created, and disabled with
+`notification-endpoints`, `create-notification-endpoint JSON`, and
+`delete-notification-endpoint ID`. `dockyard_notification_endpoint` provides
+the same lifecycle in Terraform/OpenTofu while retaining write-only provider
+credentials and generated signing secrets only in sensitive state.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

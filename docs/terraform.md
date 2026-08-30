@@ -19,6 +19,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_access_grant`
 - `dockyard_resource_policy`
 - `dockyard_cluster`
+- `dockyard_notification_endpoint`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -120,6 +121,18 @@ Enrollment tokens and active/draining/disabled transitions remain explicit
 agent or accidentally drain a live scheduler. Destroy queues the cluster
 finalizer and waits for removal; every assigned environment must be moved or
 destroyed first.
+
+`dockyard_notification_endpoint` manages immutable webhook, Slack-compatible,
+SMTP, PagerDuty, and Opsgenie delivery configuration. Provider material is a
+sensitive `configuration_json` object using the REST API field names. For
+example, webhook configuration is `jsonencode({ url = var.webhook_url })` and
+PagerDuty configuration is
+`jsonencode({ pagerDutyIntegrationKey = var.pagerduty_key })`. Changes replace
+and disable the old endpoint. Webhook/Slack signing secrets are returned once
+in the sensitive `signing_secret` attribute; protect state and deliver that
+value to the receiver before enabling alerts. Disabled endpoints are treated
+as drift and recreated. The resource is intentionally not importable because
+the API never returns provider credentials or generated signing secrets.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting

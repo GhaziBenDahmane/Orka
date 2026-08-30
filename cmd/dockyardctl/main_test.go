@@ -59,6 +59,9 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"create-backup-destination", `{}`}, http.MethodPost, "/v1/backup-destinations"},
 		{[]string{"update-backup-destination", "destination-id", `{}`}, http.MethodPut, "/v1/backup-destinations/destination-id"},
 		{[]string{"delete-backup-destination", "destination-id"}, http.MethodDelete, "/v1/backup-destinations/destination-id"},
+		{[]string{"notification-endpoints"}, http.MethodGet, "/v1/notification-endpoints"},
+		{[]string{"create-notification-endpoint", `{}`}, http.MethodPost, "/v1/notification-endpoints"},
+		{[]string{"delete-notification-endpoint", "endpoint-id"}, http.MethodDelete, "/v1/notification-endpoints/endpoint-id"},
 		{[]string{"databases", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/databases"},
 		{[]string{"database", "database-id"}, http.MethodGet, "/v1/databases/database-id"},
 		{[]string{"backup-policy", "database-id"}, http.MethodGet, "/v1/databases/database-id/backup-policy"},
@@ -300,6 +303,17 @@ func TestClusterCommandBodies(t *testing.T) {
 	method, path, input, err = commandRequest([]string{"update-cluster", "cluster-id", `{"state":"draining"}`}, strings.NewReader(""))
 	if err != nil || method != http.MethodPatch || path != "/v1/clusters/cluster-id" || input.(map[string]any)["state"] != "draining" {
 		t.Fatalf("update cluster method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+}
+
+func TestNotificationEndpointCommandBody(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-notification-endpoint", "-"}, strings.NewReader(`{"name":"On-call","kind":"pagerduty","pagerDutyIntegrationKey":"secret"}`))
+	if err != nil || method != http.MethodPost || path != "/v1/notification-endpoints" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	endpoint := input.(map[string]any)
+	if endpoint["kind"] != "pagerduty" || endpoint["pagerDutyIntegrationKey"] != "secret" {
+		t.Fatalf("notification endpoint input=%#v", endpoint)
 	}
 }
 

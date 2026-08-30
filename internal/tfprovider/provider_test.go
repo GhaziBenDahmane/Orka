@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 17 {
+	if len(instance.Resources(context.Background())) != 18 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -58,6 +58,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_cluster") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_notification_endpoint") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -243,6 +246,32 @@ func TestClusterStateUsesStringLabelsAndComputedPosture(t *testing.T) {
 	}
 	if err = setCluster(&model, clusterResponse{Labels: map[string]any{"region": float64(1)}}); err == nil {
 		t.Fatal("non-string cluster label was accepted")
+	}
+}
+
+func TestNotificationEndpointConfigurationAndSecretRetention(t *testing.T) {
+	model := notificationEndpointModel{
+		Name: types.StringValue("On-call"), Kind: types.StringValue("pagerduty"), ConfigurationJSON: types.StringValue(`{"pagerDutyIntegrationKey":"secret"}`),
+		SigningSecret: types.StringValue("generated-secret"),
+	}
+	input, err := notificationEndpointInput(model)
+	if err != nil || input["name"] != "On-call" || input["kind"] != "pagerduty" || input["pagerDutyIntegrationKey"] != "secret" {
+		t.Fatalf("notification input=%#v err=%v", input, err)
+	}
+	setNotificationEndpoint(&model, notificationEndpointResponse{ID: "endpoint-id", Name: "On-call", Kind: "pagerduty", Events: []string{"deployment.failed"}, Enabled: true})
+	if model.ConfigurationJSON.ValueString() != `{"pagerDutyIntegrationKey":"secret"}` || model.SigningSecret.ValueString() != "generated-secret" || model.Events.IsNull() {
+		t.Fatalf("notification state did not retain write-only material: %#v", model)
+	}
+	model.ConfigurationJSON = types.StringValue(`{"name":"override"}`)
+	if _, err = notificationEndpointInput(model); err == nil {
+		t.Fatal("reserved notification field was accepted")
+	}
+	model.ConfigurationJSON = types.StringValue(`[]`)
+	if _, err = notificationEndpointInput(model); err == nil {
+		t.Fatal("non-object notification configuration was accepted")
+	}
+	if !validNotificationKind("smtp") || validNotificationKind("sms") {
+		t.Fatal("notification kind validation mismatch")
 	}
 }
 

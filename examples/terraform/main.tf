@@ -35,6 +35,11 @@ variable "developer_user_id" {
   description = "Organization member UUID receiving project-scoped access"
 }
 
+variable "notification_webhook_url" {
+  type      = string
+  sensitive = true
+}
+
 resource "dockyard_project" "example" {
   name        = "Example"
   description = "Managed by OpenTofu or Terraform"
@@ -104,6 +109,24 @@ resource "dockyard_resource_policy" "organization" {
   max_environments = 100
   max_services     = 500
   max_databases    = 100
+}
+
+resource "dockyard_notification_endpoint" "operations" {
+  name = "Operations webhook"
+  kind = "webhook"
+  events = [
+    "deployment.failed",
+    "backup.failed",
+    "restore.failed",
+    "ai.finding.critical",
+  ]
+  configuration_json = jsonencode({ url = var.notification_webhook_url })
+}
+
+output "notification_signing_secret" {
+  description = "Install this secret in the webhook receiver before enabling production alerts."
+  sensitive   = true
+  value       = dockyard_notification_endpoint.operations.signing_secret
 }
 
 resource "dockyard_environment" "production" {
