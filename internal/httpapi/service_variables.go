@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"unicode/utf8"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
@@ -96,6 +98,31 @@ func (s *Server) decryptServiceVariables(item store.ComposeService) (map[string]
 	return values, nil
 }
 
+func (s *Server) templateManagedKeysForService(ctx context.Context, organizationID uuid.UUID, item store.ComposeService) (*[]string, error) {
+	provenance, err := s.Store.GetTemplateInstance(ctx, organizationID, item.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	keys := provenance.ManagedEnvironmentKeys
+	if len(keys) == 0 && item.EncryptedEnv != "" {
+		resolved := map[string]string{}
+		if provenance.EncryptedVariables != "" {
+			plain, decryptErr := s.Box.Decrypt(provenance.EncryptedVariables, cryptox.ResourceContext("template-variables", item.ID.String()))
+			if decryptErr != nil || json.Unmarshal(plain, &resolved) != nil {
+				return nil, errors.New("template variables cannot be decrypted")
+			}
+		}
+		keys, err = s.legacyTemplateEnvironmentKeys(ctx, organizationID, provenance, resolved)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &keys, nil
+}
+
 func (s *Server) getServiceVariables(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("serviceID"))
 	if err != nil {
@@ -160,6 +187,20 @@ func (s *Server) putServiceVariables(w http.ResponseWriter, r *http.Request) {
 		for name, value := range input.Values {
 			values[name] = value
 		}
+		templateManagedKeys, ownershipErr := s.templateManagedKeysForService(r.Context(), p.OrganizationID, item)
+		if ownershipErr != nil {
+			writeError(w, 409, "template_environment_provenance_missing", "current template environment ownership cannot be reconstructed")
+			return
+		}
+		if templateManagedKeys != nil {
+			filtered := (*templateManagedKeys)[:0]
+			for _, managedName := range *templateManagedKeys {
+				if _, overridden := input.Values[managedName]; !overridden {
+					filtered = append(filtered, managedName)
+				}
+			}
+			*templateManagedKeys = filtered
+		}
 		plain, marshalErr := json.Marshal(values)
 		if marshalErr != nil || len(plain) > maxServiceEnvironmentJSON {
 			writeError(w, 400, "invalid_variables", "the combined service environment exceeds 1 MiB")
@@ -170,7 +211,12 @@ func (s *Server) putServiceVariables(w http.ResponseWriter, r *http.Request) {
 			s.writeInternalError(w, r, 500, "encryption_failed", "service variables could not be encrypted", encryptErr)
 			return
 		}
-		updated, updateErr := s.Store.ReplaceComposeServiceEnvironment(r.Context(), p.OrganizationID, id, item.Revision, encrypted)
+		names := make([]string, 0, len(input.Values))
+		for name := range input.Values {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		updated, updateErr := s.Store.ReplaceComposeServiceEnvironment(r.Context(), p.OrganizationID, id, item.Revision, encrypted, templateManagedKeys)
 		if errors.Is(updateErr, store.ErrBusy) {
 			continue
 		}
@@ -178,11 +224,6 @@ func (s *Server) putServiceVariables(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, updateErr)
 			return
 		}
-		names := make([]string, 0, len(input.Values))
-		for name := range input.Values {
-			names = append(names, name)
-		}
-		sort.Strings(names)
 		s.Store.Audit(r.Context(), &p, "service.variables.upsert", "compose_service", id.String(), r.RemoteAddr, map[string]any{"names": names, "count": len(names), "revision": updated.Revision})
 		writeJSON(w, 200, serviceVariableResponse(values, updated.Revision))
 		return
@@ -227,7 +268,7 @@ func (s *Server) deleteServiceVariable(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		updated, updateErr := s.Store.ReplaceComposeServiceEnvironment(r.Context(), p.OrganizationID, id, item.Revision, encrypted)
+		updated, updateErr := s.Store.ReplaceComposeServiceEnvironment(r.Context(), p.OrganizationID, id, item.Revision, encrypted, nil)
 		if errors.Is(updateErr, store.ErrBusy) {
 			continue
 		}

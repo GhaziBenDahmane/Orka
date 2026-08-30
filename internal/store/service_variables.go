@@ -11,7 +11,7 @@ import (
 // ReplaceComposeServiceEnvironment atomically replaces encrypted runtime
 // variables. The expected revision prevents a stale read/decrypt/merge cycle
 // from overwriting a concurrent service update.
-func (s *Store) ReplaceComposeServiceEnvironment(ctx context.Context, organizationID, serviceID uuid.UUID, expectedRevision int64, encryptedEnvironment string) (ComposeService, error) {
+func (s *Store) ReplaceComposeServiceEnvironment(ctx context.Context, organizationID, serviceID uuid.UUID, expectedRevision int64, encryptedEnvironment string, templateManagedKeys *[]string) (ComposeService, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ComposeService{}, err
@@ -34,6 +34,11 @@ func (s *Store) ReplaceComposeServiceEnvironment(ctx context.Context, organizati
 	}
 	if err != nil {
 		return ComposeService{}, err
+	}
+	if templateManagedKeys != nil {
+		if _, err = tx.Exec(ctx, `UPDATE template_instances SET managed_environment_keys=$2,updated_at=now() WHERE compose_service_id=$1`, serviceID, *templateManagedKeys); err != nil {
+			return ComposeService{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return ComposeService{}, err

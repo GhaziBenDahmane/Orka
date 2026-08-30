@@ -286,6 +286,16 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&preservedEnvironment); err != nil || preservedEnvironment != encryptedEnvironment {
 		t.Fatalf("compose-only update did not preserve encrypted environment: %v", err)
 	}
+	// Simulate an instance created before managed environment ownership was
+	// recorded. The first write must reconstruct ownership before marking the
+	// explicitly rotated keys as operator-managed.
+	if _, err = db.Pool.Exec(ctx, `UPDATE template_instances SET managed_environment_keys='{}' WHERE compose_service_id=$1`, created.Service.ID); err != nil {
+		t.Fatal(err)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String()+"/variables", viewerToken, orgID, http.MethodPut, map[string]any{"values": map[string]string{"MANUAL_ONLY": "keep-on-upgrade", "PASSWORD": "operator-rotated-password"}})
+	if status != http.StatusOK || bytes.Contains(body, []byte("operator-rotated-password")) {
+		t.Fatalf("template runtime variable override status = %d: %s", status, body)
+	}
 	status, detailBody = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"drifted":true`)) {
 		t.Fatalf("template drift was not reported: %d: %s", status, detailBody)
@@ -325,8 +335,17 @@ feature = "enabled"`, 1)
 	if err = json.Unmarshal(upgradedEnvironmentJSON, &upgradedEnvironment); err != nil {
 		t.Fatal(err)
 	}
-	if upgradedEnvironment["PASSWORD"] != "operator-password" || upgradedEnvironment["ADMIN_EMAIL"] != "upgraded@example.test" || upgradedEnvironment["FEATURE"] != "enabled" {
+	if upgradedEnvironment["PASSWORD"] != "operator-rotated-password" || upgradedEnvironment["MANUAL_ONLY"] != "keep-on-upgrade" || upgradedEnvironment["ADMIN_EMAIL"] != "upgraded@example.test" || upgradedEnvironment["FEATURE"] != "enabled" {
 		t.Fatalf("upgraded environment = %#v", upgradedEnvironment)
+	}
+	var managedEnvironmentKeys []string
+	if err = db.Pool.QueryRow(ctx, `SELECT managed_environment_keys FROM template_instances WHERE compose_service_id=$1`, created.Service.ID).Scan(&managedEnvironmentKeys); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range managedEnvironmentKeys {
+		if name == "PASSWORD" || name == "MANUAL_ONLY" {
+			t.Fatalf("operator-owned variable remained template-managed: %v", managedEnvironmentKeys)
+		}
 	}
 	status, detailBody = scopedAPIRequest(t, server.URL+"/v1/services/"+created.Service.ID.String(), viewerToken, orgID, http.MethodGet, nil)
 	if status != http.StatusOK || !bytes.Contains(detailBody, []byte(`"templateVersion":"2"`)) || !bytes.Contains(detailBody, []byte(`"drifted":false`)) {

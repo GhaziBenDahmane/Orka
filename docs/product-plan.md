@@ -86,7 +86,10 @@ recovery evidence remains.
 - Safety classifications instead of silently granting host access.
 - Template instances retain encrypted resolved inputs and explicit overrides,
   expose drift-aware version provenance, and can atomically move between
-  revisions without rotating generated credentials.
+  revisions without rotating generated credentials. Runtime variables added
+  or rotated after instantiation retain explicit operator ownership and survive
+  later template upgrades, while untouched template-owned keys follow the new
+  catalog revision.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
 - Managed databases using Docker's local volume driver are durably assigned to

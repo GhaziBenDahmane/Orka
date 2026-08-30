@@ -19,6 +19,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1952,7 +1953,7 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	templateRef := item.ID
-	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides})
+	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides, ManagedEnvironmentKeys: environmentKeys(instance.Environment)})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -2098,6 +2099,19 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	currentEnvironment, err := s.decryptServiceVariables(service)
+	if err != nil {
+		s.writeInternalError(w, r, 500, "decryption_failed", "service environment cannot be decrypted", err)
+		return
+	}
+	managedEnvironmentKeys := provenance.ManagedEnvironmentKeys
+	if len(currentEnvironment) > 0 && len(managedEnvironmentKeys) == 0 {
+		managedEnvironmentKeys, err = s.legacyTemplateEnvironmentKeys(r.Context(), p.OrganizationID, provenance, preserved)
+		if err != nil {
+			writeError(w, 409, "template_environment_provenance_missing", "current template environment ownership cannot be reconstructed; reinstantiate the service before upgrading")
+			return
+		}
+	}
 	overrides := templates.UpgradeOverrides(template, preserved, storedOverrides, in.Variables)
 	upgraded, err := templates.InstantiateWithOverrides(template, target.ComposeYAML, provenance.BaseDomain, overrides)
 	if err == nil {
@@ -2107,6 +2121,25 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, "invalid_template", err.Error())
 		return
 	}
+	newManagedEnvironmentKeys := environmentKeys(upgraded.Environment)
+	managedSet := make(map[string]bool, len(managedEnvironmentKeys))
+	for _, name := range managedEnvironmentKeys {
+		managedSet[name] = true
+	}
+	operatorManagedSet := map[string]bool{}
+	for name, value := range currentEnvironment {
+		if !managedSet[name] {
+			operatorManagedSet[name] = true
+			upgraded.Environment[name] = value
+		}
+	}
+	filteredManagedKeys := newManagedEnvironmentKeys[:0]
+	for _, name := range newManagedEnvironmentKeys {
+		if !operatorManagedSet[name] {
+			filteredManagedKeys = append(filteredManagedKeys, name)
+		}
+	}
+	newManagedEnvironmentKeys = filteredManagedKeys
 	environmentJSON, _ := json.Marshal(upgraded.Environment)
 	encryptedEnvironment, err := s.Box.Encrypt(environmentJSON, composeEnvironmentContext(serviceID))
 	if err != nil {
@@ -2137,7 +2170,7 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 	upgradedSum := sha256.Sum256([]byte(upgraded.ComposeYAML))
 	targetRef := target.ID
 	service.ComposeYAML, service.EncryptedEnv = upgraded.ComposeYAML, encryptedEnvironment
-	service, routes, err = s.Store.UpgradeTemplateService(r.Context(), p.OrganizationID, service.Revision, service, routes, store.TemplateInstance{TemplateID: &targetRef, TemplateKey: target.Key, TemplateVersion: target.Version, TemplateChecksum: target.Checksum, AppliedComposeChecksum: hex.EncodeToString(upgradedSum[:]), BaseDomain: provenance.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides})
+	service, routes, err = s.Store.UpgradeTemplateService(r.Context(), p.OrganizationID, service.Revision, service, routes, store.TemplateInstance{TemplateID: &targetRef, TemplateKey: target.Key, TemplateVersion: target.Version, TemplateChecksum: target.Checksum, AppliedComposeChecksum: hex.EncodeToString(upgradedSum[:]), BaseDomain: provenance.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides, ManagedEnvironmentKeys: newManagedEnvironmentKeys})
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, 409, "concurrent_update", "service changed while the template upgrade was prepared")
@@ -2164,6 +2197,41 @@ func templateRoutes(serviceID uuid.UUID, domains []templates.Domain) ([]store.Ro
 		routes = append(routes, route)
 	}
 	return routes, nil
+}
+
+func environmentKeys(environment map[string]string) []string {
+	keys := make([]string, 0, len(environment))
+	for name := range environment {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *Server) legacyTemplateEnvironmentKeys(ctx context.Context, organizationID uuid.UUID, provenance store.TemplateInstance, resolved map[string]string) ([]string, error) {
+	if provenance.TemplateID == nil {
+		return nil, store.ErrNotFound
+	}
+	item, err := s.Store.GetTemplate(ctx, organizationID, *provenance.TemplateID)
+	if err != nil || item.Checksum != provenance.TemplateChecksum {
+		return nil, errors.New("current template revision is unavailable")
+	}
+	var config map[string]string
+	if err = json.Unmarshal(item.Config, &config); err != nil {
+		return nil, err
+	}
+	definition, err := templates.ParseDokploy([]byte(config["templateToml"]))
+	if err != nil {
+		return nil, err
+	}
+	instance, err := templates.InstantiateWithOverrides(definition, item.ComposeYAML, provenance.BaseDomain, resolved)
+	if err == nil {
+		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts, instance.Environment)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return environmentKeys(instance.Environment), nil
 }
 
 func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
