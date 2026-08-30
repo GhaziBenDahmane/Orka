@@ -184,6 +184,7 @@ export const api = {
   createNotificationEndpoint: (body: Record<string, unknown>) => request<{ endpoint: NotificationEndpoint; signingSecret?: string }>("/v1/notification-endpoints", { method: "POST", body: JSON.stringify(body) }),
   disableNotificationEndpoint: (id: string) => request<void>(`/v1/notification-endpoints/${id}`, { method: "DELETE" }),
   serviceAccounts: () => request<Envelope<ServiceAccount>>("/v1/service-accounts"),
+  createServiceAccount: (name: string, role: "admin" | "developer" | "viewer", expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role, expiresInDays }) }),
   createAuditorAccount: (name: string, expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role: "auditor", expiresInDays }) }),
   rotateServiceAccount: (id: string, expiresInDays: number) => request<{ token: string; expiresAt: string }>(`/v1/service-accounts/${id}/rotate`, { method: "POST", body: JSON.stringify({ expiresInDays }) }),
   disableServiceAccount: (id: string) => request<void>(`/v1/service-accounts/${id}`, { method: "DELETE" }),

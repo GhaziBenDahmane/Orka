@@ -378,6 +378,7 @@ function AgentUpgradeSummary({ command, busy, cancel }: { command?: ClusterComma
 
 type PolicyScope = "organization" | "project" | "environment";
 type PolicyDraft = { maintenance: boolean; maintenanceReason: string; maxProjects: string; maxEnvironments: string; maxServices: string; maxDatabases: string };
+type AutomationRole = "admin" | "developer" | "viewer";
 
 const emptyPolicy: PolicyDraft = { maintenance: false, maintenanceReason: "", maxProjects: "", maxEnvironments: "", maxServices: "", maxDatabases: "" };
 
@@ -396,6 +397,11 @@ function Governance({ principal, projects, projectId, environments, environmentI
   const [scimRole, setSCIMRole] = useState<SCIMToken["defaultRole"]>("developer");
   const [scimExpiryDays, setSCIMExpiryDays] = useState(90);
   const [createdSCIM, setCreatedSCIM] = useState<{ token: string; baseUrl: string } | null>(null);
+  const [automationAccounts, setAutomationAccounts] = useState<ServiceAccount[]>([]);
+  const [automationName, setAutomationName] = useState("deployment-automation");
+  const [automationRole, setAutomationRole] = useState<AutomationRole>("developer");
+  const [automationDays, setAutomationDays] = useState(90);
+  const [createdAutomation, setCreatedAutomation] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const scopeId = scope === "organization" ? principal.organizationId : scope === "project" ? projectId : environmentId;
 
@@ -403,10 +409,12 @@ function Governance({ principal, projects, projectId, environments, environmentI
   const refreshMembers = useCallback(async () => setMembers((await api.members()).items), []);
   const refreshInvitations = useCallback(async () => setInvitations((await api.invitations()).items), []);
   const refreshSCIMTokens = useCallback(async () => setSCIMTokens((await api.scimTokens()).items), []);
+  const refreshAutomationAccounts = useCallback(async () => setAutomationAccounts((await api.serviceAccounts()).items.filter(item => item.role !== "auditor")), []);
   useEffect(() => { api.authSettings().then(x => setRequireSso(x.requireSso)).catch(reason => setError(message(reason))); }, [setError]);
   useEffect(() => { void refreshMembers().catch(reason => setError(message(reason))); }, [refreshMembers, setError]);
   useEffect(() => { void refreshInvitations().catch(reason => setError(message(reason))); }, [refreshInvitations, setError]);
   useEffect(() => { void refreshSCIMTokens().catch(reason => setError(message(reason))); }, [refreshSCIMTokens, setError]);
+  useEffect(() => { void refreshAutomationAccounts().catch(reason => setError(message(reason))); }, [refreshAutomationAccounts, setError]);
   useEffect(() => {
     if (!scopeId) { setDraft(emptyPolicy); return; }
     api.policy(scope, scopeId).then(applyPolicy).catch(reason => setError(message(reason)));
@@ -448,11 +456,29 @@ function Governance({ principal, projects, projectId, environments, environmentI
     setBusy(true); try { await api.revokeInvitation(item.id); await refreshInvitations(); flash("Invitation revoked"); }
     catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
+  async function createAutomationAccount(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setCreatedAutomation(null);
+    try { const result = await api.createServiceAccount(automationName, automationRole, automationDays); setCreatedAutomation({ name: result.serviceAccount.name, token: result.token }); await refreshAutomationAccounts(); flash("Automation identity created"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  async function rotateAutomationAccount(item: ServiceAccount) {
+    if (!window.confirm(`Rotate the token for ${item.name}? Its current token will stop working immediately.`)) return;
+    setBusy(true); setCreatedAutomation(null);
+    try { const result = await api.rotateServiceAccount(item.id, automationDays); setCreatedAutomation({ name: item.name, token: result.token }); await refreshAutomationAccounts(); flash("Automation token rotated"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  async function disableAutomationAccount(item: ServiceAccount) {
+    if (!window.confirm(`Disable ${item.name}? Its token will stop working immediately.`)) return;
+    setBusy(true);
+    try { await api.disableServiceAccount(item.id); await refreshAutomationAccounts(); flash("Automation identity disabled"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
   const activeOwners = members.filter(item => item.active && item.role === "owner").length;
   const canManageMember = (item: OrganizationMember) => !item.managedByScim && (principal.role === "owner" || item.role !== "owner") && !(item.userId === principal.userId && item.role === "owner" && activeOwners <= 1);
   return <div className="settings-grid">
     <section className="card settings-card"><p className="eyebrow">Organization access</p><h2>Members</h2><p className="muted">Manage organization roles and remove access. Directory-managed members must be changed in the identity provider.</p><div className="admin-items">{members.map(item => { const manageable = canManageMember(item); return <article key={item.userId}><div><strong>{item.displayName || item.email}{item.userId === principal.userId ? " · You" : ""}</strong><small>{item.email} · {item.active ? "active" : "disabled"}{item.managedByScim ? " · SCIM managed" : ""}</small></div><div className="actions">{manageable ? <select aria-label={`Role for ${item.email}`} value={item.role} disabled={busy} onChange={event => void updateMemberRole(item, event.target.value as Role)}>{principal.role === "owner" && <option value="owner">Owner</option>}<option value="admin">Admin</option><option value="developer">Developer</option><option value="viewer">Viewer</option></select> : <Status value={item.role} />}{manageable && <button type="button" className="danger-button" disabled={busy} onClick={() => void removeMember(item)}>Remove</button>}</div></article>; })}{!members.length && <p className="muted">No organization members.</p>}</div></section>
     <section className="card settings-card"><p className="eyebrow">Organization access</p><h2>Invitations</h2><p className="muted">Create a one-time enrollment link. Creating another invitation for the same email revokes the previous link.</p><form onSubmit={createInvitation}><label>Email<input type="email" value={invitationEmail} onChange={event => setInvitationEmail(event.target.value)} required /></label><label>Role<select value={invitationRole} onChange={event => setInvitationRole(event.target.value as Role)}>{principal.role === "owner" && <option value="owner">Owner</option>}<option value="admin">Admin</option><option value="developer">Developer</option><option value="viewer">Viewer</option></select></label><label>Lifetime (days)<input type="number" min="1" max="30" value={invitationDays} onChange={event => setInvitationDays(Number(event.target.value))} /></label><button className="primary" disabled={busy}>Create invitation</button></form>{createdInvitation && <div className="credential-card spaced"><p className="eyebrow">Share once</p><p className="muted">The invitation token is never shown again.</p><code>{createdInvitation.acceptUrl}</code><div className="actions"><button type="button" onClick={() => void navigator.clipboard.writeText(createdInvitation.acceptUrl)}>Copy link</button><button type="button" onClick={() => setCreatedInvitation(null)}>Dismiss</button></div></div>}<div className="admin-items">{invitations.map(item => { const status = item.acceptedAt ? "accepted" : item.revokedAt ? "revoked" : new Date(item.expiresAt) <= new Date() ? "expired" : "pending"; return <article key={item.id}><div><strong>{item.email}</strong><small>{item.role} · expires {new Date(item.expiresAt).toLocaleDateString()}</small></div><Status value={status} />{status === "pending" && <button type="button" className="danger-button" disabled={busy} onClick={() => void revokeInvitation(item)}>Revoke</button>}</article>; })}{!invitations.length && <p className="muted">No invitations issued.</p>}</div></section>
+    <section className="card settings-card"><p className="eyebrow">Machine access</p><h2>Automation identities</h2><p className="muted">Issue scoped, expiring API credentials for CI/CD and infrastructure automation. Use the AI page for auditor-only identities.</p><form onSubmit={createAutomationAccount}><label>Name<input value={automationName} maxLength={120} onChange={event => setAutomationName(event.target.value)} required /></label><label>Role<select value={automationRole} onChange={event => setAutomationRole(event.target.value as AutomationRole)}><option value="viewer">Viewer</option><option value="developer">Developer</option><option value="admin">Admin</option></select></label><label>Token lifetime (days)<input type="number" min="1" max="365" value={automationDays} onChange={event => setAutomationDays(Number(event.target.value))} /></label><button className="primary" disabled={busy}>Create identity</button></form>{createdAutomation && <div className="credential-card spaced"><p className="eyebrow">Save now · {createdAutomation.name}</p><p className="muted">This token is shown once. Store it in your CI/CD secret manager.</p><code>{createdAutomation.token}</code><div className="actions"><button type="button" onClick={() => void navigator.clipboard.writeText(createdAutomation.token)}>Copy token</button><button type="button" onClick={() => setCreatedAutomation(null)}>Dismiss</button></div></div>}<div className="admin-items">{automationAccounts.map(item => { const expired = Boolean(item.tokenExpiresAt && new Date(item.tokenExpiresAt) <= new Date()); const status = !item.enabled ? "disabled" : expired ? "expired" : "active"; return <article key={item.id}><div><strong>{item.name}</strong><small>{item.role} · expires {item.tokenExpiresAt ? new Date(item.tokenExpiresAt).toLocaleString() : "without an active token"}{item.lastUsedAt ? ` · last used ${new Date(item.lastUsedAt).toLocaleString()}` : " · never used"}</small></div><Status value={status} /><div className="actions">{item.enabled && <button type="button" disabled={busy} onClick={() => void rotateAutomationAccount(item)}>Rotate</button>}{item.enabled && <button type="button" className="danger-button" disabled={busy} onClick={() => void disableAutomationAccount(item)}>Disable</button>}</div></article>; })}{!automationAccounts.length && <p className="muted">No automation identities created.</p>}</div></section>
     <section className="card settings-card"><p className="eyebrow">Resource guardrails</p><h2>Policy and quotas</h2><form onSubmit={savePolicy}>
       <label>Scope<select value={scope} onChange={e => setScope(e.target.value as PolicyScope)}><option value="organization">Organization · {principal.organization}</option><option value="project" disabled={!projectId}>Project · {projects.find(x => x.id === projectId)?.name ?? "select under Workloads"}</option><option value="environment" disabled={!environmentId}>Environment · {environments.find(x => x.id === environmentId)?.name ?? "select under Workloads"}</option></select></label>
       <label className="check"><input type="checkbox" checked={draft.maintenance} onChange={e => setDraft({ ...draft, maintenance: e.target.checked })} /> Block mutations for maintenance</label>
