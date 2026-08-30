@@ -140,7 +140,9 @@ backup-ID directory. Remote deletion intent is committed before backup metadata
 is removed, retains the destination credential reference, retries transient
 object-store failures, and exposes backlog age for alerting. A backup is not
 considered production evidence until its native engine restore and
-application-level data checks succeed.
+application-level data checks succeed. Destination changes verify access before
+atomically replacing resource-bound encrypted credentials, allowing recovery
+from key rotation without weakening tenant ownership.
 Managed databases backed by Docker's node-local volume driver persist their
 first storage-node assignment and receive a platform-owned `node.id` placement
 constraint on every deployment. Legacy stacks are adopted only when all

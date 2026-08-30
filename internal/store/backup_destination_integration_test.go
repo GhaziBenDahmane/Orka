@@ -69,6 +69,20 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	updated, err := db.UpdateBackupDestination(ctx, orgID, BackupDestination{ID: owned.ID, Name: "rotated", Endpoint: "https://objects.example.test", Region: "eu-west-3", Bucket: "rotated-backups", Prefix: "tenant", UseTLS: true, EncryptedCredentials: "rotated-ciphertext"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.OrganizationID != orgID || updated.Name != "rotated" || updated.Endpoint != "https://objects.example.test" || updated.Region != "eu-west-3" || updated.Bucket != "rotated-backups" || updated.Prefix != "tenant" || !updated.UseTLS || updated.EncryptedCredentials != "rotated-ciphertext" {
+		t.Fatalf("updated destination=%#v", updated)
+	}
+	storedDestination, err := db.GetBackupDestination(ctx, orgID, owned.ID)
+	if err != nil || storedDestination.EncryptedCredentials != "rotated-ciphertext" || storedDestination.Bucket != "rotated-backups" {
+		t.Fatalf("stored updated destination=%#v err=%v", storedDestination, err)
+	}
+	if _, err = db.UpdateBackupDestination(ctx, otherOrgID, BackupDestination{ID: owned.ID, Name: "hijacked", Endpoint: "https://evil.example.test", Bucket: "stolen", UseTLS: true, EncryptedCredentials: "foreign"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant destination update error=%v, want not found", err)
+	}
 
 	if _, err = db.QueueDatabaseBackup(ctx, orgID, databaseID, userID, &foreign.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant backup destination error = %v, want not found", err)
@@ -97,6 +111,15 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	storedBackup, err := db.GetDatabaseBackup(ctx, orgID, backup.ID)
 	if err != nil || storedBackup.DestinationID == nil || *storedBackup.DestinationID != owned.ID {
 		t.Fatalf("stored backup destination = %v, err = %v", storedBackup.DestinationID, err)
+	}
+	updated.EncryptedCredentials = "second-rotation"
+	if updated, err = db.UpdateBackupDestination(ctx, orgID, updated); err != nil || updated.EncryptedCredentials != "second-rotation" {
+		t.Fatalf("credential-only rotation=%#v err=%v", updated, err)
+	}
+	changedLocation := updated
+	changedLocation.Bucket = "different-bucket"
+	if _, err = db.UpdateBackupDestination(ctx, orgID, changedLocation); !errors.Is(err, ErrBusy) {
+		t.Fatalf("referenced destination location update error=%v, want busy", err)
 	}
 
 	db.RequireRemoteBackups = true

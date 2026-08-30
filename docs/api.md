@@ -377,7 +377,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | POST | `/v1/services/{id}/template-upgrades` | Atomically apply another template revision while preserving generated secrets and explicit overrides |
 | GET | `/v1/database-engines` | List built-in and trusted external database drivers with capabilities |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
-| GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
+| GET/POST/PUT/DELETE | `/v1/backup-destinations…` | Manage and rotate credentials for encrypted S3-compatible destinations |
 
 Repository creation accepts `trustedPublicKey` as an Ed25519 PEM or base64 raw
 public key and `requireSignature` as a boolean. When a key is configured every

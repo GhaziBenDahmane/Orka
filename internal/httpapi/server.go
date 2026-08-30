@@ -201,6 +201,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/databases/{databaseID}/backups", s.requireResourceRole("developer", "database", "databaseID", http.HandlerFunc(s.createDatabaseBackup)))
 	mux.Handle("GET /v1/backup-destinations", s.requireRole("developer", http.HandlerFunc(s.listBackupDestinations)))
 	mux.Handle("POST /v1/backup-destinations", s.requireRole("admin", http.HandlerFunc(s.createBackupDestination)))
+	mux.Handle("PUT /v1/backup-destinations/{destinationID}", s.requireRole("admin", http.HandlerFunc(s.updateBackupDestination)))
 	mux.Handle("DELETE /v1/backup-destinations/{destinationID}", s.requireRole("admin", http.HandlerFunc(s.deleteBackupDestination)))
 	mux.Handle("GET /v1/databases/{databaseID}/backup-policy", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getBackupPolicy)))
 	mux.Handle("PUT /v1/databases/{databaseID}/backup-policy", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.putBackupPolicy)))
@@ -1296,18 +1297,20 @@ func (s *Server) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, item)
 }
 
+type backupDestinationInput struct {
+	Name         string `json:"name"`
+	Endpoint     string `json:"endpoint"`
+	Region       string `json:"region"`
+	Bucket       string `json:"bucket"`
+	Prefix       string `json:"prefix"`
+	UseTLS       bool   `json:"useTls"`
+	AccessKey    string `json:"accessKey"`
+	SecretKey    string `json:"secretKey"`
+	SessionToken string `json:"sessionToken"`
+}
+
 func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Name         string `json:"name"`
-		Endpoint     string `json:"endpoint"`
-		Region       string `json:"region"`
-		Bucket       string `json:"bucket"`
-		Prefix       string `json:"prefix"`
-		UseTLS       bool   `json:"useTls"`
-		AccessKey    string `json:"accessKey"`
-		SecretKey    string `json:"secretKey"`
-		SessionToken string `json:"sessionToken"`
-	}
+	var in backupDestinationInput
 	if !decode(w, r, &in) {
 		return
 	}
@@ -1341,6 +1344,51 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 	}
 	s.Store.Audit(r.Context(), &p, "backup_destination.create", "backup_destination", item.ID.String(), r.RemoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket})
 	writeJSON(w, 201, item)
+}
+
+func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request) {
+	destinationID, err := uuid.Parse(r.PathValue("destinationID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid destination id")
+		return
+	}
+	var in backupDestinationInput
+	if !decode(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" || in.AccessKey == "" || in.SecretKey == "" {
+		writeError(w, http.StatusBadRequest, "invalid_destination", "name, accessKey, and secretKey are required")
+		return
+	}
+	p := principal(r)
+	if _, err = s.Store.GetBackupDestination(r.Context(), p.OrganizationID, destinationID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_destination", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err = client.Check(ctx); err != nil {
+		writeError(w, http.StatusBadRequest, "destination_unreachable", err.Error())
+		return
+	}
+	secretJSON, _ := json.Marshal(map[string]string{"accessKey": in.AccessKey, "secretKey": in.SecretKey, "sessionToken": in.SessionToken})
+	encrypted, err := s.Box.Encrypt(secretJSON, cryptox.ResourceContext("backup-destination", destinationID.String()))
+	if err != nil {
+		s.writeInternalError(w, r, http.StatusInternalServerError, "encryption_failed", "backup destination credentials could not be encrypted", err)
+		return
+	}
+	item, err := s.Store.UpdateBackupDestination(r.Context(), p.OrganizationID, store.BackupDestination{ID: destinationID, Name: strings.TrimSpace(in.Name), Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "backup_destination.update", "backup_destination", item.ID.String(), r.RemoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket})
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) listBackupDestinations(w http.ResponseWriter, r *http.Request) {

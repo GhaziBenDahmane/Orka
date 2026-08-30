@@ -963,6 +963,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
   /v1/backup-destinations/{destinationID}:
+    put:
+      operationId: put_v1_backup_destinations_destinationID
+      tags: [backup-destinations]
+      parameters:
+        - name: destinationID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     delete:
       operationId: delete_v1_backup_destinations_destinationID
       tags: [backup-destinations]

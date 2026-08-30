@@ -42,9 +42,13 @@ Its import ID is `SERVICE_UUID/VOLUME_NAME`, for example
 The service must declare and mount the volume, and must have a resolvable Swarm
 storage node. Set `quiesce = true` unless the application has a separately
 validated crash-consistent backup mechanism.
-Backup destinations verify bucket access during creation. Access keys, secret
-keys, and optional session tokens are sensitive and are never returned by the
-API, so the provider retains them from configuration in state.
+Backup destinations verify bucket access during creation and in-place updates.
+Credential rotation does not replace policy or durable-cleanup references.
+Access keys, secret keys, and optional session tokens are sensitive and are
+never returned by the API, so the provider retains them from configuration in
+state. Credentials and display names remain rotatable while a destination is
+referenced. Endpoint, region, bucket, prefix, and TLS changes are rejected once
+stored backup or audit artifacts depend on that location.
 Source credentials similarly retain secret material only in sensitive state;
 use `secret` for Git HTTPS and registry credentials, or `private_key` plus
 `known_hosts` for host-pinned SSH credentials.

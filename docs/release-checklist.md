@@ -142,6 +142,8 @@ links for every item below.
   running verification drills; both references must prevent artifact deletion.
   Inject an object-store deletion failure and verify the durable cleanup record,
   retry backoff, destination protection, backlog metric, and eventual deletion.
+  Rotate the destination credentials in place and verify queued cleanup resumes
+  without replacing policy or backup references.
   On a Swarm manager, `make test-database-recovery`
   exercises the exact engine-specific readiness, backup, and restore commands
   against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,

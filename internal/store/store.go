@@ -1482,6 +1482,35 @@ func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestinat
 	return item, err
 }
 
+func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid.UUID, item BackupDestination) (BackupDestination, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return BackupDestination{}, err
+	}
+	defer tx.Rollback(ctx)
+	var endpoint, region, bucket, prefix string
+	var useTLS bool
+	if err = tx.QueryRow(ctx, `SELECT endpoint,region,bucket,prefix,use_tls FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR UPDATE`, item.ID, organizationID).Scan(&endpoint, &region, &bucket, &prefix, &useTLS); errors.Is(err, pgx.ErrNoRows) {
+		return BackupDestination{}, ErrNotFound
+	} else if err != nil {
+		return BackupDestination{}, err
+	}
+	if endpoint != item.Endpoint || region != item.Region || bucket != item.Bucket || prefix != item.Prefix || useTLS != item.UseTLS {
+		var referenced bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM backup_artifact_deletions WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM audit_archive_destinations WHERE backup_destination_id=$1)`, item.ID).Scan(&referenced); err != nil {
+			return BackupDestination{}, err
+		}
+		if referenced {
+			return BackupDestination{}, ErrBusy
+		}
+	}
+	err = tx.QueryRow(ctx, `UPDATE backup_destinations SET name=$3,endpoint=$4,region=$5,bucket=$6,prefix=$7,use_tls=$8,encrypted_credentials=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,endpoint,region,bucket,prefix,use_tls,created_at,updated_at`, item.ID, organizationID, item.Name, item.Endpoint, item.Region, item.Bucket, item.Prefix, item.UseTLS, item.EncryptedCredentials).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Endpoint, &item.Region, &item.Bucket, &item.Prefix, &item.UseTLS, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return BackupDestination{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
 func (s *Store) ListBackupDestinations(ctx context.Context, organizationID uuid.UUID) ([]BackupDestination, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,endpoint,region,bucket,prefix,use_tls,created_at,updated_at FROM backup_destinations WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {

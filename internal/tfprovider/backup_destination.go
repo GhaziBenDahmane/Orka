@@ -8,9 +8,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -46,18 +43,17 @@ func (r *backupDestinationResource) Metadata(_ context.Context, request resource
 }
 
 func (r *backupDestinationResource) Schema(_ context.Context, _ resource.SchemaRequest, response *resource.SchemaResponse) {
-	replace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	response.Schema = schema.Schema{Description: "An encrypted S3-compatible backup destination.", Attributes: map[string]schema.Attribute{
 		"id":            schema.StringAttribute{Computed: true},
-		"name":          schema.StringAttribute{Required: true, PlanModifiers: replace},
-		"endpoint":      schema.StringAttribute{Required: true, PlanModifiers: replace},
-		"region":        schema.StringAttribute{Optional: true, PlanModifiers: replace},
-		"bucket":        schema.StringAttribute{Required: true, PlanModifiers: replace},
-		"prefix":        schema.StringAttribute{Optional: true, PlanModifiers: replace},
-		"use_tls":       schema.BoolAttribute{Required: true, PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()}},
-		"access_key":    schema.StringAttribute{Required: true, Sensitive: true, PlanModifiers: replace},
-		"secret_key":    schema.StringAttribute{Required: true, Sensitive: true, PlanModifiers: replace},
-		"session_token": schema.StringAttribute{Optional: true, Sensitive: true, PlanModifiers: replace},
+		"name":          schema.StringAttribute{Required: true},
+		"endpoint":      schema.StringAttribute{Required: true},
+		"region":        schema.StringAttribute{Optional: true},
+		"bucket":        schema.StringAttribute{Required: true},
+		"prefix":        schema.StringAttribute{Optional: true},
+		"use_tls":       schema.BoolAttribute{Required: true},
+		"access_key":    schema.StringAttribute{Required: true, Sensitive: true},
+		"secret_key":    schema.StringAttribute{Required: true, Sensitive: true},
+		"session_token": schema.StringAttribute{Optional: true, Sensitive: true},
 	}}
 }
 
@@ -105,7 +101,21 @@ func (r *backupDestinationResource) Read(ctx context.Context, request resource.R
 	response.State.RemoveResource(ctx)
 }
 
-func (r *backupDestinationResource) Update(context.Context, resource.UpdateRequest, *resource.UpdateResponse) {
+func (r *backupDestinationResource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
+	var plan backupDestinationModel
+	response.Diagnostics.Append(request.Plan.Get(ctx, &plan)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+	item, err := call[backupDestinationResponse](ctx, r.client, http.MethodPut, "/v1/backup-destinations/"+plan.ID.ValueString(), map[string]any{
+		"name": plan.Name.ValueString(), "endpoint": plan.Endpoint.ValueString(), "region": plan.Region.ValueString(), "bucket": plan.Bucket.ValueString(), "prefix": plan.Prefix.ValueString(), "useTls": plan.UseTLS.ValueBool(), "accessKey": plan.AccessKey.ValueString(), "secretKey": plan.SecretKey.ValueString(), "sessionToken": plan.SessionToken.ValueString(),
+	})
+	if err != nil {
+		response.Diagnostics.AddError("Unable to update backup destination", err.Error())
+		return
+	}
+	setBackupDestination(&plan, item)
+	response.Diagnostics.Append(response.State.Set(ctx, &plan)...)
 }
 
 func (r *backupDestinationResource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {
