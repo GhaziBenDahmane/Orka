@@ -16,8 +16,10 @@ import (
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var pinnedAgentImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
@@ -27,13 +29,18 @@ type clusterContextKey string
 const clusterIDKey clusterContextKey = "cluster-id"
 
 func (s *Server) AgentHandler() http.Handler {
+	if s.Metrics == nil {
+		s.Metrics = observability.NewMetrics()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/agent/heartbeat", s.agentHeartbeat)
 	mux.HandleFunc("POST /v1/agent/rotate", s.agentRotateCertificate)
 	mux.HandleFunc("GET /v1/agent/commands/next", s.agentNextCommand)
 	mux.HandleFunc("POST /v1/agent/commands/{commandID}/lease", s.agentRenewCommand)
 	mux.HandleFunc("POST /v1/agent/commands/{commandID}/complete", s.agentCompleteCommand)
-	return s.requestIDMiddleware(s.requireAgentCertificate(mux))
+	protected := s.requireAgentCertificate(mux)
+	instrumented := otelhttp.NewHandler(s.middleware(protected), "dockyard.agent_http")
+	return s.requestIDMiddleware(instrumented)
 }
 
 func (s *Server) agentRotateCertificate(w http.ResponseWriter, r *http.Request) {

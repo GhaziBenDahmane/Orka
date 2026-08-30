@@ -262,7 +262,7 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				recorder.status = http.StatusInternalServerError
-				s.logger().ErrorContext(r.Context(), "panic", "error", recovered, "request_id", requestID(r))
+				s.logger().ErrorContext(r.Context(), "request panic", "panic_type", fmt.Sprintf("%T", recovered), "request_id", requestID(r))
 				writeError(recorder, http.StatusInternalServerError, "internal_error", "internal server error")
 			}
 			route := r.Pattern

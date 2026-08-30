@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/bendahma/dokploy-go/internal/observability"
 )
 
 func TestRequestIDMiddleware(t *testing.T) {
@@ -83,5 +85,41 @@ func TestInternalErrorsDoNotLeakDetails(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "private.internal") || !strings.Contains(logs.String(), `"operation":"dependency_failed"`) || !strings.Contains(logs.String(), `"error_type":"*errors.errorString"`) {
 		t.Fatalf("unsafe or incomplete internal error log: %s", logs.String())
+	}
+}
+
+func TestAgentHandlerAppliesAPIProtectionBeforeCertificateAuthentication(t *testing.T) {
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", strings.NewReader(`{}`))
+	response := httptest.NewRecorder()
+	server.AgentHandler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("agent API status=%d, want 401", response.Code)
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("agent API cache policy=%q, want no-store", response.Header().Get("Cache-Control"))
+	}
+	for _, header := range []string{"Content-Security-Policy", "X-Content-Type-Options", "X-Frame-Options", "X-Request-ID"} {
+		if response.Header().Get(header) == "" {
+			t.Errorf("agent API response is missing %s", header)
+		}
+	}
+}
+
+func TestMiddlewareRedactsRecoveredPanic(t *testing.T) {
+	var logs bytes.Buffer
+	server := &Server{Logger: slog.New(slog.NewJSONHandler(&logs, nil)), Metrics: observability.NewMetrics()}
+	handler := server.requestIDMiddleware(server.middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(errors.New("password=secret-value host=private.internal"))
+	})))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/test", nil))
+
+	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "secret-value") {
+		t.Fatalf("unsafe panic response: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "private.internal") || !strings.Contains(logs.String(), `"panic_type":"*errors.errorString"`) {
+		t.Fatalf("unsafe or incomplete panic log: %s", logs.String())
 	}
 }

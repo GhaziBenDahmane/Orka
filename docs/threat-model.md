@@ -43,6 +43,11 @@ accounts are denied normal workload APIs. Tests exercise cross-tenant access,
 concurrent last-owner changes, federated session binding, SCIM ownership, and
 service-account revocation.
 
+The public and dedicated mTLS agent HTTP surfaces share request correlation,
+security and no-store headers, panic recovery with secret-safe logging, tracing,
+and bounded-cardinality request metrics. Agent authentication still runs before
+any command or heartbeat handler.
+
 ### Credential disclosure
 
 Passwords use Argon2id and bearer credentials are stored as SHA-256 digests.
