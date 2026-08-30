@@ -73,6 +73,12 @@ jobs:
     permissions:
       contents: read
 
+  migration-conformance:
+    name: Verify Dokploy migration
+    uses: ./.github/workflows/migration-conformance.yml
+    permissions:
+      contents: read
+
   upgrade-conformance:
     name: Verify previous release upgrade
     needs: verify
@@ -179,7 +185,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance, lifecycle-conformance, reconciliation-conformance, agent-certificate-conformance, ai-audit-conformance, notification-conformance, upgrade-conformance]
+    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance, lifecycle-conformance, reconciliation-conformance, agent-certificate-conformance, ai-audit-conformance, notification-conformance, migration-conformance, upgrade-conformance]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -352,6 +358,7 @@ jobs:
           cp conformance-evidence/agent-certificate-conformance.json .
           cp conformance-evidence/ai-audit-conformance.json .
           cp conformance-evidence/notification-conformance.json .
+          cp conformance-evidence/migration-conformance.json .
           cp upgrade-evidence/upgrade-conformance.json .
           jq -e '.oidc and .samlSpInitiated and .samlIdpInitiated and .tenantIsolation and .replayRejected' sso-keycloak-evidence.json >/dev/null
           jq -e '.minorityMutationRejected and .replicasConverged and .managers == 3' swarm-ha-conformance.json >/dev/null
@@ -360,6 +367,7 @@ jobs:
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .tlsVersion == "1.3" and .oldCertificateAuthenticated and .replacementIssuedPending and .oldValidBeforeConfirmation and .replacementPromotedOnHeartbeat and .oldRejectedAfterPromotion and .wrongClusterRejected and .untrustedCARejected and .expiredCertificateRejected and .mismatchedKeyRejected and .pendingMetricsConverged and .invalidReplacementPreservesIdentity' agent-certificate-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .realPlatformAPI and .openAICompatibleGateway and .snapshotSecretsRedacted and .promptInjectionBoundaryPresent and .deterministicFindingsPersisted and .modelFindingsPersisted and .durableRunCompleted and .lifecycleAudited and .auditorLeastPrivilege' ai-audit-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .durableWorkerPath and .signedWebhook and .slackCompatible and .pagerDuty and .opsgenie and .authenticatedImplicitTLSSMTP and .retryRecovered and .tenantIsolation and .deduplicated and .secretsEncrypted and .deliveries == 5 and .jobAttempts == 6' notification-conformance.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .postgresBacked and .dryRunSecretSafe and .controlPlaneImported and .idempotentImport and .composeImported and .applicationsImported and .routesImported and .databasesImported == 6 and .backupConfigurationImported and .sourceCredentialsReencrypted and .notificationsReencrypted and .databaseTransfersQueued == 6 and .transferSecretsEncrypted and .tenantOwnershipEnforced and .manualAcknowledgementsExplicit and .operationalVerifierFailClosed' migration-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and (.status == "passed" or (.status == "not_applicable" and .firstRelease == true))' upgrade-conformance.json >/dev/null
 
       - name: Write promotion manifest
@@ -380,7 +388,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -400,6 +408,7 @@ jobs:
             agent-certificate-conformance.json
             ai-audit-conformance.json
             notification-conformance.json
+            migration-conformance.json
             upgrade-conformance.json
             release-soak-evidence.json
           if-no-files-found: error
@@ -410,7 +419,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

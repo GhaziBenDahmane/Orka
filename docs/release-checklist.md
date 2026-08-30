@@ -10,8 +10,8 @@ links for every item below.
   database recovery, real Keycloak SSO, disposable three-manager Swarm HA,
   joined deployment lifecycle, drift reconciliation, real-mTLS agent
   certificate rotation, AI audit lifecycle, durable notification-provider
-  delivery, and previous-image upgrade conformance workflows. Tag pushes do
-  not run detached copies: the release
+  delivery, Dokploy migration, and previous-image upgrade conformance
+  workflows. Tag pushes do not run detached copies: the release
   workflow invokes all gates directly and publishes only after every job
   succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
@@ -90,6 +90,13 @@ links for every item below.
   and encrypted-at-rest provider material. The release attaches
   `notification-conformance.json`; real provider credentials remain a staging
   requirement.
+- `make test-migration-conformance` imports a representative Dokploy fixture
+  into real PostgreSQL twice and proves dry-run secrecy, idempotent Compose and
+  application conversion, routes, six managed-database mappings, backup and
+  notification conversion, credential re-encryption, native transfer queueing,
+  tenant ownership, explicit manual acknowledgements, and fail-closed
+  operational verification. The release attaches `migration-conformance.json`;
+  the final live Dokploy cutover remains a staging gate.
 
 ## Staging gates
 
@@ -165,7 +172,8 @@ links for every item below.
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
   `agent-certificate-conformance.json`, `ai-audit-conformance.json`,
-  `notification-conformance.json`, `upgrade-conformance.json`, and
+  `notification-conformance.json`, `migration-conformance.json`,
+  `upgrade-conformance.json`, and
   `release-soak-evidence.json`; the same files
   remain available as a workflow artifact. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,

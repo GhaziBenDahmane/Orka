@@ -241,6 +241,12 @@ console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
   Bitbucket credentials are imported and host-matched to applications; GitHub
   App credentials and backup policies that cannot be represented losslessly
   remain operator-assisted.
+- A release-blocking PostgreSQL conformance gate imports the representative
+  Dokploy fixture twice and preserves evidence for secret-safe dry runs,
+  idempotence, workload/database/integration mappings, credential
+  re-encryption, native-transfer queueing, tenant ownership, explicit manual
+  acknowledgements, and fail-closed operational verification. A final import
+  from the actual production Dokploy installation remains a staging gate.
 - Ed25519-signed deterministic catalog manifests are implemented and verified
   before import by default. A versioned, bounded process protocol and Go SDK
   support externally packaged database drivers with compatibility tests.
