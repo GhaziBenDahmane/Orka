@@ -230,7 +230,7 @@ echo '{"protocolVersion":1,"description":{"name":"environment-test","defaultVers
 	}
 }
 
-func TestExternalDriverRequiresDeclaredRecoveryCapability(t *testing.T) {
+func TestExternalDriverRejectsBackupExtensionWithoutCapability(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "no-recovery-driver")
 	script := `#!/bin/sh
@@ -243,11 +243,8 @@ esac
 		t.Fatal(err)
 	}
 	registry := NewRegistry()
-	if err := registry.LoadExternal(directory); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registry.Backup("no-recovery", "1", "db", map[string]string{}, "backup.dump"); err == nil || !strings.Contains(err.Error(), "does not declare") {
-		t.Fatalf("undeclared recovery capability error=%v", err)
+	if err := registry.LoadExternal(directory); err == nil || !strings.Contains(err.Error(), "invalid external database driver description") {
+		t.Fatalf("inconsistent description error=%v", err)
 	}
 }
 
@@ -270,6 +267,80 @@ esac
 	if _, err := registry.Backup("extension-test", "1", "db", map[string]string{}, "backup.dump"); err == nil || !strings.Contains(err.Error(), "inconsistent") {
 		t.Fatalf("inconsistent extension error=%v", err)
 	}
+}
+
+func TestExternalDriverRejectsInvalidRenderBoundaries(t *testing.T) {
+	tests := map[string]string{
+		"unsafe version":   `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"../../latest"}}`,
+		"environment name": `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{"BAD-NAME":"secret"},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
+		"credential name":  `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{"bad name":"secret"},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
+		"relative URL":     `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"data:5432/db","version":"1"}}`,
+	}
+	for name, response := range tests {
+		t.Run(name, func(t *testing.T) {
+			registry := externalRenderRegistry(t, response)
+			if _, err := registry.Render("render-test", Request{Name: "data"}); err == nil {
+				t.Fatal("invalid external render result was accepted")
+			}
+		})
+	}
+}
+
+func TestExternalDriverRejectsInvalidProtocolResponseShape(t *testing.T) {
+	tests := map[string]string{
+		"unknown field":         `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"},"unexpected":true}`,
+		"wrong operation field": `{"protocolVersion":1,"description":{"name":"other","defaultVersion":"1","capabilities":[]},"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
+		"trailing JSON":         `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}} {}`,
+	}
+	for name, response := range tests {
+		t.Run(name, func(t *testing.T) {
+			registry := externalRenderRegistry(t, response)
+			if _, err := registry.Render("render-test", Request{Name: "data"}); err == nil {
+				t.Fatal("invalid protocol response was accepted")
+			}
+		})
+	}
+}
+
+func TestExternalDriverRejectsInvalidDescriptions(t *testing.T) {
+	tests := map[string]string{
+		"unknown capability":   `{"name":"invalid-description","defaultVersion":"1","capabilities":["shell"]}`,
+		"duplicate capability": `{"name":"invalid-description","defaultVersion":"1","capabilities":["backup-restore","backup-restore"],"backupExtension":"dump"}`,
+		"missing extension":    `{"name":"invalid-description","defaultVersion":"1","capabilities":["backup-restore"]}`,
+	}
+	for name, description := range tests {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, "invalid-description-driver")
+			script := "#!/bin/sh\necho '{\"protocolVersion\":1,\"description\":" + description + "}'\n"
+			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := NewRegistry().LoadExternal(directory); err == nil {
+				t.Fatal("invalid driver description was accepted")
+			}
+		})
+	}
+}
+
+func externalRenderRegistry(t *testing.T, renderResponse string) *Registry {
+	t.Helper()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "render-driver")
+	script := `#!/bin/sh
+case "$(cat)" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"render-test","defaultVersion":"1","capabilities":[]}}' ;;
+  *) echo '` + renderResponse + `' ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err != nil {
+		t.Fatal(err)
+	}
+	return registry
 }
 
 func containsString(values []string, expected string) bool {

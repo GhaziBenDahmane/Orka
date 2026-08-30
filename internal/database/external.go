@@ -9,11 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
@@ -27,6 +30,18 @@ type externalDriver struct {
 
 const maxExternalDriverBytes = 64 << 20
 
+const (
+	maxExternalRenderEntries    = 128
+	maxExternalRenderValueBytes = 64 << 10
+	maxExternalRenderMapBytes   = 1 << 20
+	maxExternalInternalURLBytes = 16 << 10
+)
+
+var (
+	externalCredentialName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
+	externalURLScheme      = regexp.MustCompile(`^[a-z][a-z0-9+.-]{0,31}$`)
+)
+
 func (d *externalDriver) Name() string           { return d.description.Name }
 func (d *externalDriver) DefaultVersion() string { return d.description.DefaultVersion }
 func (d *externalDriver) Render(request Request) (Result, error) {
@@ -35,10 +50,53 @@ func (d *externalDriver) Render(request Request) (Result, error) {
 		return Result{}, responseError(err, "driver returned no render result")
 	}
 	result := response.Result
-	if len(result.ComposeYAML) == 0 || len(result.ComposeYAML) > 2<<20 || result.InternalURL == "" {
+	if len(result.ComposeYAML) == 0 || len(result.ComposeYAML) > 2<<20 || !safeVersion.MatchString(result.Version) {
 		return Result{}, errors.New("external driver returned an invalid render result")
 	}
+	if err := validateExternalStringMap(result.Environment, utilityEnvironmentName); err != nil {
+		return Result{}, errors.New("external driver returned an invalid render environment")
+	}
+	if err := validateExternalStringMap(result.Credentials, externalCredentialName); err != nil {
+		return Result{}, errors.New("external driver returned invalid credentials")
+	}
+	if err := validateExternalInternalURL(result.InternalURL); err != nil {
+		return Result{}, errors.New("external driver returned an invalid internal URL")
+	}
 	return Result{ComposeYAML: result.ComposeYAML, Environment: result.Environment, Credentials: result.Credentials, InternalURL: result.InternalURL, Version: result.Version}, nil
+}
+
+func validateExternalStringMap(values map[string]string, namePattern *regexp.Regexp) error {
+	if len(values) > maxExternalRenderEntries {
+		return errors.New("entry limit exceeded")
+	}
+	total := 0
+	for name, value := range values {
+		if !namePattern.MatchString(name) || len(value) > maxExternalRenderValueBytes || strings.ContainsRune(value, '\x00') {
+			return errors.New("invalid entry")
+		}
+		total += len(name) + len(value)
+		if total > maxExternalRenderMapBytes {
+			return errors.New("size limit exceeded")
+		}
+	}
+	return nil
+}
+
+func validateExternalInternalURL(raw string) error {
+	if raw == "" || len(raw) > maxExternalInternalURLBytes || strings.IndexFunc(raw, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return errors.New("invalid URL bytes")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Opaque != "" || !externalURLScheme.MatchString(parsed.Scheme) || parsed.Host == "" || parsed.Hostname() == "" || parsed.Fragment != "" {
+		return errors.New("invalid absolute URL")
+	}
+	if port := parsed.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return errors.New("invalid URL port")
+		}
+	}
+	return nil
 }
 
 func (d *externalDriver) Backup(version, host string, credentials map[string]string, filename string) (BackupPlan, error) {
@@ -125,16 +183,40 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 		return databaseplugin.Response{}, fmt.Errorf("database driver %s failed during %s: %w", driverLabel(d), operation, err)
 	}
 	var response databaseplugin.Response
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
 		return response, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return response, errors.New("database driver returned trailing protocol data")
 	}
 	if response.ProtocolVersion != databaseplugin.ProtocolVersion {
 		return response, errors.New("database driver protocol version mismatch")
 	}
 	if response.Error != "" {
+		if response.Description != nil || response.Result != nil || response.Plan != nil {
+			return response, errors.New("database driver returned an invalid error response shape")
+		}
 		return response, fmt.Errorf("database driver %s reported a failure during %s", driverLabel(d), operation)
 	}
+	if !validExternalResponseShape(response, operation) {
+		return response, errors.New("database driver returned an invalid response shape")
+	}
 	return response, nil
+}
+
+func validExternalResponseShape(response databaseplugin.Response, operation string) bool {
+	switch operation {
+	case "describe":
+		return response.Description != nil && response.Result == nil && response.Plan == nil
+	case "render":
+		return response.Description == nil && response.Result != nil && response.Plan == nil
+	case "backup", "restore", "readiness":
+		return response.Description == nil && response.Result == nil && response.Plan != nil
+	default:
+		return false
+	}
 }
 
 func externalDriverDigest(executable *os.File) (string, error) {
@@ -219,7 +301,7 @@ func (r *Registry) LoadExternal(directory string) error {
 			return responseError(err, "driver returned no description")
 		}
 		driver.description = *response.Description
-		if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`).MatchString(driver.Name()) || !safeVersion.MatchString(driver.DefaultVersion()) {
+		if !validExternalDescription(driver.description) {
 			return fmt.Errorf("invalid external database driver description from %s", entry.Name())
 		}
 		if _, exists := r.drivers[driver.Name()]; exists {
@@ -228,6 +310,24 @@ func (r *Registry) LoadExternal(directory string) error {
 		r.drivers[driver.Name()] = driver
 	}
 	return nil
+}
+
+func validExternalDescription(description databaseplugin.Description) bool {
+	if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`).MatchString(description.Name) || !safeVersion.MatchString(description.DefaultVersion) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(description.Capabilities))
+	for _, capability := range description.Capabilities {
+		if capability != "backup-restore" {
+			return false
+		}
+		if _, exists := seen[capability]; exists {
+			return false
+		}
+		seen[capability] = struct{}{}
+	}
+	_, backupRestore := seen["backup-restore"]
+	return backupRestore == utilityExtension.MatchString(description.BackupExtension) && (backupRestore || description.BackupExtension == "")
 }
 
 func responseError(err error, fallback string) error {

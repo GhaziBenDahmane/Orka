@@ -1505,8 +1505,12 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		if renderErr != nil {
 			return w.failRestore(ctx, j, restoreID, renderErr)
 		}
+		compiled, compileErr := w.Compiler.Compile(rendered.ComposeYAML, nil)
+		if compileErr != nil {
+			return w.failRestore(ctx, j, restoreID, errors.New("database driver returned an invalid compose document"))
+		}
 		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
-		if _, err = w.Swarm.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment, nil); err != nil {
+		if _, err = w.Swarm.Deploy(ctx, drillStack, compiled, rendered.Environment, nil); err != nil {
 			return w.failRestore(ctx, j, restoreID, err)
 		}
 		defer func() {
@@ -1590,8 +1594,12 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 		if renderErr != nil {
 			return w.failRestore(ctx, j, restoreID, renderErr)
 		}
+		compiled, compileErr := w.Compiler.Compile(rendered.ComposeYAML, nil)
+		if compileErr != nil {
+			return w.failRestore(ctx, j, restoreID, errors.New("database driver returned an invalid compose document"))
+		}
 		drillStack := "drill-" + strings.Split(restoreID.String(), "-")[0]
-		if _, err = remote.Deploy(ctx, drillStack, rendered.ComposeYAML, rendered.Environment, nil); err != nil {
+		if _, err = remote.Deploy(ctx, drillStack, compiled, rendered.Environment, nil); err != nil {
 			return w.failRestore(ctx, j, restoreID, err)
 		}
 		defer func() {

@@ -1103,6 +1103,10 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_database", err.Error())
 		return
 	}
+	if _, err = s.Compiler.Compile(rendered.ComposeYAML, nil); err != nil {
+		writeError(w, 400, "invalid_database", "database driver returned an invalid compose document")
+		return
+	}
 	serviceID, databaseID := uuid.New(), uuid.New()
 	envJSON, _ := json.Marshal(rendered.Environment)
 	encryptedEnv, err := s.Box.Encrypt(envJSON, composeEnvironmentContext(serviceID))

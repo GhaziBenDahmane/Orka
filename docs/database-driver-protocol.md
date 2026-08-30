@@ -75,9 +75,15 @@ func main() {
 `Describe` returns a lowercase unique name, default image version, and optional
 `backup-restore` capability with `backupExtension`. `Render` returns Compose
 YAML, runtime environment, one-time credentials, internal URL, and resolved
-version. Utility methods return an image, argv array, environment, extension,
-and optional small configuration files. Passwords belong in the environment or
-files, never argv.
+version. Descriptions reject unknown or duplicate capabilities and require the
+backup extension to agree with `backup-restore`. Rendered versions, environment
+and credential maps, and absolute internal URLs are bounded and validated at
+the process boundary. Rendered Compose is passed through the configured
+compiler policy used for user services before it can be persisted or used by a restore
+drill. Protocol responses reject unknown fields, trailing JSON, and fields that
+do not belong to the requested operation. Utility methods return an image,
+argv array, environment, extension, and optional small configuration files.
+Passwords belong in the environment or files, never argv.
 
 Drivers execute with controller privileges and receive plaintext generated
 database credentials when operational plans are requested. Package, sign,
