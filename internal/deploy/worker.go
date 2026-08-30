@@ -1683,6 +1683,9 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
+	if err = validateBackupArtifactMetadata(expectedSize, expectedHash, plaintextHash, artifactEncrypted); err != nil {
+		return w.failRestore(ctx, j, restoreID, err)
+	}
 	if err = w.ensureDatabaseDriver(ctx, databaseID, engine, driverSource, driverDigest); err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
@@ -1696,9 +1699,6 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	cleanRoot := filepath.Clean(w.BackupDirectory)
 	cleanPath := filepath.Clean(path)
 	if destinationID != nil {
-		if expectedSize == nil || *expectedSize <= 0 {
-			return w.failRestore(ctx, j, restoreID, errors.New("S3 backup is missing a verified artifact size"))
-		}
 		directory := filepath.Join(cleanRoot, "restore-"+restoreID.String())
 		if err = os.MkdirAll(directory, 0700); err != nil {
 			return w.failRestore(ctx, j, restoreID, err)
@@ -1717,12 +1717,12 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil || strings.HasPrefix(relative, "..") {
 		return w.failRestore(ctx, j, restoreID, errors.New("backup path escapes configured directory"))
 	}
-	actualHash, _, err := checksumFile(cleanPath)
+	actualHash, actualSize, err := checksumFile(cleanPath)
 	if err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
-	if actualHash != expectedHash {
-		return w.failRestore(ctx, j, restoreID, errors.New("backup checksum mismatch"))
+	if actualHash != expectedHash || actualSize != *expectedSize {
+		return w.failRestore(ctx, j, restoreID, errors.New("backup checksum or size mismatch"))
 	}
 	if artifactEncrypted {
 		dataKey, keyErr := w.Box.Decrypt(encryptedDataKey, "backup-data-key:"+backupID.String())
@@ -1820,6 +1820,23 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	}
 	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
 	return err
+}
+
+func validateBackupArtifactMetadata(size *int64, checksum, plaintextChecksum string, encrypted bool) error {
+	if size == nil || *size <= 0 {
+		return errors.New("backup is missing a verified artifact size")
+	}
+	digest, err := hex.DecodeString(checksum)
+	if err != nil || len(digest) != sha256.Size {
+		return errors.New("backup is missing a valid SHA-256 checksum")
+	}
+	if encrypted {
+		plaintextDigest, decodeErr := hex.DecodeString(plaintextChecksum)
+		if decodeErr != nil || len(plaintextDigest) != sha256.Size {
+			return errors.New("encrypted backup is missing a valid plaintext SHA-256 checksum")
+		}
+	}
+	return nil
 }
 
 func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, backupID, databaseID uuid.UUID, kind, engine, version, stackName, serviceName, encryptedCredentials, expectedHash, plaintextHash, encryptedDataKey, objectKey string, expectedSize *int64, destinationID *uuid.UUID, encrypted bool, remote RemoteSwarm) error {
