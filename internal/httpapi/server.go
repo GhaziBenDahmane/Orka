@@ -534,7 +534,7 @@ func (s *Server) swarmNodes(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	items, err := s.Swarm.Nodes(ctx)
 	if err != nil {
-		writeError(w, 502, "swarm_unavailable", err.Error())
+		s.writeInternalError(w, r, 502, "swarm_unavailable", "Swarm node inventory is unavailable", err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
@@ -573,7 +573,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.newSession(r, p.UserID, nil, "local")
 	if err != nil {
-		writeError(w, 500, "session_failed", err.Error())
+		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
 	s.Store.Audit(r.Context(), &p, "auth.bootstrap", "organization", p.OrganizationID.String(), r.RemoteAddr, nil)
@@ -621,7 +621,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.newSession(r, userID, nil, "local")
 	if err != nil {
-		writeError(w, 500, "session_failed", err.Error())
+		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"token": token})
@@ -954,7 +954,7 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
 		plain, _ := json.Marshal(in.Environment)
 		encrypted, err = s.Box.Encrypt(plain, composeEnvironmentContext(id))
 		if err != nil {
-			writeError(w, 500, "encryption_failed", err.Error())
+			s.writeInternalError(w, r, 500, "encryption_failed", "service environment could not be encrypted", err)
 			return
 		}
 	}
@@ -1023,13 +1023,13 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	envJSON, _ := json.Marshal(rendered.Environment)
 	encryptedEnv, err := s.Box.Encrypt(envJSON, composeEnvironmentContext(serviceID))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "database environment could not be encrypted", err)
 		return
 	}
 	credentialJSON, _ := json.Marshal(rendered.Credentials)
 	encryptedCredentials, err := s.Box.Encrypt(credentialJSON, cryptox.ResourceContext("database-credentials", databaseID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "database credentials could not be encrypted", err)
 		return
 	}
 	p := principal(r)
@@ -1199,7 +1199,7 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 	secretJSON, _ := json.Marshal(map[string]string{"accessKey": in.AccessKey, "secretKey": in.SecretKey, "sessionToken": in.SessionToken})
 	encrypted, err := s.Box.Encrypt(secretJSON, cryptox.ResourceContext("backup-destination", destinationID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "backup destination credentials could not be encrypted", err)
 		return
 	}
 	p := principal(r)
@@ -1476,7 +1476,7 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	template, err := templates.ParseDokploy([]byte(config["templateToml"]))
 	if err != nil {
-		writeError(w, 500, "invalid_template", err.Error())
+		s.writeInternalError(w, r, 500, "invalid_template", "stored template definition is invalid", err)
 		return
 	}
 	instance, err := templates.InstantiateWithOverrides(template, item.ComposeYAML, in.BaseDomain, in.Variables)
@@ -1491,19 +1491,19 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 	envJSON, _ := json.Marshal(instance.Environment)
 	encryptedEnv, err := s.Box.Encrypt(envJSON, composeEnvironmentContext(serviceID))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "template environment could not be encrypted", err)
 		return
 	}
 	variablesJSON, _ := json.Marshal(instance.Variables)
 	encryptedVariables, err := s.Box.Encrypt(variablesJSON, cryptox.ResourceContext("template-variables", serviceID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "template variables could not be encrypted", err)
 		return
 	}
 	overridesJSON, _ := json.Marshal(in.Variables)
 	encryptedOverrides, err := s.Box.Encrypt(overridesJSON, cryptox.ResourceContext("template-overrides", serviceID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "template overrides could not be encrypted", err)
 		return
 	}
 	shortID := strings.Split(serviceID.String(), "-")[0]
@@ -1542,7 +1542,7 @@ func (s *Server) getService(w http.ResponseWriter, r *http.Request) {
 	applicationSource, sourceErr := s.Store.GetApplicationSource(r.Context(), principal(r).OrganizationID, id)
 	if sourceErr == nil {
 		if err = s.redactApplicationBuildConfig(&applicationSource); err != nil {
-			writeError(w, 500, "decryption_failed", err.Error())
+			s.writeInternalError(w, r, 500, "decryption_failed", "stored build configuration could not be read", err)
 			return
 		}
 		source = &applicationSource
@@ -1682,19 +1682,19 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 	environmentJSON, _ := json.Marshal(upgraded.Environment)
 	encryptedEnvironment, err := s.Box.Encrypt(environmentJSON, composeEnvironmentContext(serviceID))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "template environment could not be encrypted", err)
 		return
 	}
 	variablesJSON, _ := json.Marshal(upgraded.Variables)
 	encryptedVariables, err := s.Box.Encrypt(variablesJSON, cryptox.ResourceContext("template-variables", serviceID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "template variables could not be encrypted", err)
 		return
 	}
 	overridesJSON, _ := json.Marshal(overrides)
 	encryptedOverrides, err := s.Box.Encrypt(overridesJSON, cryptox.ResourceContext("template-overrides", serviceID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "template overrides could not be encrypted", err)
 		return
 	}
 	routes, err := templateRoutes(serviceID, upgraded.Domains)
@@ -1792,7 +1792,7 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 		plain, _ := json.Marshal(in.Environment)
 		encrypted, err = s.Box.Encrypt(plain, composeEnvironmentContext(id))
 		if err != nil {
-			writeError(w, 500, "encryption_failed", err.Error())
+			s.writeInternalError(w, r, 500, "encryption_failed", "service environment could not be encrypted", err)
 			return
 		}
 	}
@@ -1888,7 +1888,7 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		plain, _ := json.Marshal(buildConfig)
 		encryptedBuildConfig, err = s.Box.Encrypt(plain, "application-build-config:"+id.String())
 		if err != nil {
-			writeError(w, 500, "encryption_failed", err.Error())
+			s.writeInternalError(w, r, 500, "encryption_failed", "build configuration could not be encrypted", err)
 			return
 		}
 	}
@@ -1970,7 +1970,7 @@ func (s *Server) upsertArtifactSource(w http.ResponseWriter, r *http.Request) {
 	}
 	encrypted, err := s.Box.Encrypt(archive, "application-artifact:"+id.String())
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "application artifact could not be encrypted", err)
 		return
 	}
 	digest := sha256.Sum256(archive)
@@ -2046,7 +2046,7 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 	credentialID := uuid.New()
 	encrypted, err := s.Box.Encrypt([]byte(secret), cryptox.ResourceContext("source-credential", credentialID.String()))
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "source credential could not be encrypted", err)
 		return
 	}
 	p := principal(r)
@@ -2233,7 +2233,7 @@ func (s *Server) serviceLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	logs, err := scheduler.Logs(ctx, item.StackName, 500)
 	if err != nil {
-		writeError(w, 502, "logs_failed", err.Error())
+		s.writeInternalError(w, r, 502, "logs_failed", "service logs are unavailable", err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{"logs": logs})
@@ -2272,7 +2272,7 @@ func (s *Server) createDeployToken(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "deployment token could not be generated", err)
 		return
 	}
 	p := principal(r)
@@ -2376,6 +2376,11 @@ func writeLoginSuccess(w http.ResponseWriter, r *http.Request, token string) {
 }
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+func (s *Server) writeInternalError(w http.ResponseWriter, r *http.Request, status int, code, message string, err error) {
+	s.logger().ErrorContext(r.Context(), "request operation failed", "request_id", requestID(r), "operation", code, "error_type", fmt.Sprintf("%T", err))
+	writeError(w, status, code, message)
 }
 func writeStoreError(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrOwnerRequired) {

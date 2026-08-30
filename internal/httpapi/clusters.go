@@ -305,7 +305,7 @@ func (s *Server) clusterNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := (deploy.RemoteSwarm{Store: s.Store, Box: s.Box, ClusterID: clusterID, Timeout: 30 * time.Second}).Nodes(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "cluster_unavailable", err.Error())
+		s.writeInternalError(w, r, http.StatusBadGateway, "cluster_unavailable", "remote cluster node inventory is unavailable", err)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
@@ -319,7 +319,7 @@ func (s *Server) createClusterEnrollmentToken(w http.ResponseWriter, r *http.Req
 	}
 	token, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "cluster enrollment token could not be generated", err)
 		return
 	}
 	p := principal(r)

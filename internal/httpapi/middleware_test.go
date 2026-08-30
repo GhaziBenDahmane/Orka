@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -66,5 +68,20 @@ func TestMetricsRequiresAuthentication(t *testing.T) {
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("metrics status=%d, want 401", response.Code)
+	}
+}
+
+func TestInternalErrorsDoNotLeakDetails(t *testing.T) {
+	var logs bytes.Buffer
+	server := &Server{Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/test", nil)
+	server.writeInternalError(response, request, http.StatusBadGateway, "dependency_failed", "dependency is unavailable", errors.New("password=secret-value host=private.internal"))
+
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), `"message":"dependency is unavailable"`) || strings.Contains(response.Body.String(), "secret-value") || strings.Contains(response.Body.String(), "private.internal") {
+		t.Fatalf("unsafe internal error response: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(logs.String(), "secret-value") || strings.Contains(logs.String(), "private.internal") || !strings.Contains(logs.String(), `"operation":"dependency_failed"`) || !strings.Contains(logs.String(), `"error_type":"*errors.errorString"`) {
+		t.Fatalf("unsafe or incomplete internal error log: %s", logs.String())
 	}
 }

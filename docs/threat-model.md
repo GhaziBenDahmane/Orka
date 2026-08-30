@@ -50,7 +50,9 @@ Application, source, registry, database, notification, SSO, backup, and
 migration secrets use AES-256-GCM with resource-bound authenticated context.
 Master-key rotation authenticates every ciphertext before transactional writes.
 Logs, API projections, AI snapshots, migration reports, driver failures, and
-command results omit plaintext credentials. Backups are encrypted before
+command results omit plaintext credentials. Operational 5xx responses use
+stable public messages while correlated logs retain only the error type rather
+than potentially secret-bearing error text. Backups are encrypted before
 leaving the executing node.
 
 ### Workload-to-control-plane escape

@@ -47,13 +47,13 @@ func (s *Server) createWebhookIntegration(w http.ResponseWriter, r *http.Request
 	}
 	secret, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "webhook secret could not be generated", err)
 		return
 	}
 	id := uuid.New()
 	encrypted, err := s.Box.Encrypt([]byte(secret), "webhook-secret:"+id.String())
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "webhook secret could not be encrypted", err)
 		return
 	}
 	p := principal(r)

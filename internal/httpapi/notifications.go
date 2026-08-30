@@ -62,12 +62,12 @@ func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 	id := uuid.New()
 	encryptedURL, err := s.Box.Encrypt([]byte(endpointURL), "notification-url:"+id.String())
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "notification endpoint could not be encrypted", err)
 		return
 	}
 	encryptedSecret, err := s.Box.Encrypt([]byte(secret), "notification-secret:"+id.String())
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "notification secret could not be encrypted", err)
 		return
 	}
 	p := principal(r)

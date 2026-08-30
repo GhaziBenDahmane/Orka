@@ -43,7 +43,7 @@ func (s *Server) createOrganizationInvitation(w http.ResponseWriter, r *http.Req
 	}
 	token, err := auth.NewToken()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token_failed", err.Error())
+		s.writeInternalError(w, r, http.StatusInternalServerError, "token_failed", "invitation token could not be generated", err)
 		return
 	}
 	token = "dky_inv_" + token

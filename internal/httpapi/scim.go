@@ -58,7 +58,7 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "SCIM token could not be generated", err)
 		return
 	}
 	p := principal(r)

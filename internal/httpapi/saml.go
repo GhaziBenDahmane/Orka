@@ -88,7 +88,7 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New()
 	encryptedKey, err := s.Box.Encrypt(privateKeyPEM, "saml-private-key:"+id.String())
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "SAML signing key could not be encrypted", err)
 		return
 	}
 	p := principal(r)
@@ -247,7 +247,7 @@ func (s *Server) beginSAMLCertificateRotation(w http.ResponseWriter, r *http.Req
 	}
 	encryptedKey, err := s.Box.Encrypt(privateKeyPEM, "saml-private-key:"+id.String())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, http.StatusInternalServerError, "encryption_failed", "SAML signing key could not be encrypted", err)
 		return
 	}
 	if err = s.Store.BeginSAMLCertificateRotation(r.Context(), p.OrganizationID, id, string(certificatePEM), encryptedKey, notAfter); err != nil {
@@ -397,7 +397,7 @@ func (s *Server) startSAML(w http.ResponseWriter, r *http.Request) {
 	}
 	relayState, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "state_failed", err.Error())
+		s.writeInternalError(w, r, 500, "state_failed", "SAML login state could not be generated", err)
 		return
 	}
 	if err = s.Store.CreateSAMLState(r.Context(), cryptox.Digest(relayState), provider.ID, request.ID); err != nil {
@@ -499,7 +499,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.newSession(r, userID, &provider.OrganizationID, "saml")
 	if err != nil {
-		writeError(w, 500, "session_failed", err.Error())
+		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.saml.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})

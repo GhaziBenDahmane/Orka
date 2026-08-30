@@ -171,7 +171,7 @@ func (s *Server) rotateTemplateRepositoryWebhookSecret(w http.ResponseWriter, r 
 	}
 	secret, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "template webhook secret could not be generated", err)
 		return
 	}
 	encrypted, err := s.Box.Encrypt([]byte(secret), "template-repository-webhook:"+id.String())

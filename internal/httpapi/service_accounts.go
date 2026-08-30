@@ -29,7 +29,7 @@ func (s *Server) createServiceAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "service-account token could not be generated", err)
 		return
 	}
 	token = "dky_" + token
@@ -74,7 +74,7 @@ func (s *Server) rotateServiceAccountToken(w http.ResponseWriter, r *http.Reques
 	}
 	token, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "token_failed", err.Error())
+		s.writeInternalError(w, r, 500, "token_failed", "service-account token could not be generated", err)
 		return
 	}
 	token = "dky_" + token

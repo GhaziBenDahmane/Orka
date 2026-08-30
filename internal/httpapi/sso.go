@@ -69,7 +69,7 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New()
 	encrypted, err := s.Box.Encrypt([]byte(in.ClientSecret), "oidc-client-secret:"+id.String())
 	if err != nil {
-		writeError(w, 500, "encryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "encryption_failed", "OIDC client secret could not be encrypted", err)
 		return
 	}
 	principal := principal(r)
@@ -130,7 +130,7 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	if in.ClientSecret != "" {
 		encrypted, err = s.Box.Encrypt([]byte(in.ClientSecret), "oidc-client-secret:"+id.String())
 		if err != nil {
-			writeError(w, 500, "encryption_failed", err.Error())
+			s.writeInternalError(w, r, 500, "encryption_failed", "OIDC client secret could not be encrypted", err)
 			return
 		}
 	}
@@ -220,13 +220,13 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	state, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "state_failed", err.Error())
+		s.writeInternalError(w, r, 500, "state_failed", "OIDC login state could not be generated", err)
 		return
 	}
 	verifier := oauth2.GenerateVerifier()
 	nonce, err := auth.NewToken()
 	if err != nil {
-		writeError(w, 500, "nonce_failed", err.Error())
+		s.writeInternalError(w, r, 500, "nonce_failed", "OIDC nonce could not be generated", err)
 		return
 	}
 	if err = s.Store.CreateOIDCState(r.Context(), cryptox.Digest(state), provider.ID, verifier, nonce); err != nil {
@@ -266,7 +266,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	secret, err := s.Box.Decrypt(provider.EncryptedClientSecret, "oidc-client-secret:"+provider.ID.String())
 	if err != nil {
-		writeError(w, 500, "decryption_failed", err.Error())
+		s.writeInternalError(w, r, 500, "decryption_failed", "OIDC provider configuration could not be decrypted", err)
 		return
 	}
 	providerContext, cancel := context.WithTimeout(r.Context(), oidcRequestTimeout)
@@ -326,7 +326,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.newSession(r, userID, &provider.OrganizationID, "oidc")
 	if err != nil {
-		writeError(w, 500, "session_failed", err.Error())
+		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
 	s.Store.AuditOrganization(r.Context(), provider.OrganizationID, "auth.oidc.login", "user", userID.String(), r.RemoteAddr, map[string]any{"providerId": provider.ID})

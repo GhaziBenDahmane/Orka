@@ -168,7 +168,7 @@ func (s *Server) exportAuditEvents(w http.ResponseWriter, r *http.Request) {
 	encoder := json.NewEncoder(&payload)
 	for _, item := range items {
 		if err = encoder.Encode(item); err != nil {
-			writeError(w, 500, "export_failed", err.Error())
+			s.writeInternalError(w, r, 500, "export_failed", "audit export could not be encoded", err)
 			return
 		}
 	}
