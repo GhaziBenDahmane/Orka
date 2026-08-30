@@ -7,7 +7,8 @@ cleanup() { rm -rf -- "$temporary"; }
 trap cleanup EXIT
 
 mkdir -p "$temporary/bin" "$temporary/secrets"
-printf '%s' 'one-time-enrollment-token-value' >"$temporary/secrets/enrollment-token"
+enrollment_token='one-time-enrollment-token-value-0123456789'
+printf '%s' "$enrollment_token" >"$temporary/secrets/enrollment-token"
 chmod 0600 "$temporary/secrets/enrollment-token"
 
 cat >"$temporary/bin/docker" <<'MOCK'
@@ -92,7 +93,7 @@ fi
 grep -q '^network create --driver overlay --opt encrypted --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_agent_enrollment_token $DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_INSTALL_TEST_LOG"
-if grep -q 'one-time-enrollment-token-value' "$DOCKYARD_INSTALL_TEST_LOG"; then
+if grep -Fq "$enrollment_token" "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'enrollment token leaked to Docker command log' >&2
   exit 1
 fi
@@ -269,6 +270,35 @@ if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_c
 fi
 grep -q 'edge_agent update state is rollback_completed' "$temporary/err"
 
+printf '%s' 'short-enrollment-token' >"$temporary/secrets/enrollment-token"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a short enrollment token' >&2
+  exit 1
+fi
+grep -q 'must contain between 32 and 4096 bytes' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'short enrollment token mutated Docker state' >&2
+  exit 1
+fi
+
+printf '%s\n%s' "$enrollment_token" 'second-token' >"$temporary/secrets/enrollment-token"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a multiline enrollment token' >&2
+  exit 1
+fi
+grep -q 'must contain exactly one token without CR or LF characters' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'multiline enrollment token mutated Docker state' >&2
+  exit 1
+fi
+if grep -Fq "$enrollment_token" "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'multiline enrollment token leaked to Docker command log' >&2
+  exit 1
+fi
+
+printf '%s' "$enrollment_token" >"$temporary/secrets/enrollment-token"
 chmod 0644 "$temporary/secrets/enrollment-token"
 if "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'agent installer accepted a broadly readable enrollment token' >&2

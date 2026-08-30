@@ -113,10 +113,10 @@ token_file=${DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE:-}
 [ -f "$token_file" ] && [ -r "$token_file" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must name a readable regular file"
 [ -z "$(find "$token_file" -prune -perm /077 -print)" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must not be accessible by group or other users"
 token_size=$(wc -c <"$token_file" | tr -d ' ')
-[ "$token_size" -gt 0 ] && [ "$token_size" -le 4096 ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must contain between 1 and 4096 bytes"
-token=$(tr -d '\r\n' <"$token_file")
-[ -n "$token" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE is empty"
-unset token
+[ "$token_size" -ge 32 ] && [ "$token_size" -le 4096 ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must contain between 32 and 4096 bytes"
+token_without_line_breaks_size=$(tr -d '\r\n' <"$token_file" | wc -c | tr -d ' ')
+[ "$token_without_line_breaks_size" -eq "$token_size" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must contain exactly one token without CR or LF characters"
+unset token_without_line_breaks_size
 
 DOCKYARD_AGENT_SERVICE_NAME=${stack}_agent
 export DOCKYARD_CONTROL_PLANE_URL="$control_plane_url"
