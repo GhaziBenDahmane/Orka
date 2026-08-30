@@ -221,6 +221,29 @@ func TestCompileRejectsHostMount(t *testing.T) {
 	}
 }
 
+func TestCompileAllowsOnlyEncryptedManagedFileConfigs(t *testing.T) {
+	key := InlineFileEnvironmentPrefix + strings.Repeat("A", 64)
+	valid := "services:\n  app:\n    image: alpine\n    configs:\n      - source: tpl-config-1234\n        target: /etc/app/config.yml\n        mode: 292\nconfigs:\n  tpl-config-1234:\n    file: ./.dockyard-files/tpl-config-1234\nx-dockyard-files:\n  tpl-config-1234: " + InlineFileReferencePrefix + key + "\n"
+	if _, err := (Compiler{}).Compile(valid, nil); err != nil {
+		t.Fatalf("encrypted managed file was rejected: %v", err)
+	}
+	tests := map[string]string{
+		"ordinary config":    "services:\n  app:\n    image: alpine\nconfigs:\n  arbitrary:\n    file: /etc/passwd\n",
+		"plaintext content":  strings.Replace(valid, InlineFileReferencePrefix+key, "plaintext-secret", 1),
+		"unlisted source":    strings.Replace(valid, "source: tpl-config-1234", "source: another-config", 1),
+		"relative target":    strings.Replace(valid, "target: /etc/app/config.yml", "target: ../config.yml", 1),
+		"writable mode":      strings.Replace(valid, "mode: 292", "mode: 420", 1),
+		"extra config field": strings.Replace(valid, "mode: 292", "mode: 292\n        uid: root", 1),
+	}
+	for name, source := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := (Compiler{}).Compile(source, nil); err == nil {
+				t.Fatal("unsafe managed config was accepted")
+			}
+		})
+	}
+}
+
 func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 	tests := map[string]string{
 		"device":                    "services:\n  app:\n    image: alpine\n    devices: [/dev/kvm:/dev/kvm]\n",

@@ -3,6 +3,7 @@ package deploy
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -23,6 +24,17 @@ const maxSafeTasksPerStack = 100
 const maxSafeLogFileSize = 20 << 20
 const maxSafeLogFiles = 5
 
+const (
+	InlineFileEnvironmentPrefix = "DOCKYARD_INTERNAL_FILE_"
+	InlineFileReferencePrefix   = "environment:"
+	MaxInlineFiles              = 32
+	MaxInlineFileBytes          = 500 << 10
+	MaxInlineFilesBytes         = 8 << 20
+	MaxInlineFilePathBytes      = 4096
+)
+
+var inlineFileEnvironmentName = regexp.MustCompile(`^DOCKYARD_INTERNAL_FILE_[A-F0-9]{64}$`)
+
 type Compiler struct {
 	PublicNetwork string
 	AllowUnsafe   bool
@@ -40,7 +52,13 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 	if !c.AllowUnsafe && len(services) > maxSafeTasksPerStack {
 		return "", fmt.Errorf("safe compose stacks may schedule at most %d tasks", maxSafeTasksPerStack)
 	}
+	inlineConfigs := map[string]struct{}{}
 	if !c.AllowUnsafe {
+		validatedInlineConfigs, inlineErr := validateSafeInlineFiles(doc)
+		if inlineErr != nil {
+			return "", inlineErr
+		}
+		inlineConfigs = validatedInlineConfigs
 		if err := c.validateSafeDocument(doc); err != nil {
 			return "", err
 		}
@@ -55,7 +73,7 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 			return "", fmt.Errorf("service %q must be an object", name)
 		}
 		if !c.AllowUnsafe {
-			if err := validateSafeService(name, service, c.PublicNetwork); err != nil {
+			if err := validateSafeService(name, service, c.PublicNetwork, inlineConfigs); err != nil {
 				return "", err
 			}
 			replicas, err := safeServiceReplicas(name, service)
@@ -438,7 +456,7 @@ func ValidateRoute(route store.Route) error {
 	return nil
 }
 
-func validateSafeService(name string, service map[string]any, publicNetwork string) error {
+func validateSafeService(name string, service map[string]any, publicNetwork string, inlineConfigs map[string]struct{}) error {
 	if value, _ := service["privileged"].(bool); value {
 		return fmt.Errorf("service %q requests privileged mode", name)
 	}
@@ -456,13 +474,16 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 	for _, key := range []string{
 		"devices", "device_cgroup_rules", "volumes_from", "gpus", "runtime", "isolation",
 		"env_file", "label_file", "extends", "develop", "provider",
-		"secrets", "configs", "credential_spec", "use_api_socket",
+		"secrets", "credential_spec", "use_api_socket",
 		"cgroup_parent", "storage_opt", "sysctls", "ulimits", "oom_kill_disable", "oom_score_adj",
 		"scale", "models", "post_start", "pre_stop",
 	} {
 		if value, exists := service[key]; exists && value != nil {
 			return fmt.Errorf("service %q requests forbidden %s access", name, key)
 		}
+	}
+	if err := validateSafeServiceConfigs(name, service["configs"], inlineConfigs); err != nil {
+		return err
 	}
 	if devices := nestedValue(service, "deploy", "resources", "reservations", "devices"); devices != nil {
 		return fmt.Errorf("service %q requests reserved device access", name)
@@ -623,7 +644,7 @@ func validateSafeLogging(serviceName string, raw any) error {
 }
 
 func (c Compiler) validateSafeDocument(document map[string]any) error {
-	for _, key := range []string{"secrets", "configs", "include", "models"} {
+	for _, key := range []string{"secrets", "include", "models"} {
 		if value, exists := document[key]; exists && value != nil {
 			return fmt.Errorf("compose document requests forbidden top-level %s", key)
 		}
@@ -674,6 +695,78 @@ func (c Compiler) validateSafeDocument(document map[string]any) error {
 			_, hasName := spec["name"]
 			if external || hasName {
 				return fmt.Errorf("network %q requests cross-stack external access", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateSafeInlineFiles(document map[string]any) (map[string]struct{}, error) {
+	rawInline, hasInline := document["x-dockyard-files"]
+	rawConfigs, hasConfigs := document["configs"]
+	if !hasInline || rawInline == nil {
+		if hasConfigs && rawConfigs != nil {
+			return nil, errors.New("compose document requests forbidden top-level configs")
+		}
+		return map[string]struct{}{}, nil
+	}
+	inline, ok := stringMap(rawInline)
+	if !ok || len(inline) == 0 || len(inline) > MaxInlineFiles {
+		return nil, errors.New("x-dockyard-files must be a non-empty bounded object")
+	}
+	configs, ok := stringMap(rawConfigs)
+	if !hasConfigs || !ok || len(configs) != len(inline) {
+		return nil, errors.New("managed inline files must exactly match top-level configs")
+	}
+	allowed := make(map[string]struct{}, len(inline))
+	for name, rawReference := range inline {
+		if !safeName.MatchString(name) {
+			return nil, fmt.Errorf("invalid inline file name %q", name)
+		}
+		reference, ok := rawReference.(string)
+		environmentName := strings.TrimPrefix(reference, InlineFileReferencePrefix)
+		if !ok || environmentName == reference || !inlineFileEnvironmentName.MatchString(environmentName) {
+			return nil, fmt.Errorf("inline file %q must use encrypted environment storage", name)
+		}
+		spec, ok := stringMap(configs[name])
+		if !ok || len(spec) != 1 || spec["file"] != "./.dockyard-files/"+name {
+			return nil, fmt.Errorf("inline file %q has an invalid config declaration", name)
+		}
+		allowed[name] = struct{}{}
+	}
+	return allowed, nil
+}
+
+func validateSafeServiceConfigs(serviceName string, raw any, allowed map[string]struct{}) error {
+	if raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 || len(items) > MaxInlineFiles {
+		return fmt.Errorf("service %q configs must be a bounded list", serviceName)
+	}
+	for _, rawItem := range items {
+		item, ok := stringMap(rawItem)
+		if !ok || len(item) < 2 || len(item) > 3 {
+			return fmt.Errorf("service %q has an invalid managed config", serviceName)
+		}
+		source, sourceOK := item["source"].(string)
+		target, targetOK := item["target"].(string)
+		if !sourceOK || !targetOK {
+			return fmt.Errorf("service %q managed config requires string source and target", serviceName)
+		}
+		if _, exists := allowed[source]; !exists || !path.IsAbs(target) || path.Clean(target) != target || len(target) > MaxInlineFilePathBytes || strings.ContainsRune(target, '\x00') {
+			return fmt.Errorf("service %q has an unsafe managed config", serviceName)
+		}
+		for key := range item {
+			if key != "source" && key != "target" && key != "mode" {
+				return fmt.Errorf("service %q managed config has unsupported field %q", serviceName, key)
+			}
+		}
+		if mode, exists := item["mode"]; exists {
+			value, valid := mode.(int)
+			if !valid || value != 0444 {
+				return fmt.Errorf("service %q managed config must be read-only", serviceName)
 			}
 		}
 	}

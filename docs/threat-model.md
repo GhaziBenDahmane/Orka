@@ -158,6 +158,14 @@ finding. Auditor control-plane and model requests refuse redirects so neither
 bearer token can be forwarded to a substituted endpoint. 9Router and Hermes
 remain outside the control-plane trust boundary.
 
+Template-generated environment values and managed-file contents are encrypted
+at rest. Stored Compose and immutable deployment snapshots contain only opaque
+managed-file references. The local Swarm adapter or outbound agent resolves
+those references into mode-0600 temporary files immediately before deployment,
+removes the internal values from Compose interpolation, and deletes the
+temporary directory afterward. Safe-mode compilation permits only bounded
+read-only configs that exactly match those platform-generated references.
+
 ## Explicitly trusted components
 
 - Administrators with host access, Docker-manager access, PostgreSQL owner

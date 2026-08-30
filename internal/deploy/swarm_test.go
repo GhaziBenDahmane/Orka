@@ -15,6 +15,35 @@ import (
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 )
 
+func TestMaterializeInlineFilesUsesAndRemovesEncryptedEnvironmentValue(t *testing.T) {
+	directory := t.TempDir()
+	key := InlineFileEnvironmentPrefix + strings.Repeat("A", 64)
+	environment := map[string]string{key: "password=generated-secret", "APP_MODE": "production"}
+	compose := "services:\n  app:\n    image: alpine\nconfigs:\n  tpl-config:\n    file: ./.dockyard-files/tpl-config\nx-dockyard-files:\n  tpl-config: " + InlineFileReferencePrefix + key + "\n"
+	materialized, err := materializeInlineFiles(directory, compose, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, ".dockyard-files", "tpl-config"))
+	if err != nil || string(contents) != "password=generated-secret" {
+		t.Fatalf("materialized contents=%q err=%v", contents, err)
+	}
+	if strings.Contains(materialized, "generated-secret") || strings.Contains(materialized, "x-dockyard-files") {
+		t.Fatalf("materialized compose retained secret metadata: %s", materialized)
+	}
+	if _, exists := environment[key]; exists || environment["APP_MODE"] != "production" {
+		t.Fatalf("internal file value was passed to Compose interpolation: %#v", environment)
+	}
+}
+
+func TestMaterializeInlineFilesRequiresEncryptedContent(t *testing.T) {
+	key := InlineFileEnvironmentPrefix + strings.Repeat("B", 64)
+	compose := "services:\n  app:\n    image: alpine\nx-dockyard-files:\n  tpl-config: " + InlineFileReferencePrefix + key + "\n"
+	if _, err := materializeInlineFiles(t.TempDir(), compose, map[string]string{}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("missing encrypted managed file content error=%v", err)
+	}
+}
+
 func TestRunVolumeArtifactUsesPinnedHelperAndSecretPayload(t *testing.T) {
 	directory := t.TempDir()
 	docker, calls, secretPayload := filepath.Join(directory, "docker"), filepath.Join(directory, "calls"), filepath.Join(directory, "secret")

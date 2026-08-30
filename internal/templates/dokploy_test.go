@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bendahma/dokploy-go/internal/deploy"
 )
 
 func TestInstantiateDokployTemplate(t *testing.T) {
@@ -159,7 +161,8 @@ func TestSignedCatalogDetectsTampering(t *testing.T) {
 
 func TestApplyMountsConvertsFilesToSwarmConfigs(t *testing.T) {
 	compose := "services:\n  db:\n    image: example\n    volumes:\n      - ../files/db/config.xml:/etc/db/config.xml:ro\n"
-	out, err := ApplyMounts(compose, []Mount{{FilePath: "/db/config.xml", Content: "<config/>"}})
+	environment := map[string]string{}
+	out, err := ApplyMounts(compose, []Mount{{FilePath: "/db/config.xml", Content: "<config secret='generated'/>"}}, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,5 +170,30 @@ func TestApplyMountsConvertsFilesToSwarmConfigs(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "generated") || len(environment) != 1 {
+		t.Fatalf("managed file was not moved to encrypted environment storage: compose=%q environment=%#v", out, environment)
+	}
+	for key, value := range environment {
+		if !strings.HasPrefix(key, deploy.InlineFileEnvironmentPrefix) || value != "<config secret='generated'/>" || !strings.Contains(out, deploy.InlineFileReferencePrefix+key) {
+			t.Fatalf("managed file reference is invalid: compose=%q environment=%#v", out, environment)
+		}
+	}
+	if _, err = (deploy.Compiler{PublicNetwork: "public"}).Compile(out, nil); err != nil {
+		t.Fatalf("managed file compose rejected by safe compiler: %v", err)
+	}
+}
+
+func TestApplyMountsRejectsUnsafeOrOversizedManagedFiles(t *testing.T) {
+	compose := "services:\n  db:\n    image: example\n    volumes:\n      - ../files/db/config.xml:/etc/db/config.xml:ro\n"
+	if _, err := ApplyMounts(compose, []Mount{{FilePath: "../../escape", Content: "secret"}}, map[string]string{}); err == nil {
+		t.Fatal("traversing managed file path was accepted")
+	}
+	if _, err := ApplyMounts(compose, []Mount{{FilePath: "/db/config.xml", Content: strings.Repeat("x", deploy.MaxInlineFileBytes+1)}}, map[string]string{}); err == nil {
+		t.Fatal("oversized managed file was accepted")
+	}
+	reserved := map[string]string{deploy.InlineFileEnvironmentPrefix + strings.Repeat("A", 64): "collision"}
+	if _, err := ApplyMounts(compose, []Mount{{FilePath: "/db/config.xml", Content: "secret"}}, reserved); err == nil {
+		t.Fatal("reserved environment prefix was accepted")
 	}
 }

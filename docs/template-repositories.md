@@ -20,7 +20,12 @@ blueprints/
 `template.toml` defines generated or operator-supplied variables, environment
 mapping, domains, and managed files. `docker-compose.yml` remains the workload
 definition and passes through the same Swarm safety compiler as every other
-service. See `examples/template-repository` for a complete 9Router example.
+service. Resolved managed-file contents are stored only inside the service's
+encrypted deployment environment; persisted Compose and deployment snapshots
+contain opaque references. The Swarm manager materializes mode-0600 temporary
+files immediately before deployment, removes their internal values from
+Compose interpolation, and accepts only bounded, read-only config mounts. See
+`examples/template-repository` for a complete 9Router example.
 
 Repository downloads accept only canonical HTTPS GitHub URLs and use GitHub's
 archive endpoint rather than invoking a shell. Extraction rejects links,

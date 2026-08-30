@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/google/uuid"
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
@@ -186,6 +188,9 @@ func DescribeInstance(instance Instance) (Preview, error) {
 		preview.Routes = append(preview.Routes, PreviewRoute{ServiceName: domain.ServiceName, Host: domain.Host, Path: domain.Path, TargetPort: port})
 	}
 	for key := range instance.Environment {
+		if strings.HasPrefix(key, deploy.InlineFileEnvironmentPrefix) {
+			continue
+		}
 		preview.EnvironmentKeys = append(preview.EnvironmentKeys, key)
 	}
 	sort.Strings(preview.EnvironmentKeys)
@@ -210,7 +215,7 @@ func LoadDokployDirectory(path, baseDomain string) (Instance, error) {
 	if err != nil {
 		return Instance{}, err
 	}
-	instance.ComposeYAML, err = ApplyMounts(instance.ComposeYAML, instance.Mounts)
+	instance.ComposeYAML, err = ApplyMounts(instance.ComposeYAML, instance.Mounts, instance.Environment)
 	return instance, err
 }
 
@@ -260,11 +265,22 @@ func PortNumber(value any) (int, error) {
 }
 
 // ApplyMounts replaces Dokploy's manager-local ../files bind mounts with Swarm
-// configs. The inline extension is materialized by the Swarm adapter immediately
-// before docker stack deploy reads the Compose document.
-func ApplyMounts(compose string, mounts []Mount) (string, error) {
+// configs. Persisted Compose contains only references; contents are added to the
+// encrypted environment and materialized immediately before stack deployment.
+func ApplyMounts(compose string, mounts []Mount, environment map[string]string) (string, error) {
 	if len(mounts) == 0 {
 		return compose, nil
+	}
+	if environment == nil {
+		return "", errors.New("template managed files require an environment map")
+	}
+	if len(mounts) > deploy.MaxInlineFiles {
+		return "", fmt.Errorf("template has too many managed files (maximum %d)", deploy.MaxInlineFiles)
+	}
+	for name := range environment {
+		if strings.HasPrefix(name, deploy.InlineFileEnvironmentPrefix) {
+			return "", errors.New("template environment uses the reserved managed-file prefix")
+		}
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(compose), &doc); err != nil {
@@ -279,6 +295,25 @@ func ApplyMounts(compose string, mounts []Mount) (string, error) {
 		configs = map[string]any{}
 	}
 	inline := map[string]any{}
+	seenMounts := map[string]struct{}{}
+	totalFileBytes := 0
+	for _, mount := range mounts {
+		cleanPath := filepath.Clean(mount.FilePath)
+		if cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) || len(cleanPath) > deploy.MaxInlineFilePathBytes {
+			return "", errors.New("template managed file has an invalid path")
+		}
+		if _, exists := seenMounts[cleanPath]; exists {
+			return "", errors.New("template managed file path is duplicated")
+		}
+		seenMounts[cleanPath] = struct{}{}
+		if len(mount.Content) > deploy.MaxInlineFileBytes {
+			return "", errors.New("template managed file exceeds size limit")
+		}
+		totalFileBytes += len(mount.Content)
+		if totalFileBytes > deploy.MaxInlineFilesBytes {
+			return "", errors.New("template managed files exceed total size limit")
+		}
+	}
 	for serviceName, raw := range services {
 		service, ok := raw.(map[string]any)
 		if !ok {
@@ -314,15 +349,24 @@ func ApplyMounts(compose string, mounts []Mount) (string, error) {
 				if relative != "" {
 					target = filepath.Join(target, relative)
 				}
-				sum := sha256.Sum256([]byte(mount.Content))
-				name := "tpl-" + sanitize(filepath.Base(mount.FilePath)) + "-" + hex.EncodeToString(sum[:4])
+				sum := sha256.Sum256([]byte(filepath.Clean(mount.FilePath)))
+				base := sanitize(filepath.Base(mount.FilePath))
+				if len(base) > 24 {
+					base = base[:24]
+				}
+				if base == "" {
+					base = "file"
+				}
+				name := "tpl-" + base + "-" + hex.EncodeToString(sum[:8])
+				environmentKey := deploy.InlineFileEnvironmentPrefix + strings.ToUpper(hex.EncodeToString(sum[:]))
 				entry := map[string]any{"source": name, "target": target}
 				if len(parts) > 2 && strings.Contains(parts[2], "ro") {
 					entry["mode"] = 0444
 				}
 				serviceConfigs = append(serviceConfigs, entry)
 				configs[name] = map[string]any{"file": "./.dockyard-files/" + name}
-				inline[name] = mount.Content
+				inline[name] = deploy.InlineFileReferencePrefix + environmentKey
+				environment[environmentKey] = mount.Content
 				matchedVolume = true
 			}
 			if !matchedVolume {

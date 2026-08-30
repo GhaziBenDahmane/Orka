@@ -117,17 +117,17 @@ func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[st
 		return "", err
 	}
 	defer os.RemoveAll(directory)
-	compose, err = materializeInlineFiles(directory, compose)
+	processEnv := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		processEnv[key] = value
+	}
+	compose, err = materializeInlineFiles(directory, compose, processEnv)
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(directory, "compose.yml")
 	if err = os.WriteFile(path, []byte(compose), 0600); err != nil {
 		return "", err
-	}
-	processEnv := make(map[string]string, len(env)+1)
-	for key, value := range env {
-		processEnv[key] = value
 	}
 	args := []string{"stack", "deploy", "--compose-file", path, "--prune", "--resolve-image", "always"}
 	if registryCredential != nil && registryCredential.Secret != "" {
@@ -149,7 +149,7 @@ func (s Swarm) Deploy(ctx context.Context, stackName, compose string, env map[st
 	return output + waitOutput, err
 }
 
-func materializeInlineFiles(directory, compose string) (string, error) {
+func materializeInlineFiles(directory, compose string, environment map[string]string) (string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(compose), &doc); err != nil {
 		return "", err
@@ -162,17 +162,40 @@ func materializeInlineFiles(directory, compose string) (string, error) {
 	if !ok {
 		return "", errors.New("x-dockyard-files must be an object")
 	}
+	if len(files) == 0 || len(files) > MaxInlineFiles {
+		return "", errors.New("x-dockyard-files exceeds entry limits")
+	}
 	targetDir := filepath.Join(directory, ".dockyard-files")
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return "", err
 	}
+	totalBytes := 0
 	for name, value := range files {
 		if !safeName.MatchString(name) {
 			return "", fmt.Errorf("invalid inline file name %q", name)
 		}
-		content, ok := value.(string)
+		reference, ok := value.(string)
 		if !ok {
-			return "", fmt.Errorf("inline file %q must be a string", name)
+			return "", fmt.Errorf("inline file %q reference must be a string", name)
+		}
+		content := reference
+		if environmentName := strings.TrimPrefix(reference, InlineFileReferencePrefix); environmentName != reference {
+			if !inlineFileEnvironmentName.MatchString(environmentName) {
+				return "", fmt.Errorf("inline file %q has an invalid encrypted reference", name)
+			}
+			var exists bool
+			content, exists = environment[environmentName]
+			if !exists {
+				return "", fmt.Errorf("inline file %q encrypted content is unavailable", name)
+			}
+			delete(environment, environmentName)
+		}
+		if len(content) > MaxInlineFileBytes {
+			return "", fmt.Errorf("inline file %q exceeds size limit", name)
+		}
+		totalBytes += len(content)
+		if totalBytes > MaxInlineFilesBytes {
+			return "", errors.New("inline files exceed total size limit")
 		}
 		if err := os.WriteFile(filepath.Join(targetDir, name), []byte(content), 0600); err != nil {
 			return "", err

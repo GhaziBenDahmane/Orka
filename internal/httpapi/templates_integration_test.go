@@ -77,9 +77,14 @@ serviceName = "app"
 port = 8080
 host = "${hostname}"
 path = "/"
+
+[[config.mounts]]
+filePath = "/app/config.env"
+content = "API_TOKEN=${api_token} PASSWORD=${password}"
 `
 	config, _ := json.Marshal(map[string]string{"templateToml": templateTOML})
-	orgTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: "variable-test", Version: "1", Name: "Variable Test", ComposeYAML: "services:\n  app:\n    image: nginx:alpine\n", Config: config, Source: "dokploy", Checksum: strings.Repeat("a", 64)})
+	templateCompose := "services:\n  app:\n    image: nginx:alpine\n    volumes:\n      - ../files/app/config.env:/run/config.env:ro\n"
+	orgTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: "variable-test", Version: "1", Name: "Variable Test", ComposeYAML: templateCompose, Config: config, Source: "dokploy", Checksum: strings.Repeat("a", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +144,9 @@ path = "/"
 	if err = json.Unmarshal(body, &created); err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(created.Service.ComposeYAML, "operator-token") || strings.Contains(created.Service.ComposeYAML, "operator-password") || !strings.Contains(created.Service.ComposeYAML, "x-dockyard-files") || !strings.Contains(created.Service.ComposeYAML, deploy.InlineFileReferencePrefix+deploy.InlineFileEnvironmentPrefix) {
+		t.Fatalf("stored Compose did not use an opaque managed-file reference: %s", created.Service.ComposeYAML)
+	}
 	var encryptedEnvironment string
 	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_env FROM compose_services WHERE id=$1`, created.Service.ID).Scan(&encryptedEnvironment); err != nil {
 		t.Fatal(err)
@@ -153,6 +161,15 @@ path = "/"
 	}
 	if environment["ADMIN_EMAIL"] != "operator@example.test" || environment["API_TOKEN"] != "operator-token" || environment["PASSWORD"] != "operator-password" {
 		t.Fatalf("stored environment did not use overrides: %#v", environment)
+	}
+	managedFileFound := false
+	for key, value := range environment {
+		if strings.HasPrefix(key, deploy.InlineFileEnvironmentPrefix) {
+			managedFileFound = value == "API_TOKEN=operator-token PASSWORD=operator-password"
+		}
+	}
+	if !managedFileFound {
+		t.Fatalf("managed file content was not stored in the encrypted environment: %#v", environment)
 	}
 	var templateKey, templateVersion, templateChecksum, encryptedVariables string
 	if err = db.Pool.QueryRow(ctx, `SELECT template_key,template_version,template_checksum,encrypted_variables FROM template_instances WHERE compose_service_id=$1`, created.Service.ID).Scan(&templateKey, &templateVersion, &templateChecksum, &encryptedVariables); err != nil {
@@ -215,7 +232,8 @@ path = "/"
 feature = "enabled"`, 1)
 	upgradeTOML = strings.Replace(upgradeTOML, `"PASSWORD=${password}"`, `"PASSWORD=${password}", "FEATURE=${feature}"`, 1)
 	upgradeConfig, _ := json.Marshal(map[string]string{"templateToml": upgradeTOML})
-	upgradeTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: orgTemplate.Key, Version: "2", Name: "Variable Test", ComposeYAML: "services:\n  app:\n    image: nginx:1.27-alpine\n", Config: upgradeConfig, Source: "dokploy", Checksum: strings.Repeat("b", 64)})
+	upgradeCompose := "services:\n  app:\n    image: nginx:1.27-alpine\n    volumes:\n      - ../files/app/config.env:/run/config.env:ro\n"
+	upgradeTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: orgTemplate.Key, Version: "2", Name: "Variable Test", ComposeYAML: upgradeCompose, Config: upgradeConfig, Source: "dokploy", Checksum: strings.Repeat("b", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +274,8 @@ feature = "enabled"`, 1)
 	if status != http.StatusCreated {
 		t.Fatalf("route blocker instantiate status = %d", status)
 	}
-	rollbackTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: orgTemplate.Key, Version: "3", Name: "Variable Test", ComposeYAML: "services:\n  app:\n    image: nginx:1.28-alpine\n", Config: upgradeConfig, Source: "dokploy", Checksum: strings.Repeat("c", 64)})
+	rollbackCompose := strings.Replace(upgradeCompose, "nginx:1.27-alpine", "nginx:1.28-alpine", 1)
+	rollbackTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: orgTemplate.Key, Version: "3", Name: "Variable Test", ComposeYAML: rollbackCompose, Config: upgradeConfig, Source: "dokploy", Checksum: strings.Repeat("c", 64)})
 	if err != nil {
 		t.Fatal(err)
 	}

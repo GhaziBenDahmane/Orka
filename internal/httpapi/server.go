@@ -1484,7 +1484,7 @@ func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	instance, err := templates.Instantiate(template, in.ComposeYAML, "example.invalid")
 	if err == nil {
-		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
+		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts, instance.Environment)
 	}
 	var routes []store.Route
 	if err == nil {
@@ -1539,7 +1539,7 @@ func (s *Server) previewTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	instance, err := templates.InstantiateWithOverrides(template, item.ComposeYAML, in.BaseDomain, in.Variables)
 	if err == nil {
-		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
+		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts, instance.Environment)
 	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
@@ -1612,7 +1612,7 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	instance, err := templates.InstantiateWithOverrides(template, item.ComposeYAML, in.BaseDomain, in.Variables)
 	if err == nil {
-		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts)
+		instance.ComposeYAML, err = templates.ApplyMounts(instance.ComposeYAML, instance.Mounts, instance.Environment)
 	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
@@ -1804,7 +1804,7 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 	overrides := templates.UpgradeOverrides(template, preserved, storedOverrides, in.Variables)
 	upgraded, err := templates.InstantiateWithOverrides(template, target.ComposeYAML, provenance.BaseDomain, overrides)
 	if err == nil {
-		upgraded.ComposeYAML, err = templates.ApplyMounts(upgraded.ComposeYAML, upgraded.Mounts)
+		upgraded.ComposeYAML, err = templates.ApplyMounts(upgraded.ComposeYAML, upgraded.Mounts, upgraded.Environment)
 	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
