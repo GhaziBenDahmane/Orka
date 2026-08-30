@@ -69,6 +69,75 @@ func TestInstantiateWithOverridesRejectsUnknownAndOversizedValues(t *testing.T) 
 	}
 }
 
+func TestInstantiateRejectsUnsafeGeneratorParameters(t *testing.T) {
+	for _, definition := range []string{
+		"${jwt:-1}",
+		"${jwt:257}",
+		"${jwt:999999999}",
+		"${jwt:missing_secret}",
+		"${jwt:secret:missing_payload}",
+		"${password:0}",
+		"${password:4097}",
+		"${password:not-a-number}",
+		"${base64:1:2}",
+		"${uuid:ignored}",
+	} {
+		t.Run(definition, func(t *testing.T) {
+			template := DokployTemplate{Variables: map[string]string{"token": definition, "secret": ""}}
+			if _, err := Instantiate(template, "services: {}\n", "example.test"); err == nil {
+				t.Fatalf("unsafe generator %q was accepted", definition)
+			}
+		})
+	}
+}
+
+func TestInstantiateSupportsDokployLargeBase64Generator(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{"mongo_key": "${base64:756}"}}
+	instance, err := Instantiate(template, "services: {}\n", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Variables["mongo_key"]) != 1008 {
+		t.Fatalf("base64 generator length=%d", len(instance.Variables["mongo_key"]))
+	}
+}
+
+func TestInstantiateSupportsDokployTimestampParameters(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{
+		"milliseconds": "${timestampms:2025-01-01}",
+		"seconds":      "${timestamps:2030-01-01T00:00:00Z}",
+	}}
+	instance, err := Instantiate(template, "services: {}\n", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.Variables["milliseconds"] != "1735689600000" {
+		t.Fatalf("milliseconds=%q", instance.Variables["milliseconds"])
+	}
+	if instance.Variables["seconds"] != "1893456000" {
+		t.Fatalf("seconds=%q", instance.Variables["seconds"])
+	}
+}
+
+func TestInstantiateSupportsBoundedJWTGenerators(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{
+		"random_token": "${jwt:32}",
+		"secret":       "stable-test-secret",
+		"payload":      `{"sub":"template-test"}`,
+		"signed_token": "${jwt:secret:payload}",
+	}}
+	instance, err := Instantiate(template, "services: {}\n", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Variables["random_token"]) != 64 {
+		t.Fatalf("random JWT token length=%d", len(instance.Variables["random_token"]))
+	}
+	if parts := strings.Split(instance.Variables["signed_token"], "."); len(parts) != 3 {
+		t.Fatalf("signed JWT has %d segments", len(parts))
+	}
+}
+
 func TestDescribeVariablesRedactsGeneratedAndSensitiveDefaults(t *testing.T) {
 	template := DokployTemplate{Variables: map[string]string{
 		"admin_email": "admin@example.test",

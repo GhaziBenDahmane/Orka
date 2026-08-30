@@ -20,7 +20,12 @@ blueprints/
 `template.toml` defines generated or operator-supplied variables, environment
 mapping, domains, and managed files. `docker-compose.yml` remains the workload
 definition and passes through the same Swarm safety compiler as every other
-service. Resolved managed-file contents are stored only inside the service's
+service. Random `password`, `base64`, `hash`, and `username` helpers accept at
+most one length from 1 through 4096; numeric `jwt` helpers are limited to 256.
+Signed JWT helpers must reference a declared, non-empty secret variable and may
+reference one declared JSON payload variable. Malformed, missing, negative, or
+unbounded parameters reject the complete catalog snapshot. `timestampms` and
+`timestamps` accept an optional RFC3339 or `YYYY-MM-DD` date. Resolved managed-file contents are stored only inside the service's
 encrypted deployment environment; persisted Compose and deployment snapshots
 contain opaque references. The Swarm manager materializes mode-0600 temporary
 files immediately before deployment, removes their internal values from

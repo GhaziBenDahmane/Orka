@@ -79,6 +79,19 @@ func TestCatalogImportRejectsUnsafeComposeBeforePublication(t *testing.T) {
 	}
 }
 
+func TestCatalogValidationRejectsUnboundedGenerator(t *testing.T) {
+	root := t.TempDir()
+	writeCatalogBlueprint(t, root, "allocation", `{"id":"allocation","name":"Allocation","version":"1.0.0"}`)
+	templatePath := filepath.Join(root, "blueprints", "allocation", "template.toml")
+	if err := os.WriteFile(templatePath, []byte("[variables]\ntoken = \"${jwt:999999999}\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateDokployCatalog(root, deploy.Compiler{PublicNetwork: "dockyard-public"})
+	if err == nil || !strings.Contains(report.Failed["allocation"], "between 1 and 256") {
+		t.Fatalf("unbounded generator report=%#v err=%v", report, err)
+	}
+}
+
 func TestRepositoryCatalogImportRejectsEmptySnapshot(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "blueprints"), 0700); err != nil {

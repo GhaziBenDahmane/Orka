@@ -571,59 +571,95 @@ func resolve(value string, variables map[string]string, baseDomain string) (stri
 			return v
 		}
 		parts := strings.Split(key, ":")
-		length := 32
-		if len(parts) == 2 {
-			parsed, err := strconv.Atoi(parts[1])
-			if err == nil && parsed > 0 && parsed <= 256 {
-				length = parsed
-			}
-		}
 		switch parts[0] {
 		case "domain":
+			if len(parts) != 1 {
+				resolveErr = errors.New("domain helper does not accept parameters")
+				return match
+			}
 			if baseDomain == "" {
 				return uuid.NewString() + ".local"
 			}
 			return uuid.NewString()[:8] + "." + baseDomain
 		case "password":
+			length, err := generatorLength(parts)
+			if err != nil {
+				resolveErr = err
+				return match
+			}
 			return randomText(length)
 		case "base64":
+			length, err := generatorLength(parts)
+			if err != nil {
+				resolveErr = err
+				return match
+			}
 			b := randomBytes(length)
 			return base64.RawStdEncoding.EncodeToString(b)
 		case "hash":
+			length, err := generatorLength(parts)
+			if err != nil {
+				resolveErr = err
+				return match
+			}
 			sum := sha256.Sum256(randomBytes(length))
 			return hex.EncodeToString(sum[:])[:min(length, 64)]
-		case "uuid":
-			return uuid.NewString()
-		case "timestamp", "timestampms":
-			return strconv.FormatInt(time.Now().UnixMilli(), 10)
-		case "timestamps":
-			return strconv.FormatInt(time.Now().Unix(), 10)
-		case "randomPort":
-			n := int(randomBytes(2)[0])<<8 + int(randomBytes(2)[1])
-			return strconv.Itoa(10000 + n%50000)
-		case "email":
-			return "admin-" + randomText(8) + "@example.com"
 		case "username":
+			length, err := generatorLength(parts)
+			if err != nil {
+				resolveErr = err
+				return match
+			}
 			return strings.ToLower(randomText(length))
+		case "timestampms", "timestamps":
+			value, err := timestampValue(parts[0], key)
+			if err != nil {
+				resolveErr = err
+				return match
+			}
+			return value
+		case "uuid", "timestamp", "randomPort", "email":
+			if len(parts) != 1 {
+				resolveErr = fmt.Errorf("%s helper does not accept parameters", parts[0])
+				return match
+			}
+			switch parts[0] {
+			case "uuid":
+				return uuid.NewString()
+			case "timestamp":
+				return strconv.FormatInt(time.Now().UnixMilli(), 10)
+			case "randomPort":
+				bytes := randomBytes(2)
+				n := int(bytes[0])<<8 + int(bytes[1])
+				return strconv.Itoa(10000 + n%50000)
+			default:
+				return "admin-" + randomText(8) + "@example.com"
+			}
 		case "jwt":
 			if len(parts) == 2 {
 				if size, err := strconv.Atoi(parts[1]); err == nil {
+					if size < 1 || size > 256 {
+						resolveErr = errors.New("jwt helper length must be between 1 and 256")
+						return match
+					}
 					return hex.EncodeToString(randomBytes(size))
 				}
 			}
-			if len(parts) < 2 {
-				resolveErr = fmt.Errorf("jwt helper requires a secret variable")
+			if len(parts) < 2 || len(parts) > 3 {
+				resolveErr = errors.New("jwt helper requires a declared secret variable and optional payload variable")
 				return match
 			}
-			secret := variables[parts[1]]
-			if secret == "" {
-				secret = parts[1]
+			secret, ok := variables[parts[1]]
+			if !ok || secret == "" {
+				resolveErr = errors.New("jwt helper secret variable is missing or empty")
+				return match
 			}
 			payload := map[string]any{"iat": time.Now().Unix(), "exp": time.Now().AddDate(1, 0, 0).Unix()}
-			if len(parts) > 2 {
-				raw := variables[parts[2]]
-				if raw == "" {
-					raw = parts[2]
+			if len(parts) == 3 {
+				raw, ok := variables[parts[2]]
+				if !ok || raw == "" {
+					resolveErr = errors.New("jwt helper payload variable is missing or empty")
+					return match
 				}
 				if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 					resolveErr = fmt.Errorf("invalid jwt payload: %w", err)
@@ -644,6 +680,47 @@ func resolve(value string, variables map[string]string, baseDomain string) (stri
 	result = strings.ReplaceAll(result, "__DOCKYARD_ESCAPED_DOLLAR__", "$")
 	return strings.ReplaceAll(result, "__DOCKYARD_BACKSLASH_BRACE__", `\{`), resolveErr
 }
+
+func timestampValue(helper, key string) (string, error) {
+	if key == helper {
+		if helper == "timestampms" {
+			return strconv.FormatInt(time.Now().UnixMilli(), 10), nil
+		}
+		return strconv.FormatInt(time.Now().Unix(), 10), nil
+	}
+	prefix := helper + ":"
+	if !strings.HasPrefix(key, prefix) {
+		return "", fmt.Errorf("invalid %s helper", helper)
+	}
+	raw := strings.TrimPrefix(key, prefix)
+	var parsed time.Time
+	var err error
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02"} {
+		parsed, err = time.Parse(layout, raw)
+		if err == nil {
+			if helper == "timestampms" {
+				return strconv.FormatInt(parsed.UnixMilli(), 10), nil
+			}
+			return strconv.FormatInt(parsed.Unix(), 10), nil
+		}
+	}
+	return "", fmt.Errorf("%s helper requires an RFC3339 or YYYY-MM-DD date", helper)
+}
+
+func generatorLength(parts []string) (int, error) {
+	if len(parts) == 1 {
+		return 32, nil
+	}
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("%s helper accepts at most one length parameter", parts[0])
+	}
+	length, err := strconv.Atoi(parts[1])
+	if err != nil || length < 1 || length > 4096 {
+		return 0, fmt.Errorf("%s helper length must be between 1 and 4096", parts[0])
+	}
+	return length, nil
+}
+
 func randomBytes(length int) []byte {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
