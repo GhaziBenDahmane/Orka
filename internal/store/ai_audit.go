@@ -44,6 +44,8 @@ type AIAuditSnapshot struct {
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	SAMLPosture          []AIAuditSAMLProviderPosture    `json:"samlPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
+	WebhookPosture       []AIAuditWebhookPosture         `json:"webhookPosture"`
+	BackupDestinations   []AIAuditBackupDestinationInfo  `json:"backupDestinations"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
 	MigrationPosture     []AIAuditMigrationPosture       `json:"migrationPosture"`
 	MigrationBlockers    []AIAuditMigrationBlocker       `json:"migrationBlockers"`
@@ -353,6 +355,21 @@ type AIAuditNotificationPosture struct {
 	Enabled bool      `json:"enabled"`
 }
 
+type AIAuditWebhookPosture struct {
+	ID               uuid.UUID `json:"id"`
+	ComposeServiceID uuid.UUID `json:"composeServiceId"`
+	Provider         string    `json:"provider"`
+	Enabled          bool      `json:"enabled"`
+}
+
+type AIAuditBackupDestinationInfo struct {
+	ID               uuid.UUID `json:"id"`
+	UseTLS           bool      `json:"useTls"`
+	DatabasePolicies int64     `json:"databasePolicyReferences"`
+	VolumePolicies   int64     `json:"volumePolicyReferences"`
+	AuditArchives    int64     `json:"auditArchiveReferences"`
+}
+
 type AIAuditTemplateRepositoryInfo struct {
 	ID                   uuid.UUID  `json:"id"`
 	Name                 string     `json:"name"`
@@ -391,7 +408,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -610,6 +627,9 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 	if err := s.loadAIAuditSourceBuildPosture(ctx, organizationID, &snapshot.SourceBuildPosture); err != nil {
+		return err
+	}
+	if err := s.loadAIAuditIntegrationPosture(ctx, organizationID, &snapshot.WebhookPosture, &snapshot.BackupDestinations); err != nil {
 		return err
 	}
 	rows, err := s.Pool.Query(ctx, `
@@ -931,6 +951,54 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	rows.Close()
 	return nil
+}
+
+func (s *Store) loadAIAuditIntegrationPosture(ctx context.Context, organizationID uuid.UUID, webhooks *[]AIAuditWebhookPosture, destinations *[]AIAuditBackupDestinationInfo) error {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT integration.id,integration.compose_service_id,integration.provider,integration.enabled
+		FROM webhook_integrations integration
+		JOIN compose_services service ON service.id=integration.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1
+		ORDER BY integration.provider,integration.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditWebhookPosture
+		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.Provider, &item.Enabled); err != nil {
+			rows.Close()
+			return err
+		}
+		*webhooks = append(*webhooks, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `
+		SELECT destination.id,destination.use_tls,
+			(SELECT count(*) FROM backup_policies policy WHERE policy.destination_id=destination.id),
+			(SELECT count(*) FROM volume_backup_policies policy WHERE policy.destination_id=destination.id),
+			(SELECT count(*) FROM audit_archive_destinations archive WHERE archive.backup_destination_id=destination.id)
+		FROM backup_destinations destination
+		WHERE destination.organization_id=$1
+		ORDER BY destination.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item AIAuditBackupDestinationInfo
+		if err = rows.Scan(&item.ID, &item.UseTLS, &item.DatabasePolicies, &item.VolumePolicies, &item.AuditArchives); err != nil {
+			return err
+		}
+		*destinations = append(*destinations, item)
+	}
+	return rows.Err()
 }
 
 func (s *Store) loadAIAuditSourceBuildPosture(ctx context.Context, organizationID uuid.UUID, posture *[]AIAuditSourceBuildPosture) error {

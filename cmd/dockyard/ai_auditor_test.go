@@ -201,7 +201,7 @@ func TestPerformAIAuditRefusesCredentialBearingRedirects(t *testing.T) {
 
 func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	now := time.Now().UTC()
-	organizationID, databaseID, clusterID, repositoryID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	organizationID, databaseID, clusterID, repositoryID, serviceID, backupDestinationID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	staleHeartbeat, expiringCertificate := now.Add(-3*time.Minute), now.Add(6*24*time.Hour)
 	stalledSAMLRotation := now.Add(-8 * 24 * time.Hour)
 	oldSCIMToken, oldPendingJob := now.Add(-181*24*time.Hour), now.Add(-11*time.Minute)
@@ -212,6 +212,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
 		BackupPosture:        []store.AIAuditBackupPosture{{DatabaseID: databaseID, Engine: "postgres"}},
+		BackupDestinations:   []store.AIAuditBackupDestinationInfo{{ID: backupDestinationID, DatabasePolicies: 1, VolumePolicies: 1, AuditArchives: 1}},
 		VolumeBackupPosture:  []store.AIAuditVolumeBackupPosture{{ServiceID: serviceID, VolumeName: "uploads"}},
 		Clusters:             []store.AIAuditClusterInfo{{ID: clusterID, State: "active", LastSeenAt: &staleHeartbeat, CertificateAuthorityFingerprint: "sha256:old", PendingCertificateAuthorityFingerprint: "sha256:new", CertificateNotAfter: &expiringCertificate}},
 		AgentCAPosture:       store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:new", PreviousFingerprint: "sha256:old", RolloverActive: true},
@@ -237,8 +238,36 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 			t.Errorf("missing identity governance finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 27 {
-		t.Fatalf("findings=%d, want 27: %#v", len(findings), findings)
+	if !titles["Backup destination permits plaintext object-store transport"] {
+		t.Errorf("missing plaintext backup destination finding in %#v", findings)
+	}
+	if len(findings) != 28 {
+		t.Fatalf("findings=%d, want 28: %#v", len(findings), findings)
+	}
+}
+
+func TestDeterministicAuditDetectsPlaintextBackupDestination(t *testing.T) {
+	now := time.Now().UTC()
+	for _, test := range []struct {
+		name     string
+		useTLS   bool
+		findings int
+	}{
+		{name: "plaintext", findings: 1},
+		{name: "TLS", useTLS: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := store.AIAuditSnapshot{
+				Organization:        uuid.New(),
+				IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+				NotificationPosture: fullyCoveredNotifications(),
+				BackupDestinations:  []store.AIAuditBackupDestinationInfo{{ID: uuid.New(), UseTLS: test.useTLS}},
+			}
+			findings := deterministicAuditFindings(snapshot, now)
+			if len(findings) != test.findings {
+				t.Fatalf("findings=%#v, want %d", findings, test.findings)
+			}
+		})
 	}
 }
 

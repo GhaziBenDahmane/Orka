@@ -289,6 +289,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	routeID, otherRouteID := uuid.New(), uuid.New()
 	samlProviderID, otherSAMLProviderID := uuid.New(), uuid.New()
 	notificationEndpointID, otherNotificationEndpointID := uuid.New(), uuid.New()
+	enabledWebhookID, disabledWebhookID, otherWebhookID := uuid.New(), uuid.New(), uuid.New()
 	auditArchiveID, disabledAuditArchiveID, otherAuditArchiveID := uuid.New(), uuid.New(), uuid.New()
 	auditBackupDestinationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID := uuid.New(), uuid.New(), uuid.New()
 	latestDeploymentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
@@ -302,6 +303,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{projectID, developerUserID}},
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'viewer')`, []any{environmentID, developerUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
+		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret,enabled) VALUES($1,$2,'target-github-secret-name','github','target-main-secret',$3,true),($4,$2,'target-gitlab-secret-name','gitlab','target-release-secret',$5,false)`, []any{enabledWebhookID, serviceID, "target-webhook-encrypted-secret", disabledWebhookID, "target-disabled-webhook-encrypted-secret"}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','audit-api.example.test','/',8080,false,'letsencrypt')`, []any{routeID, serviceID}},
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'target-reconciliation-detail-secret',now()-interval '30 seconds')`, []any{serviceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','deployment-secret','succeeded','manual',$3::timestamptz - interval '1 minute',$3::timestamptz - interval '30 seconds')`, []any{uuid.New(), serviceID, latestDeploymentAt}},
@@ -339,6 +341,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{otherProjectID, otherUserID}},
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'admin')`, []any{otherEnvironmentID, otherUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Other API','other-api',$3,$4,'other-encrypted-env',7)`, []any{otherServiceID, otherEnvironmentID, "other-audit-api-" + otherServiceID.String(), "services: {api: {image: registry.example.test/other-private-api@sha256:" + strings.Repeat("a", 64) + ", environment: [OTHER_COMPOSE_SECRET]}}"}},
+		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret) VALUES($1,$2,'other-webhook-secret-name','bitbucket','other-main-secret',$3)`, []any{otherWebhookID, otherServiceID, "other-webhook-encrypted-secret"}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','other-audit-api.example.test','/',8080,true,'letsencrypt')`, []any{otherRouteID, otherServiceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,7,'services: {api: {image: other:v7}}','other-deployment-secret','failed','manual',now())`, []any{uuid.New(), otherServiceID}},
 		{`INSERT INTO application_sources(compose_service_id,source_type,repository_url,git_ref,build_type,encrypted_build_config,target_service,registry_image) VALUES($1,'git','https://other-source-secret.example/repository','main','dockerfile','other-build-config-secret','api','other-registry-secret.example/private/api')`, []any{otherServiceID}},
@@ -370,7 +373,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		args  []any
 	}{
 		{`INSERT INTO audit_retention_policies(organization_id,retention_days) VALUES($1,730)`, []any{organizationID}},
-		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'target-archive-secret-name','https://s3.example.test','target-secret-bucket',true,'target-archive-credentials-secret'),($3,$2,'disabled-archive-secret-name','https://s3.example.test','disabled-secret-bucket',true,'disabled-archive-credentials-secret'),($4,$5,'other-archive-secret-name','https://s3.example.test','other-secret-bucket',true,'other-archive-credentials-secret')`, []any{auditBackupDestinationID, organizationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID, otherOrganizationID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'target-archive-secret-name','https://s3.example.test','target-secret-bucket',true,'target-archive-credentials-secret'),($3,$2,'disabled-archive-secret-name','http://target-plaintext-storage-secret.example.test','disabled-secret-bucket',false,'disabled-archive-credentials-secret'),($4,$5,'other-archive-secret-name','http://other-plaintext-storage-secret.example.test','other-secret-bucket',false,'other-archive-credentials-secret')`, []any{auditBackupDestinationID, organizationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID, otherOrganizationID}},
 		{`INSERT INTO audit_archive_destinations(id,organization_id,backup_destination_id,name,object_prefix,retention_days,enabled,last_archived_id,last_chain_hash) VALUES($1,$2,$3,'target-archive-secret-name','target-secret-prefix',730,true,$4,'target-chain-secret'),($5,$2,$6,'disabled-archive-secret-name','disabled-secret-prefix',365,false,0,'disabled-chain-secret'),($7,$8,$9,'other-archive-secret-name','other-secret-prefix',365,true,0,'other-chain-secret')`, []any{auditArchiveID, organizationID, auditBackupDestinationID, archivedAuditEventID, disabledAuditArchiveID, disabledAuditBackupDestinationID, otherAuditArchiveID, otherOrganizationID, otherAuditBackupDestinationID}},
 		{`INSERT INTO audit_archive_batches(id,destination_id,first_event_id,last_event_id,previous_sha256,object_key,status,last_error,created_at,finished_at) VALUES($1,$2,$3,$3,'target-chain-secret','target-secret-object','failed','target-archive-error-secret',now()-interval '9 minutes',now()-interval '8 minutes')`, []any{uuid.New(), auditArchiveID, unarchivedAuditEventID}},
 		{`INSERT INTO audit_events(organization_id,action,resource_type,metadata,created_at) VALUES($1,'other-archive-pending','test','{"secret":"other-audit-metadata-secret"}',now()-interval '1 day')`, []any{otherOrganizationID}},
@@ -436,6 +439,20 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if len(snapshot.NotificationPosture) != 1 || snapshot.NotificationPosture[0].Name != "On-call" {
 		t.Fatalf("notification posture=%#v", snapshot.NotificationPosture)
 	}
+	webhookPosture := map[uuid.UUID]AIAuditWebhookPosture{}
+	for _, item := range snapshot.WebhookPosture {
+		webhookPosture[item.ID] = item
+	}
+	if len(webhookPosture) != 2 || webhookPosture[enabledWebhookID].ComposeServiceID != serviceID || webhookPosture[enabledWebhookID].Provider != "github" || !webhookPosture[enabledWebhookID].Enabled || webhookPosture[disabledWebhookID].Provider != "gitlab" || webhookPosture[disabledWebhookID].Enabled {
+		t.Fatalf("webhook posture=%#v", snapshot.WebhookPosture)
+	}
+	backupDestinationPosture := map[uuid.UUID]AIAuditBackupDestinationInfo{}
+	for _, item := range snapshot.BackupDestinations {
+		backupDestinationPosture[item.ID] = item
+	}
+	if len(backupDestinationPosture) != 2 || !backupDestinationPosture[auditBackupDestinationID].UseTLS || backupDestinationPosture[auditBackupDestinationID].AuditArchives != 1 || backupDestinationPosture[disabledAuditBackupDestinationID].UseTLS || backupDestinationPosture[disabledAuditBackupDestinationID].AuditArchives != 1 {
+		t.Fatalf("backup destination posture=%#v", snapshot.BackupDestinations)
+	}
 	signalCounts := map[string]int64{}
 	for _, signal := range snapshot.Signals {
 		signalCounts[signal.Kind+":"+signal.Status] = signal.Count
@@ -465,7 +482,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-	for _, secret := range []string{"target-admin-invitation-token-hash", "target-viewer-invitation-token-hash", "target-expired-invitation-token-hash", "other-admin-invitation-token-hash", "target-admin-group-external-secret", "Target administrators secret name", "target-viewer-group-external-secret", "Target viewers secret name", "other-group-external-secret", "Other tenant group secret name"} {
+	for _, secret := range []string{"target-admin-invitation-token-hash", "target-viewer-invitation-token-hash", "target-expired-invitation-token-hash", "other-admin-invitation-token-hash", "target-admin-group-external-secret", "Target administrators secret name", "target-viewer-group-external-secret", "Target viewers secret name", "other-group-external-secret", "Other tenant group secret name", "target-github-secret-name", "target-main-secret", "target-webhook-encrypted-secret", "target-gitlab-secret-name", "target-release-secret", "target-disabled-webhook-encrypted-secret", "other-webhook-secret-name", "other-main-secret", "other-webhook-encrypted-secret", "target-plaintext-storage-secret.example.test", "other-plaintext-storage-secret.example.test"} {
 		if strings.Contains(string(encodedSnapshot), secret) {
 			t.Fatalf("snapshot leaked identity governance secret %q: body=%s", secret, encodedSnapshot)
 		}
@@ -475,7 +492,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 			t.Fatalf("snapshot leaked %q: body=%s", secret, encodedSnapshot)
 		}
 	}
-	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherRouteID, otherSAMLProviderID, otherAuditArchiveID, otherAuditBackupDestinationID} {
+	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherRouteID, otherSAMLProviderID, otherWebhookID, otherAuditArchiveID, otherAuditBackupDestinationID} {
 		if strings.Contains(string(encodedSnapshot), otherTenantID.String()) {
 			t.Fatalf("snapshot leaked cross-tenant resource %s: body=%s", otherTenantID, encodedSnapshot)
 		}

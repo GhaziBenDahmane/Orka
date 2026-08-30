@@ -77,6 +77,12 @@ keys make it a privileged service.
 - Public route inventory includes only routing metadata. The deterministic
   baseline reports any Traefik route that permits plaintext HTTP so operators
   can enable certificate-backed TLS or explicitly retire the exposure.
+- Delivery and storage integration posture exposes only opaque webhook and
+  service IDs, webhook provider/enabled state, opaque backup-destination IDs,
+  TLS state, and database/volume/audit-archive reference counts. Webhook names,
+  branches and secrets plus object-store endpoints, buckets, prefixes, and
+  credentials remain outside the model boundary. The deterministic baseline
+  reports every backup destination that permits plaintext object-store traffic.
 - Dokploy migration posture is grouped by source organization and reports
   imported versus unresolved resources plus successful native database
   transfers. Up to 200 unresolved parity records include their source kind,
@@ -136,8 +142,9 @@ keys make it a privileged service.
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
   incomplete Dokploy migrations. It also reports a missing immutable audit
   archive, a failed latest archive delivery, or tenant events left unarchived
-  for more than five minutes, along with public routes that permit plaintext
-  HTTP, malformed workload definitions, mutable image references, and services
+  for more than five minutes, backup destinations that permit plaintext
+  object-store traffic, and public routes that permit plaintext HTTP, along
+  with malformed workload definitions, mutable image references, and services
   without an image or build source. Invalid source transports, SSH sources
   without pinned-host credentials, missing uploaded artifacts, undeployed
   source changes, and successful Git builds lacking commit provenance are also
