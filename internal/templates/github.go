@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -21,8 +22,11 @@ import (
 )
 
 const maxCatalogArchiveBytes int64 = 64 << 20
+const maxCatalogExpandedBytes int64 = 128 << 20
 const maxCatalogFileBytes int64 = 4 << 20
-const maxCatalogFiles = 10000
+const maxCatalogEntries = 10000
+const maxCatalogPathBytes = 1024
+const maxCatalogPathDepth = 32
 
 var githubPart = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
@@ -68,6 +72,9 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 	if resp.StatusCode != http.StatusOK {
 		return "", nil, fmt.Errorf("download template repository returned HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxCatalogArchiveBytes {
+		return "", nil, errors.New("template repository archive exceeds 64 MiB")
+	}
 	limited := &io.LimitedReader{R: resp.Body, N: maxCatalogArchiveBytes + 1}
 	gz, err := gzip.NewReader(limited)
 	if err != nil {
@@ -79,7 +86,9 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 		return "", nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(directory) }
-	tarReader, files, extracted := tar.NewReader(gz), 0, int64(0)
+	expanded := &io.LimitedReader{R: gz, N: maxCatalogExpandedBytes + 1}
+	tarReader, entries, extracted := tar.NewReader(expanded), 0, int64(0)
+	archiveRoot := ""
 	for {
 		header, readErr := tarReader.Next()
 		if errors.Is(readErr, io.EOF) {
@@ -93,12 +102,35 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 			cleanup()
 			return "", nil, errors.New("template repository archive exceeds 64 MiB")
 		}
-		clean := filepath.Clean(filepath.FromSlash(header.Name))
-		parts := strings.Split(clean, string(filepath.Separator))
+		entries++
+		if entries > maxCatalogEntries {
+			cleanup()
+			return "", nil, errors.New("template repository exceeds entry limit")
+		}
+		clean := path.Clean(header.Name)
+		if len(clean) > maxCatalogPathBytes || strings.Contains(header.Name, `\`) || path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+			cleanup()
+			return "", nil, errors.New("template repository contains an unsafe path")
+		}
+		parts := strings.Split(clean, "/")
+		if len(parts) > maxCatalogPathDepth+1 {
+			cleanup()
+			return "", nil, errors.New("template repository path exceeds depth limit")
+		}
+		if archiveRoot == "" {
+			if !githubPart.MatchString(parts[0]) || len(parts[0]) > 255 {
+				cleanup()
+				return "", nil, errors.New("template repository has an invalid archive root")
+			}
+			archiveRoot = parts[0]
+		} else if parts[0] != archiveRoot {
+			cleanup()
+			return "", nil, errors.New("template repository contains multiple archive roots")
+		}
 		if len(parts) < 2 {
 			continue
 		}
-		relative := filepath.Join(parts[1:]...)
+		relative := filepath.FromSlash(strings.Join(parts[1:], "/"))
 		if relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			cleanup()
 			return "", nil, errors.New("template repository contains an unsafe path")
@@ -111,9 +143,8 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 				return "", nil, err
 			}
 		case tar.TypeReg:
-			files++
 			extracted += header.Size
-			if files > maxCatalogFiles || header.Size < 0 || header.Size > maxCatalogFileBytes || extracted > maxCatalogArchiveBytes {
+			if header.Size < 0 || header.Size > maxCatalogFileBytes || extracted > maxCatalogArchiveBytes {
 				cleanup()
 				return "", nil, errors.New("template repository exceeds extraction limits")
 			}
@@ -136,6 +167,22 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 			cleanup()
 			return "", nil, errors.New("template repository links and special files are not allowed")
 		}
+	}
+	if _, err = io.Copy(io.Discard, expanded); err != nil {
+		cleanup()
+		return "", nil, errors.New("read template repository gzip stream")
+	}
+	if expanded.N <= 0 {
+		cleanup()
+		return "", nil, errors.New("template repository expanded archive exceeds 128 MiB")
+	}
+	if limited.N <= 0 {
+		cleanup()
+		return "", nil, errors.New("template repository archive exceeds 64 MiB")
+	}
+	if archiveRoot == "" {
+		cleanup()
+		return "", nil, errors.New("template repository archive is empty")
 	}
 	return directory, cleanup, nil
 }

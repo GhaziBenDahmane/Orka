@@ -1,6 +1,9 @@
 package templates
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/x509"
 	"encoding/base64"
@@ -14,6 +17,12 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/store"
 )
+
+type catalogArchiveEntry struct {
+	name      string
+	contents  string
+	directory bool
+}
 
 func TestGitHubArchiveURL(t *testing.T) {
 	got, err := GitHubArchiveURL("https://github.com/acme/catalog.git", "main")
@@ -66,6 +75,107 @@ func TestFetchCatalogArchiveRefusesCredentialBearingRedirect(t *testing.T) {
 	if redirectedRequests != 0 {
 		t.Fatalf("redirect target received %d credential-bearing request(s)", redirectedRequests)
 	}
+}
+
+func TestFetchCatalogArchiveExtractsSingleRoot(t *testing.T) {
+	server := newCatalogArchiveServer(t, []catalogArchiveEntry{
+		{name: "catalog-main/", directory: true},
+		{name: "catalog-main/blueprints/", directory: true},
+		{name: "catalog-main/blueprints/demo/", directory: true},
+		{name: "catalog-main/blueprints/demo/meta.json", contents: `{"id":"demo"}`},
+	})
+	root, cleanup, err := fetchCatalogArchive(context.Background(), server.Client(), server.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	contents, err := os.ReadFile(filepath.Join(root, "blueprints", "demo", "meta.json"))
+	if err != nil || string(contents) != `{"id":"demo"}` {
+		t.Fatalf("extracted contents=%q err=%v", contents, err)
+	}
+}
+
+func TestFetchCatalogArchiveRejectsUnsafeStructure(t *testing.T) {
+	deepPath := "catalog-main/" + strings.Repeat("directory/", maxCatalogPathDepth) + "file"
+	tests := map[string][]catalogArchiveEntry{
+		"parent traversal": {{name: "../escaped", directory: true}},
+		"backslash path":   {{name: `catalog-main\blueprints`, directory: true}},
+		"multiple roots": {
+			{name: "catalog-main/blueprints/", directory: true},
+			{name: "other-main/blueprints/", directory: true},
+		},
+		"excessive depth": {{name: deepPath, contents: "x"}},
+	}
+	for name, entries := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := newCatalogArchiveServer(t, entries)
+			if root, cleanup, err := fetchCatalogArchive(context.Background(), server.Client(), server.URL, ""); err == nil {
+				cleanup()
+				t.Fatalf("unsafe archive extracted to %s", root)
+			}
+		})
+	}
+}
+
+func TestFetchCatalogArchiveCountsDirectoryEntries(t *testing.T) {
+	entries := make([]catalogArchiveEntry, maxCatalogEntries+1)
+	for index := range entries {
+		entries[index] = catalogArchiveEntry{name: "catalog-main/repeated/", directory: true}
+	}
+	server := newCatalogArchiveServer(t, entries)
+	if root, cleanup, err := fetchCatalogArchive(context.Background(), server.Client(), server.URL, ""); err == nil || !strings.Contains(err.Error(), "entry limit") {
+		if cleanup != nil {
+			cleanup()
+		}
+		t.Fatalf("directory entry limit root=%q err=%v", root, err)
+	}
+}
+
+func TestFetchCatalogArchiveRejectsAnnouncedOversize(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "67108865")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	if root, cleanup, err := fetchCatalogArchive(context.Background(), server.Client(), server.URL, ""); err == nil || !strings.Contains(err.Error(), "exceeds 64 MiB") {
+		if cleanup != nil {
+			cleanup()
+		}
+		t.Fatalf("oversized archive root=%q err=%v", root, err)
+	}
+}
+
+func newCatalogArchiveServer(t *testing.T, entries []catalogArchiveEntry) *httptest.Server {
+	t.Helper()
+	var payload bytes.Buffer
+	gzipWriter := gzip.NewWriter(&payload)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for _, entry := range entries {
+		typeflag, mode, size := byte(tar.TypeReg), int64(0644), int64(len(entry.contents))
+		if entry.directory {
+			typeflag, mode, size = tar.TypeDir, 0755, 0
+		}
+		if err := tarWriter.WriteHeader(&tar.Header{Name: entry.name, Typeflag: typeflag, Mode: mode, Size: size}); err != nil {
+			t.Fatal(err)
+		}
+		if size > 0 {
+			if _, err := tarWriter.Write([]byte(entry.contents)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload.Bytes())
+	}))
+	t.Cleanup(server.Close)
+	return server
 }
 
 func TestVerifyRepositoryCatalogEnforcesPinnedSigner(t *testing.T) {

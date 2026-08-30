@@ -25,7 +25,10 @@ service. See `examples/template-repository` for a complete 9Router example.
 Repository downloads accept only canonical HTTPS GitHub URLs and use GitHub's
 archive endpoint rather than invoking a shell. Extraction rejects links,
 special files, traversal, oversized files, oversized archives, and excessive
-file counts. A sync records success or its bounded failure message. For a
+entry counts. It also requires one consistent archive root, bounds path length
+and nesting depth, and fully consumes the gzip stream under separate compressed
+and expanded-size limits before publishing anything. A sync records success or
+its bounded failure message. For a
 production catalog, provide its PEM or base64 Ed25519 public key and enable
 `requireSignature`. Dockyard then verifies `catalog.manifest.json` and
 `catalog.manifest.sig` before importing any entry and records the signer
