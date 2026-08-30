@@ -99,6 +99,18 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='overlay|swarm|true|{"encrypted":"false"}' \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted an overlay with encryption explicitly disabled' >&2
+  exit 1
+fi
+grep -q 'existing Docker network dockyard-public must be an attachable encrypted Swarm overlay' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'disabled-encryption failure mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='overlay|swarm|true|{"encrypted":""}' \
   "$root/scripts/install-swarm.sh" >/dev/null
 if grep -q '^network create' "$DOCKYARD_INSTALL_TEST_LOG"; then
