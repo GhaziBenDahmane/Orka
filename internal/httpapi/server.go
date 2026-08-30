@@ -2931,6 +2931,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, 404, "not_found", "resource not found")
 		return
 	}
+	if errors.Is(err, store.ErrDeploymentActive) {
+		writeError(w, http.StatusConflict, "deployment_active", err.Error())
+		return
+	}
 	if errors.Is(err, store.ErrBusy) {
 		writeError(w, http.StatusConflict, "resource_not_empty", "delete child resources first")
 		return

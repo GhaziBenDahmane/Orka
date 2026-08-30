@@ -398,11 +398,11 @@ func TestRollbackDeploymentReplaysImmutableSnapshotWithoutRebuild(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	rollback, err := db.QueueRollback(ctx, organizationID, serviceID, uuid.Nil)
-	if err != nil {
+	if err = db.DeleteSourceCredential(ctx, organizationID, credentialID); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.DeleteSourceCredential(ctx, organizationID, credentialID); err != nil {
+	rollback, err := db.QueueRollback(ctx, organizationID, serviceID, uuid.Nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	worker := &Worker{Store: db, Box: box, ID: "rollback-test"}

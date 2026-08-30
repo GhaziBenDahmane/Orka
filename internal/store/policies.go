@@ -95,6 +95,17 @@ func lockActiveServiceForMutation(ctx context.Context, tx pgx.Tx, organizationID
 	return projectID, environmentID, err
 }
 
+func ensureNoActiveDeploymentTx(ctx context.Context, tx pgx.Tx, serviceID uuid.UUID) error {
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployments WHERE compose_service_id=$1 AND status IN ('queued','running'))`, serviceID).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return ErrDeploymentActive
+	}
+	return nil
+}
+
 func ensureEnvironmentClusterWritable(ctx context.Context, tx pgx.Tx, environmentID uuid.UUID) error {
 	var local, writable, fresh, capacity bool
 	err := tx.QueryRow(ctx, `SELECT

@@ -9,6 +9,9 @@ Docker Compose remains the portable workload definition.
 
 1. An authenticated actor creates a deployment for a Compose service.
 2. The API stores an immutable deployment snapshot and enqueues a PostgreSQL job.
+   Source, artifact, route, template, and referenced credential mutations are
+   rejected while that service has a queued or running deployment, preventing
+   the worker from combining the snapshot with newer mutable execution inputs.
 3. A worker claims the job with `FOR UPDATE SKIP LOCKED`.
 4. The Compose compiler validates the document, injects Dockyard and Traefik
    labels, ensures the public overlay network is attached where needed, and

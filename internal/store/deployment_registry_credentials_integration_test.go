@@ -33,6 +33,12 @@ func TestQueueDeploymentSnapshotsRegistryCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE deployments SET status='succeeded',finished_at=now() WHERE id=$1`, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE jobs SET status='succeeded',finished_at=now() WHERE kind='deploy.compose' AND payload->>'deploymentId'=$1::text`, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.DeleteSourceCredential(ctx, organizationID, credentialID); err != nil {
 		t.Fatal(err)
 	}

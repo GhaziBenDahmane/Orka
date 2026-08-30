@@ -19,6 +19,7 @@ var ErrNotFound = errors.New("not found")
 var ErrAlreadyBootstrapped = errors.New("instance is already bootstrapped")
 var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
+var ErrDeploymentActive = errors.New("service has a queued or running deployment")
 var ErrDeleting = errors.New("resource is being deleted")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
@@ -1174,6 +1175,9 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ApplicationSource{}, err
 	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, source.ComposeServiceID); err != nil {
+		return ApplicationSource{}, err
+	}
 	err = tx.QueryRow(ctx, `INSERT INTO application_sources(compose_service_id,source_type,repository_url,git_ref,context_directory,dockerfile,build_type,builder_image,output_directory,build_target,enable_submodules,encrypted_build_config,target_service,registry_image,git_credential_id,registry_credential_id,status_provider,status_credential_id,status_context)
 		SELECT s.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
@@ -1223,6 +1227,9 @@ func (s *Store) UpsertApplicationArtifact(ctx context.Context, organizationID uu
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ApplicationArtifact{}, err
 	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, artifact.ComposeServiceID); err != nil {
+		return ApplicationArtifact{}, err
+	}
 	err = tx.QueryRow(ctx, `INSERT INTO application_artifacts(compose_service_id,encrypted_archive,filename,sha256,compressed_size)
 		SELECT s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2
 		ON CONFLICT(compose_service_id) DO UPDATE SET encrypted_archive=excluded.encrypted_archive,filename=excluded.filename,sha256=excluded.sha256,compressed_size=excluded.compressed_size,updated_at=now() RETURNING updated_at`, artifact.ComposeServiceID, organizationID, artifact.EncryptedArchive, artifact.Filename, artifact.SHA256, artifact.CompressedSize).Scan(&artifact.UpdatedAt)
@@ -1268,14 +1275,60 @@ func (s *Store) ListSourceCredentials(ctx context.Context, organizationID uuid.U
 }
 
 func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT service.id FROM application_sources source JOIN compose_services service ON service.id=source.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE project.organization_id=$2 AND (source.git_credential_id=$1 OR source.registry_credential_id=$1 OR source.status_credential_id=$1) ORDER BY service.id FOR UPDATE OF service`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	serviceIDs := []uuid.UUID{}
+	for rows.Next() {
+		var serviceID uuid.UUID
+		if err = rows.Scan(&serviceID); err != nil {
+			rows.Close()
+			return err
+		}
+		serviceIDs = append(serviceIDs, serviceID)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, serviceID := range serviceIDs {
+		if err = ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
+			return err
+		}
+	}
+	repositories, err := tx.Query(ctx, `SELECT last_sync_status FROM template_repositories WHERE credential_id=$1 AND organization_id=$2 ORDER BY id FOR UPDATE`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	for repositories.Next() {
+		var status string
+		if err = repositories.Scan(&status); err != nil {
+			repositories.Close()
+			return err
+		}
+		if status == "running" {
+			repositories.Close()
+			return ErrBusy
+		}
+	}
+	repositories.Close()
+	if err = repositories.Err(); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.UUID) (ComposeService, []Route, error) {
@@ -1333,6 +1386,9 @@ func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route)
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Route{}, err
 	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, r.ComposeServiceID); err != nil {
+		return Route{}, err
+	}
 	r.ID = uuid.New()
 	err = tx.QueryRow(ctx, `INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) SELECT $1,s.id,$3,$4,$5,$6,$7,$8 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND p.organization_id=$9 RETURNING id`, r.ID, r.ComposeServiceID, r.ServiceName, r.Host, r.PathPrefix, r.TargetPort, r.TLS, r.CertificateResolver, organizationID).Scan(&r.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1354,14 +1410,33 @@ func (s *Store) GetRoute(ctx context.Context, organizationID, id uuid.UUID) (Rou
 }
 
 func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM routes r USING compose_services s,environments e,projects p WHERE r.id=$1 AND s.id=r.compose_service_id AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var serviceID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT r.compose_service_id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&serviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, _, err = lockActiveServiceForMutation(ctx, tx, organizationID, serviceID); err != nil {
+		return err
+	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM routes WHERE id=$1 AND compose_service_id=$2`, id, serviceID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string) (Deployment, error) {
@@ -2473,6 +2548,9 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 		return ComposeService{}, nil, err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, service.ID); err != nil {
 		return ComposeService{}, nil, err
 	}
 	if err = ensureProtectedVolumesDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
