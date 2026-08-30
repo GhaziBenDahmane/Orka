@@ -96,7 +96,16 @@ if [ -n "${DOCKYARD_MASTER_KEY_FILE:-}" ]; then
   master_key=$(tr -d '\r\n' <"$DOCKYARD_MASTER_KEY_FILE")
 fi
 temporary=$(mktemp -d)
-cleanup() { rm -rf -- "$temporary"; }
+staging_database=""
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -n "$staging_database" ]; then
+    docker exec --user postgres "$postgres_container" dropdb --username "$database_user" --maintenance-db postgres --if-exists --force "$staging_database" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$temporary"
+  trap - EXIT HUP INT TERM
+  exit "$status"
+}
 trap cleanup EXIT HUP INT TERM
 if ! printf '%s' "$master_key" | base64 -d >"$temporary/master-key.bin" 2>/dev/null || [ "$(wc -c <"$temporary/master-key.bin" | tr -d ' ')" -ne 32 ]; then
   echo "DOCKYARD_MASTER_KEY must be a base64-encoded 32-byte key" >&2
@@ -127,13 +136,35 @@ if [ -n "$expected_agent_ca_sha256" ]; then
 fi
 
 docker exec --interactive --user postgres "$postgres_container" pg_restore --list <"$bundle/database.dump" >/dev/null
-docker exec --user postgres "$postgres_container" dropdb --username "$database_user" --maintenance-db postgres --if-exists --force "$database"
-docker exec --user postgres "$postgres_container" createdb --username "$database_user" --owner "$database_user" "$database"
-docker exec --interactive --user postgres "$postgres_container" pg_restore --username "$database_user" --dbname "$database" --no-owner --no-privileges --single-transaction --exit-on-error <"$bundle/database.dump"
-actual_schema_version=$(docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname "$database" --tuples-only --no-align --command "SELECT COALESCE(max(version),'') FROM schema_migrations")
+staging_database="dockyard_restore_$$"
+previous_database="dockyard_previous_$$"
+docker exec --user postgres "$postgres_container" createdb --username "$database_user" --owner "$database_user" "$staging_database"
+docker exec --interactive --user postgres "$postgres_container" pg_restore --username "$database_user" --dbname "$staging_database" --no-owner --no-privileges --single-transaction --exit-on-error <"$bundle/database.dump"
+actual_schema_version=$(docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname "$staging_database" --tuples-only --no-align --command "SELECT COALESCE(max(version),'') FROM schema_migrations")
 actual_schema_version=$(printf '%s' "$actual_schema_version" | tr -d '\r\n')
 if [ "$actual_schema_version" != "$expected_schema_version" ]; then
   echo "restored schema version does not match the recovery bundle" >&2
   exit 1
 fi
-echo "control-plane database restored; restart the matching controller image and verify secrets before upgrading"
+database_exists=$(docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname postgres --tuples-only --no-align --command "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname='$database')")
+database_exists=$(printf '%s' "$database_exists" | tr -d '[:space:]')
+case "$database_exists" in
+  t)
+    docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname postgres --set ON_ERROR_STOP=1 --command "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$database' AND pid<>pg_backend_pid()" >/dev/null
+    docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname postgres --set ON_ERROR_STOP=1 --command "BEGIN; ALTER DATABASE \"$database\" RENAME TO \"$previous_database\"; ALTER DATABASE \"$staging_database\" RENAME TO \"$database\"; COMMIT" >/dev/null
+    ;;
+  f)
+    docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname postgres --set ON_ERROR_STOP=1 --command "ALTER DATABASE \"$staging_database\" RENAME TO \"$database\"" >/dev/null
+    previous_database=""
+    ;;
+  *)
+    echo "could not determine whether the target database exists" >&2
+    exit 1
+    ;;
+esac
+staging_database=""
+echo "control-plane database restored from validated staging database"
+if [ -n "$previous_database" ]; then
+  echo "previous database retained for rollback: $previous_database"
+fi
+echo "restart the matching controller image and verify secrets before upgrading"

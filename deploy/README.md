@@ -405,10 +405,15 @@ scripts/restore-control-plane.sh /secure/backups/dockyard-2026-08-28
 docker service scale dockyard_dockyard=1
 ```
 
-The restore recreates the `dockyard` database and restores it in one
-transaction, then checks the restored migration version. Start the exact image
-recorded in the manifest, verify login and representative secret decryption,
-and perform a managed-database restore drill before upgrading. Deployments
+The restore first creates a separate staging database, restores the complete
+dump in one transaction, and verifies its migration version. Only then does it
+atomically rename the current database aside and the validated staging database
+into place. It prints the retained previous database name; keep that rollback
+copy until the exact image recorded in the manifest starts successfully, login
+and representative secret decryption work, and a managed-database restore drill
+passes. Drop the retained database explicitly after validation. To roll back,
+stop every controller again, drop the failed restored database, and rename the
+printed previous database back to `dockyard`. Deployments
 using external PostgreSQL should use the provider's consistent snapshot/PITR
 mechanism and preserve the same recovery-set metadata and secret escrow.
 

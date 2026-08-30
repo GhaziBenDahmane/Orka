@@ -186,13 +186,33 @@ remaining_projects="$(docker compose --project-name "$project" exec -T postgres 
   psql --username dockyard --dbname dockyard --tuples-only --no-align \
   --command "SELECT count(*) FROM projects WHERE id='$project_id'")"
 test "$remaining_projects" = "0"
-DOCKYARD_STACK_NAME="$project" \
+cp -a "$recovery_root/control-plane" "$recovery_root/wrong-schema"
+jq '.schemaVersion = "not-the-restored-version"' "$recovery_root/wrong-schema/manifest.json" >"$recovery_root/wrong-schema/manifest.updated.json"
+mv "$recovery_root/wrong-schema/manifest.updated.json" "$recovery_root/wrong-schema/manifest.json"
+if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
   DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
   DOCKYARD_RESTORE_CONFIRM="restore:$project" \
   DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
   DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
-  scripts/restore-control-plane.sh "$recovery_root/control-plane"
+  scripts/restore-control-plane.sh "$recovery_root/wrong-schema" >/dev/null 2>&1; then
+  echo "restore unexpectedly cut over a staging database with the wrong schema" >&2
+  exit 1
+fi
+test "$(docker compose --project-name "$project" exec -T postgres psql --username dockyard --dbname dockyard --tuples-only --no-align --command "SELECT count(*) FROM projects WHERE id='$project_id'")" = "0"
+test "$(docker compose --project-name "$project" exec -T postgres psql --username dockyard --dbname postgres --tuples-only --no-align --command "SELECT count(*) FROM pg_database WHERE datname LIKE 'dockyard_restore_%'")" = "0"
+restore_output="$(DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/control-plane")"
+previous_database="$(printf '%s\n' "$restore_output" | sed -n 's/^previous database retained for rollback: //p')"
+test -n "$previous_database"
+test "$(docker compose --project-name "$project" exec -T postgres psql --username dockyard --dbname "$previous_database" --tuples-only --no-align --command "SELECT count(*) FROM projects WHERE id='$project_id'")" = "0"
+test "$(docker compose --project-name "$project" exec -T postgres psql --username dockyard --dbname dockyard --tuples-only --no-align --command "SELECT count(*) FROM projects WHERE id='$project_id'")" = "1"
+docker compose --project-name "$project" exec -T postgres dropdb --username dockyard --maintenance-db postgres --force "$previous_database"
 docker compose --project-name "$project" start dockyard
 for _ in {1..60}; do
   if curl --fail --silent "$base_url/readyz" >/dev/null; then
