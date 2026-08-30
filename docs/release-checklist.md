@@ -138,7 +138,9 @@ links for every item below.
   convergence across the production-equivalent multi-host Swarm network.
 - Back up and restore each advertised backup-capable database engine. Record
   measured RPO/RTO and verify checksum, application-level data, retention, and
-  restore-drill alerts. On a Swarm manager, `make test-database-recovery`
+  restore-drill alerts. Race retention against queued manual restores and
+  running verification drills; both references must prevent artifact deletion.
+  On a Swarm manager, `make test-database-recovery`
   exercises the exact engine-specific readiness, backup, and restore commands
   against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
   ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON

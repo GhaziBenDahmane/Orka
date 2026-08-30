@@ -1536,7 +1536,7 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	defer tx.Rollback(ctx)
 	var slug, status string
 	var backupDatabaseID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status)
+	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}

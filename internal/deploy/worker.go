@@ -1406,64 +1406,142 @@ func (w *Worker) backupDatabaseRemote(ctx context.Context, j job, backupID uuid.
 func (w *Worker) queueRestoreDrill(ctx context.Context, backupID uuid.UUID) error {
 	restoreID := uuid.New()
 	payload, _ := json.Marshal(map[string]string{"restoreId": restoreID.String()})
-	_, err := w.Store.Pool.Exec(ctx, `WITH inserted AS (INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'queued','drill') ON CONFLICT(database_backup_id) WHERE kind='drill' DO NOTHING RETURNING id), target AS (SELECT database_instance_id FROM database_backups WHERE id=$2) INSERT INTO jobs(id,kind,payload,resource_key) SELECT $3,'restore.database',$4,'database:' || target.database_instance_id::text FROM inserted CROSS JOIN target`, restoreID, backupID, uuid.New(), payload)
-	return err
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var databaseID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT database_instance_id FROM database_backups WHERE id=$1 AND status='succeeded' FOR UPDATE`, backupID).Scan(&databaseID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'queued','drill') ON CONFLICT(database_backup_id) WHERE kind='drill' DO NOTHING`, restoreID, backupID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return tx.Commit(ctx)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'restore.database',$2,$3)`, uuid.New(), payload, "database:"+databaseID.String()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id AND r.kind='manual') ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id AND (r.kind='manual' OR r.status IN ('queued','running') OR EXISTS(SELECT 1 FROM jobs job WHERE job.kind='restore.database' AND job.payload->>'restoreId'=r.id::text AND job.status IN ('pending','running')))) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
 	if err != nil {
 		w.Logger.Error("select expired backups", "error", err)
 		return
 	}
-	type expired struct {
-		id              uuid.UUID
-		path, objectKey string
-		destinationID   *uuid.UUID
+	type candidate struct {
+		id uuid.UUID
+		expiredDatabaseBackup
 	}
-	items := []expired{}
+	items := []candidate{}
 	for rows.Next() {
-		var item expired
-		if err = rows.Scan(&item.id, &item.path, &item.destinationID, &item.objectKey); err == nil {
-			items = append(items, item)
+		var item candidate
+		if err = rows.Scan(&item.id, &item.path, &item.destinationID, &item.objectKey); err != nil {
+			break
 		}
+		items = append(items, item)
 	}
 	rows.Close()
+	if err != nil {
+		w.Logger.Error("scan expired backups", "error", err)
+		return
+	}
 	for _, item := range items {
-		tx, txErr := w.Store.Pool.Begin(ctx)
-		if txErr != nil {
-			w.Logger.Error("prune backup metadata", "backup", item.id, "error", txErr)
-			continue
-		}
-		if _, txErr = tx.Exec(ctx, `DELETE FROM database_restores WHERE database_backup_id=$1 AND kind='drill'`, item.id); txErr == nil {
-			var deleted uuid.UUID
-			txErr = tx.QueryRow(ctx, `DELETE FROM database_backups WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM database_restores WHERE database_backup_id=$1) RETURNING id`, item.id).Scan(&deleted)
-		}
-		if txErr == nil {
-			txErr = tx.Commit(ctx)
-		} else {
-			_ = tx.Rollback(ctx)
-		}
-		if txErr != nil {
-			if !errors.Is(txErr, pgx.ErrNoRows) {
-				w.Logger.Error("prune backup metadata", "backup", item.id, "error", txErr)
-			}
-			continue
-		}
-		if item.destinationID != nil && item.objectKey != "" {
-			remote, remoteErr := w.s3(ctx, *item.destinationID)
-			if remoteErr == nil {
-				remoteErr = remote.Delete(ctx, item.objectKey)
-			}
-			if remoteErr != nil {
-				w.Logger.Error("delete expired remote backup", "backup", item.id, "error", remoteErr)
+		var remote *backupstore.S3
+		var artifactDirectory string
+		if item.destinationID != nil {
+			if item.objectKey == "" {
+				w.Logger.Error("prune backup metadata", "backup", item.id, "error", "remote backup has no object key")
 				continue
 			}
+			remote, err = w.s3(ctx, *item.destinationID)
+		} else {
+			artifactDirectory, err = validatedLocalBackupDirectory(w.BackupDirectory, item.id, item.path)
 		}
-		if item.path != "" {
-			_ = os.RemoveAll(filepath.Dir(item.path))
+		if err != nil {
+			w.Logger.Error("open expired backup artifact", "backup", item.id, "error", err)
+			continue
+		}
+		deletedItem, deleted, deleteErr := w.deleteExpiredDatabaseBackupMetadata(ctx, item.id)
+		if deleteErr != nil {
+			w.Logger.Error("prune backup metadata", "backup", item.id, "error", deleteErr)
+			continue
+		}
+		if !deleted {
+			continue
+		}
+		if remote != nil {
+			remoteErr := remote.Delete(ctx, deletedItem.objectKey)
+			if remoteErr != nil {
+				w.Logger.Error("delete expired remote backup", "backup", item.id, "error", remoteErr)
+			}
+		} else if removeErr := os.RemoveAll(artifactDirectory); removeErr != nil {
+			w.Logger.Error("delete expired local backup", "backup", item.id, "error", removeErr)
 		}
 	}
+}
+
+type expiredDatabaseBackup struct {
+	path          string
+	destinationID *uuid.UUID
+	objectKey     string
+}
+
+func (w *Worker) deleteExpiredDatabaseBackupMetadata(ctx context.Context, id uuid.UUID) (expiredDatabaseBackup, bool, error) {
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return expiredDatabaseBackup{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	var item expiredDatabaseBackup
+	var status string
+	if err = tx.QueryRow(ctx, `SELECT path,destination_id,object_key,status FROM database_backups WHERE id=$1 FOR UPDATE`, id).Scan(&item.path, &item.destinationID, &item.objectKey, &status); errors.Is(err, pgx.ErrNoRows) {
+		return expiredDatabaseBackup{}, false, nil
+	} else if err != nil {
+		return expiredDatabaseBackup{}, false, err
+	}
+	if status != "succeeded" {
+		return expiredDatabaseBackup{}, false, nil
+	}
+	var protected bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_restores restore WHERE restore.database_backup_id=$1 AND (restore.kind='manual' OR restore.status IN ('queued','running') OR EXISTS(SELECT 1 FROM jobs job WHERE job.kind='restore.database' AND job.payload->>'restoreId'=restore.id::text AND job.status IN ('pending','running'))))`, id).Scan(&protected); err != nil {
+		return expiredDatabaseBackup{}, false, err
+	}
+	if protected {
+		return expiredDatabaseBackup{}, false, nil
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM database_restores WHERE database_backup_id=$1 AND kind='drill'`, id); err != nil {
+		return expiredDatabaseBackup{}, false, err
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM database_backups WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM database_restores WHERE database_backup_id=$1)`, id)
+	if err != nil {
+		return expiredDatabaseBackup{}, false, err
+	}
+	if result.RowsAffected() != 1 {
+		return expiredDatabaseBackup{}, false, nil
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return expiredDatabaseBackup{}, false, err
+	}
+	return item, true, nil
+}
+
+func validatedLocalBackupDirectory(root string, backupID uuid.UUID, artifactPath string) (string, error) {
+	cleanRoot := filepath.Clean(root)
+	expectedDirectory := filepath.Join(cleanRoot, backupID.String())
+	cleanArtifact := filepath.Clean(artifactPath)
+	if !filepath.IsAbs(cleanRoot) || cleanRoot == string(filepath.Separator) || filepath.Dir(cleanArtifact) != expectedDirectory {
+		return "", errors.New("local backup artifact is outside its expected directory")
+	}
+	if !strings.HasPrefix(filepath.Base(cleanArtifact), backupID.String()+".") {
+		return "", errors.New("local backup artifact has an unexpected filename")
+	}
+	return expectedDirectory, nil
 }
 
 func (w *Worker) failBackup(ctx context.Context, j job, id uuid.UUID, backupErr error) error {
