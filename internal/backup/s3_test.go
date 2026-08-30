@@ -2,6 +2,8 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestS3ConfigurationAndObjectKey(t *testing.T) {
@@ -121,6 +124,72 @@ func TestCopyExactFileBoundsDownloadsAndCleansPartialOutput(t *testing.T) {
 			content, readErr := os.ReadFile(filename)
 			if err != nil || readErr != nil || string(content) != test.content {
 				t.Fatalf("error=%v read=%v content=%q", err, readErr, content)
+			}
+		})
+	}
+}
+
+func TestSHA256SumReaderRequiresExactSize(t *testing.T) {
+	content := "immutable audit batch"
+	want := sha256.Sum256([]byte(content))
+	digest, size, err := sha256sumReader(strings.NewReader(content), int64(len(content)))
+	if err != nil || size != int64(len(content)) || digest != hex.EncodeToString(want[:]) {
+		t.Fatalf("digest=%q size=%d error=%v", digest, size, err)
+	}
+	for name, expected := range map[string]int64{"oversized": int64(len(content) - 1), "truncated": int64(len(content) + 1)} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := sha256sumReader(strings.NewReader(content), expected); err == nil {
+				t.Fatal("size mismatch was accepted")
+			}
+		})
+	}
+}
+
+func TestPutImmutableVerifiesExistingObjectSizeAndDigest(t *testing.T) {
+	contents := []byte("immutable audit batch")
+	digestBytes := sha256.Sum256(contents)
+	digest := hex.EncodeToString(digestBytes[:])
+	tests := []struct {
+		name         string
+		metadataSize int
+		body         string
+		wantErr      bool
+	}{
+		{name: "same object", metadataSize: len(contents), body: string(contents)},
+		{name: "different metadata size", metadataSize: len(contents) + 1, body: string(contents), wantErr: true},
+		{name: "different digest", metadataSize: len(contents), body: strings.Repeat("x", len(contents)), wantErr: true},
+		{name: "oversized response", metadataSize: len(contents), body: string(contents) + "!", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("ETag", `"0123456789abcdef0123456789abcdef"`)
+				w.Header().Set("Last-Modified", "Sun, 30 Aug 2026 12:00:00 GMT")
+				switch r.Method {
+				case http.MethodPut:
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(http.StatusPreconditionFailed)
+					_, _ = w.Write([]byte(`<Error><Code>PreconditionFailed</Code><Message>exists</Message></Error>`))
+				case http.MethodHead:
+					w.Header().Set("Content-Length", fmt.Sprint(test.metadataSize))
+				case http.MethodGet:
+					w.(http.Flusher).Flush()
+					_, _ = w.Write([]byte(test.body))
+				default:
+					http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				}
+			}))
+			defer server.Close()
+			client, err := NewS3(S3Config{Endpoint: server.URL, Region: "us-east-1", Bucket: "backups", AccessKey: "access", SecretKey: "secret"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.PutImmutable(context.Background(), "audit/batch.ndjson", contents, digest, time.Now().Add(time.Hour))
+			if test.wantErr && err == nil {
+				t.Fatal("conflicting immutable object was accepted")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("identical immutable object rejected: %v", err)
 			}
 		})
 	}

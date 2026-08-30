@@ -97,22 +97,39 @@ func (s *S3) PutImmutable(ctx context.Context, key string, contents []byte, dige
 	}
 	object, statErr := s.client.GetObject(ctx, s.bucket, s.ObjectKey(key), minio.GetObjectOptions{})
 	if statErr != nil {
-		return err
+		return statErr
 	}
 	defer object.Close()
-	hash := sha256sumReader(object)
-	if hash != digest {
+	info, statErr := object.Stat()
+	if statErr != nil {
+		return statErr
+	}
+	if info.Size != int64(len(contents)) {
+		return errors.New("immutable audit object already exists with a different size")
+	}
+	hash, size, hashErr := sha256sumReader(object, int64(len(contents)))
+	if hashErr != nil {
+		return hashErr
+	}
+	if size != int64(len(contents)) || hash != digest {
 		return fmt.Errorf("immutable audit object already exists with a different digest")
 	}
 	return nil
 }
 
-func sha256sumReader(reader io.Reader) string {
-	hash := sha256.New()
-	if _, err := io.Copy(hash, reader); err != nil {
-		return ""
+func sha256sumReader(reader io.Reader, expectedSize int64) (string, int64, error) {
+	if expectedSize < 0 {
+		return "", 0, errors.New("invalid expected object size")
 	}
-	return hex.EncodeToString(hash.Sum(nil))
+	hash := sha256.New()
+	size, err := io.Copy(hash, io.LimitReader(reader, expectedSize+1))
+	if err != nil {
+		return "", size, err
+	}
+	if size != expectedSize {
+		return "", size, errors.New("object body size does not match metadata")
+	}
+	return hex.EncodeToString(hash.Sum(nil)), size, nil
 }
 
 func (s *S3) Get(ctx context.Context, key, filename string, expectedSize int64) error {
