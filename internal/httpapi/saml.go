@@ -456,16 +456,25 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_saml_response", "SAML response verification failed")
 		return
 	}
-	expiresAt := time.Now().Add(10 * time.Minute)
-	if assertion.Conditions != nil && !assertion.Conditions.NotOnOrAfter.IsZero() {
-		expiresAt = assertion.Conditions.NotOnOrAfter
+	notOnOrAfter := time.Time{}
+	if assertion.Conditions != nil {
+		notOnOrAfter = assertion.Conditions.NotOnOrAfter
 	}
-	if assertion.ID == "" || s.Store.RecordSAMLAssertion(r.Context(), provider.ID, assertion.ID, expiresAt) != nil {
-		writeError(w, 401, "saml_replay", "SAML assertion was already used")
+	expiresAt, validLifetime := samlReplayExpiry(notOnOrAfter, time.Now())
+	if !validLifetime {
+		writeError(w, 401, "invalid_saml_response", "SAML assertion lifetime is invalid")
 		return
 	}
-	if assertion.Subject == nil || assertion.Subject.NameID == nil || strings.TrimSpace(assertion.Subject.NameID.Value) == "" {
+	if !validFederatedIdentifier(assertion.ID) {
+		writeError(w, 401, "invalid_saml_response", "SAML assertion identifier is invalid")
+		return
+	}
+	if assertion.Subject == nil || assertion.Subject.NameID == nil || !validFederatedIdentifier(assertion.Subject.NameID.Value) {
 		writeError(w, 401, "invalid_claims", "SAML assertion lacks a subject")
+		return
+	}
+	if s.Store.RecordSAMLAssertion(r.Context(), provider.ID, assertion.ID, expiresAt) != nil {
+		writeError(w, 401, "saml_replay", "SAML assertion was already used")
 		return
 	}
 	email := samlAttribute(assertion, provider.EmailAttribute)
@@ -593,6 +602,16 @@ func samlAttribute(assertion *saml.Assertion, name string) string {
 		}
 	}
 	return ""
+}
+
+func samlReplayExpiry(notOnOrAfter, now time.Time) (time.Time, bool) {
+	if notOnOrAfter.IsZero() {
+		return time.Time{}, false
+	}
+	if !notOnOrAfter.After(now) || notOnOrAfter.After(now.Add(24*time.Hour)) {
+		return time.Time{}, false
+	}
+	return notOnOrAfter, true
 }
 
 func newSAMLCertificate(name string) (*rsa.PrivateKey, []byte, []byte, error) {

@@ -54,6 +54,19 @@ func TestCanonicalDisplayNameBoundsProvisionedProfiles(t *testing.T) {
 	}
 }
 
+func TestFederatedIdentityKeysAreBounded(t *testing.T) {
+	for _, valid := range []string{"subject", strings.Repeat("s", 1024)} {
+		if !validFederatedIdentifier(valid) {
+			t.Errorf("rejected valid federated identifier of length %d", len(valid))
+		}
+	}
+	for _, invalid := range []string{"", strings.Repeat("s", 1025)} {
+		if validFederatedIdentifier(invalid) {
+			t.Errorf("accepted invalid federated identifier of length %d", len(invalid))
+		}
+	}
+}
+
 func TestOIDCClientRefusesDiscoveryAndTokenRedirects(t *testing.T) {
 	targetRequests := 0
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

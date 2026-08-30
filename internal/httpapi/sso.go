@@ -296,7 +296,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var claims oidcIdentityClaims
-	if err = idToken.Claims(&claims); err != nil || claims.Subject == "" {
+	if err = idToken.Claims(&claims); err != nil || !validFederatedIdentifier(claims.Subject) {
 		writeError(w, 401, "invalid_claims", "identity token lacks required claims")
 		return
 	}

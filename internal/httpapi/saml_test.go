@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"testing"
+	"time"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/crewjam/saml"
@@ -81,6 +82,19 @@ func TestValidateSAMLRedirectEndpoint(t *testing.T) {
 	} {
 		if err := validateSAMLRedirectEndpoint(endpoint); err == nil {
 			t.Errorf("accepted unsafe endpoint %q", endpoint)
+		}
+	}
+}
+
+func TestSAMLReplayExpiryIsBounded(t *testing.T) {
+	now := time.Now().UTC()
+	expected := now.Add(time.Hour)
+	if expiresAt, ok := samlReplayExpiry(expected, now); !ok || !expiresAt.Equal(expected) {
+		t.Fatalf("provider expiry=%s valid=%t", expiresAt, ok)
+	}
+	for _, expiresAt := range []time.Time{{}, now, now.Add(-time.Second), now.Add(24*time.Hour + time.Second)} {
+		if got, ok := samlReplayExpiry(expiresAt, now); ok || !got.IsZero() {
+			t.Errorf("accepted unsafe expiry %s as %s", expiresAt, got)
 		}
 	}
 }

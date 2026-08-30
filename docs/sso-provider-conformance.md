@@ -37,6 +37,10 @@ use the standard signed `preferred_username` claim for providers such as Entra.
 The resulting address must match an allowed organization domain. Domain
 allowlists accept only normalized DNS names—never wildcards, ports, URL
 components, single-label names, or malformed labels.
+OIDC subjects, SAML NameIDs, and SAML assertion IDs are limited to 1024 bytes.
+SAML assertions must include an explicit expiration no more than 24 hours in
+the future so their replay records can be retained for the complete validity
+window. Configure shorter IdP session and assertion lifetimes where possible.
 
 ## Microsoft Entra ID
 

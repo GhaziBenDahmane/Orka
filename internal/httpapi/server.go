@@ -2736,4 +2736,8 @@ func canonicalDisplayName(raw string) (string, bool) {
 	return name, len(name) <= 120
 }
 
+func validFederatedIdentifier(value string) bool {
+	return value != "" && len(value) <= 1024
+}
+
 var _ = fmt.Sprintf
