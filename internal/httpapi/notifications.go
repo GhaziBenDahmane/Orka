@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -26,8 +25,6 @@ const (
 	maxSMTPAddressBytes          = 1024
 	maxSMTPRecipientAddressBytes = 1024
 )
-
-var notificationHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Request) {
 	var input struct {
@@ -107,7 +104,7 @@ func notificationEndpointMaterial(kind, rawURL, pagerDutyKey, opsgenieKey, opsge
 	case "webhook", "slack":
 		trimmedURL := strings.TrimSpace(rawURL)
 		parsed, err := url.Parse(trimmedURL)
-		if err != nil || rawURL != trimmedURL || len(rawURL) > maxNotificationURLBytes || parsed.Scheme != "https" || !validNotificationURLHost(parsed) || parsed.User != nil || parsed.Fragment != "" || parsed.Opaque != "" {
+		if err != nil || rawURL != trimmedURL || len(rawURL) > maxNotificationURLBytes || parsed.Scheme != "https" || !validEndpointURLHost(parsed) || parsed.User != nil || parsed.Fragment != "" || parsed.Opaque != "" {
 			return "", "", false, errors.New("an HTTPS URL without user information is required")
 		}
 		secret, err := auth.NewToken()
@@ -134,7 +131,7 @@ func notificationEndpointMaterial(kind, rawURL, pagerDutyKey, opsgenieKey, opsge
 		if smtpMode == "" {
 			smtpMode = "starttls"
 		}
-		if !validNotificationHostname(smtpHost) || smtpPort < 1 || smtpPort > 65535 || (smtpMode != "starttls" && smtpMode != "tls") || (smtpUsername == "") != (smtpPassword == "") || len(smtpUsername) > maxSMTPUsernameBytes || len(smtpPassword) > maxSMTPPasswordBytes || strings.ContainsAny(smtpUsername, "\x00\r\n") || strings.ContainsAny(smtpPassword, "\x00\r\n") || len(from) == 0 || len(from) > maxSMTPAddressBytes || len(to) == 0 || len(to) > 100 {
+		if !validEndpointHostname(smtpHost) || smtpPort < 1 || smtpPort > 65535 || (smtpMode != "starttls" && smtpMode != "tls") || (smtpUsername == "") != (smtpPassword == "") || len(smtpUsername) > maxSMTPUsernameBytes || len(smtpPassword) > maxSMTPPasswordBytes || strings.ContainsAny(smtpUsername, "\x00\r\n") || strings.ContainsAny(smtpPassword, "\x00\r\n") || len(from) == 0 || len(from) > maxSMTPAddressBytes || len(to) == 0 || len(to) > 100 {
 			return "", "", false, errors.New("valid SMTP host, port, TLS mode, optional credential pair, sender, and recipients are required")
 		}
 		if _, err := mail.ParseAddress(from); err != nil {
@@ -153,35 +150,6 @@ func notificationEndpointMaterial(kind, rawURL, pagerDutyKey, opsgenieKey, opsge
 	default:
 		return "", "", false, errors.New("unsupported notification kind")
 	}
-}
-
-func validNotificationURLHost(endpoint *url.URL) bool {
-	if endpoint == nil || !validNotificationHostname(endpoint.Hostname()) || strings.HasSuffix(endpoint.Host, ":") {
-		return false
-	}
-	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(endpoint.Hostname()) == nil {
-		return false
-	}
-	if port := endpoint.Port(); port != "" {
-		value, err := strconv.Atoi(port)
-		return err == nil && value >= 1 && value <= 65535
-	}
-	return true
-}
-
-func validNotificationHostname(host string) bool {
-	if net.ParseIP(host) != nil {
-		return true
-	}
-	if len(host) == 0 || len(host) > 253 {
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if len(label) == 0 || len(label) > 63 || !notificationHostnameLabelPattern.MatchString(label) {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Server) listNotificationEndpoints(w http.ResponseWriter, r *http.Request) {

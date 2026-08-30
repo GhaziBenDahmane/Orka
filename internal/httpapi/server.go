@@ -2316,10 +2316,12 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 	in.Kind = strings.ToLower(strings.TrimSpace(in.Kind))
 	in.Name = strings.TrimSpace(in.Name)
 	in.Server = strings.ToLower(strings.TrimSpace(in.Server))
-	if !contains([]string{"git", "git-ssh", "registry"}, in.Kind) || in.Name == "" || in.Server == "" || strings.ContainsAny(in.Server, "/@") || in.Username == "" {
+	normalizedServer, validationErr := normalizeCredentialServer(in.Server)
+	if validationErr != nil || !validSourceCredentialIdentity(in.Kind, in.Name, in.Username) {
 		writeError(w, 400, "invalid_credential", "kind, name, server, and username are required")
 		return
 	}
+	in.Server = normalizedServer
 	secret := in.Secret
 	if in.Kind == "git-ssh" {
 		if len(in.PrivateKey) > 64<<10 || len(in.KnownHosts) > 1<<20 || strings.TrimSpace(in.KnownHosts) == "" {
@@ -2337,7 +2339,13 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 		encoded, _ := json.Marshal(map[string]string{"privateKey": in.PrivateKey, "knownHosts": in.KnownHosts})
 		secret = string(encoded)
 	}
-	if secret == "" {
+	invalidSecret := secret == ""
+	if in.Kind == "git-ssh" {
+		invalidSecret = invalidSecret || len(secret) > maxSourceCredentialSSHMaterialBytes
+	} else {
+		invalidSecret = invalidSecret || len(secret) > maxSourceCredentialSecretBytes || strings.ContainsAny(secret, "\x00\r\n")
+	}
+	if invalidSecret {
 		writeError(w, 400, "invalid_credential", "credential secret is required")
 		return
 	}
@@ -2358,7 +2366,7 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 }
 
 func validKnownHosts(server, contents string) bool {
-	host := strings.ToLower(strings.TrimSpace(strings.Split(server, ":")[0]))
+	host := credentialServerHostname(server)
 	for _, line := range strings.Split(contents, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
