@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/netpolicy"
@@ -37,16 +38,18 @@ import (
 )
 
 type Config struct {
-	EnrollmentURL       string
-	AgentURL            string
-	EnrollmentToken     string
-	EnrollmentTokenFile string
-	StateDirectory      string
-	DockerBin           string
-	Network             string
-	Version             string
-	ServiceName         string
-	EgressPolicy        *netpolicy.Policy
+	EnrollmentURL                     string
+	AgentURL                          string
+	EnrollmentToken                   string
+	EnrollmentTokenFile               string
+	StateDirectory                    string
+	DockerBin                         string
+	Network                           string
+	Version                           string
+	ServiceName                       string
+	EdgeProxyServiceName              string
+	EdgeProxyDynamicConfigurationPath string
+	EgressPolicy                      *netpolicy.Policy
 }
 
 type Client struct {
@@ -84,6 +87,16 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if !serviceNamePattern.MatchString(cfg.ServiceName) {
 		return errors.New("agent Swarm service name is required and must be a valid service name")
+	}
+	if (cfg.EdgeProxyServiceName == "") != (cfg.EdgeProxyDynamicConfigurationPath == "") {
+		return errors.New("edge proxy service name and dynamic configuration path must be configured together")
+	}
+	if cfg.EdgeProxyServiceName != "" {
+		candidate := clustercontract.Baseline()
+		candidate.EdgeProxy = &clustercontract.EdgeProxyCapability{Provider: "traefik", ManagementMode: "external", ServiceName: cfg.EdgeProxyServiceName, PublicNetwork: cfg.Network, DynamicConfigurationMode: "file", DynamicConfigurationPath: cfg.EdgeProxyDynamicConfigurationPath, Status: "inspection_failed"}
+		if err := clustercontract.Validate(candidate); err != nil {
+			return fmt.Errorf("invalid edge proxy configuration: %w", err)
+		}
 	}
 	if err := os.MkdirAll(cfg.StateDirectory, 0700); err != nil {
 		return err
@@ -528,8 +541,9 @@ func (c *Client) heartbeat(ctx context.Context) error {
 			capacity["managers"] = capacity["managers"].(int) + 1
 		}
 	}
+	capabilities := c.capabilities(ctx)
 	var trust agentTrustUpdate
-	if err := c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "agentImage": agentImage, "agentUpdateState": agentUpdateState, "dockerVersion": dockerVersion, "capacity": capacity}, &trust, ""); err != nil {
+	if err := c.request(ctx, http.MethodPost, "/v1/agent/heartbeat", map[string]any{"agentVersion": c.cfg.Version, "agentImage": agentImage, "agentUpdateState": agentUpdateState, "dockerVersion": dockerVersion, "capacity": capacity, "capabilities": capabilities}, &trust, ""); err != nil {
 		return err
 	}
 	if trust.CACertificate == "" && trust.SigningCACertificate == "" {
@@ -541,6 +555,67 @@ func (c *Client) heartbeat(ctx context.Context) error {
 	}
 	c.http = client
 	return nil
+}
+
+func (c *Client) capabilities(ctx context.Context) clustercontract.Capabilities {
+	capabilities := clustercontract.Baseline()
+	if c.cfg.EdgeProxyServiceName == "" {
+		return capabilities
+	}
+	edge := &clustercontract.EdgeProxyCapability{
+		Provider: "traefik", ManagementMode: "external", ServiceName: c.cfg.EdgeProxyServiceName,
+		PublicNetwork: c.cfg.Network, DynamicConfigurationMode: "file", DynamicConfigurationPath: c.cfg.EdgeProxyDynamicConfigurationPath,
+		Status: "inspection_failed",
+	}
+	capabilities.EdgeProxy = edge
+	serviceOutput, err := boundedAgentCommandOutput(ctx, c.cfg.DockerBin, "service", "inspect", c.cfg.EdgeProxyServiceName)
+	if err != nil {
+		edge.Status = "service_unavailable"
+		return capabilities
+	}
+	var services []struct {
+		Spec struct {
+			TaskTemplate struct {
+				ContainerSpec struct {
+					Args []string `json:"Args"`
+				} `json:"ContainerSpec"`
+				Networks []struct {
+					Target string `json:"Target"`
+				} `json:"Networks"`
+			} `json:"TaskTemplate"`
+		} `json:"Spec"`
+	}
+	if json.Unmarshal(serviceOutput, &services) != nil || len(services) != 1 {
+		return capabilities
+	}
+	wantedFlag := "--providers.file.directory=" + c.cfg.EdgeProxyDynamicConfigurationPath
+	foundFileProvider := false
+	for _, argument := range services[0].Spec.TaskTemplate.ContainerSpec.Args {
+		if argument == wantedFlag {
+			foundFileProvider = true
+			break
+		}
+	}
+	if !foundFileProvider {
+		edge.Status = "file_provider_missing"
+		return capabilities
+	}
+	networkOutput, err := boundedAgentCommandOutput(ctx, c.cfg.DockerBin, "network", "inspect", "--format", "{{.ID}}", c.cfg.Network)
+	if err != nil {
+		edge.Status = "network_missing"
+		return capabilities
+	}
+	wantedNetwork := strings.TrimSpace(string(networkOutput))
+	for _, network := range services[0].Spec.TaskTemplate.Networks {
+		if wantedNetwork != "" && network.Target == wantedNetwork {
+			edge.Ready = true
+			edge.Status = "ready"
+			edge.SupportsCustomCertificates = true
+			return capabilities
+		}
+	}
+	edge.Status = "network_missing"
+	return capabilities
 }
 
 func reconcileAgentTrust(ctx context.Context, cfg Config, current *http.Client, trustBundle, signingCA []byte) (*http.Client, error) {

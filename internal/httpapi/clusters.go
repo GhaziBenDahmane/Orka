@@ -16,6 +16,7 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/observability"
@@ -182,11 +183,12 @@ func (s *Server) requireAgentCertificate(next http.Handler) http.Handler {
 
 func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		AgentVersion     string         `json:"agentVersion"`
-		AgentImage       string         `json:"agentImage"`
-		AgentUpdateState string         `json:"agentUpdateState"`
-		DockerVersion    string         `json:"dockerVersion"`
-		Capacity         map[string]any `json:"capacity"`
+		AgentVersion     string                       `json:"agentVersion"`
+		AgentImage       string                       `json:"agentImage"`
+		AgentUpdateState string                       `json:"agentUpdateState"`
+		DockerVersion    string                       `json:"dockerVersion"`
+		Capacity         map[string]any               `json:"capacity"`
+		Capabilities     clustercontract.Capabilities `json:"capabilities"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -194,12 +196,13 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	input.AgentImage = strings.TrimSpace(input.AgentImage)
 	input.AgentUpdateState = strings.TrimSpace(input.AgentUpdateState)
 	validUpdateState := contains([]string{"", "updating", "paused", "completed", "rollback_started", "rollback_paused", "rollback_completed"}, input.AgentUpdateState)
-	if len(input.AgentVersion) > 100 || len(input.AgentImage) > 500 || strings.ContainsAny(input.AgentImage, "\r\n") || !validUpdateState || len(input.DockerVersion) > 100 || len(input.Capacity) > 64 {
+	capabilitiesInvalid := input.Capabilities.ProtocolVersion != 0 && clustercontract.Validate(input.Capabilities) != nil
+	if len(input.AgentVersion) > 100 || len(input.AgentImage) > 500 || strings.ContainsAny(input.AgentImage, "\r\n") || !validUpdateState || len(input.DockerVersion) > 100 || len(input.Capacity) > 64 || capabilitiesInvalid {
 		writeError(w, 400, "invalid_heartbeat", "heartbeat metadata exceeds limits")
 		return
 	}
 	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
-	if err := s.Store.RecordClusterHeartbeat(r.Context(), clusterID, input.AgentVersion, input.AgentImage, input.AgentUpdateState, input.DockerVersion, input.Capacity); err != nil {
+	if err := s.Store.RecordClusterHeartbeat(r.Context(), clusterID, input.AgentVersion, input.AgentImage, input.AgentUpdateState, input.DockerVersion, input.Capacity, input.Capabilities); err != nil {
 		writeStoreError(w, err)
 		return
 	}

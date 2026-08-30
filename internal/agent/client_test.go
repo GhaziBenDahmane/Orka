@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
@@ -815,9 +816,10 @@ func TestExecuteAgentUpgradeRequiresDigestAndFixedService(t *testing.T) {
 
 func TestHeartbeatAggregatesActiveCapacity(t *testing.T) {
 	var body struct {
-		AgentImage       string         `json:"agentImage"`
-		AgentUpdateState string         `json:"agentUpdateState"`
-		Capacity         map[string]any `json:"capacity"`
+		AgentImage       string                       `json:"agentImage"`
+		AgentUpdateState string                       `json:"agentUpdateState"`
+		Capacity         map[string]any               `json:"capacity"`
+		Capabilities     clustercontract.Capabilities `json:"capabilities"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -846,6 +848,38 @@ func TestHeartbeatAggregatesActiveCapacity(t *testing.T) {
 	}
 	if body.AgentUpdateState != "completed" || !strings.Contains(body.AgentImage, "@sha256:") {
 		t.Fatalf("unexpected agent release state: image=%q state=%q", body.AgentImage, body.AgentUpdateState)
+	}
+	if body.Capabilities.ProtocolVersion != clustercontract.ProtocolVersion || !body.Capabilities.DockerSwarm || !body.Capabilities.DockerCompose {
+		t.Fatalf("unexpected capabilities: %#v", body.Capabilities)
+	}
+}
+
+func TestCapabilitiesFailClosedUntilTraefikContractIsObserved(t *testing.T) {
+	directory := t.TempDir()
+	dockerBin := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+case "$1 $2" in
+  "service inspect") printf '%s' '[{"Spec":{"TaskTemplate":{"ContainerSpec":{"Args":["--providers.file.directory=/etc/traefik/dynamic"]},"Networks":[{"Target":"network-id"}]}}}]' ;;
+  "network inspect") printf '%s\n' 'network-id' ;;
+  *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(dockerBin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{cfg: Config{DockerBin: dockerBin, Network: "dockyard-public", EdgeProxyServiceName: "edge_traefik", EdgeProxyDynamicConfigurationPath: "/etc/traefik/dynamic"}}
+	capabilities := client.capabilities(context.Background())
+	if err := clustercontract.Validate(capabilities); err != nil {
+		t.Fatal(err)
+	}
+	if capabilities.EdgeProxy == nil || !capabilities.EdgeProxy.Ready || !capabilities.EdgeProxy.SupportsCustomCertificates {
+		t.Fatalf("expected ready edge proxy contract, got %#v", capabilities.EdgeProxy)
+	}
+
+	client.cfg.EdgeProxyDynamicConfigurationPath = "/etc/traefik/other"
+	capabilities = client.capabilities(context.Background())
+	if capabilities.EdgeProxy == nil || capabilities.EdgeProxy.Status != "file_provider_missing" || capabilities.EdgeProxy.SupportsCustomCertificates {
+		t.Fatalf("expected fail-closed file-provider status, got %#v", capabilities.EdgeProxy)
 	}
 }
 

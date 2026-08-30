@@ -50,7 +50,7 @@ Go API: identity, tenancy, policy, catalog, audit
           |
 PostgreSQL: desired state, immutable revisions, durable jobs
           |
-Workers / future outbound mTLS agents
+Workers / outbound mTLS agents
           |
 Compose compiler -> Swarm stacks -> Traefik routes
           |
@@ -73,6 +73,9 @@ Status: substantially implemented.
 - PostgreSQL queue with retries, worker leases, heartbeat, stale-job recovery,
   sequential per-service deployment, and cancellation.
 - Swarm convergence checks and Traefik label/network compilation.
+- A versioned remote edge-provider capability contract continuously verifies
+  the configured Traefik service, dynamic file provider, and public-network
+  attachment; the controller-owned Traefik ships the same file-provider base.
 
 Exit gate: upgrade and rollback work during controller restart; no cross-tenant
 access; worker-kill and Docker-daemon-loss tests pass.

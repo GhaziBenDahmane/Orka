@@ -121,6 +121,8 @@ services:
       - --providers.swarm=true
       - --providers.swarm.exposedbydefault=false
       - --providers.swarm.network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --ping=true
@@ -133,6 +135,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - traefik-data:/data
+    configs:
+      - source: traefik_dynamic_base
+        target: /etc/traefik/dynamic/base.yml
     networks: [dockyard-public, edge-control]
     logging:
       driver: local
@@ -188,6 +193,9 @@ volumes:
   backup-artifacts: {}
   postgres-data: {}
   traefik-data: {}
+configs:
+  traefik_dynamic_base:
+    file: ./traefik-dynamic-base.yml
 secrets:
   dockyard_db_password:
     external: true

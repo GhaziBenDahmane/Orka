@@ -35,7 +35,12 @@ case "$1 $2" in
     if [ "${DOCKYARD_INSTALL_TEST_FAIL_SECRET:-false}" = true ]; then exit 1; fi ;;
   "network inspect")
     if [ "${DOCKYARD_INSTALL_TEST_NETWORK_EXISTS:-false}" = true ]; then
-      if [ "${3:-}" = --format ]; then printf '%s\n' "${DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES:-bridge|local|false|{}}"; fi
+      if [ "${3:-}" = --format ]; then
+        case "${4:-}" in
+          '{{.ID}}') printf '%s\n' 'network-id' ;;
+          *) printf '%s\n' "${DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES:-bridge|local|false|{}}" ;;
+        esac
+      fi
       exit 0
     fi
     exit 1 ;;
@@ -45,9 +50,14 @@ case "$1 $2" in
   "stack deploy")
     [ "${DOCKYARD_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
   "service inspect")
-    image=${DOCKYARD_INSTALL_TEST_AGENT_IMAGE:-$DOCKYARD_IMAGE}
-    state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
-    printf '%s|%s\n' "$image" "$state" ;;
+    case "$*" in
+      *ContainerSpec.Args*) printf '%s\n' '--providers.file.directory=/etc/traefik/dynamic' ;;
+      *TaskTemplate.Networks*) printf '%s\n' 'network-id' ;;
+      *)
+        image=${DOCKYARD_INSTALL_TEST_AGENT_IMAGE:-$DOCKYARD_IMAGE}
+        state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
+        printf '%s|%s\n' "$image" "$state" ;;
+    esac ;;
   "stack services") printf '%s\n' 'edge_agent 1/1' ;;
 esac
 MOCK
@@ -74,6 +84,14 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
   echo 'agent dry-run mutated Docker state' >&2
   exit 1
 fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true \
+  DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='overlay|swarm|true|{"encrypted":""}' \
+  DOCKYARD_EDGE_PROXY_SERVICE_NAME='edge_traefik' \
+  DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH='/etc/traefik/dynamic' \
+  DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" >/dev/null
+grep -q '^service inspect --format .* edge_traefik$' "$DOCKYARD_INSTALL_TEST_LOG"
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_EGRESS_PRIVATE_CIDRS='10.40.12.0/24,fd00:40:12::/64' \

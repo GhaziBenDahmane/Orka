@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,25 +17,26 @@ var ErrLeaseLost = errors.New("command lease is no longer valid")
 const expireAgentUpgradeVerifications = `UPDATE cluster_commands SET status='failed',last_error='replacement agent did not confirm the requested image before the verification deadline',finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' AND run_after<=now()`
 
 type Cluster struct {
-	ID                                     uuid.UUID      `json:"id"`
-	OrganizationID                         uuid.UUID      `json:"organizationId"`
-	Name                                   string         `json:"name"`
-	Slug                                   string         `json:"slug"`
-	State                                  string         `json:"state"`
-	Labels                                 map[string]any `json:"labels"`
-	Capacity                               map[string]any `json:"capacity"`
-	AgentVersion                           string         `json:"agentVersion"`
-	AgentImage                             string         `json:"agentImage"`
-	AgentUpdateState                       string         `json:"agentUpdateState"`
-	DockerVersion                          string         `json:"dockerVersion"`
-	CertificateAuthorityFingerprint        string         `json:"certificateAuthorityFingerprint,omitempty"`
-	PendingCertificateAuthorityFingerprint string         `json:"pendingCertificateAuthorityFingerprint,omitempty"`
-	CertificateNotAfter                    *time.Time     `json:"certificateNotAfter,omitempty"`
-	LastSeenAt                             *time.Time     `json:"lastSeenAt,omitempty"`
-	MaintenanceStartsAt                    *time.Time     `json:"maintenanceStartsAt,omitempty"`
-	MaintenanceEndsAt                      *time.Time     `json:"maintenanceEndsAt,omitempty"`
-	CreatedAt                              time.Time      `json:"createdAt"`
-	UpdatedAt                              time.Time      `json:"updatedAt"`
+	ID                                     uuid.UUID                    `json:"id"`
+	OrganizationID                         uuid.UUID                    `json:"organizationId"`
+	Name                                   string                       `json:"name"`
+	Slug                                   string                       `json:"slug"`
+	State                                  string                       `json:"state"`
+	Labels                                 map[string]any               `json:"labels"`
+	Capacity                               map[string]any               `json:"capacity"`
+	Capabilities                           clustercontract.Capabilities `json:"capabilities"`
+	AgentVersion                           string                       `json:"agentVersion"`
+	AgentImage                             string                       `json:"agentImage"`
+	AgentUpdateState                       string                       `json:"agentUpdateState"`
+	DockerVersion                          string                       `json:"dockerVersion"`
+	CertificateAuthorityFingerprint        string                       `json:"certificateAuthorityFingerprint,omitempty"`
+	PendingCertificateAuthorityFingerprint string                       `json:"pendingCertificateAuthorityFingerprint,omitempty"`
+	CertificateNotAfter                    *time.Time                   `json:"certificateNotAfter,omitempty"`
+	LastSeenAt                             *time.Time                   `json:"lastSeenAt,omitempty"`
+	MaintenanceStartsAt                    *time.Time                   `json:"maintenanceStartsAt,omitempty"`
+	MaintenanceEndsAt                      *time.Time                   `json:"maintenanceEndsAt,omitempty"`
+	CreatedAt                              time.Time                    `json:"createdAt"`
+	UpdatedAt                              time.Time                    `json:"updatedAt"`
 }
 
 type ClusterCommand struct {
@@ -76,7 +78,7 @@ func (s *Store) CreateCluster(ctx context.Context, item Cluster) (Cluster, error
 }
 
 func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]Cluster, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,capabilities,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -85,12 +87,13 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 	for rows.Next() {
 		var item Cluster
 		var labels []byte
-		var capacity []byte
-		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var capacity, capabilities []byte
+		if err := rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &capabilities, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(labels, &item.Labels)
 		_ = json.Unmarshal(capacity, &item.Capacity)
+		_ = json.Unmarshal(capabilities, &item.Capabilities)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -98,13 +101,14 @@ func (s *Store) ListClusters(ctx context.Context, organizationID uuid.UUID) ([]C
 
 func (s *Store) GetCluster(ctx context.Context, organizationID, clusterID uuid.UUID) (Cluster, error) {
 	var item Cluster
-	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	var labels, capacity, capabilities []byte
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,state,labels,capacity,capabilities,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at FROM clusters WHERE id=$1 AND organization_id=$2`, clusterID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &capabilities, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
 	_ = json.Unmarshal(labels, &item.Labels)
 	_ = json.Unmarshal(capacity, &item.Capacity)
+	_ = json.Unmarshal(capabilities, &item.Capabilities)
 	return item, err
 }
 
@@ -120,13 +124,14 @@ func (s *Store) UpdateClusterConfiguration(ctx context.Context, organizationID, 
 		return Cluster{}, errors.New("invalid maintenance window")
 	}
 	var item Cluster
-	var labels, capacity []byte
-	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	var labels, capacity, capabilities []byte
+	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,capabilities,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &capabilities, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
 	_ = json.Unmarshal(labels, &item.Labels)
 	_ = json.Unmarshal(capacity, &item.Capacity)
+	_ = json.Unmarshal(capabilities, &item.Capabilities)
 	return item, err
 }
 
@@ -190,8 +195,12 @@ func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUI
 	return nil
 }
 
-func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity map[string]any) error {
+func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity map[string]any, capabilities clustercontract.Capabilities) error {
 	encoded, err := json.Marshal(capacity)
+	if err != nil {
+		return err
+	}
+	encodedCapabilities, err := json.Marshal(capabilities)
 	if err != nil {
 		return err
 	}
@@ -200,7 +209,7 @@ func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE clusters SET agent_version=$2,agent_image=$3,agent_update_state=$4,docker_version=$5,capacity=$6,last_seen_at=now(),updated_at=now() WHERE id=$1 AND state IN ('active','draining')`, clusterID, agentVersion, agentImage, agentUpdateState, dockerVersion, encoded)
+	tag, err := tx.Exec(ctx, `UPDATE clusters SET agent_version=$2,agent_image=$3,agent_update_state=$4,docker_version=$5,capacity=$6,capabilities=$7,last_seen_at=now(),updated_at=now() WHERE id=$1 AND state IN ('active','draining')`, clusterID, agentVersion, agentImage, agentUpdateState, dockerVersion, encoded, encodedCapabilities)
 	if err != nil {
 		return err
 	}

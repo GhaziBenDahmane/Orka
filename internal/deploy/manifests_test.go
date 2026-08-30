@@ -99,6 +99,9 @@ func TestControllerManifestHasHealthGatedRollbackUpdates(t *testing.T) {
 	if !slices.Contains(manifest.Services["traefik"].Command, "--ping=true") {
 		t.Fatal("Traefik ping endpoint is not enabled")
 	}
+	if !slices.Contains(manifest.Services["traefik"].Command, "--providers.file.directory=/etc/traefik/dynamic") || !slices.Contains(manifest.Services["traefik"].Command, "--providers.file.watch=true") {
+		t.Fatal("Traefik dynamic file provider is not enabled")
+	}
 }
 
 func TestProductionManifestsBoundLongRunningResources(t *testing.T) {

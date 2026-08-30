@@ -253,6 +253,12 @@ Remote environments select a cluster with `clusterId` when they are created.
 Application deploy, removal, logs, and node operations use encrypted-at-rest
 commands claimed by the outbound agent. Expiring leases are retried and every
 renewal/completion is fenced by a per-attempt UUID.
+Cluster responses also expose the last `capabilities` heartbeat document.
+Protocol version 1 proves Compose-on-Swarm support and, when configured, the
+observed Traefik edge service, public network, dynamic file-provider path, and
+whether custom-certificate reconciliation is currently safe. An empty object
+means an older agent has not reported capabilities and must be treated as
+unsupported, never as an implicit edge provider.
 
 ## AI auditing
 

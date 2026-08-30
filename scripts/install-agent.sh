@@ -11,6 +11,8 @@ wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
 stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
 egress_private_cidrs=${DOCKYARD_EGRESS_PRIVATE_CIDRS:-}
 token_secret=${DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET:-dockyard_agent_enrollment_token}
+edge_proxy_service=${DOCKYARD_EDGE_PROXY_SERVICE_NAME:-}
+edge_proxy_dynamic_path=${DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH:-}
 
 fail() {
   echo "install-agent: $*" >&2
@@ -21,6 +23,8 @@ case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_AGENT_STACK_NAM
 case "$token_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" ;; esac
 case "$network" in ""|[!a-z0-9]*|*[!a-z0-9_.-]*) fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters" ;; esac
 [ "${#network}" -le 63 ] || fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters"
+case "$edge_proxy_service" in "") [ -z "$edge_proxy_dynamic_path" ] || fail "DOCKYARD_EDGE_PROXY_SERVICE_NAME is required with DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH" ;; -*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_EDGE_PROXY_SERVICE_NAME" ;; *) [ -n "$edge_proxy_dynamic_path" ] || fail "DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH is required with DOCKYARD_EDGE_PROXY_SERVICE_NAME" ;; esac
+case "$edge_proxy_dynamic_path" in "") ;; /*) case "$edge_proxy_dynamic_path" in *".."*|*[!A-Za-z0-9_./-]*) fail "invalid DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH" ;; esac ;; *) fail "DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH must be absolute" ;; esac
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
 case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
@@ -59,6 +63,8 @@ export DOCKYARD_AGENT_URL="$agent_url"
 export DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET="$token_secret"
 export DOCKYARD_AGENT_SERVICE_NAME DOCKYARD_TRAEFIK_NETWORK="$network"
 export DOCKYARD_EGRESS_PRIVATE_CIDRS="$egress_private_cidrs"
+export DOCKYARD_EDGE_PROXY_SERVICE_NAME="$edge_proxy_service"
+export DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH="$edge_proxy_dynamic_path"
 
 docker manifest inspect "$DOCKYARD_IMAGE" >/dev/null 2>&1 || fail "DOCKYARD_IMAGE cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-agent-endpoints --control-plane-url "$control_plane_url" --agent-url "$agent_url" >/dev/null || fail "DOCKYARD_CONTROL_PLANE_URL and DOCKYARD_AGENT_URL must be valid HTTPS origins without credentials, paths, queries, or fragments"
@@ -76,6 +82,13 @@ if docker network inspect "$network" >/dev/null 2>&1; then
   network_exists=true
   network_properties=$(docker network inspect --format '{{.Driver}}|{{.Scope}}|{{.Attachable}}|{{json .Options}}' "$network") || fail "could not inspect Docker network $network"
   printf '%s\n' "$network_properties" | grep -Eq '^overlay\|swarm\|true\|.*"encrypted":(""|"true")([,}]|$)' || fail "existing Docker network $network must be an attachable encrypted Swarm overlay; remove and recreate it with --driver overlay --opt encrypted --attachable"
+fi
+if [ -n "$edge_proxy_service" ]; then
+  proxy_args=$(docker service inspect --format '{{range .Spec.TaskTemplate.ContainerSpec.Args}}{{println .}}{{end}}' "$edge_proxy_service" 2>/dev/null) || fail "edge proxy service $edge_proxy_service does not exist"
+  printf '%s\n' "$proxy_args" | grep -Fx -- "--providers.file.directory=$edge_proxy_dynamic_path" >/dev/null || fail "edge proxy service $edge_proxy_service does not enable the Traefik file provider at $edge_proxy_dynamic_path"
+  network_id=$(docker network inspect --format '{{.ID}}' "$network") || fail "could not resolve Docker network $network"
+  proxy_networks=$(docker service inspect --format '{{range .Spec.TaskTemplate.Networks}}{{println .Target}}{{end}}' "$edge_proxy_service") || fail "could not inspect edge proxy networks"
+  printf '%s\n' "$proxy_networks" | grep -Fx -- "$network_id" >/dev/null || fail "edge proxy service $edge_proxy_service is not attached to $network"
 fi
 if [ "$dry_run" = true ]; then
   echo "Preflight passed for agent stack $stack; no resources were changed."

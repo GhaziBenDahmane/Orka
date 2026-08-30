@@ -335,16 +335,18 @@ func runAgent() error {
 		return fmt.Errorf("DOCKYARD_EGRESS_PRIVATE_CIDRS: %w", err)
 	}
 	return agent.Run(ctx, agent.Config{
-		EnrollmentURL:       os.Getenv("DOCKYARD_CONTROL_PLANE_URL"),
-		AgentURL:            os.Getenv("DOCKYARD_AGENT_URL"),
-		EnrollmentToken:     os.Getenv("DOCKYARD_AGENT_ENROLLMENT_TOKEN"),
-		EnrollmentTokenFile: os.Getenv("DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE"),
-		StateDirectory:      envDefault("DOCKYARD_AGENT_STATE_DIRECTORY", "/var/lib/dockyard-agent"),
-		DockerBin:           envDefault("DOCKYARD_DOCKER_BIN", "docker"),
-		Network:             envDefault("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
-		Version:             version,
-		ServiceName:         envDefault("DOCKYARD_AGENT_SERVICE_NAME", "dockyard-agent_agent"),
-		EgressPolicy:        &netpolicy.Policy{Allowed: allowedEgress},
+		EnrollmentURL:                     os.Getenv("DOCKYARD_CONTROL_PLANE_URL"),
+		AgentURL:                          os.Getenv("DOCKYARD_AGENT_URL"),
+		EnrollmentToken:                   os.Getenv("DOCKYARD_AGENT_ENROLLMENT_TOKEN"),
+		EnrollmentTokenFile:               os.Getenv("DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE"),
+		StateDirectory:                    envDefault("DOCKYARD_AGENT_STATE_DIRECTORY", "/var/lib/dockyard-agent"),
+		DockerBin:                         envDefault("DOCKYARD_DOCKER_BIN", "docker"),
+		Network:                           envDefault("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"),
+		Version:                           version,
+		ServiceName:                       envDefault("DOCKYARD_AGENT_SERVICE_NAME", "dockyard-agent_agent"),
+		EdgeProxyServiceName:              strings.TrimSpace(os.Getenv("DOCKYARD_EDGE_PROXY_SERVICE_NAME")),
+		EdgeProxyDynamicConfigurationPath: strings.TrimSpace(os.Getenv("DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH")),
+		EgressPolicy:                      &netpolicy.Policy{Allowed: allowedEgress},
 	})
 }
 

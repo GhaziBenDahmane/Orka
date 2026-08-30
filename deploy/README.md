@@ -430,6 +430,24 @@ cancellation is rejected because it could not truthfully stop a Swarm rollout.
 Set `DOCKYARD_AGENT_SERVICE_NAME` when the manually deployed stack is not named
 `dockyard-agent`; the installer derives it automatically.
 
+Remote clusters may register an externally operated Traefik service as their
+edge-provider contract. Set both `DOCKYARD_EDGE_PROXY_SERVICE_NAME` (the full
+Swarm service name) and `DOCKYARD_EDGE_PROXY_DYNAMIC_CONFIG_PATH` (for example,
+`/etc/traefik/dynamic`) before running `scripts/install-agent.sh`. The installer
+fails before changing state unless that service exists, has
+`--providers.file.directory=<path>`, and is attached to
+`DOCKYARD_TRAEFIK_NETWORK`. Every agent heartbeat repeats those inspections and
+reports a versioned capability document. The controller and console therefore
+treat custom certificates as unsupported when the proxy disappears, loses the
+file provider, leaves the public network, or is served by an older agent. This
+contract does not transfer certificate material yet; it is the fail-closed
+provider prerequisite for certificate reconciliation.
+
+The controller-owned Traefik in `deploy/swarm.yml` enables the watched file
+provider at `/etc/traefik/dynamic` and mounts a valid empty bootstrap config.
+Keep this provider enabled when customizing the stack so later certificate
+configs can be mounted without replacing the Swarm routing provider.
+
 Managed-database backup and restore on remote clusters requires an
 S3-compatible backup destination whose configured endpoint is reachable from
 both the controller and agent. Transfers use one-hour presigned URLs. Backup

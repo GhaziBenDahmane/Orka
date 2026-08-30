@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/google/uuid"
 )
 
@@ -105,7 +106,7 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 	if err = db.AuthenticateClusterCertificate(ctx, cluster.ID, "fedcba"); err != nil {
 		t.Fatalf("authenticate retried replacement certificate: %v", err)
 	}
-	if err = db.RecordClusterHeartbeat(ctx, cluster.ID, "1.2.3", "registry.example/dockyard@sha256:"+strings.Repeat("a", 64), "completed", "28.0.1", map[string]any{"nodes": 3}); err != nil {
+	if err = db.RecordClusterHeartbeat(ctx, cluster.ID, "1.2.3", "registry.example/dockyard@sha256:"+strings.Repeat("a", 64), "completed", "28.0.1", map[string]any{"nodes": 3}, clustercontract.Baseline()); err != nil {
 		t.Fatal(err)
 	}
 	command, err := db.EnqueueClusterCommand(ctx, cluster.ID, uuid.New(), "swarm.nodes", "encrypted")
@@ -169,7 +170,7 @@ func TestClusterEnrollmentTokenIsSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, err := db.ListClusters(ctx, orgID)
-	if err != nil || len(items) != 1 || items[0].State != "active" || items[0].CertificateNotAfter == nil || items[0].LastSeenAt == nil || items[0].AgentVersion != "1.2.3" {
+	if err != nil || len(items) != 1 || items[0].State != "active" || items[0].CertificateNotAfter == nil || items[0].LastSeenAt == nil || items[0].AgentVersion != "1.2.3" || items[0].Capabilities.ProtocolVersion != clustercontract.ProtocolVersion {
 		t.Fatalf("clusters=%#v err=%v", items, err)
 	}
 	if err = db.QueueClusterDeletion(ctx, orgID, cluster.ID); err != nil {
@@ -304,14 +305,14 @@ func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 		t.Fatalf("submitted upgrade=%#v err=%v", verifying, err)
 	}
 	oldImage := "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)
-	if err = db.RecordClusterHeartbeat(ctx, clusterID, "1.0.0", oldImage, "updating", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "1.0.0", oldImage, "updating", "29.0.0", map[string]any{"nodes": 3}, clustercontract.Baseline()); err != nil {
 		t.Fatal(err)
 	}
 	verifying, err = db.GetClusterCommand(ctx, clusterID, upgrade.ID)
 	if err != nil || verifying.Status != "verifying" {
 		t.Fatalf("upgrade completed before replacement heartbeat=%#v err=%v", verifying, err)
 	}
-	if err = db.RecordClusterHeartbeat(ctx, clusterID, "2.0.0", target, "completed", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "2.0.0", target, "completed", "29.0.0", map[string]any{"nodes": 3}, clustercontract.Baseline()); err != nil {
 		t.Fatal(err)
 	}
 	succeeded, err := db.GetClusterCommand(ctx, clusterID, upgrade.ID)
@@ -335,7 +336,7 @@ func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 	if err = db.CompleteClusterCommand(ctx, clusterID, rollback.ID, *claimed.LeaseID, "encrypted-submission", false); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.RecordClusterHeartbeat(ctx, clusterID, "2.0.0", target, "rollback_completed", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "2.0.0", target, "rollback_completed", "29.0.0", map[string]any{"nodes": 3}, clustercontract.Baseline()); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := db.GetClusterCommand(ctx, clusterID, rollback.ID)
@@ -357,7 +358,7 @@ func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 	if _, err = db.Pool.Exec(ctx, `UPDATE cluster_commands SET run_after=now()-interval '1 second' WHERE id=$1`, timedOut.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.RecordClusterHeartbeat(ctx, clusterID, "3.0.0", rollbackTarget, "completed", "29.0.0", map[string]any{"nodes": 3}); err != nil {
+	if err = db.RecordClusterHeartbeat(ctx, clusterID, "3.0.0", rollbackTarget, "completed", "29.0.0", map[string]any{"nodes": 3}, clustercontract.Baseline()); err != nil {
 		t.Fatal(err)
 	}
 	timedOut, err = db.GetClusterCommand(ctx, clusterID, timedOut.ID)
