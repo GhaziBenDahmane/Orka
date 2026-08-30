@@ -204,7 +204,9 @@ active-operation barrier to linked and unbound database records, and serialize
 against new environment, service, database, and template creation. Database
 operations re-check both parent deletion markers after taking their database
 lock, so a legacy or external-driver record without a Compose-service link
-cannot escape a concurrent cascade.
+cannot escape a concurrent cascade. The database backup scheduler performs the
+same post-lock check, and backup-policy retirement plus reviewed driver
+rebinding share the database/service boundary.
 
 ### AI prompt injection and unsafe autonomy
 

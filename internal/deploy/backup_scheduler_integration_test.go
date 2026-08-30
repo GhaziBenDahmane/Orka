@@ -158,6 +158,56 @@ func TestBackupSchedulersDoNotQueueBehindActiveBackups(t *testing.T) {
 	}
 }
 
+func TestDatabaseBackupSchedulerSkipsDeletingUnboundDatabaseParent(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	organizationID, projectID, environmentID, databaseID, policyID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Deleting unbound backup schedule',$2)`, []any{organizationID, "deleting-unbound-backup-schedule-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17','encrypted')`, []any{databaseID, environmentID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at) VALUES($1,$2,900,7,true,'2000-01-01')`, []any{policyID, databaseID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key=$1 OR (kind='delete.environment' AND payload->>'environmentId'=$2)`, "database:"+databaseID.String(), environmentID.String())
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+
+	if err = db.DeleteEnvironment(ctx, organizationID, environmentID); err != nil {
+		t.Fatal(err)
+	}
+	worker := &Worker{Store: db}
+	if err = worker.enqueueDueBackup(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("scheduler in deleting environment error=%v, want ErrNotFound", err)
+	}
+	var backups int
+	var lastRun *time.Time
+	if err = db.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM database_backups WHERE database_instance_id=$1),last_run_at FROM backup_policies WHERE id=$2`, databaseID, policyID).Scan(&backups, &lastRun); err != nil {
+		t.Fatal(err)
+	}
+	if backups != 0 || lastRun != nil {
+		t.Fatalf("deleting database schedule advanced: backups=%d lastRun=%v", backups, lastRun)
+	}
+}
+
 func sameOptionalTime(left, right *time.Time) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil

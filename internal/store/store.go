@@ -1771,14 +1771,27 @@ func (s *Store) GetBackupPolicy(ctx context.Context, organizationID, databaseID 
 }
 
 func (s *Store) DeleteBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM backup_policies b USING database_instances d,environments e,projects p WHERE b.database_instance_id=$1 AND d.id=b.database_instance_id AND e.id=d.environment_id AND p.id=e.project_id AND p.organization_id=$2`, databaseID, organizationID)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+	var policyID uuid.UUID
+	var composeServiceID *uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT policy.id,database.compose_service_id FROM backup_policies policy JOIN database_instances database ON database.id=policy.database_instance_id JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE policy.database_instance_id=$1 AND project.organization_id=$2 FOR UPDATE OF database,policy`, databaseID, organizationID).Scan(&policyID, &composeServiceID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if err = lockDatabaseServiceForOperation(ctx, tx, databaseID, composeServiceID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM backup_policies WHERE id=$1`, policyID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestination) (BackupDestination, error) {
@@ -2173,11 +2186,18 @@ func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Prin
 	}
 	defer tx.Rollback(ctx)
 	var item DatabaseInstance
-	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	var composeServiceID *uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &composeServiceID, &item.Config, &item.Status, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
 	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	if composeServiceID != nil {
+		item.ComposeServiceID = *composeServiceID
+	}
+	if err = lockDatabaseServiceForOperation(ctx, tx, id, composeServiceID); err != nil {
 		return DatabaseInstance{}, err
 	}
 	if confirmation != item.Slug {

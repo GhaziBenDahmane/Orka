@@ -36,6 +36,7 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml) VALUES($1,$2,'Database','database',$3,'node1',$4)`, []any{serviceID, environmentID, "deletion-data-fence-" + serviceID.String(), "services:\n  database:\n    image: postgres:17\n    volumes:\n      - data:/data\nvolumes:\n  data: {}\n"}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,status) VALUES($1,$2,'Database','database','postgres','17',$3,'encrypted','running')`, []any{databaseID, environmentID, serviceID}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'S3','https://s3.example.test','backups',true,'encrypted')`, []any{destinationID, organizationID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id) VALUES($1,$2,3600,7,true,now()+interval '1 hour',$3)`, []any{uuid.New(), databaseID, destinationID}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'data',$3,3600,7,true,true,now()+interval '1 hour')`, []any{uuid.New(), serviceID, destinationID}},
 		{`INSERT INTO template_instances(compose_service_id,template_key,template_version,template_checksum,applied_compose_checksum,encrypted_variables,encrypted_overrides) VALUES($1,'test/database','1','checksum','applied','encrypted','encrypted')`, []any{serviceID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, []any{databaseBackupID, databaseID, destinationID}},
@@ -162,6 +163,9 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 	}
 	if _, err = db.UpsertBackupPolicy(ctx, organizationID, databaseID, 3600, 7, true, true, &destinationID); !errors.Is(err, ErrDeleting) {
 		t.Fatalf("backup policy update after deletion request error=%v, want ErrDeleting", err)
+	}
+	if err = db.DeleteBackupPolicy(ctx, organizationID, databaseID); !errors.Is(err, ErrDeleting) {
+		t.Fatalf("backup policy deletion after service deletion request error=%v, want ErrDeleting", err)
 	}
 	if _, err = db.QueueWebhookDeployment(ctx, webhook.ID, uuid.NewString(), "abcdef0"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("webhook deployment after deletion request error=%v, want ErrNotFound", err)

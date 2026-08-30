@@ -372,7 +372,10 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 	err = tx.QueryRow(ctx, `SELECT policy.id,policy.database_instance_id,policy.interval_seconds,policy.retention_count,policy.destination_id,policy.verify_restore,database.compose_service_id
 		FROM backup_policies policy
 		JOIN database_instances database ON database.id=policy.database_instance_id
+		JOIN environments environment ON environment.id=database.environment_id
+		JOIN projects project ON project.id=environment.project_id
 		WHERE policy.enabled AND policy.next_run_at<=now() AND (NOT $1 OR policy.destination_id IS NOT NULL)
+			AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL
 			AND (database.compose_service_id IS NULL OR EXISTS(SELECT 1 FROM compose_services service WHERE service.id=database.compose_service_id AND service.deletion_requested_at IS NULL))
 			AND NOT EXISTS(SELECT 1 FROM database_backups backup WHERE backup.database_instance_id=database.id AND backup.status IN ('queued','running'))
 			AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.resource_key='database:' || database.id::text AND job.kind='backup.database' AND job.status IN ('pending','running'))
@@ -390,6 +393,13 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 		} else if err != nil {
 			return err
 		}
+	}
+	var parentsActive bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL)`, databaseID).Scan(&parentsActive); err != nil {
+		return err
+	}
+	if !parentsActive {
+		return store.ErrNotFound
 	}
 	backupID := uuid.New()
 	if _, err = tx.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id) VALUES($1,$2,'queued','native',$3)`, backupID, databaseID, destinationID); err != nil {

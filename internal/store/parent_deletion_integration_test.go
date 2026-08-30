@@ -271,4 +271,7 @@ func TestParentDeletionFencesUnboundDatabaseOperations(t *testing.T) {
 	if _, err = db.QueueDatabaseMigration(ctx, organizationID, DatabaseMigration{DatabaseInstanceID: secondDatabaseID}); !errors.Is(err, ErrDeleting) {
 		t.Fatalf("database migration in deleting project error=%v, want ErrDeleting", err)
 	}
+	if _, err = db.RebindDatabaseDriverIdentity(ctx, Principal{OrganizationID: organizationID}, secondDatabaseID, "second-database", "built-in", "", "127.0.0.1"); !errors.Is(err, ErrDeleting) {
+		t.Fatalf("database driver rebind in deleting project error=%v, want ErrDeleting", err)
+	}
 }
