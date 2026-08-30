@@ -106,6 +106,10 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("service account session-list status = %d, want 403", response.StatusCode)
 	}
+	response, _ = do(http.MethodPost, "/v1/auth/logout", created.Token, nil)
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("service account logout status = %d, want 403", response.StatusCode)
+	}
 
 	response, data = do(http.MethodPost, "/v1/service-accounts/"+created.ServiceAccount.ID.String()+"/rotate", userToken, []byte(`{"expiresInDays":60}`))
 	if response.StatusCode != http.StatusOK {

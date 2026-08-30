@@ -739,8 +739,17 @@ func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *u
 	return token, nil
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if p.ServiceAccountID != nil {
+		writeError(w, http.StatusForbidden, "forbidden", "service accounts do not have interactive sessions")
+		return
+	}
 	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	_ = s.Store.DeleteSession(r.Context(), cryptox.Digest(token))
+	if err := s.Store.DeleteSession(r.Context(), cryptox.Digest(token)); err != nil {
+		s.writeInternalError(w, r, http.StatusInternalServerError, "logout_failed", "session could not be revoked", err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "auth.logout", "session", p.SessionID.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
 func (s *Server) me(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, principal(r)) }
@@ -794,6 +803,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	s.Store.Audit(r.Context(), &p, "session.revoke", "session", id.String(), r.RemoteAddr, map[string]any{"current": id == p.SessionID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -808,6 +818,7 @@ func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	s.Store.Audit(r.Context(), &p, "session.revoke_others", "user", p.UserID.String(), r.RemoteAddr, map[string]any{"revoked": count})
 	writeJSON(w, 200, map[string]int64{"revoked": count})
 }
 

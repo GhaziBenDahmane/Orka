@@ -41,6 +41,12 @@ and operation durations.
 | GET | `/v1/sessions` | List the caller's active device sessions |
 | DELETE | `/v1/sessions/{id}` | Revoke one of the caller's sessions |
 | POST | `/v1/sessions/revoke-others` | Revoke every session except the caller's |
+
+Logout fails closed if the authenticated session cannot be deleted; it never
+reports success while leaving the bearer token active. Service accounts do not
+have interactive sessions and receive `403` from all session-management
+routes, including logout. Logout, individual revocation, and bulk revocation
+are recorded in the tenant audit chain.
 | GET | `/v1/members` | List organization members, roles, status, and SCIM ownership |
 | PATCH | `/v1/members/{userID}` | Change a manually managed organization membership role |
 | DELETE | `/v1/members/{userID}` | Remove a manually managed member and their scoped grants |
