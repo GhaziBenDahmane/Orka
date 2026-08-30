@@ -252,6 +252,13 @@ func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 		"custom network name":     "services:\n  app:\n    image: alpine\nnetworks:\n  default:\n    name: another-stack_default\n",
 		"service traefik label":   "services:\n  app:\n    image: alpine\n    labels:\n      traefik.enable: 'true'\n",
 		"swarm traefik label":     "services:\n  app:\n    image: alpine\n    deploy:\n      labels:\n        - traefik.http.routers.escape.rule=Host(`other.example.test`)\n",
+		"external log driver":     "services:\n  app:\n    image: alpine\n    logging:\n      driver: syslog\n      options:\n        syslog-address: tcp://169.254.169.254:514\n",
+		"logging plugin":          "services:\n  app:\n    image: alpine\n    logging:\n      driver: vendor/plugin\n",
+		"unsafe logging option":   "services:\n  app:\n    image: alpine\n    logging:\n      driver: json-file\n      options:\n        syslog-address: tcp://example.test:514\n",
+		"excessive log file size": "services:\n  app:\n    image: alpine\n    logging:\n      driver: local\n      options:\n        max-size: \"1g\"\n",
+		"overflowing log size":    "services:\n  app:\n    image: alpine\n    logging:\n      driver: local\n      options:\n        max-size: \"999999999999999999999999g\"\n",
+		"excessive log files":     "services:\n  app:\n    image: alpine\n    logging:\n      driver: local\n      options:\n        max-file: \"100\"\n",
+		"invalid log compression": "services:\n  app:\n    image: alpine\n    logging:\n      driver: local\n      options:\n        compress: sometimes\n",
 	}
 	for name, source := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -285,6 +292,12 @@ func TestCompileSafeModeAllowsScopedResourcesAndHardening(t *testing.T) {
     security_opt: [no-new-privileges:true]
     labels:
       com.example.owner: platform
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
+        compress: "true"
 volumes:
   data: {}
 networks:

@@ -70,6 +70,9 @@ allowed to finish before deletion can begin.
   records after canonical hostname and injection-safe path validation.
 - Safe stacks use replicated scheduling and are capped at 100 aggregate tasks;
   node-wide global services and jobs require explicit unsafe-workload mode.
+- Safe workloads may use only Docker's local, JSON-file, or disabled logging
+  drivers with local rotation options; daemon-side network/plugin log drivers
+  require unsafe-workload mode.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

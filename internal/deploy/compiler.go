@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -15,8 +16,11 @@ var safeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var safeHostname = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 var safeCertificateResolver = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 var safeVolumeSource = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
+var safeLogSize = regexp.MustCompile(`^([1-9][0-9]*)([kKmMgG]?)$`)
 
 const maxSafeTasksPerStack = 100
+const maxSafeLogFileSize = 20 << 20
+const maxSafeLogFiles = 5
 
 type Compiler struct {
 	PublicNetwork string
@@ -296,6 +300,9 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 			}
 		}
 	}
+	if err := validateSafeLogging(name, service["logging"]); err != nil {
+		return err
+	}
 	for _, rawLabels := range []any{service["labels"], nestedValue(service, "deploy", "labels")} {
 		for _, label := range labelNames(rawLabels) {
 			if strings.HasPrefix(strings.ToLower(label), "traefik.") {
@@ -336,6 +343,77 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 		source := parts[0]
 		if !safeVolumeSource.MatchString(source) {
 			return fmt.Errorf("service %q requests forbidden host mount %q", name, source)
+		}
+	}
+	return nil
+}
+
+func validateSafeLogging(serviceName string, raw any) error {
+	if raw == nil {
+		return nil
+	}
+	logging, valid := stringMap(raw)
+	if !valid {
+		return fmt.Errorf("service %q logging must be an object", serviceName)
+	}
+	driver := ""
+	if rawDriver, exists := logging["driver"]; exists {
+		var ok bool
+		driver, ok = rawDriver.(string)
+		if !ok {
+			return fmt.Errorf("service %q logging driver must be a string", serviceName)
+		}
+	}
+	if driver != "" && driver != "json-file" && driver != "local" && driver != "none" {
+		return fmt.Errorf("service %q requests external logging driver %q", serviceName, driver)
+	}
+	rawOptions, hasOptions := logging["options"]
+	if !hasOptions || rawOptions == nil {
+		return nil
+	}
+	options, valid := stringMap(rawOptions)
+	if !valid || driver == "" || driver == "none" {
+		return fmt.Errorf("service %q logging options require a local or json-file driver", serviceName)
+	}
+	for key, value := range options {
+		if key != "max-size" && key != "max-file" && key != "compress" {
+			return fmt.Errorf("service %q requests unsafe logging option %q", serviceName, key)
+		}
+		text, isString := value.(string)
+		if !isString {
+			return fmt.Errorf("service %q logging option %q must be a string", serviceName, key)
+		}
+		switch key {
+		case "max-size":
+			matches := safeLogSize.FindStringSubmatch(text)
+			if matches == nil {
+				return fmt.Errorf("service %q logging max-size is invalid", serviceName)
+			}
+			size, err := strconv.ParseInt(matches[1], 10, 64)
+			if err != nil {
+				return fmt.Errorf("service %q logging max-size is invalid", serviceName)
+			}
+			multiplier := int64(1)
+			switch strings.ToLower(matches[2]) {
+			case "k":
+				multiplier = 1 << 10
+			case "m":
+				multiplier = 1 << 20
+			case "g":
+				multiplier = 1 << 30
+			}
+			if size < 1 || size > maxSafeLogFileSize/multiplier {
+				return fmt.Errorf("service %q logging max-size must not exceed 20 MiB", serviceName)
+			}
+		case "max-file":
+			files, err := strconv.Atoi(text)
+			if err != nil || files < 1 || files > maxSafeLogFiles {
+				return fmt.Errorf("service %q logging max-file must be between 1 and %d", serviceName, maxSafeLogFiles)
+			}
+		case "compress":
+			if text != "true" && text != "false" {
+				return fmt.Errorf("service %q logging compress must be true or false", serviceName)
+			}
 		}
 	}
 	return nil
