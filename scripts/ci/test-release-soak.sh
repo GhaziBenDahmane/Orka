@@ -54,7 +54,7 @@ if [[ "${DOCKYARD_SOAK_SKIP_PULLS:-false}" != true ]]; then
   docker pull "$release_image" >/dev/null
   docker pull "$postgres_image" >/dev/null
 fi
-docker network create --driver overlay --attachable "$network" >/dev/null
+docker network create --driver overlay --opt encrypted --attachable "$network" >/dev/null
 docker volume create "$postgres_volume" >/dev/null
 
 docker service create --detach --name "$postgres_service" \

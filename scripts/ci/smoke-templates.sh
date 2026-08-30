@@ -84,7 +84,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]]; then docker swarm init --advertise-addr 127.0.0.1 >/dev/null; initialized_swarm=true; fi
-if ! docker network inspect "$network" >/dev/null 2>&1; then docker network create --driver overlay --attachable "$network" >/dev/null; created_network=true; fi
+if ! docker network inspect "$network" >/dev/null 2>&1; then docker network create --driver overlay --opt encrypted --attachable "$network" >/dev/null; created_network=true; fi
 
 if [[ "${DOCKYARD_TEMPLATE_SMOKE_PREBUILT:-false}" == "true" ]]; then
   docker image inspect "$project-dockyard" >/dev/null

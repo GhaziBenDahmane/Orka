@@ -56,7 +56,7 @@ if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != active ]]; then
   initialized_swarm=true
 fi
 docker network create "$bridge_network" >/dev/null
-docker network create --driver overlay --attachable "$public_network" >/dev/null
+docker network create --driver overlay --opt encrypted --attachable "$public_network" >/dev/null
 docker volume create "$postgres_volume" >/dev/null
 
 docker run --detach --name "$postgres_container" \

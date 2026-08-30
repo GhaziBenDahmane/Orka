@@ -33,7 +33,7 @@ if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]]; then
   initialized_swarm=true
 fi
 if ! docker network inspect "$public_network" >/dev/null 2>&1; then
-  docker network create --driver overlay --attachable "$public_network" >/dev/null
+  docker network create --driver overlay --opt encrypted --attachable "$public_network" >/dev/null
   created_network=true
 fi
 

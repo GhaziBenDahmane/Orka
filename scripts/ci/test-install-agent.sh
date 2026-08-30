@@ -20,7 +20,12 @@ case "$1 $2" in
     if [ "${DOCKYARD_INSTALL_TEST_SECRET_EXISTS:-false}" = true ]; then exit 0; else exit 1; fi ;;
   "secret create")
     if [ "${DOCKYARD_INSTALL_TEST_FAIL_SECRET:-false}" = true ]; then exit 1; fi ;;
-  "network inspect") exit 1 ;;
+  "network inspect")
+    if [ "${DOCKYARD_INSTALL_TEST_NETWORK_EXISTS:-false}" = true ]; then
+      if [ "${3:-}" = --format ]; then printf '%s\n' "${DOCKYARD_INSTALL_TEST_NETWORK_OPTIONS:-{}}"; fi
+      exit 0
+    fi
+    exit 1 ;;
   "stack config")
     printf 'service=%s network=%s\n' "$DOCKYARD_AGENT_SERVICE_NAME" "$DOCKYARD_TRAEFIK_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
   "service inspect")
@@ -53,11 +58,31 @@ fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 "$root/scripts/install-agent.sh" | grep -q 'installed and remained converged'
-grep -q '^network create --driver overlay --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^network create --driver overlay --opt encrypted --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_agent_enrollment_token $DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -q 'one-time-enrollment-token-value' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'enrollment token leaked to Docker command log' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_OPTIONS='{}' \
+  "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted an unencrypted existing overlay network' >&2
+  exit 1
+fi
+grep -q 'existing Docker network dockyard-public is not encrypted' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'unencrypted agent-network failure mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true DOCKYARD_INSTALL_TEST_NETWORK_OPTIONS='{"encrypted":""}' \
+  "$root/scripts/install-agent.sh" >/dev/null
+if grep -q '^network create' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'agent installer recreated an encrypted existing overlay network' >&2
   exit 1
 fi
 

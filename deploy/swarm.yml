@@ -118,7 +118,10 @@ services:
         monitor: 30s
 
 networks:
-  control: {driver: overlay}
+  control:
+    driver: overlay
+    driver_opts:
+      encrypted: ""
   dockyard-public: {external: true}
 volumes:
   postgres-data: {}

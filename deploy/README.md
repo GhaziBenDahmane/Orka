@@ -69,7 +69,7 @@ The equivalent manual commands are:
 
 ```sh
 docker swarm init                         # skip if already active
-docker network create --driver overlay --attachable dockyard-public
+docker network create --driver overlay --opt encrypted --attachable dockyard-public
 printf '%s' 'replace-with-a-long-password' | docker secret create dockyard_db_password -
 printf '%s' 'postgres://dockyard:replace-with-a-long-password@postgres:5432/dockyard?sslmode=disable' | docker secret create dockyard_database_url -
 openssl rand -base64 32 | docker secret create dockyard_master_key -

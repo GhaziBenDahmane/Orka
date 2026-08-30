@@ -194,13 +194,19 @@ elif [ "$mode" = ha ]; then
 else
   docker stack config -c "$root/deploy/swarm.yml" >/dev/null
 fi
+network_exists=false
+if docker network inspect "$network" >/dev/null 2>&1; then
+  network_exists=true
+  network_options=$(docker network inspect --format '{{json .Options}}' "$network") || fail "could not inspect Docker network $network"
+  printf '%s\n' "$network_options" | grep -q '"encrypted"' || fail "existing Docker network $network is not encrypted; remove and recreate it with --opt encrypted"
+fi
 if [ "$dry_run" = true ]; then
   echo "Preflight passed for $mode installation of stack $stack; no resources were changed."
   exit 0
 fi
 
-if ! docker network inspect "$network" >/dev/null 2>&1; then
-  docker network create --driver overlay --attachable "$network" >/dev/null
+if [ "$network_exists" = false ]; then
+  docker network create --driver overlay --opt encrypted --attachable "$network" >/dev/null
   created_network=true
 fi
 

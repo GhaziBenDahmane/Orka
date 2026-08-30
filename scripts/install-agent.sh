@@ -78,6 +78,12 @@ if docker secret inspect "$token_secret" >/dev/null 2>&1 && [ "$reuse" != true ]
 fi
 
 docker stack config -c "$root/deploy/agent-swarm.yml" >/dev/null
+network_exists=false
+if docker network inspect "$network" >/dev/null 2>&1; then
+  network_exists=true
+  network_options=$(docker network inspect --format '{{json .Options}}' "$network") || fail "could not inspect Docker network $network"
+  printf '%s\n' "$network_options" | grep -q '"encrypted"' || fail "existing Docker network $network is not encrypted; remove and recreate it with --opt encrypted"
+fi
 if [ "$dry_run" = true ]; then
   echo "Preflight passed for agent stack $stack; no resources were changed."
   exit 0
@@ -101,8 +107,8 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if ! docker network inspect "$network" >/dev/null 2>&1; then
-  docker network create --driver overlay --attachable "$network" >/dev/null
+if [ "$network_exists" = false ]; then
+  docker network create --driver overlay --opt encrypted --attachable "$network" >/dev/null
   created_network=true
 fi
 if ! docker secret inspect "$token_secret" >/dev/null 2>&1; then
