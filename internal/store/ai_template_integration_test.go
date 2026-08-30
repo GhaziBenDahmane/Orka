@@ -290,6 +290,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	samlProviderID, otherSAMLProviderID := uuid.New(), uuid.New()
 	notificationEndpointID, otherNotificationEndpointID := uuid.New(), uuid.New()
 	enabledWebhookID, disabledWebhookID, otherWebhookID := uuid.New(), uuid.New(), uuid.New()
+	activeDeployTokenID, expiringDeployTokenID, expiredDeployTokenID := uuid.New(), uuid.New(), uuid.New()
 	auditArchiveID, disabledAuditArchiveID, otherAuditArchiveID := uuid.New(), uuid.New(), uuid.New()
 	auditBackupDestinationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID := uuid.New(), uuid.New(), uuid.New()
 	latestDeploymentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
@@ -303,6 +304,10 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{projectID, developerUserID}},
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'viewer')`, []any{environmentID, developerUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,'services: {api: {image: registry.example.test/private-api:latest, environment: [SECRET_COMPOSE_VALUE]}}','encrypted-service-env',3)`, []any{serviceID, environmentID, "audit-api-" + serviceID.String()}},
+		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at,last_used_at) VALUES
+			($1,$2,$3,'target-active-deploy-token-secret-name',$4,now()+interval '30 days',now()),
+			($5,$2,$6,'target-expiring-deploy-token-secret-name',$4,now()+interval '2 days',NULL),
+			($7,$2,$8,'target-expired-deploy-token-secret-name',$4,now()-interval '1 hour',NULL)`, []any{activeDeployTokenID, serviceID, []byte("target-active-deploy-token-hash"), userID, expiringDeployTokenID, []byte("target-expiring-deploy-token-hash"), expiredDeployTokenID, []byte("target-expired-deploy-token-hash")}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,deletion_requested_at) VALUES($1,$2,'Deleting worker','deleting-worker',$3,'services: {worker: {image: worker:latest}}','deleting-service-env-secret',now()-interval '5 minutes')`, []any{deletingServiceID, environmentID, "deleting-worker-" + deletingServiceID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status) VALUES($1,'delete.compose',$2,'pending')`, []any{uuid.New(), `{"serviceId":"` + deletingServiceID.String() + `","stackName":"target-deleting-stack-secret"}`}},
 		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret,enabled) VALUES($1,$2,'target-github-secret-name','github','target-main-secret',$3,true),($4,$2,'target-gitlab-secret-name','gitlab','target-release-secret',$5,false)`, []any{enabledWebhookID, serviceID, "target-webhook-encrypted-secret", disabledWebhookID, "target-disabled-webhook-encrypted-secret"}},
@@ -344,6 +349,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO project_grants(project_id,user_id,role) VALUES($1,$2,'admin')`, []any{otherProjectID, otherUserID}},
 		{`INSERT INTO environment_grants(environment_id,user_id,role) VALUES($1,$2,'admin')`, []any{otherEnvironmentID, otherUserID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Other API','other-api',$3,$4,'other-encrypted-env',7)`, []any{otherServiceID, otherEnvironmentID, "other-audit-api-" + otherServiceID.String(), "services: {api: {image: registry.example.test/other-private-api@sha256:" + strings.Repeat("a", 64) + ", environment: [OTHER_COMPOSE_SECRET]}}"}},
+		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at) VALUES($1,$2,$3,'other-deploy-token-secret-name',$4,now()+interval '1 day')`, []any{uuid.New(), otherServiceID, []byte("other-deploy-token-hash"), otherUserID}},
 		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret) VALUES($1,$2,'other-webhook-secret-name','bitbucket','other-main-secret',$3)`, []any{otherWebhookID, otherServiceID, "other-webhook-encrypted-secret"}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver) VALUES($1,$2,'api','other-audit-api.example.test','/',8080,true,'letsencrypt')`, []any{otherRouteID, otherServiceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,7,'services: {api: {image: other:v7}}','other-deployment-secret','failed','manual',now())`, []any{uuid.New(), otherServiceID}},
@@ -437,6 +443,9 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if snapshot.IdentityPosture.PendingInvitations != 2 || snapshot.IdentityPosture.PendingPrivilegedInvitations != 1 || snapshot.IdentityPosture.InvitationsExpiringSoon != 1 || snapshot.IdentityPosture.ExpiredInvitations != 1 || snapshot.IdentityPosture.ProjectScopedGrants != 1 || snapshot.IdentityPosture.EnvironmentScopedGrants != 1 || snapshot.IdentityPosture.AdminScopedGrants != 1 || snapshot.IdentityPosture.RedundantScopedGrants != 1 || snapshot.IdentityPosture.SCIMGroups != 2 || snapshot.IdentityPosture.WriteCapableSCIMGroups != 1 || snapshot.IdentityPosture.SCIMGroupMemberships != 2 {
 		t.Fatalf("identity governance posture=%#v", snapshot.IdentityPosture)
 	}
+	if snapshot.DeployTokenPosture.ActiveTokens != 2 || snapshot.DeployTokenPosture.ExpiringTokens != 1 || snapshot.DeployTokenPosture.ExpiredUnrevokedTokens != 1 || snapshot.DeployTokenPosture.UnusedActiveTokens != 1 || snapshot.DeployTokenPosture.OldestActiveTokenCreatedAt == nil {
+		t.Fatalf("deploy token posture=%#v", snapshot.DeployTokenPosture)
+	}
 	if len(snapshot.SAMLPosture) != 1 || snapshot.SAMLPosture[0].ID != samlProviderID || snapshot.SAMLPosture[0].CertificateConfigurationOK || snapshot.SAMLPosture[0].SPCertificateNotAfter != nil || snapshot.SAMLPosture[0].IDPCertificateNotAfter != nil {
 		t.Fatalf("SAML posture=%#v", snapshot.SAMLPosture)
 	}
@@ -488,6 +497,11 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	encodedSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, secret := range []string{"target-active-deploy-token-secret-name", "target-active-deploy-token-hash", "target-expiring-deploy-token-secret-name", "target-expiring-deploy-token-hash", "target-expired-deploy-token-secret-name", "target-expired-deploy-token-hash", "other-deploy-token-secret-name", "other-deploy-token-hash"} {
+		if strings.Contains(string(encodedSnapshot), secret) {
+			t.Fatalf("snapshot leaked deploy token material %q: body=%s", secret, encodedSnapshot)
+		}
 	}
 	if strings.Contains(string(encodedSnapshot), "target-finalizer-error-secret") || strings.Contains(string(encodedSnapshot), "target-deleting-stack-secret") || strings.Contains(string(encodedSnapshot), "deleting-service-env-secret") {
 		t.Fatalf("snapshot leaked finalizer error: body=%s", encodedSnapshot)

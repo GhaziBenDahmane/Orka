@@ -206,8 +206,9 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	stalledSAMLRotation := now.Add(-8 * 24 * time.Hour)
 	oldSCIMToken, oldPendingJob := now.Add(-181*24*time.Hour), now.Add(-11*time.Minute)
 	snapshot := store.AIAuditSnapshot{
-		Organization:    organizationID,
-		IdentityPosture: store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation, ExpiringServiceAccounts: 2, ActiveSCIMTokens: 1, OldestActiveSCIMTokenCreatedAt: &oldSCIMToken, PendingInvitations: 2, PendingPrivilegedInvitations: 1, InvitationsExpiringSoon: 1, ExpiredInvitations: 1, ProjectScopedGrants: 1, EnvironmentScopedGrants: 1, AdminScopedGrants: 1, RedundantScopedGrants: 1, SCIMGroups: 2, WriteCapableSCIMGroups: 1, SCIMGroupMemberships: 2},
+		Organization:       organizationID,
+		IdentityPosture:    store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation, ExpiringServiceAccounts: 2, ActiveSCIMTokens: 1, OldestActiveSCIMTokenCreatedAt: &oldSCIMToken, PendingInvitations: 2, PendingPrivilegedInvitations: 1, InvitationsExpiringSoon: 1, ExpiredInvitations: 1, ProjectScopedGrants: 1, EnvironmentScopedGrants: 1, AdminScopedGrants: 1, RedundantScopedGrants: 1, SCIMGroups: 2, WriteCapableSCIMGroups: 1, SCIMGroupMemberships: 2},
+		DeployTokenPosture: store.AIAuditDeployTokenPosture{ActiveTokens: 2, ExpiringTokens: 1, ExpiredUnrevokedTokens: 1, UnusedActiveTokens: 1},
 		MigrationPosture: []store.AIAuditMigrationPosture{{
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
@@ -245,8 +246,13 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	if !titles["Resource deletion finalizer requires intervention"] {
 		t.Errorf("missing failed resource finalizer finding in %#v", findings)
 	}
-	if len(findings) != 29 {
-		t.Fatalf("findings=%d, want 29: %#v", len(findings), findings)
+	for _, title := range []string{"Deployment hook credentials expire soon", "Expired deployment hook credentials remain in inventory"} {
+		if !titles[title] {
+			t.Errorf("missing deployment token finding %q in %#v", title, findings)
+		}
+	}
+	if len(findings) != 31 {
+		t.Fatalf("findings=%d, want 31: %#v", len(findings), findings)
 	}
 }
 

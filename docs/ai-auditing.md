@@ -107,6 +107,11 @@ keys make it a privileged service.
   validity, and SP and IdP trust expiry timestamps. Certificates, private keys, IdP metadata,
   provider names, domains, and user identities,
   session metadata, token hashes, and provider configuration remain excluded.
+- Deployment-hook posture reports only aggregate active, expiring, expired,
+  and never-used token counts plus the oldest active credential creation time.
+  Token names, hashes, URLs, service assignments, and creator identities remain
+  outside the model boundary. Expiring and unrevoked expired credentials
+  produce deterministic rotation and cleanup findings.
 - Auditors may only create runs, add findings to their own active runs, and
   complete those runs. Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy
@@ -141,7 +146,8 @@ keys make it a privileged service.
   active maintenance scopes, near-capacity quotas, missing owners, disabled
   mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,
   expiring agent certificates,
-  expiring service-account and stale SCIM credentials, agent identities signed
+  expiring service-account and deployment-hook credentials, stale SCIM credentials,
+  unrevoked expired deployment hooks, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
   notification coverage gaps, unavailable, unbound, mismatched, or
   recovery-incapable database drivers, unhealthy reconciliation, unsigned,

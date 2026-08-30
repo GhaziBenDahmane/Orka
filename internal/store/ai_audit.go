@@ -42,6 +42,7 @@ type AIAuditSnapshot struct {
 	SourceBuildPosture   []AIAuditSourceBuildPosture     `json:"sourceBuildPosture"`
 	AuditLogPosture      AIAuditLogPosture               `json:"auditLogPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
+	DeployTokenPosture   AIAuditDeployTokenPosture       `json:"deployTokenPosture"`
 	SAMLPosture          []AIAuditSAMLProviderPosture    `json:"samlPosture"`
 	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
 	WebhookPosture       []AIAuditWebhookPosture         `json:"webhookPosture"`
@@ -339,6 +340,14 @@ type AIAuditIdentityPosture struct {
 	SCIMGroupMemberships            int64      `json:"scimGroupMemberships"`
 	PendingSAMLCertificateRotations int64      `json:"pendingSamlCertificateRotations"`
 	OldestPendingSAMLRotationAt     *time.Time `json:"oldestPendingSamlRotationAt,omitempty"`
+}
+
+type AIAuditDeployTokenPosture struct {
+	ActiveTokens               int64      `json:"activeTokens"`
+	ExpiringTokens             int64      `json:"expiringTokens7d"`
+	ExpiredUnrevokedTokens     int64      `json:"expiredUnrevokedTokens"`
+	UnusedActiveTokens         int64      `json:"unusedActiveTokens"`
+	OldestActiveTokenCreatedAt *time.Time `json:"oldestActiveTokenCreatedAt,omitempty"`
 }
 
 type AIAuditSAMLProviderPosture struct {
@@ -646,6 +655,9 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 	if err := s.loadAIAuditFinalizerPosture(ctx, organizationID, &snapshot.FinalizerPosture); err != nil {
+		return err
+	}
+	if err := s.loadAIAuditDeployTokenPosture(ctx, organizationID, &snapshot.DeployTokenPosture); err != nil {
 		return err
 	}
 	rows, err := s.Pool.Query(ctx, `
@@ -1075,6 +1087,26 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 		&posture.FailedJobs,
 		&posture.ResourcesWithoutActiveJob,
 		&posture.OldestRequestedAt,
+	)
+}
+
+func (s *Store) loadAIAuditDeployTokenPosture(ctx context.Context, organizationID uuid.UUID, posture *AIAuditDeployTokenPosture) error {
+	return s.Pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now()),
+		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now() AND token.expires_at<=now()+interval '7 days'),
+		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at<=now()),
+		count(*) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now() AND token.last_used_at IS NULL),
+		min(token.created_at) FILTER (WHERE token.revoked_at IS NULL AND token.expires_at>now())
+		FROM deploy_tokens token
+		JOIN compose_services service ON service.id=token.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1`, organizationID).Scan(
+		&posture.ActiveTokens,
+		&posture.ExpiringTokens,
+		&posture.ExpiredUnrevokedTokens,
+		&posture.UnusedActiveTokens,
+		&posture.OldestActiveTokenCreatedAt,
 	)
 }
 

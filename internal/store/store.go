@@ -342,6 +342,16 @@ type WebhookIntegration struct {
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
+type DeployToken struct {
+	ID               uuid.UUID  `json:"id"`
+	ComposeServiceID uuid.UUID  `json:"composeServiceId"`
+	Name             string     `json:"name"`
+	ExpiresAt        time.Time  `json:"expiresAt"`
+	LastUsedAt       *time.Time `json:"lastUsedAt,omitempty"`
+	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+}
+
 type ServiceAccount struct {
 	ID             uuid.UUID  `json:"id"`
 	OrganizationID uuid.UUID  `json:"organizationId"`
@@ -1274,8 +1284,41 @@ func (s *Store) CancelDeployment(ctx context.Context, organizationID, deployment
 	return tx.Commit(ctx)
 }
 
-func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID, userID uuid.UUID, name string, tokenHash []byte) error {
-	tag, err := s.Pool.Exec(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by) SELECT $1,s.id,$3,$4,$5 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND p.organization_id=$6`, uuid.New(), serviceID, tokenHash, name, nullableUUID(userID), organizationID)
+func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID, userID uuid.UUID, name string, tokenHash []byte, expiresAt time.Time) (DeployToken, error) {
+	item := DeployToken{ID: uuid.New(), ComposeServiceID: serviceID, Name: name, ExpiresAt: expiresAt}
+	err := s.Pool.QueryRow(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at)
+		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
+		WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$7
+		RETURNING created_at`, item.ID, serviceID, tokenHash, name, nullableUUID(userID), expiresAt, organizationID).Scan(&item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DeployToken{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *Store) ListDeployTokens(ctx context.Context, organizationID, serviceID uuid.UUID) ([]DeployToken, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT token.id,token.compose_service_id,token.name,token.expires_at,token.last_used_at,token.revoked_at,token.created_at
+		FROM deploy_tokens token JOIN compose_services service ON service.id=token.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id
+		WHERE token.compose_service_id=$1 AND project.organization_id=$2 ORDER BY token.created_at DESC,token.id`, serviceID, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeployToken{}
+	for rows.Next() {
+		var item DeployToken
+		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.Name, &item.ExpiresAt, &item.LastUsedAt, &item.RevokedAt, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) RevokeDeployToken(ctx context.Context, organizationID, serviceID, tokenID uuid.UUID) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE deploy_tokens token SET revoked_at=COALESCE(revoked_at,now())
+		FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id
+		WHERE token.id=$1 AND token.compose_service_id=$2 AND service.id=token.compose_service_id AND project.organization_id=$3`, tokenID, serviceID, organizationID)
 	if err != nil {
 		return err
 	}
@@ -1607,10 +1650,10 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 		return Deployment{}, err
 	}
 	defer tx.Rollback(ctx)
-	var serviceID, organizationID, projectID, environmentID uuid.UUID
+	var tokenID, serviceID, organizationID, projectID, environmentID uuid.UUID
 	var revision int64
 	var compose, env string
-	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,p.organization_id,p.id,e.id FROM deploy_tokens t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL FOR UPDATE OF s`, tokenHash).Scan(&serviceID, &revision, &compose, &env, &organizationID, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT t.id,s.id,s.revision,s.compose_yaml,s.encrypted_env,p.organization_id,p.id,e.id FROM deploy_tokens t JOIN compose_services s ON s.id=t.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF t,s`, tokenHash).Scan(&tokenID, &serviceID, &revision, &compose, &env, &organizationID, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -1632,6 +1675,9 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
+		return Deployment{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE deploy_tokens SET last_used_at=now() WHERE id=$1`, tokenID); err != nil {
 		return Deployment{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {

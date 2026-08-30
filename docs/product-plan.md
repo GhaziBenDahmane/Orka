@@ -139,6 +139,10 @@ Status: public/private HTTPS Git, private OCI registries, ephemeral build
 credentials, generic deploy hooks, signed/replay-safe provider webhooks, and
 durable provider build-status callbacks implemented.
 
+- Generic CI deploy hooks use inventory-visible bearer credentials with bounded
+  expiry, last-use tracking, explicit revocation, and deterministic AI rotation
+  warnings; legacy perpetual tokens receive a ninety-day migration deadline.
+
 - Encrypted HTTPS Git tokens, pinned-host SSH deploy keys, and OCI registry
   credentials are implemented.
 - Private build-registry authentication is forwarded to local and remote Swarm

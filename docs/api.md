@@ -298,7 +298,9 @@ until an administrator retries them.
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful snapshot |
 | GET | `/v1/services/{id}/logs` | Read aggregated Swarm service logs |
-| POST | `/v1/services/{id}/deploy-tokens` | Create a CI deploy hook |
+| GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
+| POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |
+| DELETE | `/v1/services/{id}/deploy-tokens/{tokenId}` | Revoke a CI deploy-hook credential |
 | POST | `/v1/hooks/deploy/{token}` | Trigger a deployment from CI |
 | GET/POST | `/v1/services/{id}/webhooks` | List or create provider webhook integrations |
 | DELETE | `/v1/webhooks/{id}` | Disable a provider webhook integration |

@@ -247,7 +247,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/services/{serviceID}/volume-backups/{volumeName}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createVolumeBackup)))
 	mux.Handle("GET /v1/services/{serviceID}/volume-restores", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listVolumeRestores)))
 	mux.Handle("POST /v1/services/{serviceID}/rollback", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.rollbackService)))
+	mux.Handle("GET /v1/services/{serviceID}/deploy-tokens", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.listDeployTokens)))
 	mux.Handle("POST /v1/services/{serviceID}/deploy-tokens", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createDeployToken)))
+	mux.Handle("DELETE /v1/services/{serviceID}/deploy-tokens/{tokenID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.revokeDeployToken)))
 	mux.Handle("GET /v1/services/{serviceID}/webhooks", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.listWebhookIntegrations)))
 	mux.Handle("POST /v1/services/{serviceID}/webhooks", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.createWebhookIntegration)))
 	mux.Handle("DELETE /v1/webhooks/{integrationID}", s.requireResourceRole("developer", "webhook", "integrationID", http.HandlerFunc(s.deleteWebhookIntegration)))
@@ -2443,13 +2445,26 @@ func (s *Server) createDeployToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name string `json:"name"`
+		Name          string `json:"name"`
+		ExpiresInDays int    `json:"expiresInDays"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
 		in.Name = "default"
+	}
+	if in.ExpiresInDays == 0 {
+		in.ExpiresInDays = 90
+	}
+	if len(in.Name) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_deploy_token", "name must not exceed 100 characters")
+		return
+	}
+	if in.ExpiresInDays < 1 || in.ExpiresInDays > 365 {
+		writeError(w, http.StatusBadRequest, "invalid_expiry", "expiry must be from 1 to 365 days")
+		return
 	}
 	token, err := auth.NewToken()
 	if err != nil {
@@ -2457,13 +2472,50 @@ func (s *Server) createDeployToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CreateDeployToken(r.Context(), p.OrganizationID, serviceID, p.UserID, in.Name, cryptox.Digest(token)); err != nil {
+	expiresAt := time.Now().UTC().Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour)
+	item, err := s.Store.CreateDeployToken(r.Context(), p.OrganizationID, serviceID, p.UserID, in.Name, cryptox.Digest(token), expiresAt)
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "deploy_token.create", "compose_service", serviceID.String(), r.RemoteAddr, nil)
-	writeJSON(w, 201, map[string]string{"token": token, "url": s.PublicURL + "/v1/hooks/deploy/" + token})
+	s.Store.Audit(r.Context(), &p, "deploy_token.create", "deploy_token", item.ID.String(), r.RemoteAddr, map[string]any{"composeServiceId": serviceID, "expiresAt": expiresAt})
+	writeJSON(w, 201, map[string]any{"deployToken": item, "token": token, "url": s.PublicURL + "/v1/hooks/deploy/" + token})
 }
+
+func (s *Server) listDeployTokens(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid service id")
+		return
+	}
+	items, err := s.Store.ListDeployTokens(r.Context(), principal(r).OrganizationID, serviceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) revokeDeployToken(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid service id")
+		return
+	}
+	tokenID, err := uuid.Parse(r.PathValue("tokenID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid deploy token id")
+		return
+	}
+	p := principal(r)
+	if err = s.Store.RevokeDeployToken(r.Context(), p.OrganizationID, serviceID, tokenID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "deploy_token.revoke", "deploy_token", tokenID.String(), r.RemoteAddr, map[string]any{"composeServiceId": serviceID})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) deployWebhook(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	if token == "" {

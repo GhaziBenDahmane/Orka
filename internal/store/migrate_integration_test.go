@@ -738,3 +738,41 @@ func TestMigrateUpgradeFrom087AddsDurableArtifactCleanup(t *testing.T) {
 		t.Fatalf("destination remained blocked after cleanup: %v", err)
 	}
 }
+
+func TestMigrateUpgradeFrom089ExpiresLegacyDeployTokens(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "089_ai_finalizer_posture.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID, serviceID, tokenID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Deploy token migration',$2)`, []any{organizationID, "deploy-token-migration-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'API','api',$3,'services: {}')`, []any{serviceID, environmentID, "deploy-token-migration-" + serviceID.String()}},
+		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name) VALUES($1,$2,$3,'legacy')`, []any{tokenID, serviceID, []byte("legacy-deploy-token")}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migratedAt := time.Now().UTC()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var expiresAt time.Time
+	var lastUsedAt *time.Time
+	var indexExists bool
+	if err := pool.QueryRow(ctx, `SELECT expires_at,last_used_at FROM deploy_tokens WHERE id=$1`, tokenID).Scan(&expiresAt, &lastUsedAt); err != nil {
+		t.Fatal(err)
+	}
+	if expiresAt.Before(migratedAt.Add(89*24*time.Hour)) || expiresAt.After(migratedAt.Add(91*24*time.Hour)) || lastUsedAt != nil {
+		t.Fatalf("legacy deploy token expiry=%s lastUsedAt=%v", expiresAt, lastUsedAt)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('deploy_tokens_active_expiry_idx') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
+		t.Fatalf("deploy token expiry index exists=%v err=%v", indexExists, err)
+	}
+}

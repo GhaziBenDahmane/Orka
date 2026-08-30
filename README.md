@@ -178,6 +178,11 @@ listed, inspected, issued, and revoked with `invitations`, `invitation ID`,
 Project and environment grants have list, put, and delete CLI commands and can
 be managed declaratively with `dockyard_access_grant`.
 
+CI deployment hooks use expiring, revocable bearer credentials. Manage them
+with `deploy-tokens SERVICE_ID`, `create-deploy-token SERVICE_ID JSON`, and
+`revoke-deploy-token SERVICE_ID TOKEN_ID`; creation returns the secret URL only
+once, while inventory exposes expiry and last-use timestamps without the token.
+
 Organization, project, and environment maintenance/quota policy can be read or
 updated with the corresponding `policy`/`put-*-policy` CLI commands and managed
 declaratively with `dockyard_resource_policy`.
