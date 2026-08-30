@@ -564,7 +564,7 @@ func serve() error {
 	egressPolicy := &netpolicy.Policy{Allowed: cfg.EgressPrivateCIDRs}
 	egressTransport := egressPolicy.Transport()
 	notificationClient := &http.Client{Transport: egressTransport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("notification redirects are disabled") }}
-	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin, EgressPolicy: egressPolicy}, Metrics: metrics, NotificationClient: notificationClient, EgressPolicy: egressPolicy, EgressTransport: egressTransport}
+	worker := &deploy.Worker{Store: db, Box: box, Compiler: compiler, Swarm: swarm, Concurrency: cfg.WorkerConcurrency, Logger: logger, ID: uuid.NewString(), Databases: databaseRegistry, BackupDirectory: cfg.BackupDirectory, Builder: deploy.Builder{GitBin: "git", DockerBin: cfg.DockerBin, EgressPolicy: egressPolicy, MaxWorkspaceBytes: cfg.MaxBuildWorkspaceBytes}, Metrics: metrics, NotificationClient: notificationClient, EgressPolicy: egressPolicy, EgressTransport: egressTransport}
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
 		return deploy.RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 45 * time.Minute}
 	}

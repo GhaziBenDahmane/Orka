@@ -62,6 +62,46 @@ func TestBuildPinsHTTPSGitToPolicyResolution(t *testing.T) {
 	}
 }
 
+func TestBuildRejectsOversizedCheckoutBeforeDocker(t *testing.T) {
+	directory := t.TempDir()
+	gitPath, dockerPath, dockerLog := filepath.Join(directory, "git"), filepath.Join(directory, "docker"), filepath.Join(directory, "docker.log")
+	gitScript := "#!/bin/sh\nfor destination do :; done\nmkdir -p \"$destination\"\nprintf 'FROM scratch\\n' >\"$destination/Dockerfile\"\nprintf 'oversized repository data' >\"$destination/payload\"\n"
+	if err := os.WriteFile(gitPath, []byte(gitScript), 0700); err != nil {
+		t.Fatal(err)
+	}
+	dockerScript := "#!/bin/sh\nprintf called >" + dockerLog + "\n"
+	if err := os.WriteFile(dockerPath, []byte(dockerScript), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := store.ApplicationSource{RepositoryURL: "https://github.com/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
+	_, _, err := (Builder{GitBin: gitPath, DockerBin: dockerPath, MaxWorkspaceBytes: 16}).Build(context.Background(), source, uuid.New(), BuildCredentials{})
+	if err == nil || !strings.Contains(err.Error(), "workspace exceeds") {
+		t.Fatalf("oversized checkout error=%v", err)
+	}
+	if _, statErr := os.Stat(dockerLog); !os.IsNotExist(statErr) {
+		t.Fatalf("Docker ran for oversized checkout: %v", statErr)
+	}
+}
+
+func TestEnforceWorkspaceSizeCountsOnlyRegularFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "one"), []byte("1234"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "directory"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "one"), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := enforceWorkspaceSize(root, 4); err != nil {
+		t.Fatalf("exact workspace rejected: %v", err)
+	}
+	if err := enforceWorkspaceSize(root, 3); err == nil {
+		t.Fatal("oversized workspace was accepted")
+	}
+}
+
 func TestResolveInsideRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

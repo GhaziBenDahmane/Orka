@@ -30,6 +30,29 @@ func TestLoadRequiresRemoteBackupsWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesBuildWorkspaceLimit(t *testing.T) {
+	setRequiredConfig(t)
+	cfg, err := Load()
+	if err != nil || cfg.MaxBuildWorkspaceBytes != 2<<30 {
+		t.Fatalf("default build workspace limit=%d error=%v", cfg.MaxBuildWorkspaceBytes, err)
+	}
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_MAX_BUILD_WORKSPACE_BYTES", "805306368")
+	cfg, err = Load()
+	if err != nil || cfg.MaxBuildWorkspaceBytes != 805306368 {
+		t.Fatalf("configured build workspace limit=%d error=%v", cfg.MaxBuildWorkspaceBytes, err)
+	}
+	for _, value := range []string{"invalid", "0", "67108863", "1099511627777"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_MAX_BUILD_WORKSPACE_BYTES", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_MAX_BUILD_WORKSPACE_BYTES") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidRemoteBackupPolicy(t *testing.T) {
 	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_REQUIRE_REMOTE_BACKUPS", "sometimes")

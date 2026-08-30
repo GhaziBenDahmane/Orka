@@ -98,6 +98,11 @@ backup paths remain explicit volumes. The Docker socket is mounted read-only at
 the filesystem level, but Docker's API still grants root-equivalent manager
 authority; protect these services as infrastructure administrators and never
 attach tenant workloads to their control networks.
+Git checkouts are rejected before a build when their regular-file footprint
+exceeds `DOCKYARD_MAX_BUILD_WORKSPACE_BYTES`. The application default is 2 GiB;
+the supplied one-GiB tmpfs deployment uses a 768 MiB default to retain room for
+temporary build metadata. Set the value between 64 MiB and 1 TiB and keep it
+below the actual temporary-filesystem quota.
 The manifests give the controller, agent, routing, and AI processes 30 seconds
 to stop cleanly, and PostgreSQL one minute to checkpoint, before Swarm sends a
 hard kill. Keep these periods longer than the controller's internal 15-second

@@ -24,6 +24,7 @@ import (
 type Builder struct {
 	GitBin, DockerBin, NixpacksBin, RailpackBin, PackBin, RailpackFrontend, BuildpackBuilder, HerokuBuilder, StaticImage string
 	EgressPolicy                                                                                                         *netpolicy.Policy
+	MaxWorkspaceBytes                                                                                                    int64
 }
 
 type Credential struct {
@@ -48,6 +49,7 @@ const defaultStaticImage = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b447
 const defaultRailpackFrontend = "ghcr.io/railwayapp/railpack-frontend:v0.38.0@sha256:b66c90368efcf6f2966cfa504cdbde93af7ba6092d676e0c7604cbc5ddf3acec"
 const defaultBuildpackBuilder = "paketobuildpacks/builder-jammy-base:0.4.629@sha256:129bda8835db00b4fe0b2fdf0a545e493f6f0403cbeb9f89ea6125a7a93a69d0"
 const defaultHerokuBuilder = "heroku/builder:24@sha256:c855fe9810b29dc60e0a0b1ddbbdd815ea5973c9dd754bf539218296fe3f4af2"
+const defaultMaxBuildWorkspaceBytes int64 = 2 << 30
 
 func ValidateBuildSettings(target string, config store.ApplicationBuildConfig) error {
 	if target != "" && !buildTargetName.MatchString(target) {
@@ -211,11 +213,17 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 	if err != nil {
 		return "", output, err
 	}
+	if err = enforceWorkspaceSize(directory, b.maxWorkspaceBytes()); err != nil {
+		return "", output, err
+	}
 	if source.EnableSubmodules {
 		submoduleOutput, submoduleErr := b.updateSubmodules(ctx, directory, repo, gitEnvironment)
 		output += submoduleOutput
 		if submoduleErr != nil {
 			return "", output, submoduleErr
+		}
+		if err = enforceWorkspaceSize(directory, b.maxWorkspaceBytes()); err != nil {
+			return "", output, err
 		}
 	}
 	contextPath, err := safeJoin(directory, source.ContextDirectory)
@@ -227,6 +235,41 @@ func (b Builder) Build(ctx context.Context, source store.ApplicationSource, depl
 		return "", output, fmt.Errorf("invalid build context: %w", err)
 	}
 	return b.buildWorkspace(ctx, source, deploymentID, credentials.Registry, contextPath, output)
+}
+
+func (b Builder) maxWorkspaceBytes() int64 {
+	if b.MaxWorkspaceBytes > 0 {
+		return b.MaxWorkspaceBytes
+	}
+	return defaultMaxBuildWorkspaceBytes
+}
+
+func enforceWorkspaceSize(root string, limit int64) error {
+	if limit <= 0 {
+		return errors.New("build workspace limit must be positive")
+	}
+	var size int64
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() > limit-size {
+			return fmt.Errorf("build workspace exceeds %d bytes", limit)
+		}
+		size += info.Size()
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("inspect build workspace: %w", err)
+	}
+	return nil
 }
 
 func (b Builder) BuildArchive(ctx context.Context, source store.ApplicationSource, deploymentID uuid.UUID, registryCredential Credential, archive []byte) (string, string, error) {
