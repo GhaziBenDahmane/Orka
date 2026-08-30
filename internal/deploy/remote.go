@@ -10,6 +10,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 )
 
@@ -118,6 +119,21 @@ func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) 
 	}
 	if err = json.Unmarshal([]byte(output), &result); err != nil {
 		return result, fmt.Errorf("decode remote artifact result: %w", err)
+	}
+	return result, nil
+}
+
+func (s RemoteSwarm) RunVolumeArtifact(ctx context.Context, job VolumeArtifactJob) (volumeartifact.Result, error) {
+	var result volumeartifact.Result
+	if err := ValidateVolumeArtifactJob(job); err != nil {
+		return result, err
+	}
+	output, err := s.run(ctx, "swarm.volume-artifact", job)
+	if err != nil {
+		return result, err
+	}
+	if err = json.Unmarshal([]byte(output), &result); err != nil {
+		return result, fmt.Errorf("decode remote volume artifact result: %w", err)
 	}
 	return result, nil
 }
@@ -252,3 +268,4 @@ func (s RemoteSwarm) result(command store.ClusterCommand) (commandResult, error)
 }
 
 var _ Scheduler = RemoteSwarm{}
+var _ VolumeArtifactRunner = RemoteSwarm{}

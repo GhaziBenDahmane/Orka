@@ -4,6 +4,8 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 mode=${DOCKYARD_INSTALL_MODE:-single}
 stack=${DOCKYARD_STACK_NAME:-dockyard}
+DOCKYARD_SWARM_SERVICE_NAME=${stack}_dockyard
+export DOCKYARD_SWARM_SERVICE_NAME
 network=dockyard-public
 master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
 agent_ca_cert_secret=${DOCKYARD_AGENT_CA_CERT_SECRET:-dockyard_agent_ca_cert}

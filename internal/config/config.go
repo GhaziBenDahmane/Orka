@@ -32,6 +32,7 @@ type Config struct {
 	OTLPEndpoint               string
 	OTLPInsecure               bool
 	ServiceName                string
+	SwarmServiceName           string
 	AgentCACertificate         []byte
 	AgentCAKey                 []byte
 	AgentPreviousCACertificate []byte
@@ -118,6 +119,10 @@ func Load() (Config, error) {
 	traefikNetwork := strings.TrimSpace(env("DOCKYARD_TRAEFIK_NETWORK", "dockyard-public"))
 	if !swarmNetworkName.MatchString(traefikNetwork) {
 		return Config{}, errors.New("DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters")
+	}
+	swarmServiceName := strings.TrimSpace(os.Getenv("DOCKYARD_SWARM_SERVICE_NAME"))
+	if swarmServiceName != "" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(swarmServiceName) {
+		return Config{}, errors.New("DOCKYARD_SWARM_SERVICE_NAME must be a valid Swarm service name")
 	}
 	trustedProxyCIDRs, err := parseTrustedProxyCIDRs(os.Getenv("DOCKYARD_TRUSTED_PROXY_CIDRS"))
 	if err != nil {
@@ -207,6 +212,7 @@ func Load() (Config, error) {
 		OTLPEndpoint:               otlpEndpoint,
 		OTLPInsecure:               otlpInsecure,
 		ServiceName:                env("DOCKYARD_OTEL_SERVICE_NAME", "dockyard"),
+		SwarmServiceName:           swarmServiceName,
 		AgentCACertificate:         []byte(agentCACertificate),
 		AgentCAKey:                 []byte(agentCAKey),
 		AgentPreviousCACertificate: []byte(agentPreviousCACertificate),

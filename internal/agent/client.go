@@ -100,7 +100,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		slog.Warn("agent certificate rotation deferred", "error", err)
 	}
-	c := &Client{cfg: cfg, swarm: deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.Network, Timeout: 5 * time.Minute}, http: httpClient}
+	c := &Client{cfg: cfg, swarm: deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.Network, Timeout: 5 * time.Minute, ServiceName: cfg.ServiceName}, http: httpClient}
 	c.serviceState = c.inspectServiceState
 	return c.loop(ctx)
 }
@@ -553,6 +553,18 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 			return "", errors.New("scheduler does not support storage-node resolution")
 		}
 		return resolver.ResolveStorageNode(ctx, payload.StackName)
+	case "swarm.volume-artifact":
+		var job deploy.VolumeArtifactJob
+		if err := json.Unmarshal(cmd.Payload, &job); err != nil {
+			return "", err
+		}
+		runner, ok := c.swarm.(deploy.VolumeArtifactRunner)
+		if !ok {
+			return "", errors.New("scheduler does not support volume artifact jobs")
+		}
+		result, err := runner.RunVolumeArtifact(ctx, job)
+		encoded, _ := json.Marshal(result)
+		return string(encoded), err
 	case "container.run":
 		return c.swarm.RunContainerJob(ctx, payload.Network, payload.Image, "", payload.Environment, payload.Command)
 	case "database.utility":

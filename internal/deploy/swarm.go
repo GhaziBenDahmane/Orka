@@ -23,6 +23,9 @@ type Swarm struct {
 	DockerBin string
 	Network   string
 	Timeout   time.Duration
+	// ServiceName identifies the currently running, digest-pinned Dockyard or
+	// agent service whose image is reused for privileged one-shot helpers.
+	ServiceName string
 }
 
 // Scheduler is the execution boundary between the control plane and a Swarm
@@ -55,6 +58,7 @@ type StorageNodeResolver interface {
 }
 
 var _ Scheduler = Swarm{}
+var _ VolumeArtifactRunner = Swarm{}
 
 var safeRuntimeServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 

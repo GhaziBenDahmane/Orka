@@ -102,6 +102,14 @@ the multi-cluster adapter can therefore route the same validated Compose
 snapshot through outbound agents without changing application or database
 models.
 
+Named-volume artifacts use a one-shot Swarm service constrained to the node
+that owns the local volume. The service reuses the currently running
+digest-pinned controller or agent image. Its presigned object-store URL and
+per-artifact encryption key are mounted as a temporary Swarm secret rather
+than exposed in arguments or environment variables. The helper validates the
+complete authenticated archive before restore and swaps staged data into the
+volume with rollback renames.
+
 Private build-registry credentials are scoped to the configured registry host.
 After a successful push, the scheduler supplies them to `docker stack deploy
 --with-registry-auth` through a temporary mode-0700 Docker configuration. For a

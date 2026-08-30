@@ -482,7 +482,7 @@ func serve() error {
 		return err
 	}
 	compiler := deploy.Compiler{PublicNetwork: cfg.TraefikNetwork, AllowUnsafe: cfg.UnsafeWorkloads}
-	swarm := deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.TraefikNetwork, Timeout: 5 * time.Minute}
+	swarm := deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.TraefikNetwork, Timeout: 5 * time.Minute, ServiceName: cfg.SwarmServiceName}
 	databaseRegistry := database.NewRegistry()
 	if cfg.DatabaseDriverDirectory != "" {
 		if err := databaseRegistry.LoadExternal(cfg.DatabaseDriverDirectory); err != nil {

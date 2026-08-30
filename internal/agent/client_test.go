@@ -25,6 +25,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
 )
 
@@ -39,6 +40,12 @@ type fakeScheduler struct {
 	status             deploy.StackStatus
 	containerCalls     int
 	storageNode        string
+	volumeArtifact     *deploy.VolumeArtifactJob
+}
+
+func (f *fakeScheduler) RunVolumeArtifact(_ context.Context, job deploy.VolumeArtifactJob) (volumeartifact.Result, error) {
+	f.volumeArtifact = &job
+	return volumeartifact.Result{SHA256: strings.Repeat("a", 64), PlaintextSHA256: strings.Repeat("b", 64), SizeBytes: 42}, nil
 }
 
 func (f *fakeScheduler) ResolveStorageNode(context.Context, string) (string, error) {
@@ -470,6 +477,20 @@ func TestExecuteStorageNodeCommand(t *testing.T) {
 	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.storage-node", Payload: []byte(`{"stackName":"database"}`)})
 	if err != nil || output != "node-persisted" {
 		t.Fatalf("output=%q err=%v", output, err)
+	}
+}
+
+func TestExecuteVolumeArtifactCommand(t *testing.T) {
+	scheduler := &fakeScheduler{}
+	client := &Client{swarm: scheduler}
+	payload, _ := json.Marshal(deploy.VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123"})
+	output, err := client.executeCommand(context.Background(), command{Kind: "swarm.volume-artifact", Payload: payload})
+	if err != nil || scheduler.volumeArtifact == nil || scheduler.volumeArtifact.VolumeName != "stack_data" {
+		t.Fatalf("job=%#v output=%q err=%v", scheduler.volumeArtifact, output, err)
+	}
+	var result volumeartifact.Result
+	if err = json.Unmarshal([]byte(output), &result); err != nil || result.SizeBytes != 42 {
+		t.Fatalf("result=%#v output=%q err=%v", result, output, err)
 	}
 }
 

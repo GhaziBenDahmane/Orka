@@ -365,6 +365,11 @@ func TestEnvironmentPlacementUsesLabelsCapacityAndFreshHeartbeat(t *testing.T) {
 	if _, err = db.EnqueueClusterCommand(ctx, largeID, uuid.New(), "swarm.deploy", "encrypted"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("command during maintenance error=%v", err)
 	}
+	for _, kind := range []string{"swarm.volume-artifact", "database.transfer"} {
+		if _, err = db.EnqueueClusterCommand(ctx, largeID, uuid.New(), kind, "encrypted"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s command during maintenance error=%v", kind, err)
+		}
+	}
 	if _, err = db.UpdateClusterConfiguration(ctx, orgID, largeID, "active", nil, nil); err != nil {
 		t.Fatal(err)
 	}

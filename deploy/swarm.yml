@@ -42,6 +42,7 @@ services:
       DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT: ${DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE: ${DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE:-false}
       DOCKYARD_OTEL_SERVICE_NAME: ${DOCKYARD_OTEL_SERVICE_NAME:-dockyard}
+      DOCKYARD_SWARM_SERVICE_NAME: ${DOCKYARD_SWARM_SERVICE_NAME:-dockyard_dockyard}
     secrets: [dockyard_database_url, dockyard_master_key]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

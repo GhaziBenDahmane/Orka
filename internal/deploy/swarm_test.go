@@ -12,7 +12,67 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/database"
+	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 )
+
+func TestRunVolumeArtifactUsesPinnedHelperAndSecretPayload(t *testing.T) {
+	directory := t.TempDir()
+	docker, calls, secretPayload := filepath.Join(directory, "docker"), filepath.Join(directory, "calls"), filepath.Join(directory, "secret")
+	digest := strings.Repeat("a", 64)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + calls + `"
+if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'registry.example/dockyard@sha256:` + digest + `'; exit 0; fi
+if [ "$1" = secret ] && [ "$2" = create ]; then cat > "` + secretPayload + `"; echo secret-id; exit 0; fi
+if [ "$1" = service ] && [ "$2" = create ]; then echo service-id; exit 0; fi
+if [ "$1" = service ] && [ "$2" = ps ]; then echo 'Complete 1 second ago|'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = logs ]; then echo '{"sha256":"` + strings.Repeat("b", 64) + `","plaintextSha256":"` + strings.Repeat("c", 64) + `","sizeBytes":42}'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = rm ]; then exit 0; fi
+if [ "$1" = secret ] && [ "$2" = rm ]; then exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+	result, err := (Swarm{DockerBin: docker, ServiceName: "dockyard_dockyard", Timeout: time.Second}).RunVolumeArtifact(context.Background(), VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/signed?token=secret", EncryptionKey: key, EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123", Network: "dockyard-public"})
+	if err != nil || result.SizeBytes != 42 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	arguments, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callText := string(arguments)
+	for _, expected := range []string{"node.id==nodeabc123", "type=volume,source=stack_data,target=/volume", "registry.example/dockyard@sha256:" + digest, "volume-artifact"} {
+		if !strings.Contains(callText, expected) {
+			t.Fatalf("missing %q in calls:\n%s", expected, callText)
+		}
+	}
+	if strings.Contains(callText, "token=secret") || strings.Contains(callText, key) {
+		t.Fatalf("secret material leaked into Docker arguments:\n%s", callText)
+	}
+	payload, err := os.ReadFile(secretPayload)
+	if err != nil || !strings.Contains(string(payload), "token=secret") || !strings.Contains(string(payload), key) {
+		t.Fatalf("secret payload=%q err=%v", payload, err)
+	}
+}
+
+func TestValidateVolumeArtifactJobRejectsUnsafePlacement(t *testing.T) {
+	base := VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}, VolumeName: "stack_data", NodeID: "nodeabc123"}
+	for name, mutate := range map[string]func(*VolumeArtifactJob){
+		"volume":  func(job *VolumeArtifactJob) { job.VolumeName = "../host" },
+		"node":    func(job *VolumeArtifactJob) { job.NodeID = "node;bad" },
+		"network": func(job *VolumeArtifactJob) { job.Network = "Bad Network" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			job := base
+			mutate(&job)
+			if err := ValidateVolumeArtifactJob(job); err == nil {
+				t.Fatal("unsafe volume artifact job was accepted")
+			}
+		})
+	}
+}
 
 func TestDeployForwardsRegistryAuthentication(t *testing.T) {
 	directory := t.TempDir()

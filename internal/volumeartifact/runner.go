@@ -57,17 +57,10 @@ func ReadJob(filename string) (Job, error) {
 
 func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, error) {
 	var result Result
-	if job.Mode != "backup" && job.Mode != "restore" {
-		return result, errors.New("volume artifact mode must be backup or restore")
+	if err := ValidateJob(job); err != nil {
+		return result, err
 	}
-	parsed, err := url.Parse(job.TransferURL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return result, errors.New("volume artifact transfer URL must be HTTP(S) without credentials")
-	}
-	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
-	if err != nil || len(key) != 32 || job.EncryptionAAD == "" {
-		return result, errors.New("invalid volume artifact encryption parameters")
-	}
+	key, _ := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
 	defer clear(key)
 	box, err := cryptox.New(key)
 	if err != nil {
@@ -103,9 +96,6 @@ func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, err
 		}
 		return result, err
 	}
-	if len(job.SHA256) != 64 || len(job.PlaintextSHA256) != 64 || job.SizeBytes <= 0 {
-		return result, errors.New("restore requires artifact checksums and size")
-	}
 	if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath, job.SizeBytes); err != nil {
 		return result, err
 	}
@@ -130,6 +120,26 @@ func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, err
 		err = closeErr
 	}
 	return result, err
+}
+
+func ValidateJob(job Job) error {
+	if job.Mode != "backup" && job.Mode != "restore" {
+		return errors.New("volume artifact mode must be backup or restore")
+	}
+	parsed, err := url.Parse(job.TransferURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+		return errors.New("volume artifact transfer URL must be HTTP(S) without credentials")
+	}
+	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
+	if err != nil || len(key) != 32 || job.EncryptionAAD == "" {
+		return errors.New("invalid volume artifact encryption parameters")
+	}
+	if len(job.SHA256) != 64 || len(job.PlaintextSHA256) != 64 || job.SizeBytes <= 0 {
+		if job.Mode == "restore" {
+			return errors.New("restore requires artifact checksums and size")
+		}
+	}
+	return nil
 }
 
 func transform(box *cryptox.Box, source, destination, aad string, encrypt bool) (err error) {

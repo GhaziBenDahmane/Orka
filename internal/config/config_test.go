@@ -109,6 +109,23 @@ func TestLoadValidatesTraefikNetwork(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesSwarmServiceName(t *testing.T) {
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_SWARM_SERVICE_NAME", "custom_dockyard")
+	if cfg, err := Load(); err != nil || cfg.SwarmServiceName != "custom_dockyard" {
+		t.Fatalf("service=%q error=%v", cfg.SwarmServiceName, err)
+	}
+	for _, value := range []string{"-service", "service/name", strings.Repeat("a", 129)} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_SWARM_SERVICE_NAME", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_SWARM_SERVICE_NAME") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestLoadValidatesTrustedProxyNetworks(t *testing.T) {
 	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_TRUSTED_PROXY_CIDRS", "10.255.250.0/24, 2001:db8::/64")
