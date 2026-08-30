@@ -112,13 +112,25 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	for _, workload := range snapshot.WorkloadPosture {
 		if !workload.DefinitionParseable {
 			add(modelFinding{Severity: "high", Category: "deployment", Title: "Workload definition cannot be audited", Description: "The stored Compose definition cannot be parsed into a service inventory.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"definitionParseable": false}, Remediation: "Repair and validate the Compose definition before attempting another deployment."})
+		} else if workload.MissingImageOrBuild > 0 {
+			add(modelFinding{Severity: "high", Category: "deployment", Title: "Workload services lack an image or build source", Description: "One or more Compose services cannot identify a container image or build input.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"containerCount": workload.ContainerCount, "missingImageOrBuild": workload.MissingImageOrBuild}, Remediation: "Configure an image or supported build source for every Compose service and validate the resulting revision."})
+		}
+		if !workload.SuccessfulDeployment {
 			continue
 		}
-		if workload.MutableImages > 0 {
-			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Workload uses mutable container images", Description: "One or more Compose services reference an image without an immutable SHA-256 digest.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"containerCount": workload.ContainerCount, "mutableImages": workload.MutableImages, "digestPinnedImages": workload.DigestPinnedImages, "buildOnlyServices": workload.BuildOnlyServices}, Remediation: "Resolve and record immutable repository@sha256:digest references for prebuilt images, then deploy a new revision."})
+		if !workload.RuntimeSnapshotAvailable {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Successful deployment lacks immutable runtime snapshot", Description: "The latest successful deployment predates immutable effective-Compose capture, so its running image identities cannot be verified.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"successfulDeployment": true, "runtimeSnapshotAvailable": false}, Remediation: "Redeploy the intended revision and confirm the deployment records Swarm-resolved image digests."})
+			continue
 		}
-		if workload.MissingImageOrBuild > 0 {
-			add(modelFinding{Severity: "high", Category: "deployment", Title: "Workload services lack an image or build source", Description: "One or more Compose services cannot identify a container image or build input.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"containerCount": workload.ContainerCount, "missingImageOrBuild": workload.MissingImageOrBuild}, Remediation: "Configure an image or supported build source for every Compose service and validate the resulting revision."})
+		if !workload.RuntimeDefinitionParseable {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Deployed runtime snapshot cannot be audited", Description: "The immutable effective deployment snapshot cannot be parsed into a service inventory.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"runtimeSnapshotAvailable": true, "runtimeDefinitionParseable": false}, Remediation: "Redeploy from a validated revision and confirm the resulting immutable snapshot can be inspected."})
+			continue
+		}
+		if workload.RuntimeMutableImages > 0 {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Deployed workload uses mutable container images", Description: "The latest successful effective deployment snapshot still contains image references without immutable SHA-256 digests.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"runtimeContainerCount": workload.RuntimeContainerCount, "runtimeMutableImages": workload.RuntimeMutableImages, "runtimeDigestPinnedImages": workload.RuntimeDigestPinnedImages}, Remediation: "Redeploy and confirm Swarm resolves every running image to repository@sha256:digest before treating the workload as immutable."})
+		}
+		if workload.RuntimeBuildOnlyServices > 0 || workload.RuntimeMissingImageOrBuild > 0 {
+			add(modelFinding{Severity: "high", Category: "deployment", Title: "Deployed runtime snapshot is incomplete", Description: "The latest successful effective deployment snapshot still contains an unresolved build or lacks a runnable image.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"runtimeContainerCount": workload.RuntimeContainerCount, "runtimeBuildOnlyServices": workload.RuntimeBuildOnlyServices, "runtimeMissingImageOrBuild": workload.RuntimeMissingImageOrBuild}, Remediation: "Redeploy through the supported build pipeline and verify every runtime service records an immutable image digest."})
 		}
 	}
 	for _, source := range snapshot.SourceBuildPosture {

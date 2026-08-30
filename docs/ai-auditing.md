@@ -36,11 +36,13 @@ keys make it a privileged service.
 - Core inventory, route, and workload-provenance projections use a fixed
   number of tenant-scoped queries rather than querying once per project,
   environment, or service, so audit database load scales with returned rows.
-- Compose image provenance is reduced to per-workload counts: total
-  containers, digest-pinned images, mutable image references, build-only
-  services, and services missing both image and build input. Image names,
-  registry paths, build contexts, commands, labels, and all other Compose
-  values remain excluded.
+- Desired Compose and the latest successful effective runtime snapshot are
+  reduced to per-workload counts: total containers, digest-pinned images,
+  mutable image references, build-only services, and services missing both
+  image and build input. Image names, registry paths, build contexts, commands,
+  labels, and all other Compose values remain excluded. Missing, malformed, or
+  mutable successful runtime snapshots produce deterministic supply-chain
+  findings; mutable desired template tags alone do not.
 - Source-build posture exposes only the source/build type, repository transport
   class, credential/configuration booleans, submodule use, artifact/checksum
   presence, and whether a successful deployment plus Git commit provenance
@@ -163,8 +165,9 @@ keys make it a privileged service.
   archive, a failed latest archive delivery, or tenant events left unarchived
   for more than five minutes, backup destinations that permit plaintext
   object-store traffic, and public routes that permit plaintext HTTP, along
-  with malformed workload definitions, mutable image references, and services
-  without an image or build source. Invalid source transports, SSH sources
+  with malformed workload definitions, successful deployments without
+  immutable runtime snapshots, mutable deployed images, and services without
+  an image or build source. Invalid source transports, SSH sources
   without pinned-host credentials, missing uploaded artifacts, undeployed
   source changes, and successful Git builds lacking commit provenance are also
   deterministic. Elevated 30-day failure rates across deployments, database

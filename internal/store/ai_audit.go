@@ -229,13 +229,21 @@ type AIAuditResourcePolicyPosture struct {
 }
 
 type AIAuditWorkloadPosture struct {
-	ServiceID           uuid.UUID `json:"serviceId"`
-	DefinitionParseable bool      `json:"definitionParseable"`
-	ContainerCount      int       `json:"containerCount"`
-	DigestPinnedImages  int       `json:"digestPinnedImages"`
-	MutableImages       int       `json:"mutableImages"`
-	BuildOnlyServices   int       `json:"buildOnlyServices"`
-	MissingImageOrBuild int       `json:"missingImageOrBuild"`
+	ServiceID                  uuid.UUID `json:"serviceId"`
+	DefinitionParseable        bool      `json:"definitionParseable"`
+	ContainerCount             int       `json:"containerCount"`
+	DigestPinnedImages         int       `json:"digestPinnedImages"`
+	MutableImages              int       `json:"mutableImages"`
+	BuildOnlyServices          int       `json:"buildOnlyServices"`
+	MissingImageOrBuild        int       `json:"missingImageOrBuild"`
+	SuccessfulDeployment       bool      `json:"successfulDeployment"`
+	RuntimeSnapshotAvailable   bool      `json:"runtimeSnapshotAvailable"`
+	RuntimeDefinitionParseable bool      `json:"runtimeDefinitionParseable"`
+	RuntimeContainerCount      int       `json:"runtimeContainerCount"`
+	RuntimeDigestPinnedImages  int       `json:"runtimeDigestPinnedImages"`
+	RuntimeMutableImages       int       `json:"runtimeMutableImages"`
+	RuntimeBuildOnlyServices   int       `json:"runtimeBuildOnlyServices"`
+	RuntimeMissingImageOrBuild int       `json:"runtimeMissingImageOrBuild"`
 }
 
 type AIAuditSourceBuildPosture struct {
@@ -538,10 +546,17 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	rows.Close()
 
 	rows, err = s.Pool.Query(ctx, `SELECT service.id,service.environment_id,service.name,service.slug,service.stack_name,service.storage_node_id,
-		service.revision,service.created_at,service.updated_at,service.compose_yaml
+		service.revision,service.created_at,service.updated_at,service.compose_yaml,runtime.id IS NOT NULL,COALESCE(runtime.effective_compose,'')
 		FROM compose_services service
 		JOIN environments environment ON environment.id=service.environment_id
 		JOIN projects project ON project.id=environment.project_id
+		LEFT JOIN LATERAL (
+			SELECT deployment.id,deployment.effective_compose
+			FROM deployments deployment
+			WHERE deployment.compose_service_id=service.id AND deployment.status='succeeded'
+			ORDER BY deployment.finished_at DESC NULLS LAST,deployment.created_at DESC,deployment.id DESC
+			LIMIT 1
+		) runtime ON true
 		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
 		ORDER BY project.name,project.id,environment.name,environment.id,service.name,service.id`, organizationID)
 	if err != nil {
@@ -549,13 +564,26 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	}
 	for rows.Next() {
 		var item AIAuditServiceInfo
-		var composeYAML string
-		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.CreatedAt, &item.UpdatedAt, &composeYAML); err != nil {
+		var composeYAML, runtimeCompose string
+		var successfulDeployment bool
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.CreatedAt, &item.UpdatedAt, &composeYAML, &successfulDeployment, &runtimeCompose); err != nil {
 			rows.Close()
 			return err
 		}
 		snapshot.Services = append(snapshot.Services, item)
-		snapshot.WorkloadPosture = append(snapshot.WorkloadPosture, analyzeAIAuditWorkload(item.ID, composeYAML))
+		posture := analyzeAIAuditWorkload(item.ID, composeYAML)
+		posture.SuccessfulDeployment = successfulDeployment
+		if runtimeCompose != "" {
+			runtime := analyzeAIAuditWorkload(item.ID, runtimeCompose)
+			posture.RuntimeSnapshotAvailable = true
+			posture.RuntimeDefinitionParseable = runtime.DefinitionParseable
+			posture.RuntimeContainerCount = runtime.ContainerCount
+			posture.RuntimeDigestPinnedImages = runtime.DigestPinnedImages
+			posture.RuntimeMutableImages = runtime.MutableImages
+			posture.RuntimeBuildOnlyServices = runtime.BuildOnlyServices
+			posture.RuntimeMissingImageOrBuild = runtime.MissingImageOrBuild
+		}
+		snapshot.WorkloadPosture = append(snapshot.WorkloadPosture, posture)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
