@@ -35,8 +35,14 @@ func TestValidateRemoteArtifactJobRequiresTrustedTransferMetadata(t *testing.T) 
 		"URL scheme":       func(job *RemoteArtifactJob) { job.TransferURL = "file:///tmp/artifact" },
 		"URL credentials":  func(job *RemoteArtifactJob) { job.TransferURL = "https://user:secret@objects.example.test/object" },
 		"URL fragment":     func(job *RemoteArtifactJob) { job.TransferURL += "#ignored" },
+		"URL invalid host": func(job *RemoteArtifactJob) { job.TransferURL = "https://bad_label.example.test/object" },
+		"URL invalid port": func(job *RemoteArtifactJob) { job.TransferURL = "https://objects.example.test:65536/object" },
+		"URL too long": func(job *RemoteArtifactJob) {
+			job.TransferURL = "https://objects.example.test/" + strings.Repeat("a", maxRemoteArtifactTransferURLBytes)
+		},
 		"encryption key":   func(job *RemoteArtifactJob) { job.EncryptionKey = "invalid" },
 		"encryption AAD":   func(job *RemoteArtifactJob) { job.EncryptionAAD = "" },
+		"oversized AAD":    func(job *RemoteArtifactJob) { job.EncryptionAAD = strings.Repeat("a", maxRemoteArtifactAADBytes+1) },
 		"encrypted digest": func(job *RemoteArtifactJob) { job.SHA256 = strings.Repeat("z", 64) },
 		"plaintext digest": func(job *RemoteArtifactJob) { job.PlaintextSHA256 = strings.Repeat("z", 64) },
 		"artifact size":    func(job *RemoteArtifactJob) { job.SizeBytes = 0 },

@@ -148,6 +148,33 @@ func TestValidateRestoreRequiresHexChecksums(t *testing.T) {
 	}
 }
 
+func TestValidateJobRejectsUnsafeTransferMetadata(t *testing.T) {
+	base := Job{Mode: "backup", TransferURL: "https://objects.example.test/artifact?signature=value", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test"}
+	tests := []struct {
+		name   string
+		mutate func(*Job)
+	}{
+		{"URL credentials", func(job *Job) { job.TransferURL = "https://user@objects.example.test/artifact" }},
+		{"URL fragment", func(job *Job) { job.TransferURL += "#fragment" }},
+		{"URL invalid host", func(job *Job) { job.TransferURL = "https://bad_label.example.test/artifact" }},
+		{"URL invalid port", func(job *Job) { job.TransferURL = "https://objects.example.test:65536/artifact" }},
+		{"URL too long", func(job *Job) {
+			job.TransferURL = "https://objects.example.test/" + strings.Repeat("a", maxTransferURLBytes)
+		}},
+		{"AAD newline", func(job *Job) { job.EncryptionAAD = "volume\nbackup" }},
+		{"AAD too long", func(job *Job) { job.EncryptionAAD = strings.Repeat("a", maxEncryptionAADBytes+1) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := base
+			test.mutate(&job)
+			if err := ValidateJob(job); err == nil {
+				t.Fatal("unsafe volume artifact job was accepted")
+			}
+		})
+	}
+}
+
 func TestRestoreRejectsTamperedCiphertextWithoutChangingVolume(t *testing.T) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)

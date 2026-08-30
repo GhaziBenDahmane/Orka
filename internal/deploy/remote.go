@@ -7,14 +7,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
+	"strings"
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
+)
+
+const (
+	maxRemoteArtifactTransferURLBytes = 32 << 10
+	maxRemoteArtifactAADBytes         = 1024
 )
 
 type RemoteSwarm struct {
@@ -206,12 +212,11 @@ func ValidateRemoteArtifactJob(job RemoteArtifactJob) error {
 	if _, exists := job.Files[job.ArtifactName]; exists {
 		return errors.New("utility file conflicts with artifact name")
 	}
-	parsed, err := url.Parse(job.TransferURL)
-	if err != nil || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if _, err := netpolicy.ValidateHTTPURL(job.TransferURL, maxRemoteArtifactTransferURLBytes); err != nil {
 		return errors.New("artifact transfer URL must be HTTP(S) without credentials or a fragment")
 	}
 	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
-	if err != nil || len(key) != 32 || job.EncryptionAAD == "" {
+	if err != nil || len(key) != 32 || job.EncryptionAAD == "" || len(job.EncryptionAAD) > maxRemoteArtifactAADBytes || strings.ContainsAny(job.EncryptionAAD, "\x00\r\n") {
 		return errors.New("invalid artifact encryption parameters")
 	}
 	if job.Mode == "download" {

@@ -10,11 +10,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
+)
+
+const (
+	maxTransferURLBytes   = 32 << 10
+	maxEncryptionAADBytes = 1024
 )
 
 type Job struct {
@@ -141,12 +147,11 @@ func ValidateJob(job Job) error {
 	if job.Mode != "backup" && job.Mode != "restore" {
 		return errors.New("volume artifact mode must be backup or restore")
 	}
-	parsed, err := url.Parse(job.TransferURL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
+	if _, err := netpolicy.ValidateHTTPURL(job.TransferURL, maxTransferURLBytes); err != nil {
 		return errors.New("volume artifact transfer URL must be HTTP(S) without credentials")
 	}
 	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
-	if err != nil || len(key) != 32 || job.EncryptionAAD == "" {
+	if err != nil || len(key) != 32 || job.EncryptionAAD == "" || len(job.EncryptionAAD) > maxEncryptionAADBytes || strings.ContainsAny(job.EncryptionAAD, "\x00\r\n") {
 		return errors.New("invalid volume artifact encryption parameters")
 	}
 	if job.Mode == "restore" {
