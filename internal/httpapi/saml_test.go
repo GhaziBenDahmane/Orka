@@ -65,3 +65,22 @@ func TestNewSAMLCertificateAndAttributeLookup(t *testing.T) {
 		t.Fatalf("attribute value = %q", value)
 	}
 }
+
+func TestValidateSAMLRedirectEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://login.example.test/saml/sso",
+		"https://login.example.test/saml/sso?tenant=one",
+	} {
+		if err := validateSAMLRedirectEndpoint(endpoint); err != nil {
+			t.Errorf("rejected valid endpoint %q: %v", endpoint, err)
+		}
+	}
+	for _, endpoint := range []string{
+		"", "http://login.example.test/saml/sso", "//login.example.test/saml/sso",
+		"https://user@login.example.test/saml/sso", "https://login.example.test/saml/sso#fragment",
+	} {
+		if err := validateSAMLRedirectEndpoint(endpoint); err == nil {
+			t.Errorf("accepted unsafe endpoint %q", endpoint)
+		}
+	}
+}

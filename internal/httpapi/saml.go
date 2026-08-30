@@ -65,8 +65,8 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metadataValidator := saml.ServiceProvider{IDPMetadata: metadata}
-	if metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding) == "" {
-		writeError(w, 400, "invalid_metadata", "identity-provider metadata must advertise HTTP-Redirect SSO")
+	if err = validateSAMLRedirectEndpoint(metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding)); err != nil {
+		writeError(w, 400, "invalid_metadata", err.Error())
 		return
 	}
 	if _, err = auth.SAMLIdentityProviderCertificateExpiry(metadata, time.Now()); err != nil {
@@ -148,8 +148,8 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	metadataValidator := saml.ServiceProvider{IDPMetadata: metadata}
-	if metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding) == "" {
-		writeError(w, 400, "invalid_metadata", "identity-provider metadata must advertise HTTP-Redirect SSO")
+	if err = validateSAMLRedirectEndpoint(metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding)); err != nil {
+		writeError(w, 400, "invalid_metadata", err.Error())
 		return
 	}
 	if _, err = auth.SAMLIdentityProviderCertificateExpiry(metadata, time.Now()); err != nil {
@@ -208,6 +208,11 @@ func (s *Server) enableSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	metadata, err := samlsp.ParseMetadata([]byte(provider.IDPMetadata))
 	if err != nil || setSAMLCertificateStatus(&provider, metadata, time.Now()) != nil {
 		writeError(w, http.StatusConflict, "invalid_saml_certificates", "refresh the SAML metadata or certificate configuration before enabling this provider")
+		return
+	}
+	metadataValidator := saml.ServiceProvider{IDPMetadata: metadata}
+	if err = validateSAMLRedirectEndpoint(metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding)); err != nil {
+		writeError(w, http.StatusConflict, "invalid_saml_endpoint", err.Error())
 		return
 	}
 	if err = s.Store.SetSAMLProviderEnabled(r.Context(), p.OrganizationID, id, true); err != nil {
@@ -517,6 +522,10 @@ func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.S
 	if err = setSAMLCertificateStatus(&provider, idpMetadata, time.Now()); err != nil {
 		return store.SAMLProvider{}, nil, err
 	}
+	metadataValidator := saml.ServiceProvider{IDPMetadata: idpMetadata}
+	if err = validateSAMLRedirectEndpoint(metadataValidator.GetSSOBindingLocation(saml.HTTPRedirectBinding)); err != nil {
+		return store.SAMLProvider{}, nil, err
+	}
 	certificate, signer, err := s.samlSigningMaterial(provider.ID, provider.CertificatePEM, provider.EncryptedPrivateKey)
 	if err != nil {
 		return store.SAMLProvider{}, nil, err
@@ -525,6 +534,14 @@ func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.S
 	metadataURL, _ := url.Parse(base + "/metadata")
 	acsURL, _ := url.Parse(base + "/acs")
 	return provider, &saml.ServiceProvider{EntityID: metadataURL.String(), Key: signer, Certificate: certificate, MetadataURL: *metadataURL, AcsURL: *acsURL, IDPMetadata: idpMetadata, AuthnNameIDFormat: saml.PersistentNameIDFormat, SignatureMethod: dsig.RSASHA256SignatureMethod, AllowIDPInitiated: provider.AllowIDPInitiated, DefaultRedirectURI: strings.TrimRight(s.PublicURL, "/")}, nil
+}
+
+func validateSAMLRedirectEndpoint(raw string) error {
+	endpoint, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
+		return errors.New("identity-provider metadata must advertise an absolute HTTPS HTTP-Redirect SSO endpoint")
+	}
+	return nil
 }
 
 func (s *Server) samlSigningMaterial(providerID uuid.UUID, certificatePEM, encryptedPrivateKey string) (*x509.Certificate, crypto.Signer, error) {
