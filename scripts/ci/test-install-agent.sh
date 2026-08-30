@@ -308,6 +308,19 @@ if grep -Fq "$enrollment_token" "$DOCKYARD_INSTALL_TEST_LOG"; then
 fi
 
 printf '%s' "$enrollment_token" >"$temporary/secrets/enrollment-token"
+ln -s "$temporary/secrets/enrollment-token" "$temporary/secrets/enrollment-token-link"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE="$temporary/secrets/enrollment-token-link" \
+  "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a symbolic-link enrollment token' >&2
+  exit 1
+fi
+grep -q 'must name a readable regular file, not a symbolic link' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'symbolic-link enrollment token mutated Docker state' >&2
+  exit 1
+fi
+
 chmod 0644 "$temporary/secrets/enrollment-token"
 if "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'agent installer accepted a broadly readable enrollment token' >&2

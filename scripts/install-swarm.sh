@@ -124,7 +124,7 @@ validate_secret_file() {
   label=$1
   path=$2
   [ -n "$path" ] || fail "$label is required"
-  [ -f "$path" ] && [ -r "$path" ] || fail "$label must name a readable regular file"
+  [ ! -L "$path" ] && [ -f "$path" ] && [ -r "$path" ] || fail "$label must name a readable regular file, not a symbolic link"
   [ -z "$(find "$path" -prune -perm /077 -print)" ] || fail "$label must not be accessible by group or other users"
   size=$(wc -c <"$path" | tr -d ' ')
   [ "$size" -gt 0 ] && [ "$size" -le 65536 ] || fail "$label must contain between 1 and 65536 bytes"

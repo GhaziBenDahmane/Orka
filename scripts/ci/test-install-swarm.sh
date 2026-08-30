@@ -93,6 +93,19 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
   exit 1
 fi
 
+ln -s "$temporary/secrets/metrics-token" "$temporary/secrets/metrics-token-link"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_METRICS_TOKEN_FILE="$temporary/secrets/metrics-token-link" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted a symbolic-link secret input' >&2
+  exit 1
+fi
+grep -q 'must name a readable regular file, not a symbolic link' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'symbolic-link secret input mutated Docker state' >&2
+  exit 1
+fi
+
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL=true "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'installer ignored candidate database URL validation failure' >&2

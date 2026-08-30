@@ -54,7 +54,7 @@ The script writes `release-soak-evidence.json`. It does not exercise the real
 production topology or replace the monitored production soak window.
 
 For a repeatable non-interactive installation, put the four secret values in
-mode-0600 files and run the installer on a Swarm manager:
+mode-0600 non-symlink regular files and run the installer on a Swarm manager:
 
 ```sh
 export DOCKYARD_HOST=dockyard.example.com
@@ -360,8 +360,8 @@ scripts/install-agent.sh
 The installer uses the exact immutable candidate image to require HTTPS origins
 without credentials, paths, query strings, or fragments, with valid hostnames
 and ports. It also requires a registry-resolvable image, an active Swarm
-manager, and a mode-0600 enrollment-token file containing 32–4096 bytes and no
-line breaks. It creates the workload overlay network when absent, derives the exact self-upgrade service name from
+manager, and a mode-0600 non-symlink enrollment-token file containing
+32–4096 bytes and no line breaks. It creates the workload overlay network when absent, derives the exact self-upgrade service name from
 `DOCKYARD_AGENT_STACK_NAME`, and requires the replica count to remain converged
 for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse

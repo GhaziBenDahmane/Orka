@@ -29,7 +29,7 @@ case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be
 case "$stability_seconds" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_STABILITY_SECONDS must be a non-negative integer" ;; esac
 [ "$stability_seconds" -le "$wait_timeout" ] || fail "DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed DOCKYARD_INSTALL_WAIT_TIMEOUT"
 
-for command in docker find grep sleep tr wc; do
+for command in awk date docker find grep sleep tr wc; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -45,7 +45,7 @@ swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAv
 
 token_file=${DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE:-}
 [ -n "$token_file" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE is required"
-[ -f "$token_file" ] && [ -r "$token_file" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must name a readable regular file"
+[ ! -L "$token_file" ] && [ -f "$token_file" ] && [ -r "$token_file" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must name a readable regular file, not a symbolic link"
 [ -z "$(find "$token_file" -prune -perm /077 -print)" ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must not be accessible by group or other users"
 token_size=$(wc -c <"$token_file" | tr -d ' ')
 [ "$token_size" -ge 32 ] && [ "$token_size" -le 4096 ] || fail "DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE must contain between 32 and 4096 bytes"
