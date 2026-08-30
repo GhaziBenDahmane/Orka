@@ -67,7 +67,14 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "oversized@example.test", "displayName": strings.Repeat("x", 121), "active": true}, http.StatusBadRequest)
 
-	createdUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "member-" + orgID.String() + "@example.test", "active": true}, http.StatusCreated)
+	createdUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{
+		"schemas":  []string{scimUserSchema, "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"},
+		"userName": "member-" + orgID.String() + "@example.test",
+		"active":   true,
+		"name":     map[string]string{"givenName": "Example", "familyName": "Member"},
+		"emails":   []map[string]any{{"value": "member-" + orgID.String() + "@example.test", "primary": true}},
+		"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": map[string]string{"department": "Engineering"},
+	}, http.StatusCreated)
 	memberID := createdUser["id"].(string)
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, memberID) })
 	userPage := doSCIMRequest(t, server.URL+"/scim/v2/Users?startIndex=2&count=1", token, http.MethodGet, nil, http.StatusOK)

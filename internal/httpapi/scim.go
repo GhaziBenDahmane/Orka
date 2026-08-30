@@ -3,6 +3,8 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -116,6 +118,39 @@ func scimError(w http.ResponseWriter, status int, detail string) {
 	scimJSON(w, status, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:Error"}, "status": strconv.Itoa(status), "detail": detail})
 }
 
+// decodeSCIM keeps the platform request bound while allowing extension
+// attributes, as required by SCIM's extensible schema model. Unsupported
+// attributes are ignored instead of making otherwise valid provider payloads
+// fail strict platform-API decoding.
+func decodeSCIM(w http.ResponseWriter, r *http.Request, target any) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" && mediaType != "application/scim+json" {
+		scimError(w, http.StatusUnsupportedMediaType, "request Content-Type must be application/scim+json or application/json")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 3<<20)
+	decoder := json.NewDecoder(r.Body)
+	if err = decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			scimError(w, http.StatusRequestEntityTooLarge, "SCIM request body exceeds the endpoint limit")
+		} else {
+			scimError(w, http.StatusBadRequest, "request body must contain one valid JSON object")
+		}
+		return false
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			scimError(w, http.StatusRequestEntityTooLarge, "SCIM request body exceeds the endpoint limit")
+		} else {
+			scimError(w, http.StatusBadRequest, "request must contain one JSON value")
+		}
+		return false
+	}
+	return true
+}
+
 func scimPage(r *http.Request) (startIndex, count int, err error) {
 	startIndex, count = 1, scimMaxPageSize
 	if raw := r.URL.Query().Get("startIndex"); raw != "" {
@@ -211,7 +246,7 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		DisplayName string   `json:"displayName"`
 		Active      *bool    `json:"active"`
 	}
-	if !decode(w, r, &in) {
+	if !decodeSCIM(w, r, &in) {
 		return
 	}
 	email, _, validEmail := canonicalEmail(in.UserName)
@@ -352,7 +387,7 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 			Value any    `json:"value"`
 		} `json:"Operations"`
 	}
-	if !decode(w, r, &in) {
+	if !decodeSCIM(w, r, &in) {
 		return
 	}
 	tx, err := s.Store.Pool.Begin(r.Context())

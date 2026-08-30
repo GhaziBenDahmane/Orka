@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,5 +47,39 @@ func TestSCIMJSONUsesSCIMMediaType(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"status":"400"`) {
 		t.Fatalf("SCIM error status is not encoded as a string: %q", recorder.Body.String())
+	}
+}
+
+func TestDecodeSCIMAcceptsExtensionAttributes(t *testing.T) {
+	var payload struct {
+		UserName string `json:"userName"`
+	}
+	request := httptest.NewRequest(http.MethodPost, "/scim/v2/Users", bytes.NewBufferString(`{
+		"schemas":["urn:ietf:params:scim:schemas:core:2.0:User","urn:example:extension"],
+		"userName":"user@example.test",
+		"name":{"givenName":"Example","familyName":"User"},
+		"emails":[{"value":"user@example.test","primary":true}],
+		"urn:example:extension":{"department":"Engineering"}
+	}`))
+	request.Header.Set("Content-Type", "application/scim+json; charset=utf-8")
+	recorder := httptest.NewRecorder()
+	if !decodeSCIM(recorder, request, &payload) || payload.UserName != "user@example.test" {
+		t.Fatalf("extension-bearing payload rejected: status=%d body=%q payload=%#v", recorder.Code, recorder.Body.String(), payload)
+	}
+}
+
+func TestDecodeSCIMRejectsTrailingJSONWithSCIMError(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/scim/v2/Users", bytes.NewBufferString(`{} {}`))
+	request.Header.Set("Content-Type", "application/scim+json")
+	recorder := httptest.NewRecorder()
+	if decodeSCIM(recorder, request, &map[string]any{}) {
+		t.Fatal("multiple JSON values were accepted")
+	}
+	if recorder.Code != http.StatusBadRequest || recorder.Header().Get("Content-Type") != "application/scim+json" {
+		t.Fatalf("status=%d Content-Type=%q body=%q", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil || response["status"] != "400" {
+		t.Fatalf("invalid SCIM error response: %#v err=%v", response, err)
 	}
 }

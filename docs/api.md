@@ -122,6 +122,9 @@ and stop authenticating immediately after expiration or explicit revocation.
 User and group collection reads support the SCIM `filter`, one-based
 `startIndex`, and bounded `count` parameters (default and maximum 100), and
 return the full matching `totalResults` independently of the current page.
+SCIM writes accept extension attributes within the normal bounded request body;
+unsupported attributes are ignored so standard Entra and Okta user payloads do
+not fail solely because they include optional schema fields.
 Deactivation removes access but retains that binding, so identity providers can
 query and reactivate an inactive user. A tenant cannot PATCH a global user ID
 that it does not own. Because email identities are shared across organizations,

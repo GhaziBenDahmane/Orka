@@ -107,7 +107,7 @@ func (s *Server) listSCIMGroups(w http.ResponseWriter, r *http.Request, orgID uu
 
 func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID uuid.UUID) {
 	var in scimGroupInput
-	if !decode(w, r, &in) {
+	if !decodeSCIM(w, r, &in) {
 		return
 	}
 	in.DisplayName = strings.TrimSpace(in.DisplayName)
@@ -181,7 +181,7 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 			Value json.RawMessage `json:"value"`
 		} `json:"Operations"`
 	}
-	if !decode(w, r, &in) {
+	if !decodeSCIM(w, r, &in) {
 		return
 	}
 	tx, err := s.Store.Pool.Begin(r.Context())
