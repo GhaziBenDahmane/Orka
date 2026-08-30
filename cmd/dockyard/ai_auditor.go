@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/bendahma/dokploy-go/internal/store"
 )
 
 type auditorConfig struct {
@@ -88,24 +90,48 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	if err := auditorRequest(ctx, client, cfg, http.MethodGet, "/v1/ai/audit-snapshot", nil, &snapshot); err != nil {
 		return err
 	}
+	var platform store.AIAuditSnapshot
+	if err := json.Unmarshal(snapshot, &platform); err != nil {
+		return fmt.Errorf("decode audit snapshot: %w", err)
+	}
 	var run struct {
 		ID string `json:"id"`
 	}
 	if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs", map[string]any{"agentName": cfg.AgentName, "agentVersion": cfg.AgentVersion, "model": cfg.Model, "scope": map[string]any{"kind": "platform", "focus": cfg.Focus}}, &run); err != nil {
 		return err
 	}
+	baseline := deterministicAuditFindings(platform, time.Now().UTC())
+	for _, finding := range baseline {
+		if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs/"+run.ID+"/findings", finding, nil); err != nil {
+			_ = finishFailedAudit(ctx, client, cfg, run.ID, err)
+			return err
+		}
+	}
 	report, err := requestAuditModel(ctx, client, cfg, snapshot)
 	if err != nil {
-		_ = auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "failed", "summary": err.Error()}, nil)
+		_ = finishFailedAudit(ctx, client, cfg, run.ID, fmt.Errorf("deterministic baseline recorded %d findings; model audit failed: %w", len(baseline), err))
 		return err
 	}
 	for _, finding := range report.Findings {
 		if err = auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs/"+run.ID+"/findings", finding, nil); err != nil {
-			_ = auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "failed", "summary": err.Error()}, nil)
+			_ = finishFailedAudit(ctx, client, cfg, run.ID, err)
 			return err
 		}
 	}
-	return auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "completed", "summary": report.Summary}, nil)
+	summary := fmt.Sprintf("Deterministic baseline: %d finding(s). %s", len(baseline), report.Summary)
+	return auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+run.ID, map[string]string{"status": "completed", "summary": boundedAuditSummary(summary)}, nil)
+}
+
+func finishFailedAudit(ctx context.Context, client *http.Client, cfg auditorConfig, runID string, auditErr error) error {
+	return auditorRequest(ctx, client, cfg, http.MethodPatch, "/v1/ai/audit-runs/"+runID, map[string]string{"status": "failed", "summary": boundedAuditSummary(auditErr.Error())}, nil)
+}
+
+func boundedAuditSummary(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 8000 {
+		return value
+	}
+	return value[:7997] + "..."
 }
 
 func auditorRequest(ctx context.Context, client *http.Client, cfg auditorConfig, method, path string, input, output any) error {
@@ -166,7 +192,7 @@ func requestAuditModel(ctx context.Context, client *http.Client, cfg auditorConf
 		return modelReport{}, errors.New("model response exceeds 4 MiB")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return modelReport{}, fmt.Errorf("model gateway returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(response)))
+		return modelReport{}, fmt.Errorf("model gateway returned HTTP %d", resp.StatusCode)
 	}
 	var completion struct {
 		Choices []struct {
