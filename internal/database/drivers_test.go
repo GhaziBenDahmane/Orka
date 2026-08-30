@@ -61,6 +61,24 @@ func TestRegistryRendersAllDrivers(t *testing.T) {
 	}
 }
 
+func TestRegistryEngineMetadataIsSortedAndComplete(t *testing.T) {
+	engines := NewRegistry().Engines()
+	if len(engines) != len(NewRegistry().Names()) {
+		t.Fatalf("metadata count=%d", len(engines))
+	}
+	for index, engine := range engines {
+		if index > 0 && engines[index-1].Name >= engine.Name {
+			t.Fatalf("engine metadata is not sorted: %#v", engines)
+		}
+		if engine.Name == "" || engine.DefaultVersion == "" || engine.Source != "built-in" {
+			t.Fatalf("incomplete built-in metadata: %#v", engine)
+		}
+		if !engine.BackupCapable || engine.BackupExtension == "" {
+			t.Fatalf("built-in recovery metadata is incomplete: %#v", engine)
+		}
+	}
+}
+
 func TestNativeBackupAndRestorePlans(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}

@@ -82,3 +82,16 @@ func TestOpenAPI31SecurityClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIDocumentsStructuredDatabaseEngineResponse(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{"#/components/schemas/DatabaseEngineList", "required: [name, defaultVersion, source, backupCapable, backupExtension]", "enum: [built-in, external]"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing %q", expected)
+		}
+	}
+}

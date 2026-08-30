@@ -345,7 +345,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | POST | `/v1/templates/{id}/instantiate` | Create a service, encrypted secrets, files and routes; accepts declared `variables` overrides |
 | GET | `/v1/services/{id}/template-versions` | List other revisions of the service's source template |
 | POST | `/v1/services/{id}/template-upgrades` | Atomically apply another template revision while preserving generated secrets and explicit overrides |
-| GET | `/v1/database-engines` | List built-in database drivers |
+| GET | `/v1/database-engines` | List built-in and trusted external database drivers with capabilities |
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/DELETE | `/v1/backup-destinations…` | Manage encrypted S3-compatible destinations |
 
@@ -379,7 +379,11 @@ authenticated context and is never returned by the API.
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model.
-The engine response includes `backupCapable`; verified engine-specific
+The engine response includes a structured `engines` collection with each
+driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
+`backupCapable`, and `backupExtension`. External executable paths are never
+exposed. The legacy `items` and `backupCapable` name lists remain available for
+API compatibility. Verified engine-specific
 backup/restore is currently available for PostgreSQL, MySQL, MariaDB, MongoDB,
 Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch.
 Pass `destinationId` to a backup request or backup policy to upload through an

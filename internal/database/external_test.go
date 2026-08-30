@@ -1,6 +1,7 @@
 package database
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,24 @@ esac
 	}
 	if extension, ok := registry.BackupExtension("cockroach"); !ok || extension != "dump" {
 		t.Fatalf("backup extension=%q supported=%v", extension, ok)
+	}
+	var metadata *EngineInfo
+	engines := registry.Engines()
+	for index := range engines {
+		if engines[index].Name == "cockroach" {
+			metadata = &engines[index]
+			break
+		}
+	}
+	if metadata == nil || metadata.DefaultVersion != "v25.2" || metadata.Source != "external" || !metadata.BackupCapable || metadata.BackupExtension != "dump" {
+		t.Fatalf("external metadata=%#v", metadata)
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), directory) || strings.Contains(string(encoded), path) {
+		t.Fatalf("external driver path leaked in metadata: %s", encoded)
 	}
 	if plan, err := registry.Backup("cockroach", "v25.2", "data", map[string]string{}, "backup.dump"); err != nil || len(plan.Command) == 0 {
 		t.Fatalf("backup plan=%#v err=%v", plan, err)

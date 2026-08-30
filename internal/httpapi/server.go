@@ -1046,13 +1046,16 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) databaseEngines(w http.ResponseWriter, r *http.Request) {
+	engines := s.Databases.Engines()
+	items := make([]string, 0, len(engines))
 	backupCapable := []string{}
-	for _, name := range s.Databases.Names() {
-		if _, ok := s.Databases.BackupExtension(name); ok {
-			backupCapable = append(backupCapable, name)
+	for _, engine := range engines {
+		items = append(items, engine.Name)
+		if engine.BackupCapable {
+			backupCapable = append(backupCapable, engine.Name)
 		}
 	}
-	writeJSON(w, 200, map[string]any{"items": s.Databases.Names(), "backupCapable": backupCapable})
+	writeJSON(w, 200, map[string]any{"items": items, "backupCapable": backupCapable, "engines": engines})
 }
 func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	environmentID, err := uuid.Parse(r.PathValue("environmentID"))

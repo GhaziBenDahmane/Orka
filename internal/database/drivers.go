@@ -47,6 +47,14 @@ type SourceConnection struct {
 type RestorePlan = BackupPlan
 type Registry struct{ drivers map[string]Driver }
 
+type EngineInfo struct {
+	Name            string `json:"name"`
+	DefaultVersion  string `json:"defaultVersion"`
+	Source          string `json:"source"`
+	BackupCapable   bool   `json:"backupCapable"`
+	BackupExtension string `json:"backupExtension"`
+}
+
 var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 func NewRegistry() *Registry {
@@ -68,12 +76,35 @@ func NewRegistry() *Registry {
 	return r
 }
 func (r *Registry) Names() []string {
-	names := make([]string, 0, len(r.drivers))
-	for name := range r.drivers {
-		names = append(names, name)
+	engines := r.Engines()
+	names := make([]string, 0, len(engines))
+	for _, engine := range engines {
+		names = append(names, engine.Name)
 	}
-	sort.Strings(names)
 	return names
+}
+
+// Engines returns stable, public metadata for every registered database
+// driver. It deliberately reports only the driver's trust source and never
+// exposes the executable path used by an external driver.
+func (r *Registry) Engines() []EngineInfo {
+	engines := make([]EngineInfo, 0, len(r.drivers))
+	for name, driver := range r.drivers {
+		extension, backupCapable := r.BackupExtension(name)
+		source := "built-in"
+		if _, external := driver.(*externalDriver); external {
+			source = "external"
+		}
+		engines = append(engines, EngineInfo{
+			Name:            name,
+			DefaultVersion:  driver.DefaultVersion(),
+			Source:          source,
+			BackupCapable:   backupCapable,
+			BackupExtension: extension,
+		})
+	}
+	sort.Slice(engines, func(i, j int) bool { return engines[i].Name < engines[j].Name })
+	return engines
 }
 func (r *Registry) Render(engine string, request Request) (Result, error) {
 	driver, ok := r.drivers[engine]

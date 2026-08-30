@@ -1267,6 +1267,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseEngineList'
         default:
           description: Structured API error
           content:
@@ -3657,6 +3661,29 @@ components:
     mutualTLS:
       type: mutualTLS
   schemas:
+    DatabaseEngine:
+      type: object
+      required: [name, defaultVersion, source, backupCapable, backupExtension]
+      properties:
+        name: {type: string}
+        defaultVersion: {type: string}
+        source: {type: string, enum: [built-in, external]}
+        backupCapable: {type: boolean}
+        backupExtension: {type: string}
+    DatabaseEngineList:
+      type: object
+      required: [items, backupCapable, engines]
+      properties:
+        items:
+          type: array
+          items: {type: string}
+        backupCapable:
+          type: array
+          items: {type: string}
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatabaseEngine'
     ErrorEnvelope:
       type: object
       required: [error]

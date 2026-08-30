@@ -81,7 +81,11 @@ paths:
 					output.WriteString("      requestBody:\n        required: false\n        content:\n          application/json:\n            schema:\n              type: object\n              additionalProperties: true\n")
 				}
 			}
-			output.WriteString("      responses:\n        '2XX':\n          description: Successful response\n        default:\n          description: Structured API error\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/ErrorEnvelope'\n")
+			output.WriteString("      responses:\n        '2XX':\n          description: Successful response\n")
+			if op.method == "get" && op.path == "/v1/database-engines" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseEngineList'\n")
+			}
+			output.WriteString("        default:\n          description: Structured API error\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/ErrorEnvelope'\n")
 		}
 	}
 	output.WriteString(`components:
@@ -92,6 +96,29 @@ paths:
     mutualTLS:
       type: mutualTLS
   schemas:
+    DatabaseEngine:
+      type: object
+      required: [name, defaultVersion, source, backupCapable, backupExtension]
+      properties:
+        name: {type: string}
+        defaultVersion: {type: string}
+        source: {type: string, enum: [built-in, external]}
+        backupCapable: {type: boolean}
+        backupExtension: {type: string}
+    DatabaseEngineList:
+      type: object
+      required: [items, backupCapable, engines]
+      properties:
+        items:
+          type: array
+          items: {type: string}
+        backupCapable:
+          type: array
+          items: {type: string}
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatabaseEngine'
     ErrorEnvelope:
       type: object
       required: [error]
