@@ -206,6 +206,12 @@ Repository URLs and refs, output image names, credential identifiers, artifact
 details, and encrypted build configuration are excluded. The baseline detects
 invalid transports, missing SSH trust credentials, missing drop artifacts,
 undeployed source changes, and successful Git builds without a recorded commit.
+The `signals30d` collection aggregates tenant-scoped deployment, database and
+volume recovery, migration, audit archive, remote-agent command, commit-status,
+notification, and prior AI-audit counts by status. With at least four
+succeeded/failed outcomes, the deterministic baseline reports failure rates of
+25% or greater and raises severity from medium to high at 50%; pending,
+running, and cancelled outcomes are excluded.
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a

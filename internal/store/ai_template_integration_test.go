@@ -235,6 +235,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	backupID, policyID := uuid.New(), uuid.New()
 	routeID, otherRouteID := uuid.New(), uuid.New()
 	samlProviderID, otherSAMLProviderID := uuid.New(), uuid.New()
+	notificationEndpointID, otherNotificationEndpointID := uuid.New(), uuid.New()
 	auditArchiveID, disabledAuditArchiveID, otherAuditArchiveID := uuid.New(), uuid.New(), uuid.New()
 	auditBackupDestinationID, disabledAuditBackupDestinationID, otherAuditBackupDestinationID := uuid.New(), uuid.New(), uuid.New()
 	latestDeploymentAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
@@ -267,8 +268,17 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO organization_auth_settings(organization_id,require_sso) VALUES($1,true)`, []any{organizationID}},
 		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,enabled) VALUES($1,$2,'Company','https://id.example.test','client','encrypted',true)`, []any{uuid.New(), organizationID}},
 		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,enabled) VALUES($1,$2,'Target SAML','target-idp-metadata-secret','target-sp-certificate-secret','target-saml-key-secret',true),($3,$4,'Other SAML','other-idp-metadata-secret','other-sp-certificate-secret','other-saml-key-secret',true)`, []any{samlProviderID, organizationID, otherSAMLProviderID, otherOrganizationID}},
-		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,'On-call','webhook','encrypted','encrypted',ARRAY['backup.failed'],true)`, []any{uuid.New(), organizationID}},
-		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,'Other','webhook','other-secret-url','other-secret',ARRAY['backup.failed'],true)`, []any{uuid.New(), otherOrganizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,'On-call','webhook','encrypted','encrypted',ARRAY['backup.failed'],true)`, []any{notificationEndpointID, organizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,'Other','webhook','other-secret-url','other-secret',ARRAY['backup.failed'],true)`, []any{otherNotificationEndpointID, otherOrganizationID}},
+		{`INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload,status) VALUES
+				($1,$2,'backup.failed','database','target-1','{"secret":"target-notification-payload-secret"}','succeeded'),
+				($3,$2,'backup.failed','database','target-2','{}','failed'),
+				($4,$2,'backup.failed','database','target-3','{}','failed'),
+				($5,$2,'backup.failed','database','target-4','{}','failed'),
+				($6,$7,'backup.failed','database','other-1','{"secret":"other-notification-payload-secret"}','failed'),
+				($8,$7,'backup.failed','database','other-2','{}','failed'),
+				($9,$7,'backup.failed','database','other-3','{}','failed'),
+				($10,$7,'backup.failed','database','other-4','{}','failed')`, []any{uuid.New(), notificationEndpointID, uuid.New(), uuid.New(), uuid.New(), uuid.New(), otherNotificationEndpointID, uuid.New(), uuid.New(), uuid.New()}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Other audit project','other-audit-project')`, []any{otherProjectID, otherOrganizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{otherEnvironmentID, otherProjectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Other API','other-api',$3,$4,'other-encrypted-env',7)`, []any{otherServiceID, otherEnvironmentID, "other-audit-api-" + otherServiceID.String(), "services: {api: {image: registry.example.test/other-private-api@sha256:" + strings.Repeat("a", 64) + ", environment: [OTHER_COMPOSE_SECRET]}}"}},
@@ -363,6 +373,13 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if len(snapshot.NotificationPosture) != 1 || snapshot.NotificationPosture[0].Name != "On-call" {
 		t.Fatalf("notification posture=%#v", snapshot.NotificationPosture)
 	}
+	signalCounts := map[string]int64{}
+	for _, signal := range snapshot.Signals {
+		signalCounts[signal.Kind+":"+signal.Status] = signal.Count
+	}
+	if signalCounts["notification:succeeded"] != 1 || signalCounts["notification:failed"] != 3 || signalCounts["database_migration:succeeded"] != 1 || signalCounts["audit_archive:failed"] != 1 || signalCounts["agent_command:verifying"] != 1 || signalCounts["agent_command:failed"] != 0 {
+		t.Fatalf("tenant-scoped operational signals=%#v", snapshot.Signals)
+	}
 	if len(snapshot.TemplateRepositories) != 1 || snapshot.TemplateRepositories[0].ID != repository.ID || !snapshot.TemplateRepositories[0].RequireSignature || !snapshot.TemplateRepositories[0].CredentialConfigured || !snapshot.TemplateRepositories[0].WebhookConfigured {
 		t.Fatalf("template repository posture=%#v", snapshot.TemplateRepositories)
 	}
@@ -385,7 +402,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal snapshot: %v", err)
 	}
-	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "SECRET_COMPOSE_VALUE", "registry.example.test/private-api", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "registry.example.test/other-private-api", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-migration-secret", "other-source-org", "target-source-secret.example", "target-build-config-secret", "target-registry-secret.example", "other-source-secret.example", "other-build-config-secret", "other-registry-secret.example", "target-archive-secret-name", "target-secret-bucket", "target-archive-credentials-secret", "target-secret-prefix", "target-chain-secret", "target-secret-object", "target-archive-error-secret", "target-audit-metadata-secret", "disabled-archive-secret-name", "disabled-secret-bucket", "disabled-archive-credentials-secret", "disabled-secret-prefix", "disabled-chain-secret", "other-archive-secret-name", "other-secret-bucket", "other-archive-credentials-secret", "other-secret-prefix", "other-chain-secret", "other-audit-metadata-secret", "target-idp-metadata-secret", "target-sp-certificate-secret", "target-saml-key-secret", "other-idp-metadata-secret", "other-sp-certificate-secret", "other-saml-key-secret"} {
+	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "SECRET_COMPOSE_VALUE", "registry.example.test/private-api", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "registry.example.test/other-private-api", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-migration-secret", "other-source-org", "target-source-secret.example", "target-build-config-secret", "target-registry-secret.example", "other-source-secret.example", "other-build-config-secret", "other-registry-secret.example", "target-notification-payload-secret", "other-notification-payload-secret", "target-archive-secret-name", "target-secret-bucket", "target-archive-credentials-secret", "target-secret-prefix", "target-chain-secret", "target-secret-object", "target-archive-error-secret", "target-audit-metadata-secret", "disabled-archive-secret-name", "disabled-secret-bucket", "disabled-archive-credentials-secret", "disabled-secret-prefix", "disabled-chain-secret", "other-archive-secret-name", "other-secret-bucket", "other-archive-credentials-secret", "other-secret-prefix", "other-chain-secret", "other-audit-metadata-secret", "target-idp-metadata-secret", "target-sp-certificate-secret", "target-saml-key-secret", "other-idp-metadata-secret", "other-sp-certificate-secret", "other-saml-key-secret"} {
 		if strings.Contains(string(encodedSnapshot), secret) {
 			t.Fatalf("snapshot leaked %q: body=%s", secret, encodedSnapshot)
 		}

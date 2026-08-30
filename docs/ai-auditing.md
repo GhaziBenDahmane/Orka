@@ -55,6 +55,11 @@ keys make it a privileged service.
   only jobs with a resource key that resolves through the requesting
   organization; unscoped platform jobs and another organization's jobs are
   never included.
+- Thirty-day operational signals contain only tenant-scoped counts by
+  operation kind and status. The deterministic baseline reports a fleet-level
+  reliability finding once at least four terminal operations exist and at
+  least 25% failed; severity becomes high at 50%. Pending, running, and
+  cancelled work is excluded from the denominator.
 - Audit-log posture reports the effective retention period, enabled and
   disabled immutable archive counts, the tenant's current maximum event ID,
   and per-destination checkpoint, backlog, and latest batch status/timestamps.
@@ -122,7 +127,11 @@ keys make it a privileged service.
   without an image or build source. Invalid source transports, SSH sources
   without pinned-host credentials, missing uploaded artifacts, undeployed
   source changes, and successful Git builds lacking commit provenance are also
-  deterministic. These findings survive a model gateway
+  deterministic. Elevated 30-day failure rates across deployments, database
+  and volume recovery operations, migrations, audit archives, remote agent
+  commands, commit-status callbacks, notification delivery, and prior AI
+  audits are surfaced even when a resource's latest individual state has
+  recovered. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and

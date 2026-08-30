@@ -425,6 +425,30 @@ func TestDeterministicAuditDetectsSourceBuildTrustGaps(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsElevatedOperationalFailureRates(t *testing.T) {
+	organizationID := uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        organizationID,
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		Signals: []store.AIAuditSignal{
+			{Kind: "deployment", Status: "succeeded", Count: 3},
+			{Kind: "deployment", Status: "failed", Count: 1},
+			{Kind: "deployment", Status: "cancelled", Count: 100},
+			{Kind: "backup", Status: "succeeded", Count: 2},
+			{Kind: "backup", Status: "failed", Count: 2},
+			{Kind: "restore", Status: "succeeded", Count: 4},
+			{Kind: "notification", Status: "failed", Count: 3},
+			{Kind: "ai_audit", Status: "succeeded", Count: 1},
+			{Kind: "ai_audit", Status: "failed", Count: 3},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 3 || findings[0].Title != "Deployments have an elevated failure rate" || findings[0].Severity != "medium" || findings[1].Title != "Database backups have an elevated failure rate" || findings[1].Severity != "high" || findings[2].Title != "AI audit runs have an elevated failure rate" || findings[2].Severity != "high" {
+		t.Fatalf("operational signal findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

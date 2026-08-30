@@ -12,6 +12,7 @@ import (
 const maxDeterministicAuditFindings = 100
 
 const auditArchiveSchedulerGrace = 5 * time.Minute
+const minimumOperationalSignalSample = 4
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -114,6 +115,9 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		} else if source.SourceType == "git" && !source.DeploymentCommitRecorded {
 			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Source deployment lacks commit provenance", Description: "The successful source-built deployment did not record the resolved Git commit.", ResourceType: "service", ResourceID: source.ServiceID.String(), Evidence: map[string]any{"sourceType": source.SourceType, "gitRefPinned": source.GitRefPinned, "statusReportingConfigured": source.StatusReportingConfigured}, Remediation: "Rebuild through the source pipeline and verify the deployment records the resolved commit before promotion."})
 		}
+	}
+	for _, finding := range operationalSignalFindings(snapshot.Signals, snapshot.Organization) {
+		add(finding)
 	}
 	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
 	unusableDatabaseDrivers := make(map[uuid.UUID]bool)
@@ -280,6 +284,51 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	}
 	if truncated {
 		findings[maxDeterministicAuditFindings-1] = modelFinding{Severity: "high", Category: "audit", Title: "Deterministic audit findings were truncated", Description: fmt.Sprintf("The baseline audit reached its %d-finding safety limit.", maxDeterministicAuditFindings), ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"limit": maxDeterministicAuditFindings}, Remediation: "Resolve existing findings and rerun the audit to reveal any remaining issues."}
+	}
+	return findings
+}
+
+func operationalSignalFindings(signals []store.AIAuditSignal, organizationID uuid.UUID) []modelFinding {
+	type outcome struct{ succeeded, failed int64 }
+	outcomes := map[string]outcome{}
+	for _, signal := range signals {
+		current := outcomes[signal.Kind]
+		switch signal.Status {
+		case "succeeded":
+			current.succeeded += signal.Count
+		case "failed":
+			current.failed += signal.Count
+		}
+		outcomes[signal.Kind] = current
+	}
+	labels := []struct {
+		kind  string
+		title string
+	}{
+		{kind: "deployment", title: "Deployments"},
+		{kind: "backup", title: "Database backups"},
+		{kind: "restore", title: "Database restores"},
+		{kind: "volume_backup", title: "Volume backups"},
+		{kind: "volume_restore", title: "Volume restores"},
+		{kind: "notification", title: "Notification deliveries"},
+		{kind: "database_migration", title: "Database migrations"},
+		{kind: "audit_archive", title: "Audit archive deliveries"},
+		{kind: "agent_command", title: "Remote agent commands"},
+		{kind: "commit_status", title: "Commit status deliveries"},
+		{kind: "ai_audit", title: "AI audit runs"},
+	}
+	findings := []modelFinding{}
+	for _, label := range labels {
+		outcome := outcomes[label.kind]
+		terminal := outcome.succeeded + outcome.failed
+		if terminal < minimumOperationalSignalSample || outcome.failed*4 < terminal {
+			continue
+		}
+		severity := "medium"
+		if outcome.failed*2 >= terminal {
+			severity = "high"
+		}
+		findings = append(findings, modelFinding{Severity: severity, Category: "reliability", Title: label.title + " have an elevated failure rate", Description: "At least twenty-five percent of this operation's terminal outcomes failed during the trailing thirty-day window.", ResourceType: "organization", ResourceID: organizationID.String(), Evidence: map[string]any{"kind": label.kind, "windowDays": 30, "succeeded": outcome.succeeded, "failed": outcome.failed, "terminal": terminal, "failurePercent": outcome.failed * 100 / terminal, "minimumSample": minimumOperationalSignalSample}, Remediation: "Inspect recent failures by resource, correct the shared cause, and confirm the failure rate returns below the alert threshold."})
 	}
 	return findings
 }

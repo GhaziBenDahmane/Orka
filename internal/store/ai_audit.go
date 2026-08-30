@@ -344,6 +344,11 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 			UNION ALL SELECT 'volume_backup',b.status,b.created_at FROM volume_backups b JOIN compose_services s ON s.id=b.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1
 			UNION ALL SELECT 'volume_restore',r.status,r.created_at FROM volume_restores r JOIN volume_backups b ON b.id=r.volume_backup_id JOIN compose_services s ON s.id=b.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1
 			UNION ALL SELECT 'notification',d.status,d.created_at FROM notification_deliveries d JOIN notification_endpoints n ON n.id=d.endpoint_id WHERE n.organization_id=$1
+			UNION ALL SELECT 'database_migration',m.status,m.created_at FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1
+			UNION ALL SELECT 'audit_archive',b.status,b.created_at FROM audit_archive_batches b JOIN audit_archive_destinations a ON a.id=b.destination_id WHERE a.organization_id=$1
+			UNION ALL SELECT 'agent_command',command.status,command.created_at FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE cluster.organization_id=$1
+			UNION ALL SELECT 'commit_status',delivery.status,delivery.created_at FROM commit_status_deliveries delivery JOIN deployments d ON d.id=delivery.deployment_id JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1
+			UNION ALL SELECT 'ai_audit',CASE run.status WHEN 'completed' THEN 'succeeded' ELSE run.status END,run.started_at FROM ai_audit_runs run WHERE run.organization_id=$1
 		) activity WHERE created_at>=now()-interval '30 days' GROUP BY kind,status ORDER BY kind,status`, organizationID)
 	if err != nil {
 		return snapshot, err
