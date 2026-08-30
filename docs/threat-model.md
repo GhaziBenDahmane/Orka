@@ -158,6 +158,11 @@ finding. Auditor control-plane and model requests refuse redirects so neither
 bearer token can be forwarded to a substituted endpoint. 9Router and Hermes
 remain outside the control-plane trust boundary.
 
+The snapshot uses explicit allowlisted projections rather than serializing
+normal API records. Free-form project descriptions, placement selectors,
+agent-reported cluster maps, audit metadata, and network addresses therefore
+cannot become model-visible through an unrelated API-struct change.
+
 Raw remote-agent failures, reconciliation details, and upstream API response
 bodies remain outside the snapshot and failed-run summaries because they may
 echo workload-controlled secrets. The runner rejects an oversized serialized

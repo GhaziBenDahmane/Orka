@@ -177,7 +177,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 		}},
 		BackupPosture:        []store.AIAuditBackupPosture{{DatabaseID: databaseID, Engine: "postgres"}},
 		VolumeBackupPosture:  []store.AIAuditVolumeBackupPosture{{ServiceID: serviceID, VolumeName: "uploads"}},
-		Clusters:             []store.Cluster{{ID: clusterID, State: "active", LastSeenAt: &staleHeartbeat, CertificateAuthorityFingerprint: "sha256:old", PendingCertificateAuthorityFingerprint: "sha256:new", CertificateNotAfter: &expiringCertificate}},
+		Clusters:             []store.AIAuditClusterInfo{{ID: clusterID, State: "active", LastSeenAt: &staleHeartbeat, CertificateAuthorityFingerprint: "sha256:old", PendingCertificateAuthorityFingerprint: "sha256:new", CertificateNotAfter: &expiringCertificate}},
 		AgentCAPosture:       store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:new", PreviousFingerprint: "sha256:old", RolloverActive: true},
 		AgentUpgradePosture:  []store.AIAuditAgentUpgradePosture{{ClusterID: clusterID, Status: "verifying", VerificationOverdue: true, TargetImage: "registry.example/dockyard@sha256:test"}},
 		TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{ID: repositoryID, Enabled: true, GitRef: "main", LastSyncStatus: "failed"}},
@@ -396,7 +396,7 @@ func TestDeterministicAuditDetectsPlaintextPublicRoutes(t *testing.T) {
 		Organization:        uuid.New(),
 		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		NotificationPosture: fullyCoveredNotifications(),
-		Routes: []store.Route{
+		Routes: []store.AIAuditRouteInfo{
 			{ID: insecureID, ComposeServiceID: uuid.New(), Host: "legacy.example.test", PathPrefix: "/", TargetPort: 8080},
 			{ID: uuid.New(), ComposeServiceID: uuid.New(), Host: "secure.example.test", PathPrefix: "/", TargetPort: 8443, TLS: true, CertificateResolver: "letsencrypt"},
 		},
@@ -495,7 +495,7 @@ func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *te
 		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		NotificationPosture: fullyCoveredNotifications(),
 		DatabaseEngines:     []store.AIAuditDatabaseEngineInfo{{Name: "postgres", Source: "built-in", BackupCapable: true, BackupExtension: "dump"}, {Name: "custom", Source: "external", ArtifactDigest: digest}},
-		Databases:           []store.DatabaseInstance{{ID: unsupportedID, Engine: "custom", Version: "1", DriverSource: "external", DriverDigest: digest}, {ID: missingID, Engine: "removed", Version: "2", DriverSource: "external", DriverDigest: digest}, {ID: protectedID, Engine: "postgres", Version: "17", DriverSource: "built-in"}},
+		Databases:           []store.AIAuditDatabaseInfo{{ID: unsupportedID, Engine: "custom", Version: "1", DriverSource: "external", DriverDigest: digest}, {ID: missingID, Engine: "removed", Version: "2", DriverSource: "external", DriverDigest: digest}, {ID: protectedID, Engine: "postgres", Version: "17", DriverSource: "built-in"}},
 		BackupPosture:       []store.AIAuditBackupPosture{{DatabaseID: unsupportedID, Engine: "custom"}, {DatabaseID: missingID, Engine: "removed"}, {DatabaseID: protectedID, Engine: "postgres"}},
 	}
 	findings := deterministicAuditFindings(snapshot, now)
@@ -524,7 +524,7 @@ func TestDeterministicAuditDetectsDatabaseDriverIdentityDrift(t *testing.T) {
 		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		NotificationPosture: fullyCoveredNotifications(),
 		DatabaseEngines:     []store.AIAuditDatabaseEngineInfo{{Name: "custom", Source: "external", ArtifactDigest: digest, BackupCapable: true, BackupExtension: "dump"}},
-		Databases:           []store.DatabaseInstance{{ID: unboundID, Engine: "custom", Version: "1", DriverSource: "unbound"}, {ID: mismatchID, Engine: "custom", Version: "1", DriverSource: "external", DriverDigest: "sha256:" + strings.Repeat("b", 64)}},
+		Databases:           []store.AIAuditDatabaseInfo{{ID: unboundID, Engine: "custom", Version: "1", DriverSource: "unbound"}, {ID: mismatchID, Engine: "custom", Version: "1", DriverSource: "external", DriverDigest: "sha256:" + strings.Repeat("b", 64)}},
 		BackupPosture:       []store.AIAuditBackupPosture{{DatabaseID: unboundID, Engine: "custom"}, {DatabaseID: mismatchID, Engine: "custom"}},
 	}
 	findings := deterministicAuditFindings(snapshot, now)
@@ -543,7 +543,7 @@ func TestDeterministicAuditAcceptsClusterOnActiveCertificateAuthority(t *testing
 		Organization:    uuid.New(),
 		IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		AgentCAPosture:  store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:active"},
-		Clusters:        []store.Cluster{{ID: uuid.New(), State: "active", CertificateAuthorityFingerprint: "sha256:active", LastSeenAt: &now}},
+		Clusters:        []store.AIAuditClusterInfo{{ID: uuid.New(), State: "active", CertificateAuthorityFingerprint: "sha256:active", LastSeenAt: &now}},
 	}
 	for _, finding := range deterministicAuditFindings(snapshot, now) {
 		if finding.Title == "Remote cluster uses a non-active certificate authority" || finding.Title == "Previous agent certificate authority remains trusted" {

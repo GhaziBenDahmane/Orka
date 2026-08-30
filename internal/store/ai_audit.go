@@ -26,13 +26,13 @@ var aiAuditGitCommit = regexp.MustCompile(`^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$
 type AIAuditSnapshot struct {
 	GeneratedAt          time.Time                       `json:"generatedAt"`
 	Organization         uuid.UUID                       `json:"organizationId"`
-	Projects             []Project                       `json:"projects"`
-	Environments         []Environment                   `json:"environments"`
-	Services             []ComposeService                `json:"services"`
-	Routes               []Route                         `json:"routes"`
-	Databases            []DatabaseInstance              `json:"databases"`
+	Projects             []AIAuditProjectInfo            `json:"projects"`
+	Environments         []AIAuditEnvironmentInfo        `json:"environments"`
+	Services             []AIAuditServiceInfo            `json:"services"`
+	Routes               []AIAuditRouteInfo              `json:"routes"`
+	Databases            []AIAuditDatabaseInfo           `json:"databases"`
 	DatabaseEngines      []AIAuditDatabaseEngineInfo     `json:"databaseEngines"`
-	Clusters             []Cluster                       `json:"clusters"`
+	Clusters             []AIAuditClusterInfo            `json:"clusters"`
 	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
@@ -51,7 +51,99 @@ type AIAuditSnapshot struct {
 	QueuePosture         AIAuditQueuePosture             `json:"queuePosture"`
 	Reconciliation       []AIAuditReconciliationPosture  `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
-	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
+	AuditEvents          []AIAuditEventInfo              `json:"recentAuditEvents"`
+}
+
+// Inventory types are explicit allowlists rather than aliases of the normal
+// API records. Adding an operational field to a normal record must never make
+// it model-visible without a separate review of the AI trust boundary.
+type AIAuditProjectInfo struct {
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organizationId"`
+	Name           string    `json:"name"`
+	Slug           string    `json:"slug"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
+type AIAuditEnvironmentInfo struct {
+	ID                          uuid.UUID  `json:"id"`
+	ProjectID                   uuid.UUID  `json:"projectId"`
+	ClusterID                   *uuid.UUID `json:"clusterId,omitempty"`
+	PlacementSelectorConfigured bool       `json:"placementSelectorConfigured"`
+	MinimumNodes                int        `json:"minimumNodes,omitempty"`
+	MinimumNanoCPUs             int64      `json:"minimumNanoCpus,omitempty"`
+	MinimumMemoryBytes          int64      `json:"minimumMemoryBytes,omitempty"`
+	Name                        string     `json:"name"`
+	Slug                        string     `json:"slug"`
+	CreatedAt                   time.Time  `json:"createdAt"`
+}
+
+type AIAuditServiceInfo struct {
+	ID            uuid.UUID `json:"id"`
+	EnvironmentID uuid.UUID `json:"environmentId"`
+	Name          string    `json:"name"`
+	Slug          string    `json:"slug"`
+	StackName     string    `json:"stackName"`
+	StorageNodeID string    `json:"storageNodeId,omitempty"`
+	Revision      int64     `json:"revision"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+type AIAuditRouteInfo struct {
+	ID                  uuid.UUID `json:"id"`
+	ComposeServiceID    uuid.UUID `json:"composeServiceId"`
+	ServiceName         string    `json:"serviceName"`
+	Host                string    `json:"host"`
+	PathPrefix          string    `json:"pathPrefix"`
+	TargetPort          int       `json:"targetPort"`
+	TLS                 bool      `json:"tls"`
+	CertificateResolver string    `json:"certificateResolver"`
+}
+
+type AIAuditDatabaseInfo struct {
+	ID               uuid.UUID `json:"id"`
+	EnvironmentID    uuid.UUID `json:"environmentId"`
+	Name             string    `json:"name"`
+	Slug             string    `json:"slug"`
+	Engine           string    `json:"engine"`
+	Version          string    `json:"version"`
+	DriverSource     string    `json:"driverSource"`
+	DriverDigest     string    `json:"driverArtifactDigest,omitempty"`
+	StorageNodeID    string    `json:"storageNodeId,omitempty"`
+	ComposeServiceID uuid.UUID `json:"composeServiceId"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+type AIAuditClusterInfo struct {
+	ID                                     uuid.UUID  `json:"id"`
+	OrganizationID                         uuid.UUID  `json:"organizationId"`
+	Name                                   string     `json:"name"`
+	Slug                                   string     `json:"slug"`
+	State                                  string     `json:"state"`
+	AgentVersion                           string     `json:"agentVersion"`
+	AgentImage                             string     `json:"agentImage"`
+	AgentUpdateState                       string     `json:"agentUpdateState"`
+	DockerVersion                          string     `json:"dockerVersion"`
+	CertificateAuthorityFingerprint        string     `json:"certificateAuthorityFingerprint,omitempty"`
+	PendingCertificateAuthorityFingerprint string     `json:"pendingCertificateAuthorityFingerprint,omitempty"`
+	CertificateNotAfter                    *time.Time `json:"certificateNotAfter,omitempty"`
+	LastSeenAt                             *time.Time `json:"lastSeenAt,omitempty"`
+	MaintenanceStartsAt                    *time.Time `json:"maintenanceStartsAt,omitempty"`
+	MaintenanceEndsAt                      *time.Time `json:"maintenanceEndsAt,omitempty"`
+	CreatedAt                              time.Time  `json:"createdAt"`
+	UpdatedAt                              time.Time  `json:"updatedAt"`
+}
+
+type AIAuditEventInfo struct {
+	ID                    int64      `json:"id"`
+	ActorUserID           *uuid.UUID `json:"actorUserId,omitempty"`
+	ActorServiceAccountID *uuid.UUID `json:"actorServiceAccountId,omitempty"`
+	Action                string     `json:"action"`
+	ResourceType          string     `json:"resourceType"`
+	ResourceID            string     `json:"resourceId"`
+	CreatedAt             time.Time  `json:"createdAt"`
 }
 
 type AIAuditAgentCAPosture struct {
@@ -288,12 +380,14 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Projects = projects
+	for _, item := range projects {
+		snapshot.Projects = append(snapshot.Projects, AIAuditProjectInfo{ID: item.ID, OrganizationID: item.OrganizationID, Name: item.Name, Slug: item.Slug, CreatedAt: item.CreatedAt})
+	}
 	if err = s.loadAIAuditInventory(ctx, organizationID, &snapshot); err != nil {
 		return snapshot, err
 	}
@@ -301,7 +395,15 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Clusters = clusters
+	for _, item := range clusters {
+		snapshot.Clusters = append(snapshot.Clusters, AIAuditClusterInfo{
+			ID: item.ID, OrganizationID: item.OrganizationID, Name: item.Name, Slug: item.Slug, State: item.State,
+			AgentVersion: item.AgentVersion, AgentImage: item.AgentImage, AgentUpdateState: item.AgentUpdateState, DockerVersion: item.DockerVersion,
+			CertificateAuthorityFingerprint: item.CertificateAuthorityFingerprint, PendingCertificateAuthorityFingerprint: item.PendingCertificateAuthorityFingerprint,
+			CertificateNotAfter: item.CertificateNotAfter, LastSeenAt: item.LastSeenAt, MaintenanceStartsAt: item.MaintenanceStartsAt,
+			MaintenanceEndsAt: item.MaintenanceEndsAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
+		})
+	}
 	reconciliation, err := s.ListServiceReconciliations(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -320,11 +422,12 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 	if err != nil {
 		return snapshot, err
 	}
-	for index := range events {
-		events[index].Metadata = nil
-		events[index].RemoteAddr = ""
+	for _, item := range events {
+		snapshot.AuditEvents = append(snapshot.AuditEvents, AIAuditEventInfo{
+			ID: item.ID, ActorUserID: item.ActorUserID, ActorServiceAccountID: item.ActorServiceAccountID,
+			Action: item.Action, ResourceType: item.ResourceType, ResourceID: item.ResourceID, CreatedAt: item.CreatedAt,
+		})
 	}
-	snapshot.AuditEvents = events
 	rows, err := s.Pool.Query(ctx, `
 		SELECT kind,status,count(*) FROM (
 			SELECT 'deployment' AS kind,d.status,d.created_at FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1
@@ -369,11 +472,13 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 		return err
 	}
 	for rows.Next() {
-		var item Environment
-		if err = rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &item.PlacementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
+		var item AIAuditEnvironmentInfo
+		var placementSelector map[string]string
+		if err = rows.Scan(&item.ID, &item.ProjectID, &item.ClusterID, &placementSelector, &item.MinimumNodes, &item.MinimumNanoCPUs, &item.MinimumMemoryBytes, &item.Name, &item.Slug, &item.CreatedAt); err != nil {
 			rows.Close()
 			return err
 		}
+		item.PlacementSelectorConfigured = len(placementSelector) > 0
 		snapshot.Environments = append(snapshot.Environments, item)
 	}
 	if err = rows.Err(); err != nil {
@@ -393,7 +498,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 		return err
 	}
 	for rows.Next() {
-		var item ComposeService
+		var item AIAuditServiceInfo
 		var composeYAML string
 		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.CreatedAt, &item.UpdatedAt, &composeYAML); err != nil {
 			rows.Close()
@@ -419,7 +524,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 		return err
 	}
 	for rows.Next() {
-		var item Route
+		var item AIAuditRouteInfo
 		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.TargetPort, &item.TLS, &item.CertificateResolver); err != nil {
 			rows.Close()
 			return err
@@ -444,12 +549,10 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var item DatabaseInstance
+		var item AIAuditDatabaseInfo
 		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Status, &item.CreatedAt); err != nil {
 			return err
 		}
-		// Driver config is intentionally omitted because external drivers may
-		// accept credentials even though built-ins store only non-secret values.
 		snapshot.Databases = append(snapshot.Databases, item)
 	}
 	return rows.Err()

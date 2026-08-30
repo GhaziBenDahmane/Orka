@@ -29,6 +29,10 @@ keys make it a privileged service.
   viewer/developer/admin rank and therefore cannot invoke normal resource APIs.
 - `GET /v1/ai/audit-snapshot` excludes Compose content, environment values,
   database config, credentials, backup payloads, and secret material.
+- Inventory records use dedicated allowlisted AI projections rather than the
+  normal API structs. Project descriptions, raw placement selectors, cluster
+  labels/capacity maps, audit metadata and addresses, and any future API fields
+  remain excluded unless they receive a separate model-boundary review.
 - Core inventory, route, and workload-provenance projections use a fixed
   number of tenant-scoped queries rather than querying once per project,
   environment, or service, so audit database load scales with returned rows.
