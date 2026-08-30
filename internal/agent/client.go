@@ -734,7 +734,7 @@ var (
 )
 var digestImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
-const maxAgentDockerOutputBytes = 1 << 20
+const maxAgentDockerOutputBytes = deploy.MaxRemoteCommandOutputBytes
 
 type boundedAgentOutput struct {
 	buffer    bytes.Buffer

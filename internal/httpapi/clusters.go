@@ -127,7 +127,7 @@ func (s *Server) agentCompleteCommand(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	if len(input.Output) > 65536 || len(input.Error) > 8192 {
+	if !validAgentCommandResult(input.Output, input.Error) {
 		writeError(w, 400, "result_too_large", "command result exceeds limits")
 		return
 	}
@@ -146,6 +146,10 @@ func (s *Server) agentCompleteCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validAgentCommandResult(output, commandError string) bool {
+	return len(output) <= deploy.MaxRemoteCommandOutputBytes && len(commandError) <= deploy.MaxRemoteCommandErrorBytes
 }
 
 func commandLeaseIDs(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {

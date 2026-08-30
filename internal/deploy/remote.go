@@ -102,6 +102,11 @@ type RemoteArtifactResult struct {
 	SizeBytes       int64  `json:"sizeBytes"`
 }
 
+const (
+	MaxRemoteCommandOutputBytes = 1 << 20
+	MaxRemoteCommandErrorBytes  = 8 << 10
+)
+
 type DatabaseTransferJob struct {
 	Network      string               `json:"network"`
 	ArtifactName string               `json:"artifactName"`
