@@ -36,6 +36,14 @@ groups:
           summary: Dockyard background operation failed
           description: One or more {{ $labels.kind }} operations failed in the last ten minutes.
 
+      - alert: DockyardBuildWorkspaceLimitRejected
+        expr: increase(dockyard_build_workspace_limit_rejections_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: A build source exceeded the workspace safety limit
+          description: A Git checkout or uploaded ZIP expanded beyond DOCKYARD_MAX_BUILD_WORKSPACE_BYTES. Review the rejected deployment before changing the limit.
+
       - alert: DockyardTemplateRepositorySyncQueued
         expr: dockyard_template_repository_sync_pending_age_seconds > 300
         for: 5m

@@ -29,6 +29,7 @@ func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 	m.ObserveHTTP("GET", "/v1/services/{serviceID}", 200, 20*time.Millisecond)
 	m.ObserveHTTP("GET", "/v1/services/{serviceID}", 200, 2*time.Second)
 	m.ObserveOperation("deploy.compose", "succeeded", 10*time.Second)
+	m.ObserveBuildWorkspaceLimitRejection()
 	var output bytes.Buffer
 	m.renderRuntime(&output)
 	text := output.String()
@@ -37,6 +38,7 @@ func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 		`dockyard_http_request_duration_seconds_count{method="GET",route="/v1/services/{serviceID}",status="200"} 2`,
 		`dockyard_http_request_duration_seconds_bucket{method="GET",route="/v1/services/{serviceID}",status="200",le="2.5"} 2`,
 		`dockyard_operation_duration_seconds_count{kind="deploy.compose",status="succeeded"} 1`,
+		`dockyard_build_workspace_limit_rejections_total 1`,
 		`dockyard_control_plane_certificate_expiry_seconds{certificate="agent_ca"}`,
 	} {
 		if !strings.Contains(text, expected) {
@@ -305,6 +307,22 @@ func TestPrometheusAlertsCoverTemplateRepositorySyncHealth(t *testing.T) {
 		"expr: dockyard_template_repository_sync_running_age_seconds > 600",
 		"alert: DockyardTemplateRepositorySyncFailed",
 		"expr: dockyard_template_repository_sync_failed == 1",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverBuildWorkspaceLimit(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardBuildWorkspaceLimitRejected",
+		"expr: increase(dockyard_build_workspace_limit_rejections_total[15m]) > 0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

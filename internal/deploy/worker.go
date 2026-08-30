@@ -407,6 +407,9 @@ func (w *Worker) loop(ctx context.Context) {
 			started := time.Now()
 			jobCtx, span := observability.StartOperation(ctx, j.Kind, j.ID.String())
 			jobErr := w.runClaimed(jobCtx, j)
+			if w.Metrics != nil && errors.Is(jobErr, ErrBuildWorkspaceLimit) {
+				w.Metrics.ObserveBuildWorkspaceLimitRejection()
+			}
 			finishErr := w.finish(ctx, j, jobErr)
 			operationErr := errors.Join(jobErr, finishErr)
 			observability.EndOperation(span, operationErr)

@@ -45,6 +45,11 @@ var buildSettingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 var buildTargetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256:[a-f0-9]{64}$`)
 
+// ErrBuildWorkspaceLimit lets callers distinguish an operator-configured
+// safety-limit rejection from an ordinary build failure without parsing an
+// error string.
+var ErrBuildWorkspaceLimit = errors.New("build workspace exceeds configured limit")
+
 const defaultStaticImage = "caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 const defaultRailpackFrontend = "ghcr.io/railwayapp/railpack-frontend:v0.38.0@sha256:b66c90368efcf6f2966cfa504cdbde93af7ba6092d676e0c7604cbc5ddf3acec"
 const defaultBuildpackBuilder = "paketobuildpacks/builder-jammy-base:0.4.629@sha256:129bda8835db00b4fe0b2fdf0a545e493f6f0403cbeb9f89ea6125a7a93a69d0"
@@ -261,7 +266,7 @@ func enforceWorkspaceSize(root string, limit int64) error {
 			return err
 		}
 		if info.Size() > limit-size {
-			return fmt.Errorf("build workspace exceeds %d bytes", limit)
+			return fmt.Errorf("%w of %d bytes", ErrBuildWorkspaceLimit, limit)
 		}
 		size += info.Size()
 		return nil
@@ -283,6 +288,9 @@ func (b Builder) BuildArchive(ctx context.Context, source store.ApplicationSourc
 	defer os.RemoveAll(directory)
 	if err = ExtractArchive(archive, directory); err != nil {
 		return "", "", fmt.Errorf("invalid source archive: %w", err)
+	}
+	if err = enforceWorkspaceSize(directory, b.maxWorkspaceBytes()); err != nil {
+		return "", "", err
 	}
 	contextPath, err := safeJoin(directory, source.ContextDirectory)
 	if err != nil {

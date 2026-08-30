@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,5 +121,25 @@ func TestBuildArchiveUsesExtractedWorkspace(t *testing.T) {
 	}
 	if _, err = os.Stat(string(workspace)); !os.IsNotExist(err) {
 		t.Fatalf("temporary workspace was not removed: %v", err)
+	}
+}
+
+func TestBuildArchiveHonorsConfiguredWorkspaceLimit(t *testing.T) {
+	directory := t.TempDir()
+	dockerPath := filepath.Join(directory, "docker")
+	dockerLog := filepath.Join(directory, "docker.log")
+	if err := os.WriteFile(dockerPath, []byte("#!/bin/sh\nprintf called >"+dockerLog+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := store.ApplicationSource{ContextDirectory: ".", Dockerfile: "Dockerfile", BuildType: "dockerfile", RegistryImage: "registry.example.test/acme/drop"}
+	_, _, err := (Builder{DockerBin: dockerPath, MaxWorkspaceBytes: 16}).BuildArchive(context.Background(), source, uuid.New(), Credential{}, zipFixture(t, map[string]string{
+		"release/Dockerfile": "FROM scratch\n",
+		"release/payload":    "oversized repository data",
+	}))
+	if !errors.Is(err, ErrBuildWorkspaceLimit) {
+		t.Fatalf("oversized uploaded workspace error=%v", err)
+	}
+	if _, statErr := os.Stat(dockerLog); !os.IsNotExist(statErr) {
+		t.Fatalf("Docker ran for oversized uploaded workspace: %v", statErr)
 	}
 }

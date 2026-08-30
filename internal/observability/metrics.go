@@ -42,13 +42,14 @@ type DatabaseDriverInfo struct {
 }
 
 type Metrics struct {
-	mu           sync.RWMutex
-	http         map[string]*observation
-	operations   map[string]*observation
-	certificates map[string]time.Time
-	drivers      []DatabaseDriverInfo
-	driverSet    map[string]DatabaseDriverInfo
-	driverDigest string
+	mu                            sync.RWMutex
+	http                          map[string]*observation
+	operations                    map[string]*observation
+	certificates                  map[string]time.Time
+	drivers                       []DatabaseDriverInfo
+	driverSet                     map[string]DatabaseDriverInfo
+	driverDigest                  string
+	buildWorkspaceLimitRejections uint64
 }
 
 func NewMetrics() *Metrics {
@@ -120,6 +121,15 @@ func (m *Metrics) ObserveHTTP(method, route string, status int, elapsed time.Dur
 
 func (m *Metrics) ObserveOperation(kind, status string, elapsed time.Duration) {
 	m.observe(m.operations, kind+"\x00"+status, elapsed)
+}
+
+// ObserveBuildWorkspaceLimitRejection records a bounded, non-tenant-specific
+// signal when a source checkout or uploaded build exceeds the configured
+// workspace ceiling.
+func (m *Metrics) ObserveBuildWorkspaceLimitRejection() {
+	m.mu.Lock()
+	m.buildWorkspaceLimitRejections++
+	m.mu.Unlock()
 }
 
 func (m *Metrics) observe(target map[string]*observation, key string, elapsed time.Duration) {
@@ -417,6 +427,7 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	m.mu.RLock()
 	httpItems := clone(m.http)
 	operationItems := clone(m.operations)
+	buildWorkspaceLimitRejections := m.buildWorkspaceLimitRejections
 	certificateExpiries := make(map[string]time.Time, len(m.certificates))
 	for name, expiresAt := range m.certificates {
 		certificateExpiries[name] = expiresAt
@@ -426,6 +437,9 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	renderHistogram(w, "dockyard_http_request_duration_seconds", "HTTP request latency.", httpItems, []string{"method", "route", "status"})
 	renderCounter(w, "dockyard_operations_total", "Completed background operations by kind and status.", operationItems, []string{"kind", "status"})
 	renderHistogram(w, "dockyard_operation_duration_seconds", "Background operation latency.", operationItems, []string{"kind", "status"})
+	fmt.Fprintln(w, "# HELP dockyard_build_workspace_limit_rejections_total Build attempts rejected because their source workspace exceeded the configured safety limit.")
+	fmt.Fprintln(w, "# TYPE dockyard_build_workspace_limit_rejections_total counter")
+	fmt.Fprintf(w, "dockyard_build_workspace_limit_rejections_total %d\n", buildWorkspaceLimitRejections)
 	fmt.Fprintln(w, "# HELP dockyard_control_plane_certificate_expiry_seconds Seconds until a configured control-plane certificate expires.")
 	fmt.Fprintln(w, "# TYPE dockyard_control_plane_certificate_expiry_seconds gauge")
 	names := make([]string, 0, len(certificateExpiries))

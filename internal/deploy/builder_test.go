@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -75,7 +76,7 @@ func TestBuildRejectsOversizedCheckoutBeforeDocker(t *testing.T) {
 	}
 	source := store.ApplicationSource{RepositoryURL: "https://github.com/acme/app.git", GitRef: "main", ContextDirectory: ".", Dockerfile: "Dockerfile", RegistryImage: "ghcr.io/acme/app"}
 	_, _, err := (Builder{GitBin: gitPath, DockerBin: dockerPath, MaxWorkspaceBytes: 16}).Build(context.Background(), source, uuid.New(), BuildCredentials{})
-	if err == nil || !strings.Contains(err.Error(), "workspace exceeds") {
+	if !errors.Is(err, ErrBuildWorkspaceLimit) {
 		t.Fatalf("oversized checkout error=%v", err)
 	}
 	if _, statErr := os.Stat(dockerLog); !os.IsNotExist(statErr) {
