@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/httpapi"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -35,10 +36,22 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	}
 	t.Cleanup(db.Pool.Close)
 
-	organizationID, accountID := uuid.New(), uuid.New()
+	organizationID, accountID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	secretMarker := "DO_NOT_EXPOSE_AI_CONFORMANCE_SECRET_" + uuid.NewString()
+	activeAgentCA, _, err := agentpki.NewCA(time.Now(), 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousAgentCA, _, err := agentpki.NewCA(time.Now(), 48*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousAgentCAFingerprint, err := agentpki.CertificateFingerprint(previousAgentCA)
+	if err != nil {
+		t.Fatal(err)
+	}
 	statements := []struct {
 		query string
 		args  []any
@@ -49,6 +62,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Audited project','audited-project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'Sensitive service','sensitive-service',$3,$4,$5,2)`, []any{serviceID, environmentID, "ai-conformance-" + serviceID.String(), "services: {app: {image: example.invalid/private, environment: [" + secretMarker + "]}}", "encrypted:" + secretMarker}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,certificate_ca_fingerprint,certificate_not_after,last_seen_at) VALUES($1,$2,'Legacy CA cluster','legacy-ca','active',$3,now()+interval '1 day',now())`, []any{clusterID, organizationID, previousAgentCAFingerprint}},
 	}
 	for _, statement := range statements {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -59,7 +73,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
 	})
 
-	platform := httptest.NewServer((&httpapi.Server{Store: db}).Handler())
+	platform := httptest.NewServer((&httpapi.Server{Store: db, AgentCACertificate: activeAgentCA, AgentPreviousCACertificate: previousAgentCA}).Handler())
 	defer platform.Close()
 	modelCalled := false
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +162,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Desired service revision is not deployed", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -168,6 +182,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"snapshotSecretsRedacted":        true,
 		"promptInjectionBoundaryPresent": true,
 		"deterministicFindingsPersisted": true,
+		"agentCAMismatchDetected":        true,
 		"modelFindingsPersisted":         true,
 		"durableRunCompleted":            true,
 		"lifecycleAudited":               true,

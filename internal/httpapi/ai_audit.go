@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
@@ -27,6 +28,24 @@ func (s *Server) aiAuditSnapshot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, err)
 		return
+	}
+	if len(s.AgentCACertificate) != 0 {
+		activeFingerprint, fingerprintErr := agentpki.CertificateFingerprint(s.AgentCACertificate)
+		if fingerprintErr != nil {
+			writeError(w, http.StatusInternalServerError, "agent_ca_invalid", "agent certificate authority posture is unavailable")
+			return
+		}
+		snapshot.AgentCAPosture.Configured = true
+		snapshot.AgentCAPosture.ActiveFingerprint = activeFingerprint
+	}
+	if len(s.AgentPreviousCACertificate) != 0 {
+		previousFingerprint, fingerprintErr := agentpki.CertificateFingerprint(s.AgentPreviousCACertificate)
+		if fingerprintErr != nil {
+			writeError(w, http.StatusInternalServerError, "agent_ca_invalid", "previous agent certificate authority posture is unavailable")
+			return
+		}
+		snapshot.AgentCAPosture.PreviousFingerprint = previousFingerprint
+		snapshot.AgentCAPosture.RolloverActive = true
 	}
 	writeJSON(w, 200, snapshot)
 }

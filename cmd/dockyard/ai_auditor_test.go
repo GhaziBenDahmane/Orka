@@ -84,7 +84,8 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
 		BackupPosture:        []store.AIAuditBackupPosture{{DatabaseID: databaseID, Engine: "postgres"}},
-		Clusters:             []store.Cluster{{ID: clusterID, State: "active", LastSeenAt: &staleHeartbeat, CertificateNotAfter: &expiringCertificate}},
+		Clusters:             []store.Cluster{{ID: clusterID, State: "active", LastSeenAt: &staleHeartbeat, CertificateAuthorityFingerprint: "sha256:old", PendingCertificateAuthorityFingerprint: "sha256:new", CertificateNotAfter: &expiringCertificate}},
+		AgentCAPosture:       store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:new", PreviousFingerprint: "sha256:old", RolloverActive: true},
 		AgentUpgradePosture:  []store.AIAuditAgentUpgradePosture{{ClusterID: clusterID, Status: "verifying", VerificationOverdue: true, TargetImage: "registry.example/dockyard@sha256:test"}},
 		TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{ID: repositoryID, Enabled: true, GitRef: "main", LastSyncStatus: "failed"}},
 		ServiceDeployments:   []store.AIAuditServiceDeployment{{ServiceID: serviceID, DesiredRevision: 2, LatestDeploymentRevision: 1, LatestDeploymentStatus: "succeeded"}},
@@ -95,13 +96,28 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	for _, finding := range findings {
 		titles[finding.Title] = true
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
 		if !titles[title] {
 			t.Errorf("missing deterministic finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 13 {
-		t.Fatalf("findings=%d, want 13: %#v", len(findings), findings)
+	if len(findings) != 15 {
+		t.Fatalf("findings=%d, want 15: %#v", len(findings), findings)
+	}
+}
+
+func TestDeterministicAuditAcceptsClusterOnActiveCertificateAuthority(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := store.AIAuditSnapshot{
+		Organization:    uuid.New(),
+		IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		AgentCAPosture:  store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:active"},
+		Clusters:        []store.Cluster{{ID: uuid.New(), State: "active", CertificateAuthorityFingerprint: "sha256:active", LastSeenAt: &now}},
+	}
+	for _, finding := range deterministicAuditFindings(snapshot, now) {
+		if finding.Title == "Remote cluster uses a non-active certificate authority" || finding.Title == "Previous agent certificate authority remains trusted" {
+			t.Fatalf("healthy CA posture produced finding: %#v", finding)
+		}
 	}
 }
 

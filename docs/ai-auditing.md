@@ -62,6 +62,7 @@ keys make it a privileged service.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing or disabled backups, missing owners, disabled
   mandatory SSO, stale cluster heartbeats, expiring agent certificates,
+  agent identities signed by a non-active CA, lingering dual-trust rollovers,
   unhealthy reconciliation, unsigned or failed catalogs, undeployed desired
   revisions, and incomplete Dokploy migrations. These findings survive a model
   gateway failure; the run remains marked failed so operators can distinguish

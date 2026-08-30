@@ -25,6 +25,7 @@ jobs:
             .realPlatformAPI and .openAICompatibleGateway and
             .snapshotSecretsRedacted and .promptInjectionBoundaryPresent and
             .deterministicFindingsPersisted and .modelFindingsPersisted and
+            .agentCAMismatchDetected and
             .durableRunCompleted and .lifecycleAudited and
             .auditorLeastPrivilege
           ' ai-audit-conformance.json >/dev/null

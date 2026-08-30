@@ -23,6 +23,7 @@ type AIAuditSnapshot struct {
 	Routes               []Route                         `json:"routes"`
 	Databases            []DatabaseInstance              `json:"databases"`
 	Clusters             []Cluster                       `json:"clusters"`
+	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
 	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
@@ -35,6 +36,13 @@ type AIAuditSnapshot struct {
 	Reconciliation       []ServiceReconciliation         `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
 	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
+}
+
+type AIAuditAgentCAPosture struct {
+	Configured          bool   `json:"configured"`
+	ActiveFingerprint   string `json:"activeFingerprint,omitempty"`
+	PreviousFingerprint string `json:"previousFingerprint,omitempty"`
+	RolloverActive      bool   `json:"rolloverActive"`
 }
 
 type AIAuditMigrationPosture struct {

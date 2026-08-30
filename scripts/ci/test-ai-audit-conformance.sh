@@ -62,6 +62,7 @@ jq -e '
   .status == "passed" and .realPlatformAPI and
   .openAICompatibleGateway and .snapshotSecretsRedacted and
   .promptInjectionBoundaryPresent and .deterministicFindingsPersisted and
+  .agentCAMismatchDetected and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and
   (.sourceCommit | test("^[a-f0-9]{40}$"))

@@ -36,20 +36,21 @@ import (
 )
 
 type Server struct {
-	Store               *store.Store
-	Box                 *cryptox.Box
-	Compiler            deploy.Compiler
-	Databases           *database.Registry
-	Swarm               deploy.Scheduler
-	SessionTTL          time.Duration
-	Logger              *slog.Logger
-	PublicURL           string
-	Metrics             *observability.Metrics
-	AgentCACertificate  []byte
-	AgentCATrustBundle  []byte
-	AgentCAKey          []byte
-	AgentCertificateTTL time.Duration
-	ReadinessCheck      func(context.Context) error
+	Store                      *store.Store
+	Box                        *cryptox.Box
+	Compiler                   deploy.Compiler
+	Databases                  *database.Registry
+	Swarm                      deploy.Scheduler
+	SessionTTL                 time.Duration
+	Logger                     *slog.Logger
+	PublicURL                  string
+	Metrics                    *observability.Metrics
+	AgentCACertificate         []byte
+	AgentPreviousCACertificate []byte
+	AgentCATrustBundle         []byte
+	AgentCAKey                 []byte
+	AgentCertificateTTL        time.Duration
+	ReadinessCheck             func(context.Context) error
 }
 
 type contextKey string

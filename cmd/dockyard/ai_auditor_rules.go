@@ -68,6 +68,12 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		if cluster.CertificateNotAfter != nil && cluster.CertificateNotAfter.Before(now.Add(7*24*time.Hour)) {
 			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote cluster certificate expires soon", Description: "The active agent certificate expires in less than seven days or is already expired.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"certificateNotAfter": cluster.CertificateNotAfter.UTC().Format(time.RFC3339)}, Remediation: "Complete two-phase agent certificate rotation and confirm the replacement heartbeat."})
 		}
+		if snapshot.AgentCAPosture.Configured && cluster.CertificateAuthorityFingerprint != snapshot.AgentCAPosture.ActiveFingerprint {
+			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote cluster uses a non-active certificate authority", Description: "The cluster's authenticated client identity does not match the controller's active signing CA.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"clusterFingerprint": cluster.CertificateAuthorityFingerprint, "pendingFingerprint": cluster.PendingCertificateAuthorityFingerprint, "activeFingerprint": snapshot.AgentCAPosture.ActiveFingerprint}, Remediation: "Keep dual trust enabled, restore a fresh heartbeat, and wait for automatic identity rotation before retiring the previous CA."})
+		}
+	}
+	if snapshot.AgentCAPosture.RolloverActive {
+		add(modelFinding{Severity: "medium", Category: "cluster", Title: "Previous agent certificate authority remains trusted", Description: "The controller is still accepting identities issued by the previous agent CA.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeFingerprint": snapshot.AgentCAPosture.ActiveFingerprint, "previousFingerprint": snapshot.AgentCAPosture.PreviousFingerprint}, Remediation: "Complete the agent CA rotation runbook, verify every managed cluster fingerprint, and remove the previous-CA overlay."})
 	}
 	for _, upgrade := range snapshot.AgentUpgradePosture {
 		if upgrade.VerificationOverdue || upgrade.Status == "failed" {
