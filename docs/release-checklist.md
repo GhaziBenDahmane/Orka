@@ -185,8 +185,11 @@ links for every item below.
   startup rejects mismatched or expired credentials and all three
   control-plane expiry gauges move or disappear as expected. The automated
   real-TLS CA rollover gate does not replace this production-topology exercise.
-- Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact
-  storage into an isolated Swarm. Confirm audit-chain continuity.
+- Restore the control plane from an authenticated format-2 PostgreSQL bundle,
+  master-key/CA escrow, the independently stored Ed25519 recovery verification
+  key, and artifact storage into an isolated Swarm. Confirm the manifest
+  signature, staged database cutover, retained rollback database, and
+  audit-chain continuity.
 - Re-run the final non-dry-run Dokploy import, deploy the imported current
   revisions, complete database transfers, and preserve the JSON output from
   `dockyard verify-dokploy-import`. Every manual conversion must have its own

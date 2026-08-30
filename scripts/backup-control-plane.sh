@@ -34,9 +34,24 @@ if [ ! -d "$parent" ]; then
   echo "output parent directory does not exist: $parent" >&2
   exit 1
 fi
-for command in docker jq sha256sum base64 openssl; do
+for command in awk base64 date docker find grep jq mktemp mv openssl sha256sum tr wc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
+
+signing_key=${DOCKYARD_RECOVERY_SIGNING_KEY_FILE:-}
+if [ -z "$signing_key" ] || [ ! -f "$signing_key" ] || [ ! -r "$signing_key" ] || [ -L "$signing_key" ]; then
+  echo "DOCKYARD_RECOVERY_SIGNING_KEY_FILE must name a readable regular Ed25519 private key" >&2
+  exit 1
+fi
+if [ -n "$(find "$signing_key" -prune -perm /077 -print)" ]; then
+  echo "DOCKYARD_RECOVERY_SIGNING_KEY_FILE must not be accessible by group or other users" >&2
+  exit 1
+fi
+if ! openssl pkey -in "$signing_key" -text_pub -noout 2>/dev/null | grep -q '^ED25519 Public-Key:'; then
+  echo "DOCKYARD_RECOVERY_SIGNING_KEY_FILE must contain an Ed25519 private key" >&2
+  exit 1
+fi
+recovery_signing_key_sha256=$(openssl pkey -in "$signing_key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
 
 postgres_container=${DOCKYARD_POSTGRES_CONTAINER:-}
 if [ -z "$postgres_container" ]; then
@@ -101,9 +116,11 @@ jq --null-input \
   --argjson databaseBytes "$database_bytes" \
   --arg masterKeySha256 "$master_key_sha256" \
   --arg agentCaSha256 "$agent_ca_sha256" \
-  '{formatVersion:1,createdAt:$createdAt,stack:$stack,database:$database,schemaVersion:$schemaVersion,controllerImage:$controllerImage,databaseSha256:$databaseSha256,databaseBytes:$databaseBytes,masterKeySha256:$masterKeySha256,agentCaSha256:$agentCaSha256}' \
+  --arg recoverySigningKeySha256 "$recovery_signing_key_sha256" \
+  '{formatVersion:2,createdAt:$createdAt,stack:$stack,database:$database,schemaVersion:$schemaVersion,controllerImage:$controllerImage,databaseSha256:$databaseSha256,databaseBytes:$databaseBytes,masterKeySha256:$masterKeySha256,agentCaSha256:$agentCaSha256,recoverySigningKeySha256:$recoverySigningKeySha256}' \
   >"$temporary/manifest.json"
-chmod 0600 "$temporary/database.dump" "$temporary/manifest.json"
+openssl pkeyutl -sign -rawin -inkey "$signing_key" -in "$temporary/manifest.json" -out "$temporary/manifest.sig"
+chmod 0600 "$temporary/database.dump" "$temporary/manifest.json" "$temporary/manifest.sig"
 mv "$temporary" "$output"
 trap - EXIT HUP INT TERM
 printf '%s\n' "$output"

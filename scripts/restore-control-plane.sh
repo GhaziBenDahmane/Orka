@@ -25,13 +25,34 @@ esac
 case "$database_user" in
   ""|-*|*[!A-Za-z0-9_]*) echo "invalid DOCKYARD_POSTGRES_USER" >&2; exit 1 ;;
 esac
-for command in docker jq sha256sum base64 openssl; do
+for command in awk base64 docker grep jq mktemp openssl sha256sum tr wc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
-if [ ! -f "$bundle/manifest.json" ] || [ ! -f "$bundle/database.dump" ] || [ -L "$bundle/manifest.json" ] || [ -L "$bundle/database.dump" ]; then
-  echo "recovery bundle must contain regular manifest.json and database.dump files" >&2
+if [ ! -f "$bundle/manifest.json" ] || [ ! -f "$bundle/manifest.sig" ] || [ ! -f "$bundle/database.dump" ] || [ -L "$bundle/manifest.json" ] || [ -L "$bundle/manifest.sig" ] || [ -L "$bundle/database.dump" ]; then
+  echo "recovery bundle must contain regular manifest.json, manifest.sig, and database.dump files" >&2
   exit 1
 fi
+manifest_bytes=$(wc -c <"$bundle/manifest.json" | tr -d ' ')
+signature_bytes=$(wc -c <"$bundle/manifest.sig" | tr -d ' ')
+if [ "$manifest_bytes" -eq 0 ] || [ "$manifest_bytes" -gt 65536 ] || [ "$signature_bytes" -ne 64 ]; then
+  echo "recovery bundle manifest or Ed25519 signature has an invalid size" >&2
+  exit 1
+fi
+
+verify_key=${DOCKYARD_RECOVERY_VERIFY_KEY_FILE:-}
+if [ -z "$verify_key" ] || [ ! -f "$verify_key" ] || [ ! -r "$verify_key" ] || [ -L "$verify_key" ]; then
+  echo "DOCKYARD_RECOVERY_VERIFY_KEY_FILE must name a readable regular Ed25519 public key" >&2
+  exit 1
+fi
+if ! openssl pkey -pubin -in "$verify_key" -text_pub -noout 2>/dev/null | grep -q '^ED25519 Public-Key:'; then
+  echo "DOCKYARD_RECOVERY_VERIFY_KEY_FILE must contain an Ed25519 public key" >&2
+  exit 1
+fi
+if ! openssl pkeyutl -verify -rawin -pubin -inkey "$verify_key" -in "$bundle/manifest.json" -sigfile "$bundle/manifest.sig" >/dev/null 2>&1; then
+  echo "recovery bundle manifest signature is invalid" >&2
+  exit 1
+fi
+recovery_signing_key_sha256=$(openssl pkey -pubin -in "$verify_key" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
 
 controller_service=${DOCKYARD_CONTROLLER_SERVICE:-${stack}_dockyard}
 case "$controller_service" in
@@ -76,8 +97,13 @@ expected_dump_bytes=$(jq -er '.databaseBytes' "$bundle/manifest.json")
 expected_master_sha256=$(jq -er '.masterKeySha256' "$bundle/manifest.json")
 expected_agent_ca_sha256=$(jq -er '.agentCaSha256' "$bundle/manifest.json")
 expected_schema_version=$(jq -er '.schemaVersion' "$bundle/manifest.json")
-if [ "$format_version" != "1" ] || [ "$expected_database" != "$database" ]; then
+expected_recovery_signing_key_sha256=$(jq -er '.recoverySigningKeySha256 | select(test("^[a-f0-9]{64}$"))' "$bundle/manifest.json")
+if [ "$format_version" != "2" ] || [ "$expected_database" != "$database" ]; then
   echo "recovery bundle format or database does not match" >&2
+  exit 1
+fi
+if [ "$expected_recovery_signing_key_sha256" != "$recovery_signing_key_sha256" ]; then
+  echo "recovery verification key does not match the signed bundle" >&2
   exit 1
 fi
 if [ "$expected_image" != "$image" ]; then

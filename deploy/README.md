@@ -382,14 +382,20 @@ escrowed copy of the master key:
 ```sh
 export DOCKYARD_IMAGE='ghcr.io/example/dockyard@sha256:...'
 export DOCKYARD_MASTER_KEY_FILE=/secure/escrow/dockyard-master-key
+export DOCKYARD_RECOVERY_SIGNING_KEY_FILE=/secure/escrow/dockyard-recovery-signing-key.pem
 scripts/backup-control-plane.sh /secure/backups/dockyard-2026-08-28
 ```
 
-The new directory contains a custom-format PostgreSQL dump and a JSON manifest
-with the dump checksum and size, schema version, image digest, and fingerprints
-of the master key and optional agent CA certificate. It never contains either
-secret. Copy the bundle, master key, agent CA keypair, artifact storage, stack
-configuration, and image digest to independently protected storage.
+Generate the recovery identity once with `openssl genpkey -algorithm ED25519`,
+derive its public key with `openssl pkey -pubout`, protect the private key with
+mode `0600`, and store the public verification key independently from backup
+storage. The new directory contains a custom-format PostgreSQL dump, a JSON
+manifest with the dump checksum and size, schema version, image digest, and
+trusted-key fingerprints, plus an Ed25519 manifest signature. It never contains
+the master key, agent CA, recovery signing key, or trusted verification key.
+Copy the bundle, master key, agent CA keypair, artifact storage, stack
+configuration, image digest, and recovery verification key to independently
+protected storage.
 
 Restore only on the node hosting the PostgreSQL task, with all controller
 replicas stopped. The script refuses to proceed unless the controller service
@@ -401,11 +407,16 @@ docker service scale dockyard_dockyard=0
 export DOCKYARD_RESTORE_CONFIRM='restore:dockyard'
 export DOCKYARD_IMAGE='ghcr.io/example/dockyard@sha256:...'
 export DOCKYARD_MASTER_KEY_FILE=/secure/escrow/dockyard-master-key
+export DOCKYARD_RECOVERY_VERIFY_KEY_FILE=/secure/escrow/dockyard-recovery-verify-key.pem
 scripts/restore-control-plane.sh /secure/backups/dockyard-2026-08-28
 docker service scale dockyard_dockyard=1
 ```
 
-The restore first creates a separate staging database, restores the complete
+The restore rejects unsigned manifests and verifies the signature with the
+independently supplied Ed25519 public key before trusting any bundle metadata.
+The current authenticated bundle format is version 2; create a fresh bundle
+before upgrading from a version that produced unsigned format-1 bundles. It
+then creates a separate staging database, restores the complete
 dump in one transaction, and verifies its migration version. Only then does it
 atomically rename the current database aside and the validated staging database
 into place. It prints the retained previous database name; keep that rollback

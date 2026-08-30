@@ -21,7 +21,8 @@ resource secrets are rewritten with resource-bound authenticated contexts.
 1. Record the running immutable Dockyard image digest and current schema
    version. Do not change versions during rotation.
 2. Create and verify a fresh control-plane recovery bundle with
-   `scripts/backup-control-plane.sh`. Preserve its matching old master key.
+   `scripts/backup-control-plane.sh`. Preserve its matching old master key and
+   independently stored Ed25519 recovery verification key.
 3. Generate 32 random bytes, base64 encode them as one line, and store them in a
    new mode `0600` file and in the secret manager. Never overwrite the old key.
 4. Stop every Dockyard controller replica. Leave PostgreSQL running. Wait for

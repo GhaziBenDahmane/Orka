@@ -10,6 +10,11 @@ initialized_swarm=false
 created_network=false
 stack_name=""
 recovery_root="$(mktemp -d)"
+openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
+openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
+chmod 0600 "$recovery_root/signing-key.pem"
+export DOCKYARD_RECOVERY_SIGNING_KEY_FILE="$recovery_root/signing-key.pem"
+export DOCKYARD_RECOVERY_VERIFY_KEY_FILE="$recovery_root/verify-key.pem"
 cleanup() {
   if [[ -n "$stack_name" ]]; then
     docker stack rm "$stack_name" >/dev/null 2>&1 || true
@@ -147,6 +152,9 @@ DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
   scripts/backup-control-plane.sh "$recovery_root/control-plane"
 test ! -e "$recovery_root/control-plane/master-key.bin"
+test ! -e "$recovery_root/control-plane/signing-key.pem"
+test ! -e "$recovery_root/control-plane/verify-key.pem"
+test "$(wc -c <"$recovery_root/control-plane/manifest.sig" | tr -d ' ')" = "64"
 if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
   DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
@@ -158,6 +166,19 @@ if DOCKYARD_STACK_NAME="$project" \
   exit 1
 fi
 docker compose --project-name "$project" stop dockyard
+cp -a "$recovery_root/control-plane" "$recovery_root/tampered-manifest"
+jq '.createdAt = "attacker-controlled"' "$recovery_root/tampered-manifest/manifest.json" >"$recovery_root/tampered-manifest/manifest.updated.json"
+mv "$recovery_root/tampered-manifest/manifest.updated.json" "$recovery_root/tampered-manifest/manifest.json"
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/tampered-manifest" >/dev/null 2>&1; then
+  echo "restore unexpectedly accepted a modified signed manifest" >&2
+  exit 1
+fi
 cp -a "$recovery_root/control-plane" "$recovery_root/tampered"
 printf 'tampered' >>"$recovery_root/tampered/database.dump"
 if DOCKYARD_STACK_NAME="$project" \
@@ -189,6 +210,7 @@ test "$remaining_projects" = "0"
 cp -a "$recovery_root/control-plane" "$recovery_root/wrong-schema"
 jq '.schemaVersion = "not-the-restored-version"' "$recovery_root/wrong-schema/manifest.json" >"$recovery_root/wrong-schema/manifest.updated.json"
 mv "$recovery_root/wrong-schema/manifest.updated.json" "$recovery_root/wrong-schema/manifest.json"
+openssl pkeyutl -sign -rawin -inkey "$DOCKYARD_RECOVERY_SIGNING_KEY_FILE" -in "$recovery_root/wrong-schema/manifest.json" -out "$recovery_root/wrong-schema/manifest.sig"
 if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
   DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
