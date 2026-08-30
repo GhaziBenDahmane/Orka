@@ -2,11 +2,21 @@ package main
 
 import (
 	"encoding/base64"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestPlatformHTTPServerUsesBoundedTransportSettings(t *testing.T) {
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	server := newPlatformHTTPServer(":8080", handler, 35*time.Second)
+	if server.Handler == nil || server.ReadHeaderTimeout != 10*time.Second || server.ReadTimeout != 35*time.Second || server.WriteTimeout != 35*time.Second || server.IdleTimeout != 2*time.Minute || server.MaxHeaderBytes != 64<<10 {
+		t.Fatalf("unsafe HTTP server settings: %+v", server)
+	}
+}
 
 func TestReadRestrictedMasterKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master-key")

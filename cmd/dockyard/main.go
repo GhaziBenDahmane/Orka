@@ -474,7 +474,7 @@ func serve() error {
 	go worker.Run(ctx)
 	go templates.RunRepositorySyncScheduler(ctx, db, box, nil, logger, worker.ID)
 	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL}
-	httpServer := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+	httpServer := newPlatformHTTPServer(cfg.ListenAddr, api.Handler(), 30*time.Second)
 	servers := []*http.Server{httpServer}
 	var agentServer *http.Server
 	if cfg.AgentListenAddr != "" {
@@ -482,7 +482,8 @@ func serve() error {
 		if tlsErr != nil {
 			return tlsErr
 		}
-		agentServer = &http.Server{Addr: cfg.AgentListenAddr, Handler: api.AgentHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 35 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 2 * time.Minute, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs}}
+		agentServer = newPlatformHTTPServer(cfg.AgentListenAddr, api.AgentHandler(), 35*time.Second)
+		agentServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs}
 		servers = append(servers, agentServer)
 	}
 	go func() {
@@ -506,4 +507,16 @@ func serve() error {
 	}
 	stop()
 	return err
+}
+
+func newPlatformHTTPServer(address string, handler http.Handler, requestTimeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       requestTimeout,
+		WriteTimeout:      requestTimeout,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+	}
 }

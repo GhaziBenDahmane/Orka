@@ -45,8 +45,9 @@ service-account revocation.
 
 The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,
-and bounded-cardinality request metrics. Agent authentication still runs before
-any command or heartbeat handler.
+and bounded-cardinality request metrics. Both listeners bound header size and
+header, request, response, and idle durations. Agent authentication still runs
+before any command or heartbeat handler.
 
 ### Credential disclosure
 
