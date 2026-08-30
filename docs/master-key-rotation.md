@@ -78,7 +78,10 @@ docker stack deploy --with-registry-auth --compose-file deploy/swarm.yml dockyar
 ```
 
 Persist `DOCKYARD_MASTER_KEY_SECRET=dockyard_master_key_v2` in the deployment
-configuration used for later upgrades. Confirm `/readyz`, login, inspect a
+configuration used for later upgrades. `scripts/install-swarm.sh` uses the same
+variable when validating, creating, or explicitly reusing the versioned Docker
+secret, so later installer-driven upgrades preserve the selection. Confirm
+`/readyz`, login, inspect a
 service with encrypted environment values, fetch a source-backed build, verify
 an SSO provider, and perform a managed-database restore drill. Keep the old key
 and pre-rotation recovery bundle under the normal retention policy; do not make

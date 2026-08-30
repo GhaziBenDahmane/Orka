@@ -299,4 +299,6 @@ mechanism and preserve the same recovery-set metadata and secret escrow.
 Rotate the control-plane master key with the transactional offline procedure
 in [docs/master-key-rotation.md](../docs/master-key-rotation.md). The Swarm
 manifest accepts `DOCKYARD_MASTER_KEY_SECRET` so a versioned replacement Docker
-secret can be deployed without mutating secret data in place.
+secret can be deployed without mutating secret data in place. Keep that variable
+set when rerunning `scripts/install-swarm.sh`; the installer creates, validates,
+and reuses the selected external secret name.

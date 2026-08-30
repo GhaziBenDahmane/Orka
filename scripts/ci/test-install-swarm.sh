@@ -111,6 +111,30 @@ if grep -q '^secret create' "$DOCKYARD_INSTALL_TEST_LOG"; then
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_MASTER_KEY_SECRET='dockyard_master_key_v2' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q "^secret inspect dockyard_master_key_v2$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret create dockyard_master_key_v2 $DOCKYARD_MASTER_KEY_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -q '^secret create dockyard_master_key ' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'installer created the legacy master-key secret during a versioned-key deployment' >&2
+  exit 1
+fi
+
+for unsafe_secret in '-leading' 'bad/name' 'bad secret' 'bad:secret'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_MASTER_KEY_SECRET="$unsafe_secret" \
+    "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe master-key secret name: $unsafe_secret" >&2
+    exit 1
+  fi
+  grep -q 'invalid DOCKYARD_MASTER_KEY_SECRET' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe master-key secret name mutated Docker state: $unsafe_secret" >&2
+    exit 1
+  fi
+done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_INSTALL_TEST_FAIL_SECRET='dockyard_database_url' \
   "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'installer ignored a Docker secret creation failure' >&2

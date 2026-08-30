@@ -5,6 +5,7 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 mode=${DOCKYARD_INSTALL_MODE:-single}
 stack=${DOCKYARD_STACK_NAME:-dockyard}
 network=dockyard-public
+master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
 reuse=${DOCKYARD_REUSE_EXISTING_SECRETS:-false}
 dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
@@ -44,6 +45,7 @@ validate_email() {
 
 case "$mode" in single|ha) ;; *) fail "DOCKYARD_INSTALL_MODE must be single or ha" ;; esac
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_STACK_NAME" ;; esac
+case "$master_key_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_MASTER_KEY_SECRET" ;; esac
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
 case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
@@ -63,7 +65,7 @@ validate_email "$ACME_EMAIL"
 DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
 POSTGRES_IMAGE=${POSTGRES_IMAGE:-}
 TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
-export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE
+export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_MASTER_KEY_SECRET
 "$root/scripts/ci/check-image-digests.sh" controller
 
 swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}')
@@ -119,7 +121,7 @@ unset database_url
 
 secret_specs="dockyard_db_password:${DOCKYARD_DB_PASSWORD_FILE}
 dockyard_database_url:${DOCKYARD_DATABASE_URL_FILE}
-dockyard_master_key:${DOCKYARD_MASTER_KEY_FILE}"
+${master_key_secret}:${DOCKYARD_MASTER_KEY_FILE}"
 if [ "$mode" = ha ]; then
   command -v openssl >/dev/null 2>&1 || fail "openssl is required for HA installation"
   validate_secret_file DOCKYARD_AGENT_CA_CERT_FILE "${DOCKYARD_AGENT_CA_CERT_FILE:-}"
