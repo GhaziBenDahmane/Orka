@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -89,8 +89,6 @@ type preparedApplication struct {
 	environment map[string]string
 	source      *store.ApplicationSource
 }
-
-var migrationImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)
 
 func dokployApplicationReport(item sourceApplication, targetID *uuid.UUID, status, reason string) DokployResourceReport {
 	repository, branch, buildPath := applicationRepository(item)
@@ -225,7 +223,7 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 	switch item.SourceType {
 	case "docker":
 		image := strings.TrimSpace(item.DockerImage)
-		if !migrationImagePattern.MatchString(image) || strings.Contains(image, "..") {
+		if _, err := ociref.Parse(image); err != nil {
 			return preparedApplication{}, warnings, errors.New("Docker application has an invalid or empty image")
 		}
 		service["image"] = image

@@ -71,6 +71,21 @@ func TestPrepareGitApplicationRequiresRegistryPrefix(t *testing.T) {
 	}
 }
 
+func TestPrepareDockerApplicationValidatesOCIImage(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for _, image := range []string{"postgres", "postgres:17-alpine", "registry.example.test:5000/acme/app:v1@" + digest} {
+		prepared, _, err := prepareApplication(sourceApplication{ID: "app", AppName: "app", Name: "App", SourceType: "docker", DockerImage: image, Replicas: 1}, DokployOptions{})
+		if err != nil || !strings.Contains(prepared.composeYAML, image) {
+			t.Errorf("valid Docker image %q was not prepared: %#v, %v", image, prepared, err)
+		}
+	}
+	for _, image := range []string{"", "ghcr.io//app", "ghcr.io/Acme/app", "registry.example.test:0/acme/app", "team/../app", "app@sha256:short"} {
+		if _, _, err := prepareApplication(sourceApplication{ID: "app", AppName: "app", Name: "App", SourceType: "docker", DockerImage: image, Replicas: 1}, DokployOptions{}); err == nil {
+			t.Errorf("invalid Docker image %q unexpectedly succeeded", image)
+		}
+	}
+}
+
 func TestMigrationApplicationReportDoesNotExposeCredentials(t *testing.T) {
 	item := sourceApplication{ID: "app", Name: "App", SourceType: "git", CustomGitURL: "https://username:password@git.example.test/acme/app.git?token=secret#fragment", BuildType: "dockerfile", BuildSecrets: "SECRET=value"}
 	report := dokployApplicationReport(item, nil, "skipped", "unsupported")
