@@ -195,6 +195,9 @@ Service deletion uses the same service-row boundary: active deployments,
 database migrations, backups, and restores reject deletion, while new manual
 or scheduled data operations, webhook deployments, template upgrades, and
 backup-policy writes reject a service whose deletion has been queued.
+Environment and project cascades lock their descendants in parent-to-child
+order, apply the same active-operation barrier, and serialize against new
+environment, service, database, and template creation.
 
 ### AI prompt injection and unsafe autonomy
 

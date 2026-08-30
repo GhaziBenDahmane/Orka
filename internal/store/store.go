@@ -766,6 +766,32 @@ func (s *Store) GetProject(ctx context.Context, organizationID, projectID uuid.U
 	return item, err
 }
 
+type deletionServiceChild struct {
+	id       uuid.UUID
+	stack    string
+	deleting bool
+}
+
+func activeServiceOperations(ctx context.Context, tx pgx.Tx, serviceIDs []uuid.UUID) (bool, error) {
+	if len(serviceIDs) == 0 {
+		return false, nil
+	}
+	serviceKeys := make([]string, 0, len(serviceIDs))
+	for _, serviceID := range serviceIDs {
+		serviceKeys = append(serviceKeys, "service:"+serviceID.String())
+	}
+	var busy bool
+	err := tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM jobs job WHERE job.status IN ('pending','running') AND (job.resource_key=ANY($2) OR job.resource_key IN (SELECT 'database:' || database.id::text FROM database_instances database WHERE database.compose_service_id=ANY($1))))
+		OR EXISTS(SELECT 1 FROM deployments deployment WHERE deployment.compose_service_id=ANY($1) AND deployment.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=ANY($1) AND backup.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=ANY($1) AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_backups backup JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=ANY($1) AND backup.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=ANY($1) AND restore.status IN ('queued','running'))
+		OR EXISTS(SELECT 1 FROM database_migrations migration JOIN database_instances database ON database.id=migration.database_instance_id WHERE database.compose_service_id=ANY($1) AND migration.status IN ('queued','running'))`, serviceIDs, serviceKeys).Scan(&busy)
+	return busy, err
+}
+
 func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uuid.UUID) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -780,8 +806,49 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 	if err != nil {
 		return err
 	}
-	var busy bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON d.id=(j.payload->>'deploymentId')::uuid JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id WHERE j.kind='deploy.compose' AND j.status IN ('pending','running') AND e.project_id=$1)`, projectID).Scan(&busy); err != nil {
+	rows, err := tx.Query(ctx, `SELECT id,deletion_requested_at IS NOT NULL FROM environments WHERE project_id=$1 ORDER BY id FOR UPDATE`, projectID)
+	if err != nil {
+		return err
+	}
+	environments := map[uuid.UUID]bool{}
+	environmentIDs := []uuid.UUID{}
+	for rows.Next() {
+		var environmentID uuid.UUID
+		var environmentDeleting bool
+		if err = rows.Scan(&environmentID, &environmentDeleting); err != nil {
+			rows.Close()
+			return err
+		}
+		environments[environmentID] = environmentDeleting
+		environmentIDs = append(environmentIDs, environmentID)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	services := []deletionServiceChild{}
+	serviceIDs := []uuid.UUID{}
+	if len(environmentIDs) > 0 {
+		rows, err = tx.Query(ctx, `SELECT id,stack_name,deletion_requested_at IS NOT NULL FROM compose_services WHERE environment_id=ANY($1) ORDER BY environment_id,id FOR UPDATE`, environmentIDs)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var child deletionServiceChild
+			if err = rows.Scan(&child.id, &child.stack, &child.deleting); err != nil {
+				rows.Close()
+				return err
+			}
+			services = append(services, child)
+			serviceIDs = append(serviceIDs, child.id)
+		}
+		rows.Close()
+		if err = rows.Err(); err != nil {
+			return err
+		}
+	}
+	busy, err := activeServiceOperations(ctx, tx, serviceIDs)
+	if err != nil {
 		return err
 	}
 	if busy {
@@ -793,44 +860,16 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 	if err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT s.id,COALESCE(s.stack_name,''),s.deletion_requested_at IS NOT NULL,e.id,e.deletion_requested_at IS NOT NULL FROM environments e LEFT JOIN compose_services s ON s.environment_id=e.id WHERE e.project_id=$1 ORDER BY e.id,s.id`, projectID)
-	if err != nil {
-		return err
-	}
-	type child struct {
-		serviceID           *uuid.UUID
-		stack               string
-		serviceDeleting     bool
-		environmentID       uuid.UUID
-		environmentDeleting bool
-	}
-	children := []child{}
-	for rows.Next() {
-		var c child
-		if err = rows.Scan(&c.serviceID, &c.stack, &c.serviceDeleting, &c.environmentID, &c.environmentDeleting); err != nil {
-			rows.Close()
+	for _, child := range services {
+		if !child.deleting {
+			_, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, child.id)
+		}
+		if err != nil {
 			return err
 		}
-		children = append(children, c)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return err
-	}
-	environments := map[uuid.UUID]bool{}
-	for _, c := range children {
-		environments[c.environmentID] = c.environmentDeleting
-		if c.serviceID != nil {
-			if !c.serviceDeleting {
-				_, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, *c.serviceID)
-			}
-			if err != nil {
-				return err
-			}
-			payload, _ := json.Marshal(map[string]string{"serviceId": c.serviceID.String(), "stackName": c.stack})
-			if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.compose',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, c.serviceID.String()); err != nil {
-				return err
-			}
+		payload, _ := json.Marshal(map[string]string{"serviceId": child.id.String(), "stackName": child.stack})
+		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.compose',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, child.id.String()); err != nil {
+			return err
 		}
 	}
 	for environmentID, environmentDeleting := range environments {
@@ -866,6 +905,12 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 		return Environment{}, err
 	}
 	defer tx.Rollback(ctx)
+	var lockedProjectID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT id FROM projects WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL FOR UPDATE`, projectID, organizationID).Scan(&lockedProjectID); errors.Is(err, pgx.ErrNoRows) {
+		return Environment{}, ErrNotFound
+	} else if err != nil {
+		return Environment{}, err
+	}
 	if err = s.validatePolicyScope(ctx, tx, organizationID, "project", projectID); err != nil {
 		return Environment{}, err
 	}
@@ -947,8 +992,27 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 	if err != nil {
 		return err
 	}
-	var busy bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs j JOIN deployments d ON d.id=(j.payload->>'deploymentId')::uuid JOIN compose_services s ON s.id=d.compose_service_id WHERE j.kind='deploy.compose' AND j.status IN ('pending','running') AND s.environment_id=$1)`, environmentID).Scan(&busy); err != nil {
+	rows, err := tx.Query(ctx, `SELECT id,stack_name,deletion_requested_at IS NOT NULL FROM compose_services WHERE environment_id=$1 ORDER BY id FOR UPDATE`, environmentID)
+	if err != nil {
+		return err
+	}
+	services := []deletionServiceChild{}
+	serviceIDs := []uuid.UUID{}
+	for rows.Next() {
+		var child deletionServiceChild
+		if err = rows.Scan(&child.id, &child.stack, &child.deleting); err != nil {
+			rows.Close()
+			return err
+		}
+		services = append(services, child)
+		serviceIDs = append(serviceIDs, child.id)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	busy, err := activeServiceOperations(ctx, tx, serviceIDs)
+	if err != nil {
 		return err
 	}
 	if busy {
@@ -958,28 +1022,6 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 		_, err = tx.Exec(ctx, `UPDATE environments SET deletion_requested_at=now() WHERE id=$1`, environmentID)
 	}
 	if err != nil {
-		return err
-	}
-	rows, err := tx.Query(ctx, `SELECT id,stack_name,deletion_requested_at IS NOT NULL FROM compose_services WHERE environment_id=$1`, environmentID)
-	if err != nil {
-		return err
-	}
-	type serviceChild struct {
-		id       uuid.UUID
-		stack    string
-		deleting bool
-	}
-	services := []serviceChild{}
-	for rows.Next() {
-		var child serviceChild
-		if err = rows.Scan(&child.id, &child.stack, &child.deleting); err != nil {
-			rows.Close()
-			return err
-		}
-		services = append(services, child)
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
 		return err
 	}
 	for _, child := range services {
@@ -1001,16 +1043,31 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 	return tx.Commit(ctx)
 }
 
+func lockEnvironmentForServiceCreation(ctx context.Context, tx pgx.Tx, organizationID, environmentID uuid.UUID) (uuid.UUID, error) {
+	var projectID uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT project.id FROM projects project JOIN environments environment ON environment.project_id=project.id WHERE environment.id=$1 AND project.organization_id=$2 AND project.deletion_requested_at IS NULL FOR UPDATE OF project`, environmentID, organizationID).Scan(&projectID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var lockedEnvironmentID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM environments WHERE id=$1 AND deletion_requested_at IS NULL FOR UPDATE`, environmentID).Scan(&lockedEnvironmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	return projectID, err
+}
+
 func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UUID, service ComposeService) (ComposeService, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ComposeService{}, err
 	}
 	defer tx.Rollback(ctx)
-	var projectID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, service.EnvironmentID, organizationID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
-		return ComposeService{}, ErrNotFound
-	} else if err != nil {
+	projectID, err := lockEnvironmentForServiceCreation(ctx, tx, organizationID, service.EnvironmentID)
+	if err != nil {
 		return ComposeService{}, err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &service.EnvironmentID, "services"); err != nil {
@@ -1339,15 +1396,8 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return err
 	}
-	var busy bool
-	if err = tx.QueryRow(ctx, `SELECT
-		EXISTS(SELECT 1 FROM jobs job WHERE job.status IN ('pending','running') AND (job.resource_key=$2 OR job.resource_key IN (SELECT 'database:' || database.id::text FROM database_instances database WHERE database.compose_service_id=$1)))
-		OR EXISTS(SELECT 1 FROM deployments deployment WHERE deployment.compose_service_id=$1 AND deployment.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM volume_backups backup WHERE backup.compose_service_id=$1 AND backup.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=$1 AND restore.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM database_backups backup JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=$1 AND backup.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id JOIN database_instances database ON database.id=backup.database_instance_id WHERE database.compose_service_id=$1 AND restore.status IN ('queued','running'))
-		OR EXISTS(SELECT 1 FROM database_migrations migration JOIN database_instances database ON database.id=migration.database_instance_id WHERE database.compose_service_id=$1 AND migration.status IN ('queued','running'))`, serviceID, "service:"+serviceID.String()).Scan(&busy); err != nil {
+	busy, err := activeServiceOperations(ctx, tx, []uuid.UUID{serviceID})
+	if err != nil {
 		return err
 	}
 	if busy {
@@ -1939,10 +1989,8 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 		return DatabaseInstance{}, err
 	}
 	defer tx.Rollback(ctx)
-	var projectID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, instance.EnvironmentID, organizationID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
-		return DatabaseInstance{}, ErrNotFound
-	} else if err != nil {
+	projectID, err := lockEnvironmentForServiceCreation(ctx, tx, organizationID, instance.EnvironmentID)
+	if err != nil {
 		return DatabaseInstance{}, err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &instance.EnvironmentID, "services"); err != nil {
@@ -2249,10 +2297,8 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 		return ComposeService{}, nil, err
 	}
 	defer tx.Rollback(ctx)
-	var projectID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT p.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`, service.EnvironmentID, organizationID).Scan(&projectID); errors.Is(err, pgx.ErrNoRows) {
-		return ComposeService{}, nil, ErrNotFound
-	} else if err != nil {
+	projectID, err := lockEnvironmentForServiceCreation(ctx, tx, organizationID, service.EnvironmentID)
+	if err != nil {
 		return ComposeService{}, nil, err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &service.EnvironmentID, "services"); err != nil {
