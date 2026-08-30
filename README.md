@@ -140,6 +140,13 @@ cluster operations have short commands. `dockyardctl request METHOD /v1/path
 release. Environment variables `DOCKYARD_URL`, `DOCKYARD_TOKEN`, and
 `DOCKYARD_ORGANIZATION_ID` override saved configuration.
 
+Named-volume recovery also has dedicated commands: `volumes SERVICE_ID`,
+`volume-policies SERVICE_ID`, `put-volume-policy SERVICE_ID VOLUME_NAME JSON`,
+`backup-volume SERVICE_ID VOLUME_NAME`, `volume-backups SERVICE_ID`, and
+`restore-volume BACKUP_ID SERVICE_SLUG`. Backup and restore inspection and
+cancellation use `volume-backup`, `volume-restore`, `cancel-volume-backup`, and
+`cancel-volume-restore`.
+
 ## Terraform / OpenTofu
 
 `terraform-provider-dockyard` manages projects, environments, and Compose

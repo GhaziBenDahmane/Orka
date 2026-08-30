@@ -95,6 +95,67 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodGet, "/v1/services/" + args[1] + "/logs", nil, nil
+	case "volumes":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/volumes", nil, nil
+	case "volume-policies":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/volume-backup-policies", nil, nil
+	case "put-volume-policy":
+		if err := require(4); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[3], stdin)
+		return http.MethodPut, "/v1/services/" + args[1] + "/volume-backup-policies/" + args[2], input, err
+	case "delete-volume-policy":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/services/" + args[1] + "/volume-backup-policies/" + args[2], nil, nil
+	case "volume-backups":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/volume-backups", nil, nil
+	case "backup-volume":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/services/" + args[1] + "/volume-backups/" + args[2], map[string]any{}, nil
+	case "volume-restores":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/volume-restores", nil, nil
+	case "volume-backup":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/volume-backups/" + args[1], nil, nil
+	case "cancel-volume-backup":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/volume-backups/" + args[1] + "/cancel", map[string]any{}, nil
+	case "restore-volume":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/volume-backups/" + args[1] + "/restore", map[string]string{"confirm": args[2]}, nil
+	case "volume-restore":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/volume-restores/" + args[1], nil, nil
+	case "cancel-volume-restore":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/volume-restores/" + args[1] + "/cancel", map[string]any{}, nil
 	case "templates":
 		return http.MethodGet, "/v1/templates", nil, require(1)
 	case "clusters":
@@ -303,5 +364,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }
