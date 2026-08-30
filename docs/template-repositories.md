@@ -27,7 +27,7 @@ respectively, and `base64` uses padded standard encoding. A parameterless
 `jwt` produces a signed token with Dokploy's standard issuer and expiry.
 Signed JWT helpers must reference a declared, non-empty secret variable and may
 reference one declared JSON payload variable. Malformed, missing, negative, or
-unbounded parameters reject the complete catalog snapshot. `timestampms` and
+unbounded parameters fail validation and are never deployable. `timestampms` and
 `timestamps` accept an optional RFC3339 or `YYYY-MM-DD` date. Catalog admission
 also bounds variable counts, source bytes, resolved bytes, and expression count
 so chained substitutions cannot amplify a small repository into unbounded
@@ -37,6 +37,16 @@ contain opaque references. The Swarm manager materializes mode-0600 temporary
 files immediately before deployment, removes their internal values from
 Compose interpolation, and accepts only bounded, read-only config mounts. See
 `examples/template-repository` for a complete 9Router example.
+
+Catalog synchronization distinguishes invalid templates from valid templates
+that request privileged containers, host mounts, direct published ports, or
+other restricted Compose capabilities. Entries with valid metadata and source
+files remain visible as `safetyClass=invalid` when expansion or structural
+Compose validation fails, but can never be instantiated. Restricted entries
+remain visible with `safetyClass=requires_unsafe` and their admission reason,
+but cannot be previewed or instantiated unless the controller was deliberately
+started with `DOCKYARD_ALLOW_UNSAFE_WORKLOADS=true`. Missing files, malformed
+TOML or metadata, and duplicate identities still reject the atomic snapshot.
 
 Repository downloads accept only canonical HTTPS GitHub URLs and use GitHub's
 archive endpoint rather than invoking a shell. Extraction rejects links,

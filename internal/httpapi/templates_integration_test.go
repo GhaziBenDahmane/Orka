@@ -88,6 +88,11 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 	if err != nil {
 		t.Fatal(err)
 	}
+	restrictedConfig, _ := json.Marshal(map[string]string{"templateToml": "[variables]\n", "safetyClass": "requires_unsafe", "safetyReason": "service requests privileged mode"})
+	restrictedTemplate, err := db.CreateTemplate(ctx, store.Template{OrganizationID: &orgID, Key: "restricted-test", Version: "1", Name: "Restricted Test", ComposeYAML: "services:\n  app:\n    image: example:1\n    privileged: true\n", Config: restrictedConfig, Source: "dokploy", Checksum: strings.Repeat("d", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	server := httptest.NewServer((&Server{Store: db, Box: box, Compiler: deploy.Compiler{PublicNetwork: "dockyard-public"}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	defer server.Close()
@@ -101,6 +106,16 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 	}
 	if !strings.Contains(text, `"name":"admin_email","default":"admin@example.test"`) || !strings.Contains(text, `"name":"password","generated":true,"sensitive":true`) {
 		t.Fatalf("template variable descriptors missing: %s", body)
+	}
+	if !strings.Contains(text, `"safetyClass":"safe","deployable":true`) {
+		t.Fatalf("legacy safe template classification missing: %s", body)
+	}
+	if !strings.Contains(text, `"key":"restricted-test"`) || !strings.Contains(text, `"safetyClass":"requires_unsafe","safetyReason":"service requests privileged mode","deployable":false`) {
+		t.Fatalf("restricted template classification missing: %s", body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+restrictedTemplate.ID.String()+"/preview", viewerToken, orgID, http.MethodPost, map[string]any{})
+	if status != http.StatusBadRequest || !bytes.Contains(body, []byte("privileged")) {
+		t.Fatalf("restricted template preview status = %d: %s", status, body)
 	}
 	previewVariables := map[string]string{
 		"admin_email": "operator@example.test",

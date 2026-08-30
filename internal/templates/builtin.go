@@ -65,7 +65,7 @@ func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, err
 		hash := sha256.New()
 		_, _ = hash.Write(tomlBytes)
 		_, _ = hash.Write(compose)
-		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes)})
+		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes), "safetyClass": SafetyClassSafe})
 		items = append(items, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "builtin", SourcePath: path.Join("blueprints", entry.Name()), Checksum: hex.EncodeToString(hash.Sum(nil))})
 	}
 	if len(report.Failed) > 0 {

@@ -18,9 +18,18 @@ import (
 )
 
 type ImportReport struct {
-	Imported int               `json:"imported"`
-	Failed   map[string]string `json:"failed"`
+	Imported   int               `json:"imported"`
+	Restricted int               `json:"restricted"`
+	Invalid    int               `json:"invalid"`
+	Failed     map[string]string `json:"failed"`
 }
+
+const (
+	SafetyClassSafe           = "safe"
+	SafetyClassRequiresUnsafe = "requires_unsafe"
+	SafetyClassInvalid        = "invalid"
+)
+
 type metadata struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -98,11 +107,18 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		if readErr = validateCatalogBlueprint(path, deploy.Compiler{PublicNetwork: "dockyard-public"}); readErr != nil {
+		safetyClass, safetyReason, classifyErr := classifyCatalogBlueprint(path, "dockyard-public")
+		if classifyErr != nil {
+			readErr = classifyErr
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes)})
+		if safetyClass == SafetyClassRequiresUnsafe {
+			report.Restricted++
+		} else if safetyClass == SafetyClassInvalid {
+			report.Invalid++
+		}
+		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes), "safetyClass": safetyClass, "safetyReason": safetyReason})
 		sum := sha256.Sum256(append(tomlBytes, compose...))
 		items = append(items, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "dokploy", SourcePath: filepath.ToSlash(filepath.Join("blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
 	}
@@ -161,11 +177,18 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		if readErr = validateCatalogBlueprint(path, deploy.Compiler{PublicNetwork: "dockyard-public"}); readErr != nil {
+		safetyClass, safetyReason, classifyErr := classifyCatalogBlueprint(path, "dockyard-public")
+		if classifyErr != nil {
+			readErr = classifyErr
 			report.Failed[entry.Name()] = readErr.Error()
 			continue
 		}
-		provenance := map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef}
+		if safetyClass == SafetyClassRequiresUnsafe {
+			report.Restricted++
+		} else if safetyClass == SafetyClassInvalid {
+			report.Invalid++
+		}
+		provenance := map[string]string{"templateToml": string(tomlBytes), "repositorySlug": repository.Slug, "repositoryUrl": repository.RepositoryURL, "gitRef": repository.GitRef, "safetyClass": safetyClass, "safetyReason": safetyReason}
 		if key, keyErr := ParsePublicKey([]byte(repository.TrustedPublicKey)); keyErr == nil && len(key) > 0 {
 			provenance["catalogSigner"] = PublicKeyFingerprint(key)
 		}
@@ -238,21 +261,62 @@ func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport
 }
 
 func validateCatalogBlueprint(blueprint string, compiler deploy.Compiler) error {
-	instance, err := LoadDokployDirectory(blueprint, "example.invalid")
+	compose, routes, err := loadCatalogBlueprint(blueprint)
 	if err != nil {
 		return err
+	}
+	_, err = compiler.Compile(compose, routes)
+	return err
+}
+
+func classifyCatalogBlueprint(blueprint, publicNetwork string) (string, string, error) {
+	compose, routes, err := loadCatalogBlueprint(blueprint)
+	if err != nil {
+		return SafetyClassInvalid, boundedSafetyReason(err), nil
+	}
+	class, reason, err := ClassifyComposeSafety(compose, routes, publicNetwork)
+	if err != nil {
+		return SafetyClassInvalid, boundedSafetyReason(err), nil
+	}
+	return class, reason, nil
+}
+
+// ClassifyComposeSafety distinguishes structurally invalid templates from
+// valid templates that need the operator's explicit unsafe-workload opt-in.
+func ClassifyComposeSafety(compose string, routes []store.Route, publicNetwork string) (string, string, error) {
+	_, safeErr := (deploy.Compiler{PublicNetwork: publicNetwork}).Compile(compose, routes)
+	if safeErr == nil {
+		return SafetyClassSafe, "", nil
+	}
+	if _, unsafeErr := (deploy.Compiler{PublicNetwork: publicNetwork, AllowUnsafe: true}).Compile(compose, routes); unsafeErr != nil {
+		return "", "", unsafeErr
+	}
+	return SafetyClassRequiresUnsafe, boundedSafetyReason(safeErr), nil
+}
+
+func boundedSafetyReason(err error) string {
+	reason := err.Error()
+	if len(reason) > 512 {
+		reason = reason[:512]
+	}
+	return reason
+}
+
+func loadCatalogBlueprint(blueprint string) (string, []store.Route, error) {
+	instance, err := LoadDokployDirectory(blueprint, "example.invalid")
+	if err != nil {
+		return "", nil, err
 	}
 	routes := make([]store.Route, 0, len(instance.Domains))
 	for _, domain := range instance.Domains {
 		port, portErr := PortNumber(domain.Port)
 		if portErr != nil {
-			return portErr
+			return "", nil, portErr
 		}
 		routes = append(routes, store.Route{
 			ServiceName: domain.ServiceName, Host: domain.Host, PathPrefix: domain.Path,
 			TargetPort: port, TLS: true, CertificateResolver: "letsencrypt",
 		})
 	}
-	_, err = compiler.Compile(instance.ComposeYAML, routes)
-	return err
+	return instance.ComposeYAML, routes, nil
 }

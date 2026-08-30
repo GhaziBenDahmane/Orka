@@ -28,15 +28,18 @@ two rows.
 Dokploy provides the closest product model: projects and environments,
 Compose-based applications, domains, databases, templates, deployments, and a
 web console. Its catalog format is worth supporting so existing templates are
-portable. Dockyard currently imports all 526 templates from the inspected
-catalog; 435 pass the safe Swarm profile and 91 remain visible but cannot be
-instantiated without explicitly enabling unsafe workloads.
+portable.
 
 Dokku is strongest as a small, composable, command-oriented PaaS. Its useful
 lessons are stable lifecycle hooks, narrow plugin contracts, explicit config,
 simple operational commands, and backing-service linking. Dockyard should not
 copy Dokku's single-host container lifecycle because that would discard Swarm's
 desired-state scheduling and Compose compatibility.
+
+Dockyard imports all 526 entries from the current public catalog: 364 pass the
+safe Swarm profile, 157 require explicit unsafe-workload mode, and 5 currently
+have semantic errors and remain visible but disabled. These counts are a dated
+compatibility snapshot rather than a release guarantee.
 
 The resulting model is:
 

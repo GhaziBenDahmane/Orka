@@ -370,7 +370,7 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/templates` | List global and organization templates with redacted variable descriptors |
+| GET | `/v1/templates` | List templates with redacted inputs, safety classification, and current deployability |
 | GET/POST | `/v1/template-repositories` | List or register organization GitHub catalogs, optionally using an encrypted GitHub token credential |
 | PATCH | `/v1/template-repositories/{id}` | Pin or rotate a repository signing key, private-access credential, signature policy, and automatic sync interval |
 | POST | `/v1/template-repositories/{id}/sync` | Durably queue a bounded Dokploy-compatible catalog refresh |

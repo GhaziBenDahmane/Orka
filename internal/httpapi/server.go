@@ -1494,7 +1494,10 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 	}
 	type catalogItem struct {
 		store.Template
-		Variables []templates.VariableDescriptor `json:"variables"`
+		Variables    []templates.VariableDescriptor `json:"variables"`
+		SafetyClass  string                         `json:"safetyClass"`
+		SafetyReason string                         `json:"safetyReason,omitempty"`
+		Deployable   bool                           `json:"deployable"`
 	}
 	response := make([]catalogItem, 0, len(items))
 	for _, item := range items {
@@ -1508,7 +1511,15 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "invalid_template", "stored template definition is invalid")
 			return
 		}
-		response = append(response, catalogItem{Template: item, Variables: templates.DescribeVariables(template)})
+		safetyClass := config["safetyClass"]
+		if safetyClass == "" {
+			safetyClass = templates.SafetyClassSafe
+		}
+		response = append(response, catalogItem{
+			Template: item, Variables: templates.DescribeVariables(template),
+			SafetyClass: safetyClass, SafetyReason: config["safetyReason"],
+			Deployable: safetyClass == templates.SafetyClassSafe || (safetyClass == templates.SafetyClassRequiresUnsafe && s.Compiler.AllowUnsafe),
+		})
 	}
 	writeJSON(w, 200, map[string]any{"items": response})
 }
@@ -1542,14 +1553,15 @@ func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		routes, err = templateRoutes(uuid.Nil, instance.Domains)
 	}
+	safetyClass, safetyReason := "", ""
 	if err == nil {
-		_, err = s.Compiler.Compile(instance.ComposeYAML, routes)
+		safetyClass, safetyReason, err = templates.ClassifyComposeSafety(instance.ComposeYAML, routes, s.Compiler.PublicNetwork)
 	}
 	if err != nil {
 		writeError(w, 400, "invalid_template", err.Error())
 		return
 	}
-	config, _ := json.Marshal(map[string]string{"templateToml": in.TemplateTOML})
+	config, _ := json.Marshal(map[string]string{"templateToml": in.TemplateTOML, "safetyClass": safetyClass, "safetyReason": safetyReason})
 	sum := sha256.Sum256(append([]byte(in.TemplateTOML), []byte(in.ComposeYAML)...))
 	p := principal(r)
 	item, err := s.Store.CreateTemplate(r.Context(), store.Template{OrganizationID: &p.OrganizationID, Key: in.Key, Version: in.Version, Name: in.Name, Description: in.Description, ComposeYAML: in.ComposeYAML, Config: config, Source: "dokploy", Checksum: hex.EncodeToString(sum[:])})

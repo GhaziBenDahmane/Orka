@@ -308,7 +308,7 @@ func RunRepositorySyncScheduler(ctx context.Context, db *store.Store, box *crypt
 					break
 				}
 				report, syncErr := SyncClaimedRepository(ctx, db, box, client, repository)
-				metadata := map[string]any{"imported": report.Imported, "failed": len(report.Failed), "scheduled": true}
+				metadata := map[string]any{"imported": report.Imported, "restricted": report.Restricted, "invalid": report.Invalid, "failed": len(report.Failed), "scheduled": true}
 				if syncErr != nil {
 					metadata["error"] = syncErr.Error()
 					logger.Error("scheduled template repository sync", "repository_id", repository.ID, "error", syncErr)

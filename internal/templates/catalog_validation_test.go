@@ -65,17 +65,34 @@ func TestValidateDokployCatalogRejectsEmptyCatalog(t *testing.T) {
 	}
 }
 
-func TestCatalogImportRejectsUnsafeComposeBeforePublication(t *testing.T) {
+func TestCatalogClassifiesUnsafeComposeWithoutTreatingItAsInvalid(t *testing.T) {
 	root := t.TempDir()
 	writeCatalogBlueprint(t, root, "unsafe", `{"id":"unsafe","name":"Unsafe","version":"1.0.0"}`)
 	composePath := filepath.Join(root, "blueprints", "unsafe", "docker-compose.yml")
 	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example:1\n    privileged: true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	repository := store.TemplateRepository{Slug: "community"}
-	report, err := ImportRepositoryCatalog(context.Background(), nil, repository, root)
+	class, reason, err := classifyCatalogBlueprint(filepath.Join(root, "blueprints", "unsafe"), "dockyard-public")
+	if err != nil || class != SafetyClassRequiresUnsafe || !strings.Contains(reason, "privileged") {
+		t.Fatalf("unsafe classification class=%q reason=%q err=%v", class, reason, err)
+	}
+	report, err := ValidateDokployCatalog(root, deploy.Compiler{PublicNetwork: "dockyard-public"})
 	if err == nil || report.Imported != 0 || !strings.Contains(report.Failed["unsafe"], "privileged") {
-		t.Fatalf("unsafe repository catalog report=%#v err=%v", report, err)
+		t.Fatalf("safe-only validation report=%#v err=%v", report, err)
+	}
+}
+
+func TestCatalogKeepsStructurallyInvalidEntryDisabled(t *testing.T) {
+	root := t.TempDir()
+	writeCatalogBlueprint(t, root, "invalid-route", `{"id":"invalid-route","name":"Invalid route","version":"1.0.0"}`)
+	templatePath := filepath.Join(root, "blueprints", "invalid-route", "template.toml")
+	definition := "[variables]\n[[config.domains]]\nserviceName = \"missing\"\nport = 8080\nhost = \"${domain}\"\npath = \"/\"\n"
+	if err := os.WriteFile(templatePath, []byte(definition), 0600); err != nil {
+		t.Fatal(err)
+	}
+	class, reason, err := classifyCatalogBlueprint(filepath.Join(root, "blueprints", "invalid-route"), "dockyard-public")
+	if err != nil || class != SafetyClassInvalid || !strings.Contains(reason, "missing service") {
+		t.Fatalf("invalid classification class=%q reason=%q err=%v", class, reason, err)
 	}
 }
 
