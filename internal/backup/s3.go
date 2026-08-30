@@ -8,10 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,9 +35,11 @@ type S3 struct {
 	prefix string
 }
 
+var s3HostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
+
 func NewS3(config S3Config) (*S3, error) {
 	parsed, err := url.Parse(config.Endpoint)
-	if err != nil || parsed.Host == "" || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.Path != "" && parsed.Path != "/" {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || !validS3EndpointHost(parsed) || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.Path != "" && parsed.Path != "/" {
 		return nil, errors.New("S3 endpoint must be an HTTP(S) origin without a path")
 	}
 	if config.UseTLS && parsed.Scheme != "https" || !config.UseTLS && parsed.Scheme != "http" {
@@ -48,6 +53,33 @@ func NewS3(config S3Config) (*S3, error) {
 		return nil, err
 	}
 	return &S3{client: client, bucket: config.Bucket, prefix: strings.Trim(strings.TrimSpace(config.Prefix), "/")}, nil
+}
+
+func validS3EndpointHost(endpoint *url.URL) bool {
+	host := endpoint.Hostname()
+	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(host) == nil {
+		return false
+	}
+	if net.ParseIP(host) == nil {
+		if len(host) == 0 || len(host) > 253 {
+			return false
+		}
+		for _, label := range strings.Split(host, ".") {
+			if len(label) == 0 || len(label) > 63 || !s3HostnameLabelPattern.MatchString(label) {
+				return false
+			}
+		}
+	}
+	if strings.HasSuffix(endpoint.Host, ":") {
+		return false
+	}
+	if port := endpoint.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *S3) Check(ctx context.Context) error {

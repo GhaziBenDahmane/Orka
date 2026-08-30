@@ -33,9 +33,18 @@ func TestS3ConfigurationAndObjectKey(t *testing.T) {
 			t.Fatalf("expected invalid config rejection: %#v", config)
 		}
 	}
-	for _, endpoint := range []string{"https://user@objects.example.test", "https://objects.example.test?token=secret", "https://objects.example.test/#fragment"} {
+	for _, endpoint := range []string{
+		"https://user@objects.example.test", "https://objects.example.test?token=secret", "https://objects.example.test/#fragment",
+		"https://bad_label.example.test", "https://-bad.example.test", "https://objects.example.test:",
+		"https://objects.example.test:0", "https://objects.example.test:65536", "https://[not-an-ip]",
+	} {
 		if _, err = NewS3(S3Config{Endpoint: endpoint, Bucket: "backups", UseTLS: true, AccessKey: "access", SecretKey: "secret"}); err == nil {
 			t.Errorf("unsafe endpoint %q was accepted", endpoint)
+		}
+	}
+	for _, endpoint := range []string{"https://objects.example.test:9443", "https://127.0.0.1", "https://[2001:db8::1]:9443"} {
+		if _, err = NewS3(S3Config{Endpoint: endpoint, Bucket: "backups", UseTLS: true, AccessKey: "access", SecretKey: "secret"}); err != nil {
+			t.Errorf("valid endpoint %q was rejected: %v", endpoint, err)
 		}
 	}
 }

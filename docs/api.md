@@ -512,7 +512,9 @@ API compatibility. Verified engine-specific
 backup/restore is currently available for PostgreSQL, MySQL, MariaDB, MongoDB,
 Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch.
 Pass `destinationId` to a backup request or backup policy to upload through an
-S3-compatible multipart client. Restores download to an isolated temporary
+S3-compatible multipart client. Destination endpoints must be HTTP(S) origins
+with valid DNS/IP hosts and TCP ports; credentials, paths, queries, and
+fragments are rejected. Restores download to an isolated temporary
 directory and verify the stored SHA-256 checksum before invoking native tools.
 Every new local or S3 artifact is encrypted before storage with a random
 per-backup AES-256-GCM data key; only the master-key-wrapped data key is kept in
