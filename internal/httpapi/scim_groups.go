@@ -191,7 +191,10 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 	}
 	defer tx.Rollback(r.Context())
 	var exists bool
-	_ = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM scim_groups WHERE id=$1 AND organization_id=$2)`, groupID, orgID).Scan(&exists)
+	if err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM scim_groups WHERE id=$1 AND organization_id=$2)`, groupID, orgID).Scan(&exists); err != nil {
+		scimError(w, 500, "patch failed")
+		return
+	}
 	if !exists {
 		scimError(w, 404, "group not found")
 		return

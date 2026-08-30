@@ -153,6 +153,11 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if active, _ := loaded["active"].(bool); active {
 		t.Fatal("deprovisioned SCIM user is active")
 	}
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodDelete, nil, http.StatusNoContent)
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusNotFound)
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)`, orgID, inactiveID).Scan(&attached); err != nil || attached {
+		t.Fatalf("deleted inactive user retained SCIM binding = %v, err = %v", attached, err)
+	}
 
 	// Organization owners remain outside SCIM deprovisioning authority.
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
