@@ -241,6 +241,36 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		return http.MethodPost, "/v1/volume-restores/" + args[1] + "/cancel", map[string]any{}, nil
 	case "templates":
 		return http.MethodGet, "/v1/templates", nil, require(1)
+	case "template-repositories":
+		return http.MethodGet, "/v1/template-repositories", nil, require(1)
+	case "create-template-repository":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/template-repositories", 2)
+	case "update-template-repository":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPatch, "/v1/template-repositories/" + args[1], input, err
+	case "sync-template-repository":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/template-repositories/" + args[1] + "/sync", map[string]any{}, nil
+	case "rotate-template-repository-webhook":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/template-repositories/" + args[1] + "/webhook-secret", map[string]any{}, nil
+	case "disable-template-repository-webhook":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/template-repositories/" + args[1] + "/webhook-secret", nil, nil
+	case "delete-template-repository":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/template-repositories/" + args[1], nil, nil
 	case "clusters":
 		return http.MethodGet, "/v1/clusters", nil, require(1)
 	case "deploy":
@@ -447,5 +477,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }

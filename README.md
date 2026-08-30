@@ -143,6 +143,11 @@ cluster operations have short commands. `dockyardctl request METHOD /v1/path
 release. Environment variables `DOCKYARD_URL`, `DOCKYARD_TOKEN`, and
 `DOCKYARD_ORGANIZATION_ID` override saved configuration.
 
+Federated catalogs have dedicated `template-repositories`,
+`create-template-repository JSON`, `update-template-repository ID JSON`,
+`sync-template-repository ID`, webhook rotation/disable, and deletion commands.
+Creation and settings JSON can be read from standard input with `-`.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

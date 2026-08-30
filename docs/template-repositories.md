@@ -119,6 +119,15 @@ Set `credentialId` on `POST` or `PATCH` to the ID returned when creating a
 public repository. `syncIntervalSeconds` accepts `0` for manual-only operation
 or a value from `300` through `604800`.
 
+Automation can use `dockyardctl template-repositories`,
+`create-template-repository JSON`, `update-template-repository ID JSON`,
+`sync-template-repository ID`, `rotate-template-repository-webhook ID`,
+`disable-template-repository-webhook ID`, and `delete-template-repository ID`.
+For declarative lifecycle management, use the
+`dockyard_template_repository` Terraform/OpenTofu resource; its repository
+location is replacement-oriented while trust, credential, and schedule
+settings update in place.
+
 Deleting a repository also removes its catalog entries. Existing services keep
 their immutable Compose revision and template provenance snapshot.
 

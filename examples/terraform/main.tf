@@ -25,6 +25,16 @@ resource "dockyard_project" "example" {
   description = "Managed by OpenTofu or Terraform"
 }
 
+resource "dockyard_template_repository" "orka_examples" {
+  name                  = "Orka examples"
+  slug                  = "orka-examples"
+  repository_url        = "https://github.com/GhaziBenDahmane/Orka"
+  git_ref               = "master"
+  catalog_path          = "examples/template-repository"
+  require_signature     = false
+  sync_interval_seconds = 3600
+}
+
 resource "dockyard_environment" "production" {
   project_id        = dockyard_project.example.id
   name              = "Production"

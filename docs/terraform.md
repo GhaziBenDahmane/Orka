@@ -12,6 +12,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_backup_destination`
 - `dockyard_backup_policy`
 - `dockyard_volume_backup_policy`
+- `dockyard_template_repository`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
 optional `DOCKYARD_ORGANIZATION_ID` selects an organization for owners with
@@ -57,3 +58,9 @@ Managed databases are replacement-oriented because changing an engine,
 version, or credential-bearing driver configuration in place is unsafe.
 `config_json` is sensitive: credentials are submitted once, remain encrypted
 in Dockyard, and are retained only in Terraform's sensitive state on refresh.
+
+`dockyard_template_repository` manages a namespaced, Dokploy-compatible GitHub
+catalog. Repository identity and location fields are replacement-oriented;
+signing policy, the optional private-GitHub credential, and the automatic sync
+interval update in place. Webhook secret rotation and immediate manual sync are
+intentional one-shot operations and remain available through `dockyardctl`.

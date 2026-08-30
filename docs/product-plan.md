@@ -235,11 +235,11 @@ embedded React console for core workload, template, database, and cluster
   quiescence, and storage-node binding; unsupported calendar schedules remain
   explicit manual-conversion records. The Terraform/OpenTofu provider covers
   projects, environments, Compose services, routes, managed databases, source
-  credentials, backup destinations, database backup policies, and named-volume
-  backup policies. The console provides credential, backup-destination, OIDC,
-  SAML,
-hierarchical policy, mandatory-SSO, audit retention/archive, and notification
-administration. Remote clusters can be registered, enrolled, drained,
+  credentials, backup destinations, database backup policies, named-volume
+  backup policies, and federated template repositories. The console provides
+  credential, backup-destination, OIDC, SAML, hierarchical policy,
+  mandatory-SSO, audit retention/archive, and notification administration.
+  Remote clusters can be registered, enrolled, drained,
 reactivated, removed, and upgraded to a digest-pinned agent image from the
 console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
 

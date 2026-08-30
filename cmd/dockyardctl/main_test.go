@@ -43,6 +43,13 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"restore-volume", "backup-id", "service-slug"}, http.MethodPost, "/v1/volume-backups/backup-id/restore"},
 		{[]string{"volume-restore", "restore-id"}, http.MethodGet, "/v1/volume-restores/restore-id"},
 		{[]string{"cancel-volume-restore", "restore-id"}, http.MethodPost, "/v1/volume-restores/restore-id/cancel"},
+		{[]string{"template-repositories"}, http.MethodGet, "/v1/template-repositories"},
+		{[]string{"create-template-repository", `{}`}, http.MethodPost, "/v1/template-repositories"},
+		{[]string{"update-template-repository", "repository-id", `{}`}, http.MethodPatch, "/v1/template-repositories/repository-id"},
+		{[]string{"sync-template-repository", "repository-id"}, http.MethodPost, "/v1/template-repositories/repository-id/sync"},
+		{[]string{"rotate-template-repository-webhook", "repository-id"}, http.MethodPost, "/v1/template-repositories/repository-id/webhook-secret"},
+		{[]string{"disable-template-repository-webhook", "repository-id"}, http.MethodDelete, "/v1/template-repositories/repository-id/webhook-secret"},
+		{[]string{"delete-template-repository", "repository-id"}, http.MethodDelete, "/v1/template-repositories/repository-id"},
 		{[]string{"preview-template", "template-id", `{}`}, http.MethodPost, "/v1/templates/template-id/preview"},
 		{[]string{"template-versions", "service-id"}, http.MethodGet, "/v1/services/service-id/template-versions"},
 		{[]string{"cluster-token", "cluster-id"}, http.MethodPost, "/v1/clusters/cluster-id/enrollment-tokens"},
@@ -125,6 +132,25 @@ func TestBackupDestinationCommandBodies(t *testing.T) {
 	destination = input.(map[string]any)
 	if destination["name"] != "rotated" || destination["accessKey"] != "new-access" || destination["secretKey"] != "new-secret" {
 		t.Fatalf("destination input=%#v", destination)
+	}
+}
+
+func TestTemplateRepositoryCommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-template-repository", "-"}, strings.NewReader(`{"name":"Community","slug":"community","repositoryUrl":"https://github.com/acme/templates"}`))
+	if err != nil || method != http.MethodPost || path != "/v1/template-repositories" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	repository := input.(map[string]any)
+	if repository["slug"] != "community" || repository["repositoryUrl"] != "https://github.com/acme/templates" {
+		t.Fatalf("repository input=%#v", repository)
+	}
+	method, path, input, err = commandRequest([]string{"update-template-repository", "repository-id", `{"requireSignature":true,"syncIntervalSeconds":3600}`}, strings.NewReader(""))
+	if err != nil || method != http.MethodPatch || path != "/v1/template-repositories/repository-id" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	repository = input.(map[string]any)
+	if repository["requireSignature"] != true || repository["syncIntervalSeconds"] != float64(3600) {
+		t.Fatalf("repository input=%#v", repository)
 	}
 }
 
