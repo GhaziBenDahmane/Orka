@@ -41,6 +41,8 @@ type modelReport struct {
 
 const (
 	maxAuditModelResponseBytes = 4 << 20
+	maxAuditSnapshotBytes      = 8 << 20
+	maxAuditorAPIResponseBytes = 16 << 20
 	maxAuditFindings           = store.MaxAIAuditFindingsPerRun
 )
 
@@ -147,6 +149,9 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	if err := auditorRequest(ctx, client, cfg, http.MethodGet, "/v1/ai/audit-snapshot", nil, &snapshot); err != nil {
 		return err
 	}
+	if len(snapshot) > maxAuditSnapshotBytes {
+		return fmt.Errorf("audit snapshot exceeds %d MiB", maxAuditSnapshotBytes>>20)
+	}
 	var platform store.AIAuditSnapshot
 	if err := json.Unmarshal(snapshot, &platform); err != nil {
 		return fmt.Errorf("decode audit snapshot: %w", err)
@@ -238,12 +243,17 @@ func auditorRequest(ctx context.Context, client *http.Client, cfg auditorConfig,
 		return err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAuditorAPIResponseBytes+1))
 	if err != nil {
 		return err
 	}
+	if len(data) > maxAuditorAPIResponseBytes {
+		return errors.New("dockyard API response exceeds 16 MiB")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("dockyard %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+		// Never persist an upstream response body in a failed-run summary. The
+		// body is outside the auditor trust boundary and may contain secrets.
+		return fmt.Errorf("dockyard %s returned HTTP %d", path, resp.StatusCode)
 	}
 	if output != nil && len(data) > 0 {
 		return json.Unmarshal(data, output)

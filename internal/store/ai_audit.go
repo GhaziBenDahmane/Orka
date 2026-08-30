@@ -49,7 +49,7 @@ type AIAuditSnapshot struct {
 	MigrationBlockers    []AIAuditMigrationBlocker       `json:"migrationBlockers"`
 	ServiceDeployments   []AIAuditServiceDeployment      `json:"serviceDeployments"`
 	QueuePosture         AIAuditQueuePosture             `json:"queuePosture"`
-	Reconciliation       []ServiceReconciliation         `json:"reconciliation"`
+	Reconciliation       []AIAuditReconciliationPosture  `json:"reconciliation"`
 	Signals              []AIAuditSignal                 `json:"signals30d"`
 	AuditEvents          []AuditEvent                    `json:"recentAuditEvents"`
 }
@@ -195,11 +195,21 @@ type AIAuditAgentUpgradePosture struct {
 	Status               string     `json:"status"`
 	TargetImage          string     `json:"targetImage"`
 	Attempts             int        `json:"attempts"`
-	LastError            string     `json:"lastError,omitempty"`
 	VerificationOverdue  bool       `json:"verificationOverdue"`
 	VerificationDeadline *time.Time `json:"verificationDeadline,omitempty"`
 	CreatedAt            time.Time  `json:"createdAt"`
 	FinishedAt           *time.Time `json:"finishedAt,omitempty"`
+}
+
+// AIAuditReconciliationPosture deliberately excludes Detail. Reconciliation
+// detail is produced from Docker/agent errors and may echo workload-controlled
+// strings or secret values that must not cross the model trust boundary.
+type AIAuditReconciliationPosture struct {
+	ComposeServiceID    uuid.UUID  `json:"composeServiceId"`
+	State               string     `json:"state"`
+	ConsecutiveFailures int        `json:"consecutiveFailures"`
+	LastCheckedAt       time.Time  `json:"lastCheckedAt"`
+	LastRepairAt        *time.Time `json:"lastRepairAt,omitempty"`
 }
 
 type AIAuditIdentityPosture struct {
@@ -278,7 +288,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -296,7 +306,13 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Reconciliation = reconciliation
+	for _, item := range reconciliation {
+		snapshot.Reconciliation = append(snapshot.Reconciliation, AIAuditReconciliationPosture{
+			ComposeServiceID: item.ComposeServiceID, State: item.State,
+			ConsecutiveFailures: item.ConsecutiveFailures,
+			LastCheckedAt:       item.LastCheckedAt, LastRepairAt: item.LastRepairAt,
+		})
+	}
 	if err = s.loadAIAuditOperationalPosture(ctx, organizationID, &snapshot); err != nil {
 		return snapshot, err
 	}
@@ -504,7 +520,7 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	populateAIAuditPolicyUsage(snapshot)
 
 	rows, err = s.Pool.Query(ctx, `
-		SELECT c.id,c.name,latest.id,latest.status,latest.target_image,latest.attempts,latest.last_error,
+		SELECT c.id,c.name,latest.id,latest.status,latest.target_image,latest.attempts,
 			latest.status='verifying' AND latest.run_after<=now(),
 			CASE WHEN latest.status='verifying' THEN latest.run_after END,latest.created_at,latest.finished_at
 		FROM clusters c
@@ -522,7 +538,7 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	for rows.Next() {
 		var item AIAuditAgentUpgradePosture
-		if err = rows.Scan(&item.ClusterID, &item.ClusterName, &item.CommandID, &item.Status, &item.TargetImage, &item.Attempts, &item.LastError, &item.VerificationOverdue, &item.VerificationDeadline, &item.CreatedAt, &item.FinishedAt); err != nil {
+		if err = rows.Scan(&item.ClusterID, &item.ClusterName, &item.CommandID, &item.Status, &item.TargetImage, &item.Attempts, &item.VerificationOverdue, &item.VerificationDeadline, &item.CreatedAt, &item.FinishedAt); err != nil {
 			rows.Close()
 			return err
 		}

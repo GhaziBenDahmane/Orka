@@ -54,7 +54,9 @@ keys make it a privileged service.
   active maintenance scopes, configured quota limits, and current usage while
   excluding operator-supplied maintenance reasons. The latest agent upgrade for each
   cluster includes its immutable target, state, attempt count, deadline, and
-  overdue flag, but never its encrypted command or result. Queue counts cover
+  overdue flag, but never its encrypted command, result, or raw failure text.
+  Reconciliation posture includes only state, failure count, and timestamps;
+  raw Docker and agent detail stays outside the model boundary. Queue counts cover
   only jobs with a resource key that resolves through the requesting
   organization; unscoped platform jobs and another organization's jobs are
   never included.
@@ -108,7 +110,7 @@ keys make it a privileged service.
   to critical, or a critical recurrence after resolution. Unchanged open or
   acknowledged critical findings do not alert again on every scheduled run.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
-  runner bounds model responses and finding counts, validates every structured
+  runner bounds the serialized snapshot, model responses, and finding counts, validates every structured
   field, and rejects oversized evidence before submitting results. The API
   independently enforces the 100-finding limit under concurrent submissions;
   third-party agents cannot bypass the bound, while they may update an existing

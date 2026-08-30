@@ -158,6 +158,11 @@ finding. Auditor control-plane and model requests refuse redirects so neither
 bearer token can be forwarded to a substituted endpoint. 9Router and Hermes
 remain outside the control-plane trust boundary.
 
+Raw remote-agent failures, reconciliation details, and upstream API response
+bodies remain outside the snapshot and failed-run summaries because they may
+echo workload-controlled secrets. The runner rejects an oversized serialized
+snapshot before creating a run or sending any content to a model gateway.
+
 Template-generated environment values and managed-file contents are encrypted
 at rest. Stored Compose and immutable deployment snapshots contain only opaque
 managed-file references. The local Swarm adapter or outbound agent resolves

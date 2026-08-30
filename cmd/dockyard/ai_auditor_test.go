@@ -184,7 +184,7 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 		NotificationPosture:  []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{"deployment.failed"}}},
 		QueuePosture:         store.AIAuditQueuePosture{PendingServiceJobs: 1, PendingDatabaseJobs: 1, OldestPendingAt: &oldPendingJob},
 		ServiceDeployments:   []store.AIAuditServiceDeployment{{ServiceID: serviceID, DesiredRevision: 2, LatestDeploymentRevision: 1, LatestDeploymentStatus: "succeeded"}},
-		Reconciliation:       []store.ServiceReconciliation{{ComposeServiceID: serviceID, State: "degraded", ConsecutiveFailures: 2, LastCheckedAt: now}},
+		Reconciliation:       []store.AIAuditReconciliationPosture{{ComposeServiceID: serviceID, State: "degraded", ConsecutiveFailures: 2, LastCheckedAt: now}},
 	}
 	findings := deterministicAuditFindings(snapshot, now)
 	titles := map[string]bool{}
@@ -607,6 +607,77 @@ func TestPerformAIAuditPreservesBaselineWhenModelFails(t *testing.T) {
 	want := []string{"GET /v1/ai/audit-snapshot", "POST /v1/ai/audit-runs", "POST /v1/ai/audit-runs/00000000-0000-0000-0000-000000000001/findings", "PATCH /v1/ai/audit-runs/00000000-0000-0000-0000-000000000001"}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("paths=%v", paths)
+	}
+}
+
+func TestPerformAIAuditRejectsOversizedSnapshotBeforeCreatingRun(t *testing.T) {
+	var runRequests, modelRequests int
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/ai/audit-snapshot":
+			_, _ = w.Write([]byte(`{"projects":[{"description":"` + strings.Repeat("x", maxAuditSnapshotBytes) + `"}]}`))
+		case "/v1/ai/audit-runs":
+			runRequests++
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected platform request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer platform.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		modelRequests++
+	}))
+	defer model.Close()
+
+	err := performAIAudit(context.Background(), platform.Client(), auditorConfig{
+		DockyardURL: platform.URL, DockyardToken: "auditor-token",
+		ModelURL: model.URL, Model: "test", Focus: "security",
+	})
+	if err == nil || !strings.Contains(err.Error(), "snapshot exceeds 8 MiB") {
+		t.Fatalf("oversized snapshot error=%v", err)
+	}
+	if runRequests != 0 || modelRequests != 0 {
+		t.Fatalf("oversized snapshot created %d run(s) and %d model request(s)", runRequests, modelRequests)
+	}
+}
+
+func TestPerformAIAuditDoesNotPersistControlPlaneErrorBody(t *testing.T) {
+	const responseSecret = "upstream-response-secret"
+	completion := map[string]string{}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/ai/audit-snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"identityPosture":     map[string]any{"requireSso": true, "activeOwners": 1},
+				"notificationPosture": fullyCoveredNotifications(),
+			})
+		case r.URL.Path == "/v1/ai/audit-runs":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
+		case r.Method == http.MethodPost:
+			http.Error(w, responseSecret, http.StatusInternalServerError)
+		case r.Method == http.MethodPatch:
+			if err := json.NewDecoder(r.Body).Decode(&completion); err != nil {
+				t.Error(err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer platform.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"issue found","findings":[{"severity":"low","category":"capacity","title":"Issue","description":"Description","evidence":{},"remediation":"Review"}]}`}}}})
+	}))
+	defer model.Close()
+
+	err := performAIAudit(context.Background(), platform.Client(), auditorConfig{
+		DockyardURL: platform.URL, DockyardToken: "auditor-token",
+		ModelURL: model.URL, Model: "test", Focus: "security",
+	})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("control-plane failure=%v", err)
+	}
+	if completion["status"] != "failed" || strings.Contains(completion["summary"], responseSecret) {
+		t.Fatalf("failed completion leaked upstream body: %#v", completion)
 	}
 }
 
