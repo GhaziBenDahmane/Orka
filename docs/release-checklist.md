@@ -7,10 +7,10 @@ links for every item below.
 ## Automated gates
 
 - Release publication is blocked on the complete reusable CI, ten-engine
-  database recovery, real Keycloak SSO, disposable three-manager Swarm HA, and
-  previous-image upgrade conformance workflows. Tag pushes do not run detached
-  copies: the release workflow invokes all gates directly and publishes only
-  after every job succeeds.
+  database recovery, real Keycloak SSO, disposable three-manager Swarm HA,
+  joined deployment lifecycle, and previous-image upgrade conformance
+  workflows. Tag pushes do not run detached copies: the release workflow
+  invokes all gates directly and publishes only after every job succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
   checkpoint-upgrade tests, high-contention exactly-once queue claiming across
@@ -51,6 +51,13 @@ links for every item below.
   remain healthy. The gate then deploys a deliberately failing health check and
   requires Swarm to report `rollback_completed`, restore the signed digest and
   original health configuration, and preserve the authenticated session.
+- `make test-lifecycle-conformance` drives the authenticated HTTP API and real
+  PostgreSQL queue through successful, failed, cancelled, and rollback
+  deployments. It also verifies a signed provider webhook and replay defense,
+  ordered commit-status delivery, a signed failure notification, remote-agent
+  command encryption/completion, cancellation/completion serialization, and
+  per-attempt fencing after worker takeover. The release attaches the resulting
+  `lifecycle-conformance.json` evidence.
 
 ## Staging gates
 
@@ -59,9 +66,11 @@ links for every item below.
   exercise.
   Confirm migration checksums, login/SSO, secret decryption, resource counts,
   queue recovery, and existing stack reconciliation.
-- Exercise deploy, cancellation, failed deploy, rollback, provider webhook and
-  commit status, every enabled notification provider, and one remote-agent
-  command. Kill a worker while a job is leased and verify fenced takeover. Hold
+- Repeat deploy, cancellation, failed deploy, rollback, provider webhook and
+  commit status against the production-equivalent topology. Exercise every
+  enabled external notification provider with real provider credentials; CI
+  exercises the signed generic-webhook path. Run one real remote-agent command.
+  Kill a worker while a job is leased and verify fenced takeover. Hold
   the old attempt past lease expiry and verify it cannot regress a completed
   resource to running or commit any resource completion after takeover. Race a
   cancellation against completion and verify the job and resource both remain
@@ -120,8 +129,9 @@ links for every item below.
   Release with `promotion-manifest.json`, `image-digest.txt`, and a downloadable
   `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
-  `upgrade-conformance.json`, and `release-soak-evidence.json`; the same files
-  remain available as a workflow artifact. Upgrade evidence records the
+  `lifecycle-conformance.json`, `upgrade-conformance.json`, and
+  `release-soak-evidence.json`; the same files remain available as a workflow
+  artifact. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence
   records the exact promoted digest, observation count, and automatic rollback

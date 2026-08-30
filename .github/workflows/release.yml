@@ -43,6 +43,12 @@ jobs:
     permissions:
       contents: read
 
+  lifecycle-conformance:
+    name: Verify deployment lifecycle
+    uses: ./.github/workflows/lifecycle-conformance.yml
+    permissions:
+      contents: read
+
   upgrade-conformance:
     name: Verify previous release upgrade
     needs: verify
@@ -149,7 +155,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance, upgrade-conformance]
+    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance, lifecycle-conformance, upgrade-conformance]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -317,9 +323,11 @@ jobs:
           jq -e 'length == 10 and ([.[].engine] | unique | length) == 10 and all(.[]; .dataVerified == true and .restartVerified == true)' database-recovery-evidence.json >/dev/null
           cp conformance-evidence/sso-keycloak-evidence.json .
           cp conformance-evidence/swarm-ha-conformance.json .
+          cp conformance-evidence/lifecycle-conformance.json .
           cp upgrade-evidence/upgrade-conformance.json .
           jq -e '.oidc and .samlSpInitiated and .samlIdpInitiated and .tenantIsolation and .replayRejected' sso-keycloak-evidence.json >/dev/null
           jq -e '.minorityMutationRejected and .replicasConverged and .managers == 3' swarm-ha-conformance.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .deploySucceeded and .deployFailed and .deploymentCancelled and .rollbackSucceeded and .signedWebhookAccepted and .webhookReplayRejected and .commitStatusDelivered and .failureNotificationDelivered and .workerTakeoverFenced and .staleCompletionRejected and .cancellationCompletionRace and .remoteAgentCommand' lifecycle-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and (.status == "passed" or (.status == "not_applicable" and .firstRelease == true))' upgrade-conformance.json >/dev/null
 
       - name: Write promotion manifest
@@ -340,7 +348,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -355,6 +363,7 @@ jobs:
             database-recovery-evidence.json
             sso-keycloak-evidence.json
             swarm-ha-conformance.json
+            lifecycle-conformance.json
             upgrade-conformance.json
             release-soak-evidence.json
           if-no-files-found: error
@@ -365,7 +374,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

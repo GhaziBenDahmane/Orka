@@ -102,7 +102,7 @@ func finishDeploymentTx(ctx context.Context, tx pgx.Tx, deploymentID uuid.UUID, 
 func (s *Store) GetCommitStatusDeliveryForJob(ctx context.Context, jobID, leaseID, id uuid.UUID) (CommitStatusDelivery, error) {
 	var item CommitStatusDelivery
 	err := s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE commit_status_deliveries cs SET status='running',started_at=COALESCE(started_at,now())
+		return tx.QueryRow(ctx, `UPDATE commit_status_deliveries cs SET status='running',started_at=COALESCE(cs.started_at,now())
 			FROM deployments d WHERE cs.id=$1 AND d.id=cs.deployment_id
 			RETURNING cs.id,cs.deployment_id,cs.state,cs.repository_url,d.commit_sha,cs.provider,cs.status_context,cs.credential_server,cs.credential_username,cs.credential_id,cs.encrypted_credential`, id).Scan(&item.ID, &item.DeploymentID, &item.State, &item.RepositoryURL, &item.CommitSHA, &item.Provider, &item.Context, &item.CredentialServer, &item.CredentialUsername, &item.CredentialID, &item.EncryptedCredential)
 	})

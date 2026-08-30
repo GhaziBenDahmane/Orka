@@ -1,4 +1,4 @@
-.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
+.PHONY: test test-database-recovery test-install test-keycloak-sso test-keycloak-oidc test-lifecycle-conformance test-swarm-ha test-templates test-release-soak test-release-upgrade lint build run web generate-openapi check-openapi check-alerts check-licenses check-release-images
 
 test:
 	go test ./...
@@ -15,6 +15,9 @@ test-keycloak-sso:
 
 # Backward-compatible alias for the original OIDC-only target.
 test-keycloak-oidc: test-keycloak-sso
+
+test-lifecycle-conformance:
+	./scripts/ci/test-lifecycle-conformance.sh
 
 test-swarm-ha:
 	./scripts/ci/test-swarm-ha.sh
