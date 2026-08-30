@@ -26,6 +26,7 @@ func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, err
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	report := ImportReport{Failed: map[string]string{}}
 	identities := map[string]string{}
+	items := make([]store.Template, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -65,16 +66,15 @@ func SeedBuiltinCatalog(ctx context.Context, db *store.Store) (ImportReport, err
 		_, _ = hash.Write(tomlBytes)
 		_, _ = hash.Write(compose)
 		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes)})
-		_, readErr = db.UpsertGlobalTemplate(ctx, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "builtin", SourcePath: path.Join("blueprints", entry.Name()), Checksum: hex.EncodeToString(hash.Sum(nil))})
-		if readErr != nil {
-			report.Failed[entry.Name()] = readErr.Error()
-			continue
-		}
-		report.Imported++
+		items = append(items, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "builtin", SourcePath: path.Join("blueprints", entry.Name()), Checksum: hex.EncodeToString(hash.Sum(nil))})
 	}
 	if len(report.Failed) > 0 {
 		return report, fmt.Errorf("%d built-in template(s) failed to import", len(report.Failed))
 	}
+	if err = db.UpsertGlobalTemplates(ctx, items); err != nil {
+		return report, err
+	}
+	report.Imported = len(items)
 	return report, nil
 }
 

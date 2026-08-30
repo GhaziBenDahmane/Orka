@@ -62,6 +62,7 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	report := ImportReport{Failed: map[string]string{}}
 	identities := map[string]string{}
+	items := make([]store.Template, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -99,16 +100,15 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 		}
 		config, _ := json.Marshal(map[string]string{"templateToml": string(tomlBytes)})
 		sum := sha256.Sum256(append(tomlBytes, compose...))
-		_, readErr = db.UpsertGlobalTemplate(ctx, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "dokploy", Checksum: hex.EncodeToString(sum[:])})
-		if readErr != nil {
-			report.Failed[entry.Name()] = readErr.Error()
-			continue
-		}
-		report.Imported++
+		items = append(items, store.Template{Key: meta.ID, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "dokploy", SourcePath: filepath.ToSlash(filepath.Join("blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
 	}
 	if len(report.Failed) > 0 {
 		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
 	}
+	if err = db.UpsertGlobalTemplates(ctx, items); err != nil {
+		return report, err
+	}
+	report.Imported = len(items)
 	return report, nil
 }
 

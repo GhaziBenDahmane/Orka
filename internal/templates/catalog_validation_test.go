@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,19 @@ func TestValidateDokployCatalogFailsClosedOnInvalidMetadata(t *testing.T) {
 	report, err := ValidateDokployCatalog(root, deploy.Compiler{PublicNetwork: "dockyard-public"})
 	if err == nil || report.Imported != 1 || !strings.Contains(report.Failed["invalid"], "meta.json") {
 		t.Fatalf("partial invalid catalog report=%#v err=%v", report, err)
+	}
+}
+
+func TestImportDokployCatalogValidatesEverythingBeforePublication(t *testing.T) {
+	root := t.TempDir()
+	writeCatalogBlueprint(t, root, "a-valid", `{"id":"valid","name":"Valid","version":"1.0.0"}`)
+	writeCatalogBlueprint(t, root, "z-invalid", `{"id":"invalid","name":"Invalid","version":"1.0.0"}`)
+	if err := os.Remove(filepath.Join(root, "blueprints", "z-invalid", "docker-compose.yml")); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ImportDokployCatalog(context.Background(), nil, root)
+	if err == nil || report.Imported != 0 || !strings.Contains(report.Failed["z-invalid"], "docker-compose.yml") {
+		t.Fatalf("pre-publication validation report=%#v err=%v", report, err)
 	}
 }
 

@@ -1871,6 +1871,31 @@ func (s *Store) UpsertGlobalTemplate(ctx context.Context, item Template) (Templa
 	return s.CreateTemplate(ctx, item)
 }
 
+// UpsertGlobalTemplates publishes a complete validated catalog as one
+// transaction. A database error cannot expose only the prefix of a catalog.
+func (s *Store) UpsertGlobalTemplates(ctx context.Context, items []Template) error {
+	if len(items) == 0 {
+		return errors.New("global template catalog must contain at least one template")
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, item := range items {
+		if item.OrganizationID != nil || item.RepositoryID != nil {
+			return errors.New("global template catalog contains a scoped template")
+		}
+		item.ID = uuid.New()
+		if _, err = tx.Exec(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum)
+			VALUES($1,NULL,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			ON CONFLICT (organization_id,template_key,version) DO UPDATE SET repository_id=NULL,name=excluded.name,description=excluded.description,compose_yaml=excluded.compose_yaml,config=excluded.config,source=excluded.source,source_path=excluded.source_path,checksum=excluded.checksum`, item.ID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) ListTemplates(ctx context.Context, organizationID uuid.UUID) ([]Template, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,repository_id,template_key,version,name,description,config,source,source_path,checksum,created_at FROM templates WHERE organization_id IS NULL OR organization_id=$1 ORDER BY name,version DESC`, organizationID)
 	if err != nil {

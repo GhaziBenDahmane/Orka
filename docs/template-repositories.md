@@ -33,6 +33,10 @@ fingerprint in every imported template's provenance. A failed or tampered sync
 leaves the previously imported versions intact. Valid snapshots are reconciled
 in one database transaction, including removal of catalog versions no longer
 published by the repository; existing services retain their copied provenance.
+Built-in startup seeding and the signed local catalog importer likewise parse
+the complete catalog first and publish all template versions in one database
+transaction, so an invalid sibling or storage failure cannot expose a partial
+catalog.
 Each repository can be synchronized manually or on a controller-managed
 schedule between five minutes and seven days. Manual requests are durably
 coalesced and return `202 Accepted`; the same HA-safe scheduler performs all
