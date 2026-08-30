@@ -67,7 +67,7 @@ allowed to finish before deletion can begin.
   The configured public overlay network is reserved: safe Compose input cannot
   declare or attach it, and the compiler attaches it only to services with
   approved routes. Routing labels are generated only from tenant-scoped route
-  records.
+  records after canonical hostname and injection-safe path validation.
 - Docker commands receive arguments directly; user input is never evaluated by
   a shell.
 

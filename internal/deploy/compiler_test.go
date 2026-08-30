@@ -376,6 +376,16 @@ func TestValidateRouteAcceptsDNSHosts(t *testing.T) {
 	}
 }
 
+func TestCompileCanonicalizesRouteHostname(t *testing.T) {
+	out, err := (Compiler{PublicNetwork: "public"}).Compile("services:\n  web:\n    image: nginx\n", []store.Route{{ServiceName: "web", Host: " APP.Example.COM\n", PathPrefix: "/", TargetPort: 80}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Host(`app.example.com`)") || strings.Contains(out, "APP.Example.COM") {
+		t.Fatalf("route hostname was not canonicalized: %s", out)
+	}
+}
+
 func TestCompileAddsRollbackSafeSwarmDefaults(t *testing.T) {
 	out, err := (Compiler{}).Compile("services:\n  web:\n    image: nginx:alpine\n", nil)
 	if err != nil {

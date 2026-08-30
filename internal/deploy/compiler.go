@@ -65,6 +65,7 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		doc["networks"] = networks
 	}
 	for i, route := range routes {
+		route.Host = strings.ToLower(strings.TrimSpace(route.Host))
 		if err := ValidateRoute(route); err != nil {
 			return "", err
 		}
