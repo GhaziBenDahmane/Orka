@@ -26,7 +26,7 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 		mutex.Unlock()
 		switch r.URL.Path {
 		case "/v1/ai/audit-snapshot":
-			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{}, "identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{}, "identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}, "notificationPosture": fullyCoveredNotifications()})
 		case "/v1/ai/audit-runs":
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
@@ -167,9 +167,10 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	organizationID, databaseID, clusterID, repositoryID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	staleHeartbeat, expiringCertificate := now.Add(-3*time.Minute), now.Add(6*24*time.Hour)
 	stalledSAMLRotation := now.Add(-8 * 24 * time.Hour)
+	oldSCIMToken, oldPendingJob := now.Add(-181*24*time.Hour), now.Add(-11*time.Minute)
 	snapshot := store.AIAuditSnapshot{
 		Organization:    organizationID,
-		IdentityPosture: store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation},
+		IdentityPosture: store.AIAuditIdentityPosture{PendingSAMLCertificateRotations: 1, OldestPendingSAMLRotationAt: &stalledSAMLRotation, ExpiringServiceAccounts: 2, ActiveSCIMTokens: 1, OldestActiveSCIMTokenCreatedAt: &oldSCIMToken},
 		MigrationPosture: []store.AIAuditMigrationPosture{{
 			SourceOrganizationID: "legacy", Resources: 4, Imported: 2, Unresolved: 2, Databases: 1,
 		}},
@@ -178,6 +179,8 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 		AgentCAPosture:       store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:new", PreviousFingerprint: "sha256:old", RolloverActive: true},
 		AgentUpgradePosture:  []store.AIAuditAgentUpgradePosture{{ClusterID: clusterID, Status: "verifying", VerificationOverdue: true, TargetImage: "registry.example/dockyard@sha256:test"}},
 		TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{ID: repositoryID, Enabled: true, GitRef: "main", LastSyncStatus: "failed"}},
+		NotificationPosture:  []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{"deployment.failed"}}},
+		QueuePosture:         store.AIAuditQueuePosture{PendingServiceJobs: 1, PendingDatabaseJobs: 1, OldestPendingAt: &oldPendingJob},
 		ServiceDeployments:   []store.AIAuditServiceDeployment{{ServiceID: serviceID, DesiredRevision: 2, LatestDeploymentRevision: 1, LatestDeploymentStatus: "succeeded"}},
 		Reconciliation:       []store.ServiceReconciliation{{ComposeServiceID: serviceID, State: "degraded", ConsecutiveFailures: 2, LastCheckedAt: now}},
 	}
@@ -186,13 +189,41 @@ func TestDeterministicAuditFindingsCoverCriticalPosture(t *testing.T) {
 	for _, finding := range findings {
 		titles[finding.Title] = true
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "SAML certificate rotation is stalled", "Service account credentials expire soon", "Long-lived SCIM credential requires rotation", "Dokploy migration has unresolved resources", "Dokploy database transfers are incomplete", "Database has no backup policy", "Remote cluster heartbeat is stale", "Remote cluster certificate expires soon", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote agent upgrade requires intervention", "Template repository does not require signatures", "Template repository synchronization failed", "Deployment queue is stalled", "Failure notifications have coverage gaps", "Desired service revision is not deployed", "Swarm service reconciliation is unhealthy"} {
 		if !titles[title] {
 			t.Errorf("missing deterministic finding %q in %#v", title, findings)
 		}
 	}
-	if len(findings) != 15 {
-		t.Fatalf("findings=%d, want 15: %#v", len(findings), findings)
+	if len(findings) != 19 {
+		t.Fatalf("findings=%d, want 19: %#v", len(findings), findings)
+	}
+}
+
+func TestDeterministicAuditDetectsTemplateRepositoryFreshness(t *testing.T) {
+	now := time.Now().UTC()
+	stale, fresh := now.Add(-3*time.Hour), now.Add(-30*time.Minute)
+	tests := []struct {
+		name     string
+		lastSync *time.Time
+		want     string
+	}{
+		{name: "never synchronized", want: "Template repository has never synchronized"},
+		{name: "stale", lastSync: &stale, want: "Template repository synchronization is stale"},
+		{name: "fresh", lastSync: &fresh},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := store.AIAuditSnapshot{
+				Organization:         uuid.New(),
+				IdentityPosture:      store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+				NotificationPosture:  fullyCoveredNotifications(),
+				TemplateRepositories: []store.AIAuditTemplateRepositoryInfo{{ID: uuid.New(), Enabled: true, GitRef: "main", RequireSignature: true, SyncIntervalSeconds: 3600, LastSyncStatus: "succeeded", LastSyncedAt: test.lastSync}},
+			}
+			findings := deterministicAuditFindings(snapshot, now)
+			if test.want == "" && len(findings) != 0 || test.want != "" && (len(findings) != 1 || findings[0].Title != test.want) {
+				t.Fatalf("findings=%#v", findings)
+			}
+		})
 	}
 }
 
@@ -231,8 +262,9 @@ func TestPerformAIAuditPreservesBaselineWhenModelFails(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v1/ai/audit-snapshot":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"identityPosture":  map[string]any{"requireSso": true, "activeOwners": 1},
-				"migrationPosture": []map[string]any{{"sourceOrganizationId": "legacy", "resources": 2, "imported": 1, "unresolved": 1}},
+				"identityPosture":     map[string]any{"requireSso": true, "activeOwners": 1},
+				"migrationPosture":    []map[string]any{{"sourceOrganizationId": "legacy", "resources": 2, "imported": 1, "unresolved": 1}},
+				"notificationPosture": []map[string]any{{"enabled": true, "events": []string{"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed"}}},
 			})
 		case r.URL.Path == "/v1/ai/audit-runs":
 			w.WriteHeader(http.StatusCreated)
@@ -274,7 +306,7 @@ func TestPerformAIAuditFinalizesRunAfterContextDeadline(t *testing.T) {
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/ai/audit-snapshot":
-			_ = json.NewEncoder(w).Encode(map[string]any{"identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}, "notificationPosture": fullyCoveredNotifications()})
 		case r.URL.Path == "/v1/ai/audit-runs":
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
@@ -310,6 +342,12 @@ func TestPerformAIAuditFinalizesRunAfterContextDeadline(t *testing.T) {
 	if completion["status"] != "failed" || !strings.Contains(completion["summary"], "context deadline exceeded") {
 		t.Fatalf("completion=%#v", completion)
 	}
+}
+
+func fullyCoveredNotifications() []store.AIAuditNotificationPosture {
+	return []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{
+		"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed",
+	}}}
 }
 
 func TestValidateModelReportRejectsUnboundedOrMalformedOutput(t *testing.T) {

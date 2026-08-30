@@ -62,10 +62,12 @@ keys make it a privileged service.
 - Before calling the model, the built-in runner records a bounded deterministic
   safety baseline for missing or disabled backups, missing owners, disabled
   mandatory SSO, stale cluster heartbeats, expiring agent certificates,
-  agent identities signed by a non-active CA, lingering dual-trust rollovers,
-  unhealthy reconciliation, unsigned or failed catalogs, undeployed desired
-  revisions, and incomplete Dokploy migrations. These findings survive a model
-  gateway failure; the run remains marked failed so operators can distinguish
+  expiring service-account and stale SCIM credentials, agent identities signed
+  by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
+  notification coverage gaps, unhealthy reconciliation, unsigned, failed,
+  never-synchronized, or stale catalogs, undeployed desired revisions, and
+  incomplete Dokploy migrations. These findings survive a model gateway
+  failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and
   structured findings. Lifecycle transitions also enter the normal audit log.

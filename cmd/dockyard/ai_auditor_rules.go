@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -27,6 +28,12 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	}
 	if snapshot.IdentityPosture.PendingSAMLCertificateRotations > 0 && snapshot.IdentityPosture.OldestPendingSAMLRotationAt != nil && now.Sub(*snapshot.IdentityPosture.OldestPendingSAMLRotationAt) > 7*24*time.Hour {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "SAML certificate rotation is stalled", Description: "A replacement service-provider signing certificate has remained published without promotion or cancellation for more than seven days.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingRotations": snapshot.IdentityPosture.PendingSAMLCertificateRotations, "oldestPendingAt": snapshot.IdentityPosture.OldestPendingSAMLRotationAt.UTC().Format(time.RFC3339)}, Remediation: "Confirm the IdP imported the replacement certificate and promote it, or cancel the pending rotation."})
+	}
+	if snapshot.IdentityPosture.ExpiringServiceAccounts > 0 {
+		add(modelFinding{Severity: "medium", Category: "identity", Title: "Service account credentials expire soon", Description: "One or more active service accounts have credentials expiring within seven days.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"expiringServiceAccounts7d": snapshot.IdentityPosture.ExpiringServiceAccounts}, Remediation: "Rotate each expiring service-account token and verify its consumer before revoking the old credential."})
+	}
+	if snapshot.IdentityPosture.ActiveSCIMTokens > 0 && snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt != nil && now.Sub(*snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt) > 180*24*time.Hour {
+		add(modelFinding{Severity: "medium", Category: "identity", Title: "Long-lived SCIM credential requires rotation", Description: "The oldest active SCIM token is more than 180 days old.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeScimTokens": snapshot.IdentityPosture.ActiveSCIMTokens, "oldestCreatedAt": snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.UTC().Format(time.RFC3339)}, Remediation: "Issue a replacement SCIM token, update the identity provider, verify synchronization, and revoke the old token."})
 	}
 	for _, migration := range snapshot.MigrationPosture {
 		if migration.Unresolved > 0 {
@@ -87,6 +94,17 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		if repository.Enabled && repository.LastSyncStatus == "failed" {
 			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Template repository synchronization failed", Description: "The latest refresh of an enabled template repository failed.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"lastSyncStatus": repository.LastSyncStatus}, Remediation: "Inspect the repository credential, ref, signature, and archive validation error before retrying."})
 		}
+		if repository.Enabled && repository.LastSyncStatus != "failed" && repository.LastSyncedAt == nil {
+			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository has never synchronized", Description: "An enabled remote catalog has no successful synchronization record.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"gitRef": repository.GitRef, "syncIntervalSeconds": repository.SyncIntervalSeconds}, Remediation: "Run a catalog synchronization and verify its signature and imported template inventory."})
+		} else if repository.Enabled && repository.LastSyncStatus != "failed" && repository.SyncIntervalSeconds > 0 && now.Sub(*repository.LastSyncedAt) > 2*time.Duration(repository.SyncIntervalSeconds)*time.Second+5*time.Minute {
+			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Template repository synchronization is stale", Description: "An enabled scheduled catalog has not synchronized within two configured intervals plus a five-minute grace period.", ResourceType: "template_repository", ResourceID: repository.ID.String(), Evidence: map[string]any{"gitRef": repository.GitRef, "syncIntervalSeconds": repository.SyncIntervalSeconds, "lastSyncedAt": repository.LastSyncedAt.UTC().Format(time.RFC3339)}, Remediation: "Restore the catalog scheduler or repository access and complete a verified synchronization."})
+		}
+	}
+	if snapshot.QueuePosture.OldestPendingAt != nil && now.Sub(*snapshot.QueuePosture.OldestPendingAt) > 10*time.Minute {
+		add(modelFinding{Severity: "high", Category: "operations", Title: "Deployment queue is stalled", Description: "A tenant-scoped service or database job has remained pending for more than ten minutes.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"pendingServiceJobs": snapshot.QueuePosture.PendingServiceJobs, "pendingDatabaseJobs": snapshot.QueuePosture.PendingDatabaseJobs, "oldestPendingAt": snapshot.QueuePosture.OldestPendingAt.UTC().Format(time.RFC3339)}, Remediation: "Check worker health, leader leases, cluster admission, and job retry state before accepting more work."})
+	}
+	if missing := missingNotificationCoverage(snapshot.NotificationPosture); len(missing) > 0 {
+		add(modelFinding{Severity: "medium", Category: "operations", Title: "Failure notifications have coverage gaps", Description: "No enabled notification endpoint subscribes to one or more supported failure events.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"missingEvents": missing}, Remediation: "Enable at least one tested notification destination for every supported failure event."})
 	}
 	for _, deployment := range snapshot.ServiceDeployments {
 		if !deployment.CurrentRevisionDeployed {
@@ -104,4 +122,34 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		findings[maxDeterministicAuditFindings-1] = modelFinding{Severity: "high", Category: "audit", Title: "Deterministic audit findings were truncated", Description: fmt.Sprintf("The baseline audit reached its %d-finding safety limit.", maxDeterministicAuditFindings), ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"limit": maxDeterministicAuditFindings}, Remediation: "Resolve existing findings and rerun the audit to reveal any remaining issues."}
 	}
 	return findings
+}
+
+func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) []string {
+	required := map[string]bool{
+		"deployment.failed":         false,
+		"backup.failed":             false,
+		"restore.failed":            false,
+		"restore.drill.failed":      false,
+		"database.migration.failed": false,
+		"audit.archive.failed":      false,
+		"ai.audit.failed":           false,
+	}
+	for _, endpoint := range endpoints {
+		if !endpoint.Enabled {
+			continue
+		}
+		for _, event := range endpoint.Events {
+			if _, tracked := required[event]; tracked {
+				required[event] = true
+			}
+		}
+	}
+	missing := make([]string, 0, len(required))
+	for event, covered := range required {
+		if !covered {
+			missing = append(missing, event)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
