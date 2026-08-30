@@ -14,7 +14,10 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	pathpkg "path"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -48,7 +51,14 @@ const (
 	maxAuditModelChunks        = 64
 	maxAuditorAPIResponseBytes = 16 << 20
 	maxAuditFindings           = store.MaxAIAuditFindingsPerRun
+	maxAuditorEndpointBytes    = 16 << 10
+	maxAuditorSecretBytes      = 16 << 10
+	maxAuditModelNameBytes     = 512
+	maxAuditAgentNameBytes     = 120
+	maxAuditFocusBytes         = 8 << 10
 )
+
+var auditorHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 func runAIAuditor(arguments []string) error {
 	flags := flag.NewFlagSet("ai-auditor", flag.ContinueOnError)
@@ -89,8 +99,8 @@ func runAIAuditor(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: dockyardToken, ModelURL: modelURL, ModelToken: modelToken, Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, RetryInterval: retryInterval, Timeout: timeout}
-	if cfg.DockyardURL == "" || cfg.DockyardToken == "" || cfg.ModelURL == "" || cfg.Model == "" {
+	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: dockyardToken, ModelURL: modelURL, ModelToken: modelToken, Model: strings.TrimSpace(os.Getenv("DOCKYARD_AI_MODEL")), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, RetryInterval: retryInterval, Timeout: timeout}
+	if cfg.DockyardURL == "" || cfg.DockyardToken == "" || cfg.ModelURL == "" || !validAuditorMetadata(cfg.Model, cfg.AgentName, cfg.Focus) {
 		return errors.New("control-plane URL, auditor token, AI base URL, and model are required")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -144,20 +154,54 @@ func aiAuditRetryDelay(consecutiveFailures int, base, maximum time.Duration) tim
 }
 
 func normalizedAuditorEndpoint(name, raw string, allowPath bool) (string, error) {
+	if len(raw) > maxAuditorEndpointBytes {
+		return "", fmt.Errorf("%s is too long", name)
+	}
 	raw = strings.TrimSpace(raw)
 	endpoint, err := url.Parse(raw)
-	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" {
-		return "", fmt.Errorf("%s must be an HTTP(S) URL without credentials, query, or fragment", name)
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || !validAuditorURLHost(endpoint) || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" || endpoint.RawPath != "" {
+		return "", fmt.Errorf("%s must be an HTTP(S) URL without credentials, query, or fragment and with a valid host and port", name)
 	}
 	if !allowPath && endpoint.EscapedPath() != "" && endpoint.EscapedPath() != "/" {
 		return "", fmt.Errorf("%s must be an HTTP(S) origin without a path", name)
 	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
+	if endpoint.Path != "" && (pathpkg.Clean(endpoint.Path) != endpoint.Path || strings.Contains(endpoint.Path, "//")) {
+		return "", fmt.Errorf("%s path must not contain empty, dot, or parent segments", name)
+	}
 	if endpoint.Scheme == "http" && !privateAuditorHostname(endpoint.Hostname()) {
 		return "", fmt.Errorf("%s must use HTTPS outside a private or local network", name)
 	}
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
-	endpoint.RawPath = strings.TrimRight(endpoint.RawPath, "/")
 	return endpoint.String(), nil
+}
+
+func validAuditorURLHost(endpoint *url.URL) bool {
+	if endpoint == nil || !validAuditorHostname(endpoint.Hostname()) || strings.HasSuffix(endpoint.Host, ":") {
+		return false
+	}
+	if strings.HasPrefix(endpoint.Host, "[") && net.ParseIP(endpoint.Hostname()) == nil {
+		return false
+	}
+	if port := endpoint.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		return err == nil && value >= 1 && value <= 65535
+	}
+	return true
+}
+
+func validAuditorHostname(host string) bool {
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || !auditorHostnameLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func privateAuditorHostname(host string) bool {
@@ -178,21 +222,40 @@ func auditorSecretValue(name string) (string, error) {
 		return "", fmt.Errorf("%s and %s_FILE cannot both be configured", name, name)
 	}
 	if value != "" {
-		return value, nil
+		return validateAuditorSecret(name, value)
 	}
 	if path == "" {
 		return "", nil
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", name, err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxAuditorSecretBytes+2))
 	if err != nil {
 		return "", fmt.Errorf("read %s_FILE: %w", name, err)
 	}
 	defer clear(data)
+	if len(data) > maxAuditorSecretBytes+1 {
+		return "", fmt.Errorf("%s_FILE exceeds the maximum secret size", name)
+	}
 	value = strings.TrimSpace(string(data))
 	if value == "" {
 		return "", fmt.Errorf("%s_FILE is empty", name)
 	}
+	return validateAuditorSecret(name, value)
+}
+
+func validateAuditorSecret(name, value string) (string, error) {
+	if len(value) > maxAuditorSecretBytes || strings.ContainsAny(value, "\x00\r\n") {
+		return "", fmt.Errorf("%s must contain at most %d bytes without NUL or line breaks", name, maxAuditorSecretBytes)
+	}
 	return value, nil
+}
+
+func validAuditorMetadata(model, agentName, focus string) bool {
+	return model != "" && len(model) <= maxAuditModelNameBytes && !strings.ContainsAny(model, "\x00\r\n") && agentName != "" && len(agentName) <= maxAuditAgentNameBytes && !strings.ContainsAny(agentName, "\x00\r\n") && focus != "" && len(focus) <= maxAuditFocusBytes && !strings.ContainsRune(focus, '\x00')
 }
 
 func auditorHTTPClient(client *http.Client) *http.Client {

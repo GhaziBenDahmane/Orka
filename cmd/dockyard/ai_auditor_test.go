@@ -352,10 +352,56 @@ func TestNormalizedAuditorEndpoint(t *testing.T) {
 		{raw: "https://token@dockyard.example.test"}, {raw: "https://dockyard.example.test?target=evil"},
 		{raw: "https://dockyard.example.test#fragment"}, {raw: "https://dockyard.example.test/prefix"},
 		{raw: "//dockyard.example.test"}, {raw: "http://models.example.test", allowPath: true},
+		{raw: "https://bad_label.example.test"}, {raw: "https://-bad.example.test"},
+		{raw: "https://dockyard.example.test:"}, {raw: "https://dockyard.example.test:0"},
+		{raw: "https://dockyard.example.test:65536"}, {raw: "https://models.example.test/v1/../admin", allowPath: true},
+		{raw: "https://models.example.test/v1//chat", allowPath: true},
+		{raw: "https://models.example.test/" + strings.Repeat("a", maxAuditorEndpointBytes), allowPath: true},
 	} {
 		if _, err := normalizedAuditorEndpoint("endpoint", test.raw, test.allowPath); err == nil {
 			t.Errorf("accepted unsafe endpoint %q", test.raw)
 		}
+	}
+}
+
+func TestAuditorConfigurationFieldsAreBounded(t *testing.T) {
+	if !validAuditorMetadata("provider/model", "security-auditor", "security and reliability") {
+		t.Fatal("valid auditor metadata was rejected")
+	}
+	for _, values := range [][3]string{
+		{"", "agent", "focus"},
+		{"model\nheader", "agent", "focus"},
+		{strings.Repeat("m", maxAuditModelNameBytes+1), "agent", "focus"},
+		{"model", "agent\nname", "focus"},
+		{"model", strings.Repeat("a", maxAuditAgentNameBytes+1), "focus"},
+		{"model", "agent", strings.Repeat("f", maxAuditFocusBytes+1)},
+		{"model", "agent", "focus\x00data"},
+	} {
+		if validAuditorMetadata(values[0], values[1], values[2]) {
+			t.Errorf("invalid auditor metadata lengths %d/%d/%d were accepted", len(values[0]), len(values[1]), len(values[2]))
+		}
+	}
+}
+
+func TestAuditorSecretValueRejectsUnsafeAndOversizedValues(t *testing.T) {
+	if _, err := validateAuditorSecret("TEST_SECRET", "secret\x00value"); err == nil {
+		t.Fatal("secret containing NUL was accepted")
+	}
+	for _, value := range []string{"secret\nheader", strings.Repeat("s", maxAuditorSecretBytes+1)} {
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", value)
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", "")
+		if _, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET"); err == nil {
+			t.Errorf("unsafe inline secret of length %d was accepted", len(value))
+		}
+	}
+	path := t.TempDir() + "/oversized"
+	if err := os.WriteFile(path, []byte(strings.Repeat("s", maxAuditorSecretBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", "")
+	t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", path)
+	if _, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET"); err == nil {
+		t.Fatal("oversized secret file was accepted")
 	}
 }
 
