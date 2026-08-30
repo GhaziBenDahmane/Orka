@@ -4,6 +4,7 @@ set -euo pipefail
 release_image="${DOCKYARD_IMAGE:?DOCKYARD_IMAGE is required}"
 evidence_file="${DOCKYARD_SOAK_EVIDENCE:-release-soak-evidence.json}"
 postgres_image="${DOCKYARD_SOAK_POSTGRES_IMAGE:-postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}"
+metrics_token="${DOCKYARD_SOAK_METRICS_TOKEN:-release-soak-metrics-token-at-least-32-bytes}"
 soak_seconds="${DOCKYARD_RELEASE_SOAK_SECONDS:-300}"
 run_id="${GITHUB_RUN_ID:-local}-$$"
 prefix="dockyard-soak-${run_id//[^A-Za-z0-9_.-]/-}"
@@ -79,6 +80,7 @@ docker service create --detach --name "$controller_service" \
   --publish target=8080,mode=host \
   --env "DOCKYARD_DATABASE_URL=postgres://dockyard:dockyard@$postgres_service:5432/dockyard?sslmode=disable" \
   --env 'DOCKYARD_MASTER_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  --env "DOCKYARD_METRICS_TOKEN=$metrics_token" \
   --env "DOCKYARD_TRAEFIK_NETWORK=$network" \
   --env 'DOCKYARD_PUBLIC_URL=http://127.0.0.1:8080' \
   --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
@@ -122,6 +124,8 @@ bootstrap="$(curl --fail-with-body --silent --show-error --header 'Content-Type:
 token="$(jq -er '.token' <<<"$bootstrap")"
 organization_id="$(jq -er '.principal.organizationId' <<<"$bootstrap")"
 auth_headers=(-H "Authorization: Bearer $token" -H "X-Organization-ID: $organization_id")
+tenant_metrics_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "${auth_headers[@]}" "$base_url/metrics")"
+[[ "$tenant_metrics_status" == 401 ]] || fail "tenant bearer token unexpectedly accessed global metrics (status $tenant_metrics_status)"
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 start_epoch="$(date +%s)"
@@ -132,7 +136,7 @@ while (( $(date +%s) < deadline )); do
   curl --fail --silent "$base_url/readyz" >/dev/null || fail "readiness check failed during soak"
   curl --fail --silent "${auth_headers[@]}" "$base_url/v1/me" | \
     jq -e --arg organization "$organization_id" '.organizationId == $organization' >/dev/null || fail "authenticated check failed during soak"
-  curl --fail --silent "${auth_headers[@]}" "$base_url/metrics" | grep -q '^dockyard_http_requests_total' || fail "metrics disappeared during soak"
+  curl --fail --silent --header "Authorization: Bearer $metrics_token" "$base_url/metrics" | grep -q '^dockyard_http_requests_total' || fail "metrics disappeared during soak"
   replicas="$(docker service ls --filter "name=$controller_service" --format '{{.Replicas}}')"
   [[ "$replicas" == 1/1 ]] || fail "controller replica count changed during soak: $replicas"
   ((health_checks += 1))

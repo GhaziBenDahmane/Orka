@@ -76,6 +76,12 @@ func TestOpenAPI31SecurityClassification(t *testing.T) {
 				}
 				continue
 			}
+			if path == "/metrics" {
+				if op.Security == nil || len(*op.Security) != 1 || (*op.Security)[0]["metricsBearer"] == nil {
+					t.Errorf("%s %s must require the dedicated metrics bearer token", strings.ToUpper(method), path)
+				}
+				continue
+			}
 			if op.Security != nil {
 				t.Errorf("%s %s should inherit global bearer authentication", strings.ToUpper(method), path)
 			}

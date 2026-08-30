@@ -10,6 +10,7 @@ network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
 db_password_secret=${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}
 database_url_secret=${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}
 master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
+metrics_token_secret=${DOCKYARD_METRICS_TOKEN_SECRET:-dockyard_metrics_token}
 agent_ca_cert_secret=${DOCKYARD_AGENT_CA_CERT_SECRET:-dockyard_agent_ca_cert}
 agent_ca_key_secret=${DOCKYARD_AGENT_CA_KEY_SECRET:-dockyard_agent_ca_key}
 agent_server_cert_secret=${DOCKYARD_AGENT_SERVER_CERT_SECRET:-dockyard_agent_server_cert}
@@ -59,11 +60,12 @@ case "$network" in ""|[!a-z0-9]*|*[!a-z0-9_.-]*) fail "DOCKYARD_TRAEFIK_NETWORK 
 case "$db_password_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_DB_PASSWORD_SECRET" ;; esac
 case "$database_url_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_DATABASE_URL_SECRET" ;; esac
 case "$master_key_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_MASTER_KEY_SECRET" ;; esac
+case "$metrics_token_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_METRICS_TOKEN_SECRET" ;; esac
 for secret_name in "$agent_ca_cert_secret" "$agent_ca_key_secret" "$agent_server_cert_secret" "$agent_server_key_secret" "$agent_previous_ca_cert_secret"; do
   case "$secret_name" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid agent TLS Docker secret name" ;; esac
 done
 seen_secret_names=" "
-for secret_name in "$db_password_secret" "$database_url_secret" "$master_key_secret" "$agent_ca_cert_secret" "$agent_ca_key_secret" "$agent_server_cert_secret" "$agent_server_key_secret" "$agent_previous_ca_cert_secret"; do
+for secret_name in "$db_password_secret" "$database_url_secret" "$master_key_secret" "$metrics_token_secret" "$agent_ca_cert_secret" "$agent_ca_key_secret" "$agent_server_cert_secret" "$agent_server_key_secret" "$agent_previous_ca_cert_secret"; do
   case "$seen_secret_names" in *" $secret_name "*) fail "Docker secret names must be distinct" ;; esac
   seen_secret_names="${seen_secret_names}${secret_name} "
 done
@@ -87,7 +89,7 @@ validate_email "$ACME_EMAIL"
 DOCKYARD_IMAGE=${DOCKYARD_IMAGE:-}
 POSTGRES_IMAGE=${POSTGRES_IMAGE:-}
 TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
-export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_MASTER_KEY_SECRET
+export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_MASTER_KEY_SECRET DOCKYARD_METRICS_TOKEN_SECRET
 DOCKYARD_TRAEFIK_NETWORK=$network
 export DOCKYARD_TRAEFIK_NETWORK
 export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT_SERVER_CERT_SECRET DOCKYARD_AGENT_SERVER_KEY_SECRET DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET
@@ -142,12 +144,19 @@ validate_agent_ca() {
 validate_secret_file DOCKYARD_DB_PASSWORD_FILE "${DOCKYARD_DB_PASSWORD_FILE:-}"
 validate_secret_file DOCKYARD_DATABASE_URL_FILE "${DOCKYARD_DATABASE_URL_FILE:-}"
 validate_secret_file DOCKYARD_MASTER_KEY_FILE "${DOCKYARD_MASTER_KEY_FILE:-}"
+validate_secret_file DOCKYARD_METRICS_TOKEN_FILE "${DOCKYARD_METRICS_TOKEN_FILE:-}"
 
 if ! tr -d '\r\n' <"$DOCKYARD_MASTER_KEY_FILE" | base64 -d >"$temporary/master-key" 2>/dev/null; then
   fail "DOCKYARD_MASTER_KEY_FILE must contain valid base64"
 fi
 [ "$(wc -c <"$temporary/master-key" | tr -d ' ')" -eq 32 ] || fail "DOCKYARD_MASTER_KEY_FILE must contain a base64-encoded 32-byte key"
 rm -f -- "$temporary/master-key"
+
+metrics_token=$(tr -d '\r\n' <"$DOCKYARD_METRICS_TOKEN_FILE")
+metrics_token_size=$(printf '%s' "$metrics_token" | wc -c | tr -d ' ')
+[ "$(wc -c <"$DOCKYARD_METRICS_TOKEN_FILE" | tr -d ' ')" -eq "$metrics_token_size" ] || fail "DOCKYARD_METRICS_TOKEN_FILE must contain one token without line breaks"
+[ "$metrics_token_size" -ge 32 ] && [ "$metrics_token_size" -le 4096 ] || fail "DOCKYARD_METRICS_TOKEN_FILE must contain between 32 and 4096 bytes"
+unset metrics_token metrics_token_size
 
 database_url=$(tr -d '\r\n' <"$DOCKYARD_DATABASE_URL_FILE")
 [ "$(wc -c <"$DOCKYARD_DATABASE_URL_FILE" | tr -d ' ')" -eq "$(printf '%s' "$database_url" | wc -c | tr -d ' ')" ] || fail "DOCKYARD_DATABASE_URL_FILE must contain one URL without line breaks"
@@ -162,7 +171,8 @@ unset database_url
 
 secret_specs="${db_password_secret}:${DOCKYARD_DB_PASSWORD_FILE}
 ${database_url_secret}:${DOCKYARD_DATABASE_URL_FILE}
-${master_key_secret}:${DOCKYARD_MASTER_KEY_FILE}"
+${master_key_secret}:${DOCKYARD_MASTER_KEY_FILE}
+${metrics_token_secret}:${DOCKYARD_METRICS_TOKEN_FILE}"
 if [ "$mode" = ha ]; then
   command -v openssl >/dev/null 2>&1 || fail "openssl is required for HA installation"
   validate_secret_file DOCKYARD_AGENT_CA_CERT_FILE "${DOCKYARD_AGENT_CA_CERT_FILE:-}"

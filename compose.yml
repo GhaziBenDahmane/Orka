@@ -19,6 +19,7 @@ services:
     environment:
       DOCKYARD_DATABASE_URL: postgres://dockyard:dockyard@postgres:5432/dockyard?sslmode=disable
       DOCKYARD_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      DOCKYARD_METRICS_TOKEN: dockyard-development-metrics-token-change-me
       DOCKYARD_TRAEFIK_NETWORK: dockyard-public
     ports:
       - "${DOCKYARD_HTTP_BIND:-8080}:8080"

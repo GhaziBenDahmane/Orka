@@ -10,6 +10,7 @@ mkdir -p "$temporary/bin" "$temporary/secrets"
 printf '%s' 'correct horse battery staple' >"$temporary/secrets/database-password"
 printf '%s' 'postgres://dockyard:safe-value@postgres:5432/dockyard?sslmode=disable' >"$temporary/secrets/database-url"
 printf '%s' 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' >"$temporary/secrets/master-key"
+printf '%s' 'test-metrics-token-at-least-32-bytes' >"$temporary/secrets/metrics-token"
 chmod 0600 "$temporary"/secrets/*
 
 cat >"$temporary/bin/docker" <<'MOCK'
@@ -68,6 +69,7 @@ export TRAEFIK_IMAGE="traefik@$digest"
 export DOCKYARD_DB_PASSWORD_FILE="$temporary/secrets/database-password"
 export DOCKYARD_DATABASE_URL_FILE="$temporary/secrets/database-url"
 export DOCKYARD_MASTER_KEY_FILE="$temporary/secrets/master-key"
+export DOCKYARD_METRICS_TOKEN_FILE="$temporary/secrets/metrics-token"
 export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
@@ -85,8 +87,9 @@ fi
 "$root/scripts/install-swarm.sh" | grep -q 'installed and remained converged'
 grep -q '^network create --driver overlay --opt encrypted --attachable dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_db_password $DOCKYARD_DB_PASSWORD_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret create dockyard_metrics_token $DOCKYARD_METRICS_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_INSTALL_TEST_LOG"
-if grep -q 'correct horse battery staple' "$DOCKYARD_INSTALL_TEST_LOG"; then
+if grep -Eq 'correct horse battery staple|test-metrics-token-at-least-32-bytes' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'secret value leaked to Docker command log' >&2
   exit 1
 fi
@@ -164,7 +167,7 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
 fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
-DOCKYARD_INSTALL_TEST_EXISTING_SECRETS='dockyard_db_password dockyard_database_url dockyard_master_key' \
+DOCKYARD_INSTALL_TEST_EXISTING_SECRETS='dockyard_db_password dockyard_database_url dockyard_master_key dockyard_metrics_token' \
   DOCKYARD_REUSE_EXISTING_SECRETS=true \
   "$root/scripts/install-swarm.sh" >/dev/null
 if grep -q '^secret create' "$DOCKYARD_INSTALL_TEST_LOG"; then
@@ -179,6 +182,16 @@ grep -q "^secret inspect dockyard_master_key_v2$" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "^secret create dockyard_master_key_v2 $DOCKYARD_MASTER_KEY_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -q '^secret create dockyard_master_key ' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'installer created the legacy master-key secret during a versioned-key deployment' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_METRICS_TOKEN_SECRET='dockyard_metrics_token_v2' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q "^secret inspect dockyard_metrics_token_v2$" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "^secret create dockyard_metrics_token_v2 $DOCKYARD_METRICS_TOKEN_FILE$" "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -q '^secret create dockyard_metrics_token ' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'installer created the legacy metrics-token secret during a versioned-token deployment' >&2
   exit 1
 fi
 
@@ -209,7 +222,7 @@ for unsafe_secret in '-leading' 'bad/name' 'bad secret' 'bad:secret'; do
   fi
 done
 
-for variable in DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET; do
+for variable in DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_METRICS_TOKEN_SECRET; do
   : >"$DOCKYARD_INSTALL_TEST_LOG"
   if env "$variable=bad/secret" \
     "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
@@ -222,6 +235,20 @@ for variable in DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET; do
     exit 1
   fi
 done
+
+printf '%s' 'too-short' >"$temporary/secrets/metrics-token-invalid"
+chmod 0600 "$temporary/secrets/metrics-token-invalid"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_METRICS_TOKEN_FILE="$temporary/secrets/metrics-token-invalid" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted a short metrics token' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_METRICS_TOKEN_FILE must contain between 32 and 4096 bytes' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid metrics token mutated Docker state' >&2
+  exit 1
+fi
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
 if DOCKYARD_DB_PASSWORD_SECRET='shared_database_secret' \

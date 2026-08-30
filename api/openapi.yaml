@@ -26,6 +26,8 @@ paths:
     get:
       operationId: get_metrics
       tags: [metrics]
+      security:
+        - metricsBearer: []
       responses:
         '2XX':
           description: Successful response
@@ -4083,6 +4085,10 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+    metricsBearer:
+      type: http
+      scheme: bearer
+      description: Dedicated operator token configured with DOCKYARD_METRICS_TOKEN.
     mutualTLS:
       type: mutualTLS
   schemas:

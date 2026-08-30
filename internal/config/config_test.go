@@ -18,8 +18,7 @@ import (
 )
 
 func TestLoadRequiresRemoteBackupsWhenConfigured(t *testing.T) {
-	t.Setenv("DOCKYARD_DATABASE_URL", "postgres://dockyard@example.test/dockyard")
-	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_REQUIRE_REMOTE_BACKUPS", "true")
 	cfg, err := Load()
 	if err != nil {
@@ -31,8 +30,7 @@ func TestLoadRequiresRemoteBackupsWhenConfigured(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidRemoteBackupPolicy(t *testing.T) {
-	t.Setenv("DOCKYARD_DATABASE_URL", "postgres://dockyard@example.test/dockyard")
-	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_REQUIRE_REMOTE_BACKUPS", "sometimes")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "DOCKYARD_REQUIRE_REMOTE_BACKUPS") {
@@ -153,13 +151,50 @@ func TestLoadRejectsAmbiguousSecretSources(t *testing.T) {
 	t.Setenv("DOCKYARD_DATABASE_URL", "postgres://from-env.example.test/dockyard")
 	t.Setenv("DOCKYARD_DATABASE_URL_FILE", path)
 	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	t.Setenv("DOCKYARD_METRICS_TOKEN", "test-metrics-token-at-least-32-bytes")
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "cannot both be configured") {
 		t.Fatalf("error=%v", err)
 	}
 }
 
+func TestLoadRequiresBoundedMetricsToken(t *testing.T) {
+	for name, value := range map[string]string{
+		"missing":   "",
+		"short":     strings.Repeat("x", 31),
+		"oversized": strings.Repeat("x", 4097),
+		"multiline": strings.Repeat("x", 32) + "\nsecret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_METRICS_TOKEN", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_METRICS_TOKEN") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
+func TestLoadReadsMetricsTokenFromFileAndRejectsAmbiguousSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics-token")
+	const token = "metrics-token-from-a-secure-file-123456"
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_METRICS_TOKEN", "")
+	t.Setenv("DOCKYARD_METRICS_TOKEN_FILE", path)
+	cfg, err := Load()
+	if err != nil || cfg.MetricsToken != token {
+		t.Fatalf("metrics token=%q error=%v", cfg.MetricsToken, err)
+	}
+	t.Setenv("DOCKYARD_METRICS_TOKEN", "another-metrics-token-at-least-32-bytes")
+	if _, err = Load(); err == nil || !strings.Contains(err.Error(), "cannot both be configured") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestLoadRequiresVerifiedDatabaseTLSWhenConfigured(t *testing.T) {
-	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_REQUIRE_DATABASE_TLS", "true")
 	for _, databaseURL := range []string{
 		"postgres://dockyard@example.test/dockyard",
@@ -271,6 +306,7 @@ func setRequiredConfig(t *testing.T) {
 	t.Helper()
 	t.Setenv("DOCKYARD_DATABASE_URL", "postgres://dockyard@example.test/dockyard")
 	t.Setenv("DOCKYARD_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	t.Setenv("DOCKYARD_METRICS_TOKEN", "test-metrics-token-at-least-32-bytes")
 }
 
 func setAgentConfig(t *testing.T, caPEM, caKeyPEM []byte, certFile, keyFile string) {

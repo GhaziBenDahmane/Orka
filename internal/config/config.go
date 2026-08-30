@@ -21,6 +21,7 @@ type Config struct {
 	DatabaseURL                string
 	RequireDatabaseTLS         bool
 	MasterKey                  []byte
+	MetricsToken               string
 	DockerBin                  string
 	WorkerConcurrency          int
 	SessionTTL                 time.Duration
@@ -66,6 +67,13 @@ func Load() (Config, error) {
 	key, err := base64.StdEncoding.DecodeString(keyValue)
 	if err != nil || len(key) != 32 {
 		return Config{}, errors.New("DOCKYARD_MASTER_KEY must be a base64-encoded 32-byte key")
+	}
+	metricsToken, err := secretEnv("DOCKYARD_METRICS_TOKEN")
+	if err != nil {
+		return Config{}, err
+	}
+	if len(metricsToken) < 32 || len(metricsToken) > 4096 || strings.ContainsAny(metricsToken, "\r\n") {
+		return Config{}, errors.New("DOCKYARD_METRICS_TOKEN must contain between 32 and 4096 bytes without line breaks")
 	}
 	unsafeWorkloads, err := strconv.ParseBool(env("DOCKYARD_ALLOW_UNSAFE_WORKLOADS", "false"))
 	if err != nil {
@@ -205,6 +213,7 @@ func Load() (Config, error) {
 		DatabaseURL:                databaseURL,
 		RequireDatabaseTLS:         requireDatabaseTLS,
 		MasterKey:                  key,
+		MetricsToken:               metricsToken,
 		DockerBin:                  env("DOCKYARD_DOCKER_BIN", "docker"),
 		WorkerConcurrency:          concurrency,
 		SessionTTL:                 ttl,

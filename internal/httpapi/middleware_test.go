@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/observability"
 	"github.com/bendahma/dokploy-go/internal/store"
 )
@@ -73,6 +75,70 @@ func TestMetricsRequiresAuthentication(t *testing.T) {
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("metrics status=%d, want 401", response.Code)
+	}
+}
+
+func TestMetricsUsesDedicatedOperatorCredential(t *testing.T) {
+	const token = "metrics-operator-token-at-least-32-bytes"
+	server := &Server{
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MetricsTokenHash: cryptox.Digest(token),
+	}
+	called := false
+	handler := server.requireMetricsAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	for name, authorization := range map[string]string{
+		"missing":      "",
+		"wrong":        "Bearer tenant-session-token",
+		"malformed":    "Basic " + token,
+		"extra_fields": "Bearer " + token + " trailing",
+	} {
+		t.Run(name, func(t *testing.T) {
+			called = false
+			request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			if authorization != "" {
+				request.Header.Set("Authorization", authorization)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized || called || !strings.Contains(response.Body.String(), `"message":"unauthorized"`) || strings.Contains(response.Body.String(), token) {
+				t.Fatalf("status=%d called=%v body=%s", response.Code, called, response.Body.String())
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "bearer "+token)
+	request.Header.Set("X-Organization-ID", "not-an-organization")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !called {
+		t.Fatalf("status=%d called=%v", response.Code, called)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Add("Authorization", "Bearer "+token)
+	request.Header.Add("Authorization", "Bearer "+token)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("duplicate authorization status=%d", response.Code)
+	}
+}
+
+func TestMetricsAuthenticationFailsClosedWithoutConfiguredHash(t *testing.T) {
+	server := &Server{}
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer any-tenant-or-operator-token")
+	response := httptest.NewRecorder()
+	server.requireMetricsAuth(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unconfigured metrics authentication passed")
+	})).ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || len(server.MetricsTokenHash) == sha256.Size {
+		t.Fatalf("status=%d hash length=%d", response.Code, len(server.MetricsTokenHash))
 	}
 }
 

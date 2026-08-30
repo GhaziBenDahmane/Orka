@@ -6,6 +6,7 @@ candidate_image="${DOCKYARD_CANDIDATE_IMAGE:?DOCKYARD_CANDIDATE_IMAGE is require
 evidence_file="${DOCKYARD_UPGRADE_EVIDENCE:-upgrade-conformance.json}"
 postgres_image="${DOCKYARD_UPGRADE_POSTGRES_IMAGE:-postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}"
 master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+metrics_token="release-upgrade-metrics-token-at-least-32-bytes"
 run_id="${GITHUB_RUN_ID:-local}-$$"
 prefix="dockyard-upgrade-${run_id//[^A-Za-z0-9_.-]/-}"
 postgres_container="$prefix-postgres"
@@ -79,6 +80,7 @@ start_controller() {
     --publish 127.0.0.1::8080 \
     --env 'DOCKYARD_DATABASE_URL=postgres://dockyard:dockyard@postgres:5432/dockyard?sslmode=disable' \
     --env "DOCKYARD_MASTER_KEY=$master_key" \
+    --env "DOCKYARD_METRICS_TOKEN=$metrics_token" \
     --env "DOCKYARD_TRAEFIK_NETWORK=$public_network" \
     --env 'DOCKYARD_PUBLIC_URL=http://127.0.0.1:8080' \
     --volume /var/run/docker.sock:/var/run/docker.sock \

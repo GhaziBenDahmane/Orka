@@ -53,7 +53,7 @@ make test-release-soak
 The script writes `release-soak-evidence.json`. It does not exercise the real
 production topology or replace the monitored production soak window.
 
-For a repeatable non-interactive installation, put the three secret values in
+For a repeatable non-interactive installation, put the four secret values in
 mode-0600 files and run the installer on a Swarm manager:
 
 ```sh
@@ -65,6 +65,7 @@ export TRAEFIK_IMAGE=traefik@sha256:...
 export DOCKYARD_DB_PASSWORD_FILE=/secure/dockyard/database-password
 export DOCKYARD_DATABASE_URL_FILE=/secure/dockyard/database-url
 export DOCKYARD_MASTER_KEY_FILE=/secure/dockyard/master-key
+export DOCKYARD_METRICS_TOKEN_FILE=/secure/dockyard/metrics-token
 
 DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
 scripts/install-swarm.sh
@@ -107,8 +108,9 @@ intact for Docker diagnostics and an explicit retry.
 
 Docker secrets are cluster-global rather than stack-scoped. When installing a
 second stack or preparing a coordinated database-credential rotation, set
-`DOCKYARD_DB_PASSWORD_SECRET`, `DOCKYARD_DATABASE_URL_SECRET`, and
-`DOCKYARD_MASTER_KEY_SECRET` to distinct, versioned secret names. The
+`DOCKYARD_DB_PASSWORD_SECRET`, `DOCKYARD_DATABASE_URL_SECRET`,
+`DOCKYARD_MASTER_KEY_SECRET`, and `DOCKYARD_METRICS_TOKEN_SECRET` to distinct,
+versioned secret names. The
 installer validates and creates those exact names, and the stack resolves its
 logical secret mounts to them. Do not use `DOCKYARD_REUSE_EXISTING_SECRETS`
 across independent stacks merely to bypass a name collision. Changing the
@@ -146,6 +148,7 @@ docker network create --driver overlay --opt encrypted --attachable dockyard-pub
 printf '%s' 'replace-with-a-long-password' | docker secret create dockyard_db_password -
 printf '%s' 'postgres://dockyard:replace-with-a-long-password@postgres:5432/dockyard?sslmode=disable' | docker secret create dockyard_database_url -
 openssl rand -base64 32 | docker secret create dockyard_master_key -
+openssl rand -base64 48 | tr -d '\n' | docker secret create dockyard_metrics_token -
 DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
   DOCKYARD_IMAGE=ghcr.io/example/dockyard@sha256:... \
   POSTGRES_IMAGE=postgres@sha256:... \
@@ -251,8 +254,11 @@ it uses versioned secret names, the temporary
 a reversible old-listener/new-signer transition.
 
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
-and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
-account configured as an HTTP bearer token. The rules cover controller outage,
+and scrape `http://dockyard:8080/metrics` with the fleet-wide operator token in
+the `dockyard_metrics_token` Docker secret (or its configured versioned name).
+Configure Prometheus with a protected `bearer_token_file` containing the same
+value; tenant sessions and service-account tokens cannot scrape this endpoint.
+The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, stale backups, overdue
 restore drills, stalled durable artifact deletion, stalled or failed Dokploy
 database migrations, and maintenance mode left enabled. They also detect

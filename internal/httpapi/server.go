@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,7 @@ type Server struct {
 	PublicURL                  string
 	OIDCHTTPClient             *http.Client
 	Metrics                    *observability.Metrics
+	MetricsTokenHash           []byte
 	AgentCACertificate         []byte
 	AgentPreviousCACertificate []byte
 	AgentCATrustBundle         []byte
@@ -72,7 +74,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /readyz", s.ready)
-	mux.Handle("GET /metrics", s.requireAuth(http.HandlerFunc(s.metrics)))
+	mux.Handle("GET /metrics", s.requireMetricsAuth(http.HandlerFunc(s.metrics)))
 	mux.HandleFunc("POST /v1/auth/bootstrap", s.bootstrap)
 	mux.HandleFunc("POST /v1/auth/login", s.login)
 	mux.HandleFunc("POST /v1/invitations/accept", s.acceptOrganizationInvitation)
@@ -437,6 +439,29 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))
 	})
+}
+
+func (s *Server) requireMetricsAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := bearerToken(r)
+		if !ok || len(s.MetricsTokenHash) != sha256.Size || subtle.ConstantTimeCompare(cryptox.Digest(token), s.MetricsTokenHash) != 1 {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return "", false
+	}
+	parts := strings.Fields(values[0])
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 func (s *Server) requireRole(minimum string, next http.Handler) http.Handler {

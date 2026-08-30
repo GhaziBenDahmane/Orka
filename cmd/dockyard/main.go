@@ -543,7 +543,7 @@ func serve() error {
 	}
 	go worker.Run(ctx)
 	go templates.RunRepositorySyncScheduler(ctx, db, box, nil, logger, worker.ID)
-	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
+	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, Metrics: metrics, MetricsTokenHash: cryptox.Digest(cfg.MetricsToken), AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
 	httpServer := newPlatformHTTPServer(cfg.ListenAddr, api.Handler(), 30*time.Second)
 	servers := []*http.Server{httpServer}
 	var agentServer *http.Server

@@ -1,10 +1,12 @@
 # HTTP API
 
 All request and response bodies use JSON. Except for health, bootstrap, login,
-SSO discovery/callback, and deploy hooks, endpoints require
+SSO discovery/callback, and deploy hooks, tenant endpoints require
 `Authorization: Bearer <session-token>`. Use `X-Organization-ID` to select an
-organization when a user belongs to more than one. This includes `/metrics`;
-Prometheus should use a dedicated read-only service-account token.
+organization when a user belongs to more than one. Because `/metrics` reports
+fleet-wide state, it accepts only the dedicated operator credential configured
+with `DOCKYARD_METRICS_TOKEN`; tenant sessions and service-account tokens are
+never accepted there.
 
 `GET /healthz` is the unauthenticated liveness probe and only reports whether
 the HTTP process can answer. `GET /readyz` is the unauthenticated readiness
@@ -32,7 +34,8 @@ Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a
 Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,
 deployments, backups, restores, restore drills, durable artifact-cleanup backlog,
-and operation durations.
+and operation durations. Send `Authorization: Bearer <metrics-token>` and omit
+`X-Organization-ID`.
 
 ## Identity
 

@@ -60,6 +60,8 @@ paths:
 			fmt.Fprintf(&output, "    %s:\n      operationId: %s\n      tags: [%s]\n", op.method, operationID(op), tag(op.path))
 			if isPublic(op.path) {
 				output.WriteString("      security: []\n")
+			} else if op.path == "/metrics" {
+				output.WriteString("      security:\n        - metricsBearer: []\n")
 			} else if strings.HasPrefix(op.path, "/v1/agent/") {
 				output.WriteString("      security:\n        - mutualTLS: []\n")
 			}
@@ -93,6 +95,10 @@ paths:
     bearerAuth:
       type: http
       scheme: bearer
+    metricsBearer:
+      type: http
+      scheme: bearer
+      description: Dedicated operator token configured with DOCKYARD_METRICS_TOKEN.
     mutualTLS:
       type: mutualTLS
   schemas:

@@ -121,7 +121,9 @@ curl -X POST http://localhost:8080/v1/auth/bootstrap \
 Every HTTP response includes `X-Request-ID`; callers may supply their own
 printable value. `GET /metrics` exposes bounded-route HTTP latency/status,
 background-operation duration/status, queue and lease health, deployment
-state, and backup/restore state and age. Set
+state, and backup/restore state and age. It requires the dedicated fleet
+operator bearer credential in `DOCKYARD_METRICS_TOKEN`, not a tenant session.
+Set
 `DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP/gRPC URL (for example,
 `http://otel-collector:4317`) to export traces. TLS is the default; set
 `DOCKYARD_OTEL_EXPORTER_OTLP_INSECURE=true` only for a trusted plaintext
