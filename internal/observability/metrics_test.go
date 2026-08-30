@@ -99,7 +99,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	scimToken := uuid.New()
 	samlProvider := uuid.New()
 	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
-	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, destinationID, volumeBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	databaseDigest := "sha256:" + strings.Repeat("a", 64)
 	statements := []struct {
 		query string
@@ -110,6 +110,10 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Metrics project','metrics-project')`, []any{projectID, organizationA}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Metrics environment','metrics-environment')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Metrics service','metrics-service',$3,'services: {}')`, []any{serviceID, environmentID, "metrics-" + serviceID.String()}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'Metrics destination','https://s3.example.test','backups','encrypted')`, []any{destinationID, organizationA}},
+		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'uploads',$3,3600,7,true,true,now()+interval '1 hour')`, []any{uuid.New(), serviceID, destinationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,started_at,finished_at) VALUES($1,$2,'uploads','nodeabc123',$3,true,'succeeded','volume.enc',42,$4,$5,'encrypted',now()-interval '2 hours',now()-interval '1 hour')`, []any{volumeBackupID, serviceID, destinationID, strings.Repeat("a", 64), strings.Repeat("b", 64)}},
+		{`INSERT INTO volume_restores(id,volume_backup_id,status,started_at,finished_at) VALUES($1,$2,'succeeded',now()-interval '30 minutes',now()-interval '29 minutes')`, []any{uuid.New(), volumeBackupID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Matching','matching','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, databaseDigest}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Mismatch','mismatch','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("b", 64)}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Unbound','unbound','legacy','1','unbound','','encrypted')`, []any{uuid.New(), environmentID}},
@@ -144,7 +148,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -181,6 +185,11 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_database_driver_binding_issues{engine="cockroach",reason="identity_mismatch"} 1`,
 		`dockyard_database_driver_binding_issues{engine="legacy",reason="unbound"} 1`,
 		`dockyard_database_driver_binding_issues{engine="missing",reason="unavailable"} 1`,
+		`dockyard_volume_backups{status="succeeded"} 1`,
+		`dockyard_volume_restores{status="succeeded"} 1`,
+		`dockyard_volume_backup_last_success_age_seconds{service="` + serviceID.String() + `",volume="uploads"}`,
+		`dockyard_volume_restore_last_success_age_seconds{service="` + serviceID.String() + `",volume="uploads"}`,
+		`dockyard_volume_backup_overdue{service="` + serviceID.String() + `",volume="uploads"} 0`,
 	} {
 		if !strings.Contains(metrics, expected) {
 			t.Errorf("missing %q in metrics output", expected)

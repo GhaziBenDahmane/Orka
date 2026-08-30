@@ -72,6 +72,65 @@ func TestValidateVolumeArtifactJobRejectsUnsafePlacement(t *testing.T) {
 			}
 		})
 	}
+	restore := base
+	restore.Mode = "restore"
+	restore.SHA256 = strings.Repeat("a", 64)
+	restore.PlaintextSHA256 = strings.Repeat("b", 64)
+	restore.SizeBytes = 42
+	if err := ValidateVolumeArtifactJob(restore); err == nil || !strings.Contains(err.Error(), "quiesce") {
+		t.Fatalf("non-quiesced restore error=%v", err)
+	}
+}
+
+func TestRunVolumeArtifactRestoresMountingServiceScale(t *testing.T) {
+	for _, failHelper := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "helper-failure"}[failHelper], func(t *testing.T) {
+			directory := t.TempDir()
+			docker, calls := filepath.Join(directory, "docker"), filepath.Join(directory, "calls")
+			digest := strings.Repeat("a", 64)
+			script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + calls + `"
+if [ "$1" = service ] && [ "$2" = ls ]; then printf '%s\n' app_web app_worker; exit 0; fi
+if [ "$1" = service ] && [ "$2" = inspect ] && [ "$5" = dockyard_dockyard ]; then echo 'registry.example/dockyard@sha256:` + digest + `'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = inspect ] && [ "$4" = '{{json .Spec.TaskTemplate.ContainerSpec.Mounts}}' ]; then
+  if [ "$5" = app_web ]; then echo '[{"Type":"volume","Source":"app_uploads"}]'; else echo '[{"Type":"volume","Source":"app_cache"}]'; fi
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = inspect ] && [ "$4" = '{{.Spec.Mode.Replicated.Replicas}}' ]; then echo 2; exit 0; fi
+if [ "$1" = service ] && [ "$2" = scale ]; then exit 0; fi
+if [ "$1" = secret ] && [ "$2" = create ]; then cat >/dev/null; exit 0; fi
+if [ "$1" = service ] && [ "$2" = create ]; then [ "$FAIL_HELPER" != 1 ]; exit $?; fi
+if [ "$1" = service ] && [ "$2" = ps ]; then echo 'Complete 1 second ago|'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = logs ]; then echo '{"sha256":"` + strings.Repeat("b", 64) + `","plaintextSha256":"` + strings.Repeat("c", 64) + `","sizeBytes":42}'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = rm ]; then exit 0; fi
+if [ "$1" = secret ] && [ "$2" = rm ]; then exit 0; fi
+exit 1
+`
+			if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if failHelper {
+				t.Setenv("FAIL_HELPER", "1")
+			}
+			key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+			_, err := (Swarm{DockerBin: docker, ServiceName: "dockyard_dockyard", Timeout: time.Second}).RunVolumeArtifact(context.Background(), VolumeArtifactJob{Job: volumeartifact.Job{Mode: "backup", TransferURL: "https://objects.example.test/upload", EncryptionKey: key, EncryptionAAD: "volume-backup:test"}, VolumeName: "app_uploads", NodeID: "nodeabc123", StackName: "app", Quiesce: true})
+			if failHelper == (err == nil) {
+				t.Fatalf("failHelper=%v err=%v", failHelper, err)
+			}
+			logged, readErr := os.ReadFile(calls)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			callText := string(logged)
+			stopAt, resumeAt := strings.Index(callText, "service scale --detach=false app_web=0"), strings.LastIndex(callText, "service scale --detach=false app_web=2")
+			if stopAt < 0 || resumeAt <= stopAt {
+				t.Fatalf("mounting service was not quiesced and resumed:\n%s", callText)
+			}
+			if strings.Contains(callText, "app_worker=0") || strings.Contains(callText, "app_worker=2") {
+				t.Fatalf("unrelated service was scaled:\n%s", callText)
+			}
+		})
+	}
 }
 
 func TestDeployForwardsRegistryAuthentication(t *testing.T) {
