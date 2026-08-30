@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/environments/{environmentID}/databases", s.requireResourceRole("developer", "environment", "environmentID", http.HandlerFunc(s.createDatabase)))
 	mux.Handle("GET /v1/environments/{environmentID}/databases", s.requireResourceRole("viewer", "environment", "environmentID", http.HandlerFunc(s.listDatabases)))
 	mux.Handle("GET /v1/databases/{databaseID}", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getDatabase)))
+	mux.Handle("POST /v1/databases/{databaseID}/driver-rebind", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.rebindDatabaseDriver)))
 	mux.Handle("GET /v1/databases/{databaseID}/backups", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseBackups)))
 	mux.Handle("GET /v1/databases/{databaseID}/migrations", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseMigrations)))
 	mux.Handle("GET /v1/databases/{databaseID}/restores", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseRestores)))
@@ -1141,6 +1142,49 @@ func (s *Server) getDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, item)
+}
+
+func (s *Server) rebindDatabaseDriver(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("databaseID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid database id")
+		return
+	}
+	var in struct {
+		Confirm string `json:"confirm"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.GetDatabase(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if s.Databases == nil {
+		writeError(w, http.StatusConflict, "database_driver_unavailable", "database registry is not configured")
+		return
+	}
+	driver, exists := s.Databases.Engine(item.Engine)
+	if !exists {
+		writeError(w, http.StatusConflict, "database_driver_unavailable", "database engine is not registered on this controller")
+		return
+	}
+	item, err = s.Store.RebindDatabaseDriverIdentity(r.Context(), p, id, in.Confirm, driver.Source, driver.ArtifactDigest, r.RemoteAddr)
+	if err != nil {
+		if errors.Is(err, store.ErrDatabaseDriverConfirmation) {
+			writeError(w, http.StatusBadRequest, "confirmation_mismatch", err.Error())
+			return
+		}
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "database_busy", "wait for active database operations before rebinding the driver")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {

@@ -367,6 +367,7 @@ authenticated context and is never returned by the API.
 | GET/POST | `/v1/databases/{id}/backups` | List or queue verified native backups |
 | GET | `/v1/databases/{id}/restores` | List manual and verification restores |
 | GET/DELETE | `/v1/databases/{id}` | Inspect or asynchronously delete a managed database |
+| POST | `/v1/databases/{id}/driver-rebind` | Confirm and audit adoption of the currently installed driver identity |
 | GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
 | POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation |
@@ -380,7 +381,10 @@ Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model. Database
 records expose `driverSource` and, for external drivers, the bound
-`driverArtifactDigest`; recovery workers reject a different artifact.
+`driverArtifactDigest`; recovery workers reject a different artifact. An
+administrator can rebind only after typing the database slug and only while no
+backup, restore, or migration job is queued or running for it. The identity
+change and its before/after digests are committed with one audit event.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
 optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.

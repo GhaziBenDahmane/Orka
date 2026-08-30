@@ -128,9 +128,42 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("service-account project status = %d: %s", response.StatusCode, data)
 	}
+	var project store.Project
+	if err = json.Unmarshal(data, &project); err != nil {
+		t.Fatal(err)
+	}
+	response, data = do(http.MethodPost, "/v1/projects/"+project.ID.String()+"/environments", newToken, []byte(`{"name":"Production"}`))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("service-account environment status = %d: %s", response.StatusCode, data)
+	}
+	var environment store.Environment
+	if err = json.Unmarshal(data, &environment); err != nil {
+		t.Fatal(err)
+	}
+	response, data = do(http.MethodPost, "/v1/environments/"+environment.ID.String()+"/databases", newToken, []byte(`{"name":"Primary","engine":"postgres","version":"17","config":{}}`))
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("service-account database status = %d: %s", response.StatusCode, data)
+	}
+	var databaseResponse struct {
+		Database store.DatabaseInstance `json:"database"`
+	}
+	if err = json.Unmarshal(data, &databaseResponse); err != nil || databaseResponse.Database.DriverSource != "built-in" {
+		t.Fatalf("created database=%s err=%v", data, err)
+	}
+	response, _ = do(http.MethodPost, "/v1/databases/"+databaseResponse.Database.ID.String()+"/driver-rebind", newToken, []byte(`{"confirm":"wrong"}`))
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("driver rebind confirmation status=%d, want 400", response.StatusCode)
+	}
+	response, data = do(http.MethodPost, "/v1/databases/"+databaseResponse.Database.ID.String()+"/driver-rebind", newToken, []byte(`{"confirm":"`+databaseResponse.Database.Slug+`"}`))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("driver rebind status=%d: %s", response.StatusCode, data)
+	}
 	var audited bool
 	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM audit_events WHERE organization_id=$1 AND actor_service_account_id=$2 AND action='project.create')`, orgID, created.ServiceAccount.ID).Scan(&audited); err != nil || !audited {
 		t.Fatalf("service account audit present = %v, err = %v", audited, err)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM audit_events WHERE organization_id=$1 AND actor_service_account_id=$2 AND action='database.driver_rebind')`, orgID, created.ServiceAccount.ID).Scan(&audited); err != nil || !audited {
+		t.Fatalf("driver rebind audit present = %v, err = %v", audited, err)
 	}
 
 	response, data = do(http.MethodPost, "/v1/service-accounts", userToken, []byte(`{"name":"ai-auditor","role":"auditor","expiresInDays":30}`))

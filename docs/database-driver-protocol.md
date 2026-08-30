@@ -23,6 +23,13 @@ predate this metadata are marked `unbound`; the first leased recovery or
 migration job atomically binds them to that worker's installed driver, and a
 different worker cannot race in with another artifact.
 
+To adopt a reviewed driver update, an administrator uses
+`POST /v1/databases/{id}/driver-rebind` and confirms the database slug. The
+operation locks the database against new recovery and migration queue entries,
+refuses any already active operation, and commits the new digest with its audit
+event atomically. Every controller should have the new artifact before the
+rebind; a worker that still has the previous digest will fail closed.
+
 Dockyard starts a fresh process for each call, writes one JSON request to stdin,
 and reads one JSON response from stdout. Protocol version 1 supports
 `describe`, `render`, `backup`, `restore`, and `readiness`. Calls time out after

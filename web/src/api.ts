@@ -123,6 +123,7 @@ export const api = {
   databaseEngines: () => request<{ items: string[]; backupCapable: string[]; engines: DatabaseEngine[] }>("/v1/database-engines"),
   createDatabase: (environmentId: string, body: { name: string; engine: string; version: string; config: Record<string, unknown> }) => request<{ database: { id: string; name: string }; credentials: Record<string, string>; internalUrl: string }>(`/v1/environments/${environmentId}/databases`, { method: "POST", body: JSON.stringify(body) }),
   databases: (environmentId: string) => request<Envelope<Database>>(`/v1/environments/${environmentId}/databases`),
+  rebindDatabaseDriver: (databaseId: string, confirm: string) => request<Database>(`/v1/databases/${databaseId}/driver-rebind`, { method: "POST", body: JSON.stringify({ confirm }) }),
   databaseBackups: (databaseId: string) => request<Envelope<DatabaseBackup>>(`/v1/databases/${databaseId}/backups`),
   databaseRestores: (databaseId: string) => request<Envelope<DatabaseRestore>>(`/v1/databases/${databaseId}/restores`),
   databaseMigrations: (databaseId: string) => request<Envelope<DatabaseMigration>>(`/v1/databases/${databaseId}/migrations`),

@@ -84,4 +84,26 @@ func TestDatabaseDriverIdentityBindsAtomically(t *testing.T) {
 	if err = db.BindDatabaseDriverIdentity(ctx, databaseID, source, other); !errors.Is(err, ErrDatabaseDriverIdentityMismatch) {
 		t.Fatalf("mismatched binding error=%v", err)
 	}
+	jobID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,status,resource_key) VALUES($1,'backup.database','{}','pending',$2)`, jobID, "database:"+databaseID.String()); err != nil {
+		t.Fatal(err)
+	}
+	principal := Principal{OrganizationID: organizationID}
+	if _, err = db.RebindDatabaseDriverIdentity(ctx, principal, databaseID, "data", "external", other, "127.0.0.1"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("active-job rebind error=%v", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.RebindDatabaseDriverIdentity(ctx, principal, databaseID, "wrong", "external", other, "127.0.0.1"); !errors.Is(err, ErrDatabaseDriverConfirmation) {
+		t.Fatalf("confirmation error=%v", err)
+	}
+	updated, err := db.RebindDatabaseDriverIdentity(ctx, principal, databaseID, "data", "external", other, "127.0.0.1")
+	if err != nil || updated.DriverDigest != other {
+		t.Fatalf("reviewed rebind=%#v err=%v", updated, err)
+	}
+	var auditCount int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='database.driver_rebind' AND resource_id=$2`, organizationID, databaseID.String()).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatalf("rebind audit count=%d err=%v", auditCount, err)
+	}
 }

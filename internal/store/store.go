@@ -1394,12 +1394,20 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 		return DatabaseBackup{}, err
 	}
 	defer tx.Rollback(ctx)
-	var allowed bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2) AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM backup_destinations b WHERE b.id=$3 AND b.organization_id=$2))`, databaseID, organizationID, destinationID).Scan(&allowed); err != nil {
+	var lockedID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT d.id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, databaseID, organizationID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+		return DatabaseBackup{}, ErrNotFound
+	} else if err != nil {
 		return DatabaseBackup{}, err
 	}
-	if !allowed {
-		return DatabaseBackup{}, ErrNotFound
+	if destinationID != nil {
+		var destinationAllowed bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`, destinationID, organizationID).Scan(&destinationAllowed); err != nil {
+			return DatabaseBackup{}, err
+		}
+		if !destinationAllowed {
+			return DatabaseBackup{}, ErrNotFound
+		}
 	}
 	backup := DatabaseBackup{ID: uuid.New(), DatabaseInstanceID: databaseID, Status: "queued", Format: "native", DestinationID: destinationID}
 	if err = tx.QueryRow(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,actor_user_id,destination_id) VALUES($1,$2,'queued','native',$3,$4) RETURNING created_at`, backup.ID, databaseID, nullableUUID(actorID), destinationID).Scan(&backup.CreatedAt); err != nil {
@@ -1526,7 +1534,7 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	defer tx.Rollback(ctx)
 	var slug, status string
 	var backupDatabaseID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status)
+	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}
@@ -1716,7 +1724,10 @@ func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (
 	return item, err
 }
 
-var ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
+var (
+	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
+	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
+)
 
 // BindDatabaseDriverIdentity atomically upgrades a legacy unbound database or
 // verifies that another controller already bound it to the same driver. This
@@ -1731,6 +1742,52 @@ func (s *Store) BindDatabaseDriverIdentity(ctx context.Context, id uuid.UUID, so
 		return ErrDatabaseDriverIdentityMismatch
 	}
 	return nil
+}
+
+func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Principal, id uuid.UUID, confirmation, source, digest, remoteAddr string) (DatabaseInstance, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	defer tx.Rollback(ctx)
+	var item DatabaseInstance
+	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DatabaseInstance{}, ErrNotFound
+	}
+	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	if confirmation != item.Slug {
+		return DatabaseInstance{}, ErrDatabaseDriverConfirmation
+	}
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE resource_key=$1 AND status IN ('pending','running'))`, "database:"+id.String()).Scan(&busy); err != nil {
+		return DatabaseInstance{}, err
+	}
+	if busy {
+		return DatabaseInstance{}, ErrBusy
+	}
+	previousSource, previousDigest := item.DriverSource, item.DriverDigest
+	if _, err = tx.Exec(ctx, `UPDATE database_instances SET driver_source=$2,driver_artifact_digest=$3,updated_at=now() WHERE id=$1`, id, source, digest); err != nil {
+		return DatabaseInstance{}, err
+	}
+	metadata, err := json.Marshal(map[string]any{"engine": item.Engine, "previousSource": previousSource, "previousDigest": previousDigest, "source": source, "digest": digest})
+	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	var serviceAccountID any
+	if principal.ServiceAccountID != nil {
+		serviceAccountID = *principal.ServiceAccountID
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,'database.driver_rebind','database',$4,$5,$6)`, principal.OrganizationID, nullableUUID(principal.UserID), serviceAccountID, id.String(), remoteAddr, metadata); err != nil {
+		return DatabaseInstance{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseInstance{}, err
+	}
+	item.DriverSource, item.DriverDigest = source, digest
+	return item, nil
 }
 
 func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID uuid.UUID) ([]DatabaseInstance, error) {
