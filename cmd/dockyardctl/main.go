@@ -346,6 +346,31 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		}
 		input, err := parseJSONArgument(args[2], stdin)
 		return http.MethodPut, "/v1/projects/" + args[1] + "/tags", input, err
+	case "networks":
+		return http.MethodGet, "/v1/networks", nil, require(1)
+	case "network":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/networks/" + args[1], nil, nil
+	case "create-network":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/networks", 2)
+	case "delete-network":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/networks/" + args[1], nil, nil
+	case "service-networks":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/services/" + args[1] + "/networks", nil, nil
+	case "set-service-networks":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/services/" + args[1] + "/networks", input, err
 	case "route":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -901,5 +926,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, tags, create-tag, set-project-tags, set-service-tags, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, tags, networks, create-network, set-service-networks, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
 }

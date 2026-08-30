@@ -42,6 +42,23 @@ type Compiler struct {
 }
 
 func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
+	return c.CompileWithManagedNetworks(source, routes, nil)
+}
+
+func (c Compiler) CompileWithManagedNetworks(source string, routes []store.Route, managedNetworks []string) (string, error) {
+	attachments := make([]ManagedNetworkAttachment, 0, len(managedNetworks))
+	for _, name := range managedNetworks {
+		attachments = append(attachments, ManagedNetworkAttachment{Name: name})
+	}
+	return c.CompileWithNetworkAttachments(source, routes, attachments)
+}
+
+type ManagedNetworkAttachment struct {
+	Name         string
+	ServiceNames []string
+}
+
+func (c Compiler) CompileWithNetworkAttachments(source string, routes []store.Route, managedNetworks []ManagedNetworkAttachment) (string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
 		return "", fmt.Errorf("parse compose yaml: %w", err)
@@ -204,6 +221,55 @@ func (c Compiler) Compile(source string, routes []store.Route) (string, error) {
 		services[route.ServiceName] = service
 	}
 	doc["services"] = services
+	if len(managedNetworks) > 0 {
+		networks, _ := stringMap(doc["networks"])
+		if networks == nil {
+			networks = map[string]any{}
+		}
+		seen := map[string]bool{}
+		for _, attachment := range managedNetworks {
+			name := attachment.Name
+			if !safeManagedNetworkName.MatchString(name) || reservedManagedNetworkNames[name] || name == c.PublicNetwork || seen[name] {
+				return "", fmt.Errorf("invalid, reserved, or duplicate managed network %q", name)
+			}
+			seen[name] = true
+			if _, exists := networks[name]; exists {
+				return "", fmt.Errorf("managed network %q conflicts with a Compose-defined network", name)
+			}
+			networks[name] = map[string]any{"external": true, "name": name}
+			targets := map[string]bool{}
+			for _, target := range attachment.ServiceNames {
+				if !safeName.MatchString(target) || targets[target] {
+					return "", fmt.Errorf("managed network %q has an invalid or duplicate service target %q", name, target)
+				}
+				if _, exists := services[target]; !exists {
+					return "", fmt.Errorf("managed network %q references missing service %q", name, target)
+				}
+				targets[target] = true
+			}
+			for serviceName, raw := range services {
+				if len(targets) > 0 && !targets[serviceName] {
+					continue
+				}
+				service, _ := stringMap(raw)
+				if mode, _ := service["network_mode"].(string); mode == "none" {
+					continue
+				}
+				value, implicitDefault, networkErr := addServiceNetwork(service["networks"], name)
+				if networkErr != nil {
+					return "", fmt.Errorf("service %q: %w", serviceName, networkErr)
+				}
+				service["networks"] = value
+				if implicitDefault {
+					if _, exists := networks["default"]; !exists {
+						networks["default"] = map[string]any{}
+					}
+				}
+				services[serviceName] = service
+			}
+		}
+		doc["services"], doc["networks"] = services, networks
+	}
 	if !c.AllowUnsafe {
 		if err := c.encryptStackNetworks(doc); err != nil {
 			return "", err

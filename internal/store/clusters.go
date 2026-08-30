@@ -137,7 +137,7 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 	}
 	defer tx.Rollback(ctx)
 	var deleting, assigned bool
-	err = tx.QueryRow(ctx, `SELECT c.deletion_requested_at IS NOT NULL,EXISTS(SELECT 1 FROM environments e WHERE e.cluster_id=c.id) FROM clusters c WHERE c.id=$1 AND c.organization_id=$2 FOR UPDATE`, clusterID, organizationID).Scan(&deleting, &assigned)
+	err = tx.QueryRow(ctx, `SELECT c.deletion_requested_at IS NOT NULL,EXISTS(SELECT 1 FROM environments e WHERE e.cluster_id=c.id) OR EXISTS(SELECT 1 FROM managed_networks n WHERE n.cluster_id=c.id) FROM clusters c WHERE c.id=$1 AND c.organization_id=$2 FOR UPDATE`, clusterID, organizationID).Scan(&deleting, &assigned)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -254,7 +254,7 @@ func (s *Store) enqueueClusterCommand(ctx context.Context, clusterID, commandID 
 			return ClusterCommand{}, err
 		}
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,owner_job_id,owner_job_lease_id) SELECT $1,c.id,$3,$4,$5,$6 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','container.run','database.utility','database.transfer') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload, nullableUUID(jobID), nullableUUID(jobLeaseID)).Scan(&item.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,owner_job_id,owner_job_lease_id) SELECT $1,c.id,$3,$4,$5,$6 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','swarm.network-create','swarm.network-remove','container.run','database.utility','database.transfer') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload, nullableUUID(jobID), nullableUUID(jobLeaseID)).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClusterCommand{}, clusterCommandUnavailableError(ctx, tx, clusterID, kind)
 	}

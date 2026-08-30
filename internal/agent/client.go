@@ -709,6 +709,28 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 			return "", errors.New("scheduler does not support volume-node resolution")
 		}
 		return resolver.ResolveVolumeNode(ctx, payload.StackName, payload.VolumeName)
+	case "swarm.network-create":
+		var spec deploy.ManagedNetworkSpec
+		if err := json.Unmarshal(cmd.Payload, &spec); err != nil {
+			return "", err
+		}
+		manager, ok := c.swarm.(deploy.NetworkManager)
+		if !ok {
+			return "", errors.New("scheduler does not support managed networks")
+		}
+		result, err := manager.CreateManagedNetwork(ctx, spec)
+		encoded, _ := json.Marshal(result)
+		return string(encoded), err
+	case "swarm.network-remove":
+		var spec deploy.ManagedNetworkSpec
+		if err := json.Unmarshal(cmd.Payload, &spec); err != nil {
+			return "", err
+		}
+		manager, ok := c.swarm.(deploy.NetworkManager)
+		if !ok {
+			return "", errors.New("scheduler does not support managed networks")
+		}
+		return "", manager.RemoveManagedNetwork(ctx, spec)
 	case "swarm.volume-artifact":
 		var job deploy.VolumeArtifactJob
 		if err := json.Unmarshal(cmd.Payload, &job); err != nil {

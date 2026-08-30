@@ -113,6 +113,31 @@ func (s RemoteSwarm) RunServiceCommand(ctx context.Context, stackName, targetSer
 	return s.run(ctx, "swarm.exec", map[string]string{"stackName": stackName, "targetService": targetService, "shell": shell, "command": command})
 }
 
+func (s RemoteSwarm) CreateManagedNetwork(ctx context.Context, spec ManagedNetworkSpec) (ManagedNetworkResult, error) {
+	if err := ValidateManagedNetworkSpec(spec); err != nil {
+		return ManagedNetworkResult{}, err
+	}
+	output, err := s.run(ctx, "swarm.network-create", spec)
+	if err != nil {
+		return ManagedNetworkResult{}, err
+	}
+	var result ManagedNetworkResult
+	if err = json.Unmarshal([]byte(output), &result); err != nil {
+		return ManagedNetworkResult{}, fmt.Errorf("decode remote network result: %w", err)
+	}
+	return result, nil
+}
+
+func (s RemoteSwarm) RemoveManagedNetwork(ctx context.Context, spec ManagedNetworkSpec) error {
+	if err := ValidateManagedNetworkSpec(spec); err != nil {
+		return err
+	}
+	_, err := s.run(ctx, "swarm.network-remove", spec)
+	return err
+}
+
+var _ NetworkManager = RemoteSwarm{}
+
 type RemoteArtifactJob struct {
 	Mode            string            `json:"mode"`
 	Network         string            `json:"network"`

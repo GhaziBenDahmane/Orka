@@ -73,6 +73,7 @@ type sourceApplication struct {
 	BitbucketID       string   `json:"bitbucketId"`
 	RegistryID        string   `json:"registryId"`
 	BuildRegistryID   string   `json:"buildRegistryId"`
+	NetworkIDs        []string `json:"networkIds"`
 }
 
 type sourceApplicationRoute struct {

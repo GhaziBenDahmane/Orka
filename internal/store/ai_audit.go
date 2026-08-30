@@ -35,6 +35,7 @@ type AIAuditSnapshot struct {
 	Databases            []AIAuditDatabaseInfo           `json:"databases"`
 	DatabaseEngines      []AIAuditDatabaseEngineInfo     `json:"databaseEngines"`
 	Clusters             []AIAuditClusterInfo            `json:"clusters"`
+	ManagedNetworks      []AIAuditManagedNetworkInfo     `json:"managedNetworks"`
 	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
 	AgentCommandPosture  []AIAuditAgentCommandPosture    `json:"agentCommandPosture"`
@@ -97,8 +98,22 @@ type AIAuditServiceInfo struct {
 	Revision      int64     `json:"revision"`
 	DesiredState  string    `json:"desiredState"`
 	Tags          []string  `json:"tags"`
+	Networks      []string  `json:"networks"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+type AIAuditManagedNetworkInfo struct {
+	ID         uuid.UUID  `json:"id"`
+	ClusterID  *uuid.UUID `json:"clusterId,omitempty"`
+	Name       string     `json:"name"`
+	Driver     string     `json:"driver"`
+	Internal   bool       `json:"internal"`
+	Attachable bool       `json:"attachable"`
+	EnableIPv4 bool       `json:"enableIpv4"`
+	EnableIPv6 bool       `json:"enableIpv6"`
+	Status     string     `json:"status"`
+	LastError  string     `json:"lastError,omitempty"`
 }
 
 type AIAuditRouteInfo struct {
@@ -484,6 +499,7 @@ type AIAuditFinalizerPosture struct {
 	DeletingEnvironments      int64      `json:"deletingEnvironments"`
 	DeletingServices          int64      `json:"deletingServices"`
 	DeletingClusters          int64      `json:"deletingClusters"`
+	DeletingNetworks          int64      `json:"deletingNetworks"`
 	PendingJobs               int64      `json:"pendingJobs"`
 	RunningJobs               int64      `json:"runningJobs"`
 	FailedJobs                int64      `json:"failedJobs"`
@@ -495,7 +511,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -522,6 +538,13 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 			CertificateNotAfter: item.CertificateNotAfter, LastSeenAt: item.LastSeenAt, MaintenanceStartsAt: item.MaintenanceStartsAt,
 			MaintenanceEndsAt: item.MaintenanceEndsAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,
 		})
+	}
+	networks, err := s.ListManagedNetworks(ctx, organizationID)
+	if err != nil {
+		return snapshot, err
+	}
+	for _, item := range networks {
+		snapshot.ManagedNetworks = append(snapshot.ManagedNetworks, AIAuditManagedNetworkInfo{ID: item.ID, ClusterID: item.ClusterID, Name: item.Name, Driver: item.Driver, Internal: item.Internal, Attachable: item.Attachable, EnableIPv4: item.EnableIPv4, EnableIPv6: item.EnableIPv6, Status: item.Status, LastError: item.LastError})
 	}
 	reconciliation, err := s.ListServiceReconciliations(ctx, organizationID)
 	if err != nil {
@@ -607,7 +630,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	rows.Close()
 
 	rows, err = s.Pool.Query(ctx, `SELECT service.id,service.environment_id,service.name,service.slug,service.stack_name,service.storage_node_id,
-		service.revision,service.desired_state,ARRAY(SELECT tag.name FROM compose_service_tags assignment JOIN tags tag ON tag.id=assignment.tag_id WHERE assignment.compose_service_id=service.id ORDER BY lower(tag.name),tag.id),service.created_at,service.updated_at,service.compose_yaml,runtime.id IS NOT NULL,COALESCE(runtime.effective_compose,'')
+		service.revision,service.desired_state,ARRAY(SELECT tag.name FROM compose_service_tags assignment JOIN tags tag ON tag.id=assignment.tag_id WHERE assignment.compose_service_id=service.id ORDER BY lower(tag.name),tag.id),ARRAY(SELECT network.name FROM compose_service_networks assignment JOIN managed_networks network ON network.id=assignment.network_id WHERE assignment.compose_service_id=service.id ORDER BY lower(network.name),network.id),service.created_at,service.updated_at,service.compose_yaml,runtime.id IS NOT NULL,COALESCE(runtime.effective_compose,'')
 		FROM compose_services service
 		JOIN environments environment ON environment.id=service.environment_id
 		JOIN projects project ON project.id=environment.project_id
@@ -627,7 +650,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 		var item AIAuditServiceInfo
 		var composeYAML, runtimeCompose string
 		var successfulDeployment bool
-		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.DesiredState, &item.Tags, &item.CreatedAt, &item.UpdatedAt, &composeYAML, &successfulDeployment, &runtimeCompose); err != nil {
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.DesiredState, &item.Tags, &item.Networks, &item.CreatedAt, &item.UpdatedAt, &composeYAML, &successfulDeployment, &runtimeCompose); err != nil {
 			rows.Close()
 			return err
 		}
@@ -1390,22 +1413,27 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 			UNION ALL
 			SELECT 'cluster',cluster.id::text,cluster.deletion_requested_at
 			FROM clusters cluster WHERE cluster.organization_id=$1 AND cluster.deletion_requested_at IS NOT NULL
+			UNION ALL
+			SELECT 'network',network.id::text,network.deletion_requested_at
+			FROM managed_networks network WHERE network.organization_id=$1 AND network.deletion_requested_at IS NOT NULL
 		), deletion_jobs AS (
 			SELECT CASE job.kind
 					WHEN 'delete.project' THEN 'project'
 					WHEN 'delete.environment' THEN 'environment'
 					WHEN 'delete.compose' THEN 'service'
 					WHEN 'delete.cluster' THEN 'cluster'
+					WHEN 'network.delete' THEN 'network'
 				END AS resource_type,
 				CASE job.kind
 					WHEN 'delete.project' THEN job.payload->>'projectId'
 					WHEN 'delete.environment' THEN job.payload->>'environmentId'
 					WHEN 'delete.compose' THEN job.payload->>'serviceId'
 					WHEN 'delete.cluster' THEN job.payload->>'clusterId'
+					WHEN 'network.delete' THEN job.payload->>'networkId'
 				END AS resource_id,
 				job.status
 			FROM jobs job
-			WHERE job.kind IN ('delete.project','delete.environment','delete.compose','delete.cluster')
+			WHERE job.kind IN ('delete.project','delete.environment','delete.compose','delete.cluster','network.delete')
 		), scoped_jobs AS (
 			SELECT job.status FROM deletion_jobs job JOIN deleting_resources resource USING(resource_type,resource_id)
 		)
@@ -1414,6 +1442,7 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 			count(*) FILTER (WHERE resource_type='environment'),
 			count(*) FILTER (WHERE resource_type='service'),
 			count(*) FILTER (WHERE resource_type='cluster'),
+			count(*) FILTER (WHERE resource_type='network'),
 			(SELECT count(*) FROM scoped_jobs WHERE status='pending'),
 			(SELECT count(*) FROM scoped_jobs WHERE status='running'),
 			(SELECT count(*) FROM scoped_jobs WHERE status='failed'),
@@ -1427,6 +1456,7 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 		&posture.DeletingEnvironments,
 		&posture.DeletingServices,
 		&posture.DeletingClusters,
+		&posture.DeletingNetworks,
 		&posture.PendingJobs,
 		&posture.RunningJobs,
 		&posture.FailedJobs,

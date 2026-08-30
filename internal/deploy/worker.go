@@ -718,6 +718,12 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	if j.Kind == "delete.cluster" {
 		return w.deleteCluster(ctx, j)
 	}
+	if j.Kind == "network.create" {
+		return w.createManagedNetwork(ctx, j)
+	}
+	if j.Kind == "network.delete" {
+		return w.deleteManagedNetwork(ctx, j)
+	}
 	if j.Kind == "backup.database" {
 		return w.backupDatabase(ctx, j)
 	}
@@ -758,8 +764,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	var serviceID uuid.UUID
 	var stack, compose, encrypted, trigger string
 	var clusterID *uuid.UUID
+	var organizationID uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING s.id,s.stack_name,d.compose_snapshot,d.env_snapshot,d.trigger,e.cluster_id`, id).Scan(&serviceID, &stack, &compose, &encrypted, &trigger, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE deployments d SET status='running',started_at=now() FROM compose_services s,environments e,projects p WHERE d.id=$1 AND s.id=d.compose_service_id AND e.id=s.environment_id AND p.id=e.project_id RETURNING s.id,s.stack_name,d.compose_snapshot,d.env_snapshot,d.trigger,e.cluster_id,p.organization_id`, id).Scan(&serviceID, &stack, &compose, &encrypted, &trigger, &clusterID, &organizationID)
 	})
 	if err != nil {
 		return err
@@ -806,7 +813,21 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	compiled := compose
 	immutableReplay := trigger == "reconcile" || trigger == "rollback"
 	if !immutableReplay {
-		compiled, err = w.Compiler.Compile(compose, routes)
+		var managedNetworks []store.ManagedNetworkAttachment
+		managedNetworks, err = w.Store.ListServiceNetworkAttachments(ctx, organizationID, serviceID)
+		if err == nil {
+			attachments := make([]ManagedNetworkAttachment, 0, len(managedNetworks))
+			for _, network := range managedNetworks {
+				if network.Status != "ready" {
+					err = fmt.Errorf("managed network %s is %s", network.Name, network.Status)
+					break
+				}
+				attachments = append(attachments, ManagedNetworkAttachment{Name: network.Name, ServiceNames: network.ServiceNames})
+			}
+			if err == nil {
+				compiled, err = w.Compiler.CompileWithNetworkAttachments(compose, routes, attachments)
+			}
+		}
 	}
 	if err != nil {
 		w.markDeployment(ctx, j, id, "failed", "", err)
@@ -1232,6 +1253,85 @@ func (w *Worker) deleteProject(ctx context.Context, j job) error {
 		}
 	}
 	return nil
+}
+
+func (w *Worker) createManagedNetwork(ctx context.Context, j job) error {
+	network, err := w.managedNetworkForJob(ctx, j)
+	if err != nil {
+		return err
+	}
+	if network.DeletionRequestedAt != nil {
+		return nil
+	}
+	manager, ok := w.scheduler(network.ClusterID).(NetworkManager)
+	if !ok {
+		return errors.New("scheduler does not support managed networks")
+	}
+	result, err := manager.CreateManagedNetwork(ctx, managedNetworkSpec(network))
+	if err != nil {
+		_ = w.updateResourceForJob(context.WithoutCancel(ctx), j, `UPDATE managed_networks SET status=CASE WHEN $3 THEN 'error' ELSE 'provisioning' END,last_error=$2,updated_at=now() WHERE id=$1 AND deletion_requested_at IS NULL`, network.ID, truncate(err.Error(), 2048), j.Attempts+1 >= j.MaxAttempts)
+		return err
+	}
+	return w.updateResourceForJob(ctx, j, `UPDATE managed_networks SET status='ready',docker_id=$2,last_error='',updated_at=now() WHERE id=$1 AND deletion_requested_at IS NULL`, network.ID, result.DockerID)
+}
+
+func (w *Worker) deleteManagedNetwork(ctx context.Context, j job) error {
+	network, err := w.managedNetworkForJob(ctx, j)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if network.DeletionRequestedAt == nil {
+		return errors.New("managed network deletion was not requested")
+	}
+	manager, ok := w.scheduler(network.ClusterID).(NetworkManager)
+	if !ok {
+		return errors.New("scheduler does not support managed networks")
+	}
+	if err = manager.RemoveManagedNetwork(ctx, managedNetworkSpec(network)); err != nil {
+		_ = w.updateResourceForJob(context.WithoutCancel(ctx), j, `UPDATE managed_networks SET status=CASE WHEN $3 THEN 'error' ELSE 'deleting' END,last_error=$2,updated_at=now() WHERE id=$1`, network.ID, truncate(err.Error(), 2048), j.Attempts+1 >= j.MaxAttempts)
+		return err
+	}
+	return w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		result, deleteErr := tx.Exec(ctx, `DELETE FROM managed_networks WHERE id=$1 AND deletion_requested_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM compose_service_networks WHERE network_id=$1)`, network.ID)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		if result.RowsAffected() != 1 {
+			return errors.New("managed network is still assigned")
+		}
+		return nil
+	})
+}
+
+func (w *Worker) managedNetworkForJob(ctx context.Context, j job) (store.ManagedNetwork, error) {
+	var payload struct {
+		NetworkID string `json:"networkId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return store.ManagedNetwork{}, err
+	}
+	id, err := uuid.Parse(payload.NetworkID)
+	if err != nil {
+		return store.ManagedNetwork{}, err
+	}
+	var organizationID uuid.UUID
+	if err = w.Store.Pool.QueryRow(ctx, `SELECT organization_id FROM managed_networks WHERE id=$1`, id).Scan(&organizationID); errors.Is(err, pgx.ErrNoRows) {
+		return store.ManagedNetwork{}, store.ErrNotFound
+	} else if err != nil {
+		return store.ManagedNetwork{}, err
+	}
+	return w.Store.GetManagedNetwork(ctx, organizationID, id)
+}
+
+func managedNetworkSpec(item store.ManagedNetwork) ManagedNetworkSpec {
+	ipam := make([]NetworkIPAMConfig, 0, len(item.IPAM))
+	for _, config := range item.IPAM {
+		ipam = append(ipam, NetworkIPAMConfig{Subnet: config.Subnet, Gateway: config.Gateway, IPRange: config.IPRange})
+	}
+	return ManagedNetworkSpec{ID: item.ID.String(), Name: item.Name, Driver: item.Driver, Internal: item.Internal, Attachable: item.Attachable, EnableIPv4: item.EnableIPv4, EnableIPv6: item.EnableIPv6, MTU: item.MTU, IPAM: ipam}
 }
 
 func (w *Worker) deleteCluster(ctx context.Context, j job) error {

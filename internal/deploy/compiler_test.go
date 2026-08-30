@@ -101,6 +101,68 @@ func TestCompileEncryptsImplicitDefaultNetwork(t *testing.T) {
 	assertEncryptedOverlay(t, compiledNetworks(t, out), "default")
 }
 
+func TestCompilerAttachesManagedExternalNetworks(t *testing.T) {
+	source := "services:\n  web:\n    image: nginx\n  isolated:\n    image: alpine\n    network_mode: none\n"
+	out, err := (Compiler{PublicNetwork: "public"}).CompileWithManagedNetworks(source, nil, []string{"shared_backend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	networks := compiledNetworks(t, out)
+	shared, ok := stringMap(networks["shared_backend"])
+	if !ok || shared["external"] != true || shared["name"] != "shared_backend" {
+		t.Fatalf("managed network declaration = %#v", shared)
+	}
+	assertNetworkNames(t, compiledService(t, out, "web")["networks"], "default", "shared_backend")
+	if _, exists := compiledService(t, out, "isolated")["networks"]; exists {
+		t.Fatalf("network_mode none service was attached: %s", out)
+	}
+}
+
+func TestCompilerScopesManagedNetworkToSelectedServices(t *testing.T) {
+	source := "services:\n  web:\n    image: nginx\n  worker:\n    image: alpine\n"
+	out, err := (Compiler{}).CompileWithNetworkAttachments(source, nil, []ManagedNetworkAttachment{{Name: "shared", ServiceNames: []string{"worker"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := compiledService(t, out, "web")["networks"]; exists {
+		t.Fatalf("untargeted service was attached: %s", out)
+	}
+	assertNetworkNames(t, compiledService(t, out, "worker")["networks"], "default", "shared")
+	if _, err = (Compiler{}).CompileWithNetworkAttachments(source, nil, []ManagedNetworkAttachment{{Name: "shared", ServiceNames: []string{"missing"}}}); err == nil {
+		t.Fatal("accepted missing service target")
+	}
+}
+
+func TestCompilerRejectsManagedNetworkCollisions(t *testing.T) {
+	source := "services:\n  app:\n    image: alpine\n    networks: [shared]\nnetworks:\n  shared: {}\n"
+	if _, err := (Compiler{}).CompileWithManagedNetworks(source, nil, []string{"shared"}); err == nil {
+		t.Fatal("accepted managed network colliding with Compose-defined network")
+	}
+	for _, name := range []string{"bridge", "UPPER", "public"} {
+		if _, err := (Compiler{PublicNetwork: "public"}).CompileWithManagedNetworks("services: {app: {image: alpine}}", nil, []string{name}); err == nil {
+			t.Fatalf("accepted invalid managed network %q", name)
+		}
+	}
+}
+
+func TestValidateManagedNetworkSpec(t *testing.T) {
+	mtu := 1450
+	valid := ManagedNetworkSpec{ID: "network-id", Name: "private", Driver: "overlay", Attachable: true, EnableIPv4: true, MTU: &mtu, IPAM: []NetworkIPAMConfig{{Subnet: "10.42.0.0/24", Gateway: "10.42.0.1", IPRange: "10.42.0.128/25"}}}
+	if err := ValidateManagedNetworkSpec(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalid := valid
+	invalid.IPAM = []NetworkIPAMConfig{{Subnet: "10.42.0.1/24"}}
+	if err := ValidateManagedNetworkSpec(invalid); err == nil {
+		t.Fatal("accepted non-canonical subnet")
+	}
+	invalid = valid
+	invalid.IPAM = []NetworkIPAMConfig{{Subnet: "10.42.0.0/24", Gateway: "10.43.0.1"}}
+	if err := ValidateManagedNetworkSpec(invalid); err == nil {
+		t.Fatal("accepted gateway outside subnet")
+	}
+}
+
 func TestCompileEncryptsExplicitStackNetworks(t *testing.T) {
 	source := `services:
   app:

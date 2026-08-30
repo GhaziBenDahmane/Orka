@@ -160,6 +160,26 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		}
 		return "", nil
 	}
+	if resource.SourceKind == "service_network" {
+		var metadata struct {
+			ServiceID string `json:"serviceId"`
+		}
+		if err := json.Unmarshal(resource.Metadata, &metadata); err != nil {
+			return "service-network parity metadata is invalid", nil
+		}
+		serviceID, parseErr := uuid.Parse(metadata.ServiceID)
+		if parseErr != nil {
+			return "service-network parity metadata has an invalid service id", nil
+		}
+		var exists bool
+		if err := destination.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_service_networks sn JOIN compose_services s ON s.id=sn.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id JOIN managed_networks n ON n.id=sn.network_id WHERE sn.compose_service_id=$1 AND sn.network_id=$2 AND p.organization_id=$3 AND n.organization_id=$3)`, serviceID, id, organizationID).Scan(&exists); err != nil {
+			return "", err
+		}
+		if !exists {
+			return "target service network assignment is missing", nil
+		}
+		return "", nil
+	}
 	queries := map[string]string{
 		"project":            `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1 AND organization_id=$2)`,
 		"environment":        `SELECT EXISTS(SELECT 1 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2)`,
@@ -169,6 +189,7 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		"source_credential":  `SELECT EXISTS(SELECT 1 FROM source_credentials WHERE id=$1 AND organization_id=$2)`,
 		"notification":       `SELECT EXISTS(SELECT 1 FROM notification_endpoints WHERE id=$1 AND organization_id=$2)`,
 		"tag":                `SELECT EXISTS(SELECT 1 FROM tags WHERE id=$1 AND organization_id=$2)`,
+		"network":            `SELECT EXISTS(SELECT 1 FROM managed_networks WHERE id=$1 AND organization_id=$2)`,
 	}
 	query := queries[resource.SourceKind]
 	if query == "" {

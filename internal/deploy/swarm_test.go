@@ -261,6 +261,60 @@ exit 1
 	}
 }
 
+func TestManagedNetworkCreateUsesEncryptedOwnedOverlay(t *testing.T) {
+	directory := t.TempDir()
+	docker, calls := filepath.Join(directory, "docker"), filepath.Join(directory, "calls")
+	t.Setenv("ORKA_DOCKER_LOG", calls)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ORKA_DOCKER_LOG"
+if [ "$1" = info ]; then printf 'active\n'; exit 0; fi
+if [ "$1" = network ] && [ "$2" = inspect ] && [ "$3" = --format ]; then printf 'overlay|swarm|true|{"encrypted":""}\n'; exit 0; fi
+if [ "$1" = network ] && [ "$2" = inspect ]; then printf 'Error: No such network\n' >&2; exit 1; fi
+if [ "$1" = network ] && [ "$2" = create ]; then printf 'docker-network-id\n'; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	mtu := 1450
+	result, err := (Swarm{DockerBin: docker, Network: "dockyard-public"}).CreateManagedNetwork(context.Background(), ManagedNetworkSpec{ID: "resource-id", Name: "shared_backend", Driver: "overlay", Internal: true, Attachable: true, EnableIPv4: true, EnableIPv6: true, MTU: &mtu, IPAM: []NetworkIPAMConfig{{Subnet: "10.42.0.0/24", Gateway: "10.42.0.1", IPRange: "10.42.0.128/25"}}})
+	if err != nil || result.DockerID != "docker-network-id" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	log, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := string(log)
+	for _, wanted := range []string{"--driver overlay", "--opt encrypted", "--label com.dockyard.network-id=resource-id", "--internal", "--attachable", "--ipv6", "--subnet 10.42.0.0/24", "--gateway 10.42.0.1", "--ip-range 10.42.0.128/25", "--opt com.docker.network.driver.mtu=1450", "shared_backend"} {
+		if !strings.Contains(command, wanted) {
+			t.Errorf("network create command missing %q:\n%s", wanted, command)
+		}
+	}
+}
+
+func TestManagedNetworkRemovalRequiresOwnership(t *testing.T) {
+	directory := t.TempDir()
+	docker, calls := filepath.Join(directory, "docker"), filepath.Join(directory, "calls")
+	t.Setenv("ORKA_DOCKER_LOG", calls)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$ORKA_DOCKER_LOG"
+if [ "$1" = network ] && [ "$2" = inspect ]; then printf '[{"Id":"docker-id","Name":"shared","Driver":"overlay","Attachable":true,"Labels":{"com.dockyard.network-id":"someone-else"}}]\n'; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	err := (Swarm{DockerBin: docker}).RemoveManagedNetwork(context.Background(), ManagedNetworkSpec{ID: "resource-id", Name: "shared", Driver: "overlay", Attachable: true, EnableIPv4: true})
+	if err == nil || !strings.Contains(err.Error(), "ownership") {
+		t.Fatalf("ownership error=%v", err)
+	}
+	log, _ := os.ReadFile(calls)
+	if strings.Contains(string(log), "network rm") {
+		t.Fatalf("unowned network was removed: %s", log)
+	}
+}
+
 func TestEnsureReadyRejectsUnsafeExistingNetwork(t *testing.T) {
 	for _, properties := range []string{
 		`bridge|local|true|{"encrypted":""}`,

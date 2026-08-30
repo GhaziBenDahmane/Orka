@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,16 +76,187 @@ type VolumeNodeResolver interface {
 	ResolveVolumeNode(context.Context, string, string) (string, error)
 }
 
+type NetworkIPAMConfig struct {
+	Subnet  string `json:"subnet,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
+	IPRange string `json:"ipRange,omitempty"`
+}
+
+type ManagedNetworkSpec struct {
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Driver     string              `json:"driver"`
+	Internal   bool                `json:"internal"`
+	Attachable bool                `json:"attachable"`
+	EnableIPv4 bool                `json:"enableIpv4"`
+	EnableIPv6 bool                `json:"enableIpv6"`
+	MTU        *int                `json:"mtu,omitempty"`
+	IPAM       []NetworkIPAMConfig `json:"ipam"`
+}
+
+type ManagedNetworkResult struct {
+	DockerID string `json:"dockerId"`
+}
+
+type NetworkManager interface {
+	CreateManagedNetwork(context.Context, ManagedNetworkSpec) (ManagedNetworkResult, error)
+	RemoveManagedNetwork(context.Context, ManagedNetworkSpec) error
+}
+
 var _ Scheduler = Swarm{}
 var _ ServiceCommandRunner = Swarm{}
 var _ VolumeArtifactRunner = Swarm{}
 var _ VolumeNodeResolver = Swarm{}
+var _ NetworkManager = Swarm{}
 
 var safeRuntimeServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+var safeManagedNetworkName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+
+var reservedManagedNetworkNames = map[string]bool{"bridge": true, "host": true, "none": true, "ingress": true, "docker_gwbridge": true}
+var errManagedNetworkNotFound = errors.New("managed Docker network not found")
 
 const maxDockerCommandOutputBytes = 1 << 20
 
 const dockerOutputTruncatedMarker = "\n...[docker output truncated]"
+
+func ValidateManagedNetworkSpec(spec ManagedNetworkSpec) error {
+	if spec.ID == "" || !safeManagedNetworkName.MatchString(spec.Name) || reservedManagedNetworkNames[spec.Name] {
+		return errors.New("invalid or reserved managed network name")
+	}
+	if spec.Driver != "overlay" && spec.Driver != "bridge" {
+		return errors.New("managed network driver must be overlay or bridge")
+	}
+	if !spec.EnableIPv4 && !spec.EnableIPv6 {
+		return errors.New("managed network must enable IPv4 or IPv6")
+	}
+	if spec.MTU != nil && (*spec.MTU < 576 || *spec.MTU > 65535) {
+		return errors.New("managed network MTU must be between 576 and 65535")
+	}
+	if len(spec.IPAM) > 8 {
+		return errors.New("managed network may define at most 8 IPAM ranges")
+	}
+	for _, config := range spec.IPAM {
+		if config.Subnet == "" {
+			if config.Gateway != "" || config.IPRange != "" {
+				return errors.New("managed network gateway and IP range require a subnet")
+			}
+			continue
+		}
+		subnet, err := netip.ParsePrefix(config.Subnet)
+		if err != nil || subnet.Masked().String() != config.Subnet {
+			return errors.New("managed network subnet must be a canonical CIDR")
+		}
+		if config.Gateway != "" {
+			address, parseErr := netip.ParseAddr(config.Gateway)
+			if parseErr != nil || !subnet.Contains(address) {
+				return errors.New("managed network gateway must be an address within the subnet")
+			}
+		}
+		if config.IPRange != "" {
+			rangePrefix, parseErr := netip.ParsePrefix(config.IPRange)
+			if parseErr != nil || rangePrefix.Masked().String() != config.IPRange || rangePrefix.Addr().BitLen() != subnet.Addr().BitLen() || rangePrefix.Bits() < subnet.Bits() || !subnet.Contains(rangePrefix.Addr()) {
+				return errors.New("managed network IP range must be a canonical CIDR within the subnet")
+			}
+		}
+	}
+	return nil
+}
+
+func (s Swarm) CreateManagedNetwork(ctx context.Context, spec ManagedNetworkSpec) (ManagedNetworkResult, error) {
+	if err := ValidateManagedNetworkSpec(spec); err != nil {
+		return ManagedNetworkResult{}, err
+	}
+	if err := s.EnsureReady(ctx); err != nil {
+		return ManagedNetworkResult{}, err
+	}
+	if current, err := s.inspectManagedNetwork(ctx, spec.Name); err == nil {
+		if current.Labels["com.dockyard.network-id"] != spec.ID {
+			return ManagedNetworkResult{}, fmt.Errorf("Docker network %s already exists and is not owned by this resource", spec.Name)
+		}
+		if current.Driver != spec.Driver || current.Internal != spec.Internal || current.Attachable != spec.Attachable || current.EnableIPv6 != spec.EnableIPv6 {
+			return ManagedNetworkResult{}, fmt.Errorf("Docker network %s configuration drift requires deletion and recreation", spec.Name)
+		}
+		return ManagedNetworkResult{DockerID: current.ID}, nil
+	} else if !errors.Is(err, errManagedNetworkNotFound) {
+		return ManagedNetworkResult{}, err
+	}
+	args := []string{"network", "create", "--driver", spec.Driver, "--label", "com.dockyard.managed=true", "--label", "com.dockyard.network-id=" + spec.ID}
+	if spec.Internal {
+		args = append(args, "--internal")
+	}
+	if spec.Attachable {
+		args = append(args, "--attachable")
+	}
+	if !spec.EnableIPv4 {
+		args = append(args, "--ipv4=false")
+	}
+	if spec.EnableIPv6 {
+		args = append(args, "--ipv6")
+	}
+	if spec.Driver == "overlay" {
+		args = append(args, "--opt", "encrypted")
+	}
+	if spec.MTU != nil {
+		args = append(args, "--opt", "com.docker.network.driver.mtu="+strconv.Itoa(*spec.MTU))
+	}
+	for _, config := range spec.IPAM {
+		if config.Subnet != "" {
+			args = append(args, "--subnet", config.Subnet)
+		}
+		if config.Gateway != "" {
+			args = append(args, "--gateway", config.Gateway)
+		}
+		if config.IPRange != "" {
+			args = append(args, "--ip-range", config.IPRange)
+		}
+	}
+	args = append(args, spec.Name)
+	id, err := s.run(ctx, args...)
+	return ManagedNetworkResult{DockerID: strings.TrimSpace(id)}, err
+}
+
+func (s Swarm) RemoveManagedNetwork(ctx context.Context, spec ManagedNetworkSpec) error {
+	if err := ValidateManagedNetworkSpec(spec); err != nil {
+		return err
+	}
+	current, err := s.inspectManagedNetwork(ctx, spec.Name)
+	if errors.Is(err, errManagedNetworkNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current.Labels["com.dockyard.network-id"] != spec.ID {
+		return fmt.Errorf("refusing to remove Docker network %s because ownership does not match", spec.Name)
+	}
+	_, err = s.run(ctx, "network", "rm", current.ID)
+	return err
+}
+
+type inspectedManagedNetwork struct {
+	ID         string            `json:"Id"`
+	Name       string            `json:"Name"`
+	Driver     string            `json:"Driver"`
+	Internal   bool              `json:"Internal"`
+	Attachable bool              `json:"Attachable"`
+	EnableIPv6 bool              `json:"EnableIPv6"`
+	Labels     map[string]string `json:"Labels"`
+}
+
+func (s Swarm) inspectManagedNetwork(ctx context.Context, name string) (inspectedManagedNetwork, error) {
+	output, err := s.run(ctx, "network", "inspect", name)
+	if err != nil {
+		if strings.Contains(strings.ToLower(output+" "+err.Error()), "no such network") {
+			return inspectedManagedNetwork{}, errManagedNetworkNotFound
+		}
+		return inspectedManagedNetwork{}, err
+	}
+	var items []inspectedManagedNetwork
+	if err = json.Unmarshal([]byte(output), &items); err != nil || len(items) != 1 {
+		return inspectedManagedNetwork{}, errors.New("decode Docker network inspection")
+	}
+	return items[0], nil
+}
 
 func (s Swarm) RunServiceCommand(ctx context.Context, stackName, targetService, shell, command string) (string, error) {
 	if !safeName.MatchString(stackName) || !safeRuntimeServiceName.MatchString(targetService) {
