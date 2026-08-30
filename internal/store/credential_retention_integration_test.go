@@ -36,7 +36,7 @@ func TestPruneExpiredCredentialsPreservesActiveAndRecentRecords(t *testing.T) {
 		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,expires_at,revoked_at) VALUES($1,$2,$3,'old',now()+interval '1 day',now()-interval '31 days'),($4,$2,$5,'active',now()+interval '1 day',NULL)`, []any{uuid.New(), serviceID, []byte("old-deploy"), uuid.New(), []byte("active-deploy")}},
 		{`INSERT INTO organization_invitations(id,organization_id,email,role,token_hash,expires_at,accepted_at,accepted_user_id) VALUES($1,$2,'old@example.test','viewer',$3,now()-interval '31 days',now()-interval '31 days',$4),($5,$2,'active@example.test','viewer',$6,now()+interval '1 day',NULL,NULL)`, []any{uuid.New(), organizationID, []byte("old-invitation"), userID, uuid.New(), []byte("active-invitation")}},
 		{`INSERT INTO cluster_enrollment_tokens(id,cluster_id,token_hash,expires_at,used_at) VALUES($1,$2,$3,now()+interval '1 day',now()-interval '31 days'),($4,$2,$5,now()+interval '1 day',NULL)`, []any{uuid.New(), clusterID, []byte("old-enrollment"), uuid.New(), []byte("active-enrollment")}},
-		{`INSERT INTO oidc_states(token_hash,provider_id,code_verifier,expires_at) VALUES($1,$2,'old',now()-interval '1 second'),($3,$2,'active',now()+interval '1 day')`, []any{[]byte("old-oidc"), oidcProviderID, []byte("active-oidc")}},
+		{`INSERT INTO oidc_states(token_hash,provider_id,code_verifier,nonce,expires_at) VALUES($1,$2,'old','old-nonce',now()-interval '1 second'),($3,$2,'active','active-nonce',now()+interval '1 day')`, []any{[]byte("old-oidc"), oidcProviderID, []byte("active-oidc")}},
 		{`INSERT INTO saml_states(token_hash,provider_id,request_id,expires_at) VALUES($1,$2,'old',now()-interval '1 second'),($3,$2,'active',now()+interval '1 day')`, []any{[]byte("old-saml-state"), samlProviderID, []byte("active-saml-state")}},
 		{`INSERT INTO saml_assertions(provider_id,assertion_id,expires_at) VALUES($1,'old',now()-interval '1 second'),($1,'active',now()+interval '1 day')`, []any{samlProviderID}},
 	}
@@ -96,5 +96,37 @@ func TestDisableServiceAccountRevokesTokensAtomically(t *testing.T) {
 	}
 	if enabled || activeTokens != 0 {
 		t.Fatalf("disabled account enabled=%t active_tokens=%d", enabled, activeTokens)
+	}
+}
+
+func TestPruneExpiredCredentialsBoundsEachTable(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	userID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at)
+		SELECT md5(item::text)::uuid,$1,decode(md5('expired-session-'||item::text),'hex'),now()-interval '31 days'
+		FROM generate_series(1,$2::int) item`, userID, maxCredentialPruneRowsPerTable+1); err != nil {
+		t.Fatal(err)
+	}
+
+	db := &Store{Pool: pool}
+	first, err := db.PruneExpiredCredentials(ctx, DefaultCredentialRetention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Sessions != maxCredentialPruneRowsPerTable || first.Total() != maxCredentialPruneRowsPerTable {
+		t.Fatalf("first batch=%+v, want %d sessions", first, maxCredentialPruneRowsPerTable)
+	}
+	second, err := db.PruneExpiredCredentials(ctx, DefaultCredentialRetention)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Sessions != 1 || second.Total() != 1 {
+		t.Fatalf("second batch=%+v, want one session", second)
 	}
 }

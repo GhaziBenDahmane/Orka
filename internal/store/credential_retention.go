@@ -7,8 +7,12 @@ import (
 )
 
 const (
-	minCredentialRetention = 24 * time.Hour
-	maxCredentialRetention = 365 * 24 * time.Hour
+	// DefaultCredentialRetention keeps terminal authentication records long
+	// enough for incident investigation without retaining them indefinitely.
+	DefaultCredentialRetention           = 30 * 24 * time.Hour
+	minCredentialRetention               = 24 * time.Hour
+	maxCredentialRetention               = 365 * 24 * time.Hour
+	maxCredentialPruneRowsPerTable int64 = 10_000
 )
 
 // CredentialPruneResult reports how many terminal credential records were removed.
@@ -50,15 +54,15 @@ func (s *Store) PruneExpiredCredentials(ctx context.Context, retention time.Dura
 		count *int64
 		args  []any
 	}{
-		{`DELETE FROM sessions WHERE expires_at < now()-make_interval(secs => $1)`, &result.Sessions, []any{retentionSeconds}},
-		{`DELETE FROM service_account_tokens WHERE COALESCE(revoked_at,expires_at) < now()-make_interval(secs => $1)`, &result.ServiceAccountTokens, []any{retentionSeconds}},
-		{`DELETE FROM scim_tokens WHERE COALESCE(revoked_at,expires_at) < now()-make_interval(secs => $1)`, &result.SCIMTokens, []any{retentionSeconds}},
-		{`DELETE FROM deploy_tokens WHERE COALESCE(revoked_at,expires_at) < now()-make_interval(secs => $1)`, &result.DeployTokens, []any{retentionSeconds}},
-		{`DELETE FROM organization_invitations WHERE COALESCE(accepted_at,revoked_at,expires_at) < now()-make_interval(secs => $1)`, &result.Invitations, []any{retentionSeconds}},
-		{`DELETE FROM cluster_enrollment_tokens WHERE COALESCE(used_at,expires_at) < now()-make_interval(secs => $1)`, &result.ClusterEnrollmentTokens, []any{retentionSeconds}},
-		{`DELETE FROM oidc_states WHERE expires_at < now()`, &result.OIDCStates, nil},
-		{`DELETE FROM saml_states WHERE expires_at < now()`, &result.SAMLStates, nil},
-		{`DELETE FROM saml_assertions WHERE expires_at < now()`, &result.SAMLAssertions, nil},
+		{`DELETE FROM sessions WHERE ctid IN (SELECT ctid FROM sessions WHERE expires_at < now()-make_interval(secs => $1) ORDER BY expires_at LIMIT $2)`, &result.Sessions, []any{retentionSeconds, maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM service_account_tokens WHERE ctid IN (SELECT ctid FROM service_account_tokens WHERE COALESCE(revoked_at,expires_at) < now()-make_interval(secs => $1) ORDER BY COALESCE(revoked_at,expires_at) LIMIT $2)`, &result.ServiceAccountTokens, []any{retentionSeconds, maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM scim_tokens WHERE ctid IN (SELECT ctid FROM scim_tokens WHERE COALESCE(revoked_at,expires_at) < now()-make_interval(secs => $1) ORDER BY COALESCE(revoked_at,expires_at) LIMIT $2)`, &result.SCIMTokens, []any{retentionSeconds, maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM deploy_tokens WHERE ctid IN (SELECT ctid FROM deploy_tokens WHERE COALESCE(revoked_at,expires_at) < now()-make_interval(secs => $1) ORDER BY COALESCE(revoked_at,expires_at) LIMIT $2)`, &result.DeployTokens, []any{retentionSeconds, maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM organization_invitations WHERE ctid IN (SELECT ctid FROM organization_invitations WHERE COALESCE(accepted_at,revoked_at,expires_at) < now()-make_interval(secs => $1) ORDER BY COALESCE(accepted_at,revoked_at,expires_at) LIMIT $2)`, &result.Invitations, []any{retentionSeconds, maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM cluster_enrollment_tokens WHERE ctid IN (SELECT ctid FROM cluster_enrollment_tokens WHERE COALESCE(used_at,expires_at) < now()-make_interval(secs => $1) ORDER BY COALESCE(used_at,expires_at) LIMIT $2)`, &result.ClusterEnrollmentTokens, []any{retentionSeconds, maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM oidc_states WHERE ctid IN (SELECT ctid FROM oidc_states WHERE expires_at < now() ORDER BY expires_at LIMIT $1)`, &result.OIDCStates, []any{maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM saml_states WHERE ctid IN (SELECT ctid FROM saml_states WHERE expires_at < now() ORDER BY expires_at LIMIT $1)`, &result.SAMLStates, []any{maxCredentialPruneRowsPerTable}},
+		{`DELETE FROM saml_assertions WHERE ctid IN (SELECT ctid FROM saml_assertions WHERE expires_at < now() ORDER BY expires_at LIMIT $1)`, &result.SAMLAssertions, []any{maxCredentialPruneRowsPerTable}},
 	}
 	for _, deletion := range deletes {
 		tag, execErr := tx.Exec(ctx, deletion.query, deletion.args...)

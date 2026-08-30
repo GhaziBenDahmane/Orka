@@ -186,7 +186,9 @@ duplicate repairs.
 The audit-pruner lease also protects credential cleanup. Terminal sessions,
 API tokens, invitations, and cluster enrollment tokens are retained for 30
 days for operational investigation; expired OIDC/SAML login state and SAML
-replay assertions are removed on the next hourly pass.
+replay assertions are removed on the next hourly pass. Each pass deletes at
+most 10,000 rows of each kind in oldest-first index order to bound transaction
+size and lock pressure. Prometheus reports any remaining eligible backlog.
 
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a

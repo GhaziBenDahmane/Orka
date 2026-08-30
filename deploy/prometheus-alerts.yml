@@ -334,6 +334,15 @@ groups:
           summary: A Dockyard SCIM token expired
           description: SCIM token {{ $labels.token }} can no longer provision identities; issue a replacement and update the identity provider.
 
+      - alert: DockyardCredentialCleanupBacklog
+        expr: dockyard_expired_credential_backlog > 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: Dockyard credential cleanup is not keeping pace
+          description: More than two hourly cleanup passes have left {{ $value }} expired {{ $labels.kind }} record(s); inspect the audit-pruner controller lease and database health.
+
       - alert: DockyardSAMLCertificateExpiring
         expr: dockyard_saml_certificate_expiry_seconds > 0 and dockyard_saml_certificate_expiry_seconds < 2592000
         for: 15m

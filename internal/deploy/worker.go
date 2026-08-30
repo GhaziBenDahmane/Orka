@@ -310,7 +310,7 @@ func (w *Worker) pruneAuditEvents(ctx context.Context) {
 			if _, err := w.Store.PruneAuthenticationRateLimits(ctx, 24*time.Hour); err != nil && ctx.Err() == nil {
 				w.Logger.Error("prune authentication rate limits", "error", err)
 			}
-			if _, err := w.Store.PruneExpiredCredentials(ctx, 30*24*time.Hour); err != nil && ctx.Err() == nil {
+			if _, err := w.Store.PruneExpiredCredentials(ctx, store.DefaultCredentialRetention); err != nil && ctx.Err() == nil {
 				w.Logger.Error("prune expired credentials", "error_type", fmt.Sprintf("%T", err))
 			}
 		}

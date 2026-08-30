@@ -268,7 +268,10 @@ authenticate. Non-revoked deploy-hook credentials expose expiry by immutable
 service and token IDs, while deletion finalizer metrics distinguish active,
 failed, and missing work and alert after fifteen minutes without convergence.
 Non-revoked SCIM tokens have equivalent expiry gauges and alerts
-so directory provisioning does not stop silently. Enabled SAML providers expose
+so directory provisioning does not stop silently. The
+`dockyard_expired_credential_backlog` gauge reports retained records that an
+hourly bounded cleanup pass should have removed; a two-hour backlog alerts on
+lease, database, or sustained-volume problems. Enabled SAML providers expose
 separate service-provider and identity-provider trust expiries; alerts begin
 thirty days before expiry and also detect malformed or not-yet-valid rollover
 material.

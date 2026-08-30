@@ -98,6 +98,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	auditorA := uuid.New()
 	auditorB := uuid.New()
 	scimToken := uuid.New()
+	expiredSCIMToken := uuid.New()
 	samlProvider := uuid.New()
 	templatePending, templateRunning, templateFailed := uuid.New(), uuid.New(), uuid.New()
 	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
@@ -132,6 +133,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorA, []byte("metrics-token-a-" + auditorA.String())}},
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at,created_at) VALUES($1,$2,$3,now()+interval '7 days',now()-interval '3 days')`, []any{uuid.New(), auditorB, []byte("metrics-token-b-" + auditorB.String())}},
 		{`INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,expires_at) VALUES($1,$2,'metrics-directory',$3,'developer',now()+interval '7 days')`, []any{scimToken, organizationA, []byte("metrics-scim-" + scimToken.String())}},
+		{`INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,expires_at) VALUES($1,$2,'expired-directory',$3,'developer',now()-interval '31 days')`, []any{expiredSCIMToken, organizationA, []byte("expired-metrics-scim-" + expiredSCIMToken.String())}},
 		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains) VALUES($1,$2,'metrics-saml',$3,$4,'encrypted','{example.test}')`, []any{samlProvider, organizationA, samlMetadata, samlCertificate}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','completed',now()-interval '65 minutes',now()-interval '1 hour')`, []any{uuid.New(), organizationA, auditorA}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','failed',now()-interval '10 minutes',now()-interval '5 minutes')`, []any{uuid.New(), organizationA, auditorA}},
@@ -158,7 +160,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -192,6 +194,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_service_account_token_expiry_seconds{organization="` + organizationA.String() + `",account="` + auditorA.String() + `",role="auditor"}`,
 		`dockyard_service_account_token_expiry_seconds{organization="` + organizationB.String() + `",account="` + auditorB.String() + `",role="auditor"}`,
 		`dockyard_scim_token_expiry_seconds{organization="` + organizationA.String() + `",token="` + scimToken.String() + `",role="developer"}`,
+		`dockyard_expired_credential_backlog{kind="scim_token"} 1`,
 		`dockyard_saml_certificate_valid{organization="` + organizationA.String() + `",provider="` + samlProvider.String() + `",kind="service_provider"} 1`,
 		`dockyard_saml_certificate_valid{organization="` + organizationA.String() + `",provider="` + samlProvider.String() + `",kind="identity_provider"} 1`,
 		`dockyard_saml_certificate_expiry_seconds{organization="` + organizationA.String() + `",provider="` + samlProvider.String() + `",kind="identity_provider"}`,
@@ -360,6 +363,23 @@ func TestPrometheusAlertsCoverSCIMTokenExpiry(t *testing.T) {
 		"expr: dockyard_scim_token_expiry_seconds > 0 and dockyard_scim_token_expiry_seconds < 604800",
 		"alert: DockyardSCIMTokenExpired",
 		"expr: dockyard_scim_token_expiry_seconds <= 0",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverCredentialCleanup(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardCredentialCleanupBacklog",
+		"expr: dockyard_expired_credential_backlog > 0",
+		"for: 2h",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
