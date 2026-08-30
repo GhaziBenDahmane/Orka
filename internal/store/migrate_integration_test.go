@@ -378,7 +378,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -774,5 +774,47 @@ func TestMigrateUpgradeFrom089ExpiresLegacyDeployTokens(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `SELECT to_regclass('deploy_tokens_active_expiry_idx') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
 		t.Fatalf("deploy token expiry index exists=%v err=%v", indexExists, err)
+	}
+}
+
+func TestMigrateUpgradeFrom092AddsSCIMUserExternalIDs(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "092_template_catalog_pagination.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, firstUserID, secondUserID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SCIM external ID migration',$2)`, organizationID, "scim-external-id-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test'),($3,$4,'!test')`, firstUserID, firstUserID.String()+"@example.test", secondUserID, secondUserID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,'viewer')`, organizationID, firstUserID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var externalID *string
+	if err := pool.QueryRow(ctx, `SELECT external_id FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, organizationID, firstUserID).Scan(&externalID); err != nil || externalID != nil {
+		t.Fatalf("legacy SCIM external ID=%v err=%v", externalID, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scim_user_defaults SET external_id='directory-user' WHERE organization_id=$1 AND user_id=$2`, organizationID, firstUserID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,'viewer','directory-user')`, organizationID, secondUserID)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("duplicate organization external ID was accepted: %v", err)
+	}
+	otherOrganizationID, thirdUserID := uuid.New(), uuid.New()
+	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other SCIM directory',$2)`, otherOrganizationID, "other-scim-external-id-"+otherOrganizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, thirdUserID, thirdUserID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,'viewer','directory-user')`, otherOrganizationID, thirdUserID); err != nil {
+		t.Fatalf("external ID was not tenant scoped: %v", err)
 	}
 }

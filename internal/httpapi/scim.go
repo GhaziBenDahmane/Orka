@@ -16,6 +16,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
@@ -25,10 +26,19 @@ const scimMaxPageSize = 100
 type scimUserResponse struct {
 	Schemas     []string          `json:"schemas"`
 	ID          string            `json:"id"`
+	ExternalID  string            `json:"externalId,omitempty"`
 	UserName    string            `json:"userName"`
 	DisplayName string            `json:"displayName,omitempty"`
 	Active      bool              `json:"active"`
 	Meta        map[string]string `json:"meta,omitempty"`
+}
+
+type scimUserInput struct {
+	Schemas     []string `json:"schemas"`
+	ExternalID  string   `json:"externalId"`
+	UserName    string   `json:"userName"`
+	DisplayName string   `json:"displayName"`
+	Active      *bool    `json:"active"`
 }
 
 func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
@@ -198,13 +208,17 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 			OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$1))`
 	args := []any{orgID}
 	if filter := r.URL.Query().Get("filter"); filter != "" {
-		match := regexp.MustCompile(`(?i)^userName\s+eq\s+"([^"]+)"$`).FindStringSubmatch(filter)
-		if len(match) != 2 {
-			scimError(w, 400, "only userName eq filters are supported")
+		match := regexp.MustCompile(`(?i)^(userName|externalId)\s+eq\s+"([^"]+)"$`).FindStringSubmatch(filter)
+		if len(match) != 3 {
+			scimError(w, 400, "only userName eq and externalId eq filters are supported")
 			return
 		}
-		from += ` AND lower(u.email)=lower($2)`
-		args = append(args, match[1])
+		if strings.EqualFold(match[1], "userName") {
+			from += ` AND lower(u.email)=lower($2)`
+		} else {
+			from += ` AND EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.organization_id=$1 AND d.user_id=u.id AND d.external_id=$2)`
+		}
+		args = append(args, match[2])
 	}
 	var total int
 	if err = s.Store.Pool.QueryRow(r.Context(), `SELECT count(*)`+from, args...).Scan(&total); err != nil {
@@ -213,7 +227,8 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 	}
 	limitParameter := len(args) + 1
 	query := `SELECT u.id,u.email,u.display_name,
-		EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1)` + from +
+		EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1),
+		COALESCE((SELECT d.external_id FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$1),'')` + from +
 		` ORDER BY u.email LIMIT $` + strconv.Itoa(limitParameter) + ` OFFSET $` + strconv.Itoa(limitParameter+1)
 	pageArgs := append(append([]any(nil), args...), count, startIndex-1)
 	rows, err := s.Store.Pool.Query(r.Context(), query, pageArgs...)
@@ -225,13 +240,13 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 	resources := []scimUserResponse{}
 	for rows.Next() {
 		var id uuid.UUID
-		var email, name string
+		var email, name, externalID string
 		var active bool
-		if err := rows.Scan(&id, &email, &name, &active); err != nil {
+		if err := rows.Scan(&id, &email, &name, &active, &externalID); err != nil {
 			scimError(w, 500, "query failed")
 			return
 		}
-		resources = append(resources, makeSCIMUser(id, email, name, active, s.PublicURL))
+		resources = append(resources, makeSCIMUser(id, externalID, email, name, active, s.PublicURL))
 	}
 	if err = rows.Err(); err != nil {
 		scimError(w, 500, "query failed")
@@ -240,12 +255,7 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": total, "startIndex": startIndex, "itemsPerPage": len(resources), "Resources": resources})
 }
 func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, role string) {
-	var in struct {
-		Schemas     []string `json:"schemas"`
-		UserName    string   `json:"userName"`
-		DisplayName string   `json:"displayName"`
-		Active      *bool    `json:"active"`
-	}
+	var in scimUserInput
 	if !decodeSCIM(w, r, &in) {
 		return
 	}
@@ -258,6 +268,11 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 	in.DisplayName, validDisplayName = canonicalDisplayName(in.DisplayName)
 	if !validDisplayName {
 		scimError(w, 400, "displayName must not exceed 120 bytes")
+		return
+	}
+	in.ExternalID = strings.TrimSpace(in.ExternalID)
+	if len(in.ExternalID) > 1024 {
+		scimError(w, 400, "externalId must not exceed 1024 bytes")
 		return
 	}
 	tx, err := s.Store.Pool.Begin(r.Context())
@@ -291,7 +306,17 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		return
 	}
 	active := in.Active == nil || *in.Active
-	_, err = tx.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET default_role=excluded.default_role`, orgID, userID, role)
+	var externalID *string
+	if in.ExternalID != "" {
+		externalID = &in.ExternalID
+	}
+	var storedExternalID string
+	err = tx.QueryRow(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,$3,$4) ON CONFLICT(organization_id,user_id) DO UPDATE SET default_role=excluded.default_role,external_id=COALESCE(excluded.external_id,scim_user_defaults.external_id) RETURNING COALESCE(external_id,'')`, orgID, userID, role, externalID).Scan(&storedExternalID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		scimError(w, 409, "externalId is already assigned in this organization")
+		return
+	}
 	if err == nil && active {
 		_, err = tx.Exec(r.Context(), `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=CASE WHEN memberships.role='owner' THEN 'owner' ELSE excluded.role END`, orgID, userID, role)
 	}
@@ -311,7 +336,7 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		scimError(w, 500, "create failed")
 		return
 	}
-	scimJSON(w, 201, makeSCIMUser(userID, email, displayName, active, s.PublicURL))
+	scimJSON(w, 201, makeSCIMUser(userID, storedExternalID, email, displayName, active, s.PublicURL))
 }
 func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 	orgID, role, err := s.scimPrincipal(r)
@@ -326,13 +351,14 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		var email, name string
+		var email, name, externalID string
 		var active bool
 		err = s.Store.Pool.QueryRow(r.Context(), `SELECT u.email,u.display_name,
-			EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$2)
+			EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$2),
+			COALESCE((SELECT d.external_id FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2),'')
 			FROM users u WHERE u.id=$1 AND (
 				EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$2)
-				OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2))`, userID, orgID).Scan(&email, &name, &active)
+				OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2))`, userID, orgID).Scan(&email, &name, &active, &externalID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			scimError(w, 404, "user not found")
 			return
@@ -341,7 +367,7 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			scimError(w, 500, "query failed")
 			return
 		}
-		scimJSON(w, 200, makeSCIMUser(userID, email, name, active, s.PublicURL))
+		scimJSON(w, 200, makeSCIMUser(userID, externalID, email, name, active, s.PublicURL))
 	case http.MethodDelete:
 		var currentRole *string
 		if err = s.Store.Pool.QueryRow(r.Context(), `SELECT (SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2)
@@ -484,6 +510,6 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 	}
 	w.WriteHeader(204)
 }
-func makeSCIMUser(id uuid.UUID, email, name string, active bool, baseURL string) scimUserResponse {
-	return scimUserResponse{Schemas: []string{scimUserSchema}, ID: id.String(), UserName: email, DisplayName: name, Active: active, Meta: map[string]string{"resourceType": "User", "location": baseURL + "/scim/v2/Users/" + id.String()}}
+func makeSCIMUser(id uuid.UUID, externalID, email, name string, active bool, baseURL string) scimUserResponse {
+	return scimUserResponse{Schemas: []string{scimUserSchema}, ID: id.String(), ExternalID: externalID, UserName: email, DisplayName: name, Active: active, Meta: map[string]string{"resourceType": "User", "location": baseURL + "/scim/v2/Users/" + id.String()}}
 }
