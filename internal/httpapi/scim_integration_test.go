@@ -68,7 +68,7 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "oversized@example.test", "displayName": strings.Repeat("x", 121), "active": true}, http.StatusBadRequest)
 
 	externalUserID := "directory-" + uuid.NewString()
-	createdUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{
+	createdUser, createdUserHeaders := doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{
 		"schemas":    []string{scimUserSchema, "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"},
 		"externalId": externalUserID,
 		"userName":   "member-" + orgID.String() + "@example.test",
@@ -76,10 +76,15 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 		"name":       map[string]string{"givenName": "Example", "familyName": "Member"},
 		"emails":     []map[string]any{{"value": "member-" + orgID.String() + "@example.test", "primary": true}},
 		"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": map[string]string{"department": "Engineering"},
-	}, http.StatusCreated)
+	}, http.StatusCreated, nil)
 	memberID := createdUser["id"].(string)
 	if createdUser["externalId"] != externalUserID {
 		t.Fatalf("created SCIM externalId=%v, want %q", createdUser["externalId"], externalUserID)
+	}
+	createdUserETag := createdUserHeaders.Get("ETag")
+	createdUserMeta := createdUser["meta"].(map[string]any)
+	if createdUserETag != `W/"1"` || createdUserHeaders.Get("Location") == "" || createdUserMeta["version"] != createdUserETag || createdUserMeta["created"] == "" || createdUserMeta["lastModified"] == "" {
+		t.Fatalf("created SCIM user metadata=%#v headers=%v", createdUser["meta"], createdUserHeaders)
 	}
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, memberID) })
 	reprovisionedUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "member-" + orgID.String() + "@example.test", "active": true}, http.StatusCreated)
@@ -96,19 +101,24 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{
 		"Operations": []map[string]any{{"op": "replace", "value": map[string]any{"userName": updatedUserName, "displayName": "Updated Member", "externalId": updatedExternalUserID, "active": true}}},
 	}, http.StatusNoContent)
-	updatedUser := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodGet, nil, http.StatusOK)
+	updatedUser, updatedUserHeaders := doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodGet, nil, http.StatusOK, nil)
 	if updatedUser["userName"] != updatedUserName || updatedUser["displayName"] != "Updated Member" || updatedUser["externalId"] != updatedExternalUserID {
 		t.Fatalf("pathless SCIM patch was not persisted: %#v", updatedUser)
 	}
 	replacedExternalUserID := "replaced-" + externalUserID
 	replacedUserName := "replaced-" + orgID.String() + "@example.test"
-	replacedUser := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPut, map[string]any{
+	replacementBody := map[string]any{
 		"schemas":    []string{scimUserSchema, "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"},
 		"externalId": replacedExternalUserID, "userName": replacedUserName, "displayName": "Replaced Member", "active": true,
 		"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": map[string]string{"department": "Operations"},
-	}, http.StatusOK)
+	}
+	doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPut, replacementBody, http.StatusPreconditionFailed, map[string]string{"If-Match": createdUserETag})
+	replacedUser, replacedUserHeaders := doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPut, replacementBody, http.StatusOK, map[string]string{"If-Match": updatedUserHeaders.Get("ETag")})
 	if replacedUser["id"] != memberID || replacedUser["userName"] != replacedUserName || replacedUser["displayName"] != "Replaced Member" || replacedUser["externalId"] != replacedExternalUserID || replacedUser["active"] != true {
 		t.Fatalf("SCIM user replacement was not persisted: %#v", replacedUser)
+	}
+	if replacedUserHeaders.Get("ETag") == updatedUserHeaders.Get("ETag") || replacedUser["meta"].(map[string]any)["version"] != replacedUserHeaders.Get("ETag") {
+		t.Fatalf("SCIM user replacement did not advance version: body=%#v headers=%v", replacedUser, replacedUserHeaders)
 	}
 	updatedExternalUserID = replacedExternalUserID
 	externalMatch = doSCIMRequest(t, server.URL+`/scim/v2/Users?filter=externalId%20eq%20%22`+updatedExternalUserID+`%22`, token, http.MethodGet, nil, http.StatusOK)
@@ -120,6 +130,19 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 		t.Fatalf("unexpected paginated user response: %#v", userPage)
 	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users?count=101", token, http.MethodGet, nil, http.StatusBadRequest)
+	manualUserID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,'!test','Manual Member')`, manualUserID, manualUserID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'viewer')`, orgID, manualUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, manualUserID) })
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+manualUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": false}}}, http.StatusNoContent)
+	manualUser := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+manualUserID.String(), token, http.MethodGet, nil, http.StatusOK)
+	if manualUser["active"] != false || manualUser["meta"].(map[string]any)["version"] != `W/"2"` {
+		t.Fatalf("deactivated manual member did not retain versioned SCIM ownership: %#v", manualUser)
+	}
 
 	// User mutation endpoints are scoped to resources visible in the token's
 	// organization. A global user UUID from another tenant cannot be renamed or
@@ -141,8 +164,12 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"displayName": "Cross tenant", "members": []map[string]string{{"value": otherUserID.String()}}}, http.StatusBadRequest)
 
 	groupExternalID := "directory-group-" + uuid.NewString()
-	group := doSCIMRequest(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"externalId": groupExternalID, "displayName": "Engineering", "role": "admin", "members": []map[string]string{{"value": memberID}}}, http.StatusCreated)
+	group, groupHeaders := doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Groups", token, http.MethodPost, map[string]any{"externalId": groupExternalID, "displayName": "Engineering", "role": "admin", "members": []map[string]string{{"value": memberID}}}, http.StatusCreated, nil)
 	groupID := group["id"].(string)
+	groupMeta := group["meta"].(map[string]any)
+	if groupHeaders.Get("ETag") != `W/"1"` || groupMeta["version"] != groupHeaders.Get("ETag") || groupMeta["created"] == "" || groupMeta["lastModified"] == "" {
+		t.Fatalf("created SCIM group metadata=%#v headers=%v", group["meta"], groupHeaders)
+	}
 	groupMatch := doSCIMRequest(t, server.URL+`/scim/v2/Groups?filter=externalId%20eq%20%22`+groupExternalID+`%22`, token, http.MethodGet, nil, http.StatusOK)
 	if groupMatch["totalResults"] != float64(1) || len(groupMatch["Resources"].([]any)) != 1 {
 		t.Fatalf("unexpected group externalId filter response: %#v", groupMatch)
@@ -156,12 +183,16 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 		t.Fatalf("group role = %q, err = %v", role, err)
 	}
 	replacedGroupExternalID := "replaced-" + groupExternalID
-	replacedGroup := doSCIMRequest(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPut, map[string]any{
+	replacedGroup, replacedGroupHeaders := doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPut, map[string]any{
 		"schemas": []string{scimGroupSchema}, "externalId": replacedGroupExternalID, "displayName": "Platform Engineering",
 		"members": []map[string]string{{"value": memberID}},
-	}, http.StatusOK)
+	}, http.StatusOK, map[string]string{"If-Match": groupHeaders.Get("ETag")})
 	if replacedGroup["externalId"] != replacedGroupExternalID || replacedGroup["displayName"] != "Platform Engineering" || replacedGroup["role"] != "admin" || len(replacedGroup["members"].([]any)) != 1 {
 		t.Fatalf("SCIM group replacement was not persisted: %#v", replacedGroup)
+	}
+	doSCIMRequestWithHeaders(t, server.URL+"/scim/v2/Groups/"+groupID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Stale update"}}}, http.StatusPreconditionFailed, map[string]string{"If-Match": groupHeaders.Get("ETag")})
+	if replacedGroupHeaders.Get("ETag") == groupHeaders.Get("ETag") || replacedGroup["meta"].(map[string]any)["version"] != replacedGroupHeaders.Get("ETag") {
+		t.Fatalf("SCIM group replacement did not advance version: body=%#v headers=%v", replacedGroup, replacedGroupHeaders)
 	}
 	groupExternalID = replacedGroupExternalID
 	updatedGroupExternalID := "updated-" + groupExternalID
@@ -225,8 +256,8 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
 
 	var scimAuditEvents int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 13 {
-		t.Fatalf("SCIM audit event count=%d, want 13, err=%v", scimAuditEvents, err)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 14 {
+		t.Fatalf("SCIM audit event count=%d, want 14, err=%v", scimAuditEvents, err)
 	}
 }
 
@@ -297,6 +328,12 @@ func TestSCIMGroupAddEnforcesPersistedMemberLimit(t *testing.T) {
 
 func doSCIMRequest(t *testing.T, url, token, method string, body any, wantStatus int) map[string]any {
 	t.Helper()
+	result, _ := doSCIMRequestWithHeaders(t, url, token, method, body, wantStatus, nil)
+	return result
+}
+
+func doSCIMRequestWithHeaders(t *testing.T, url, token, method string, body any, wantStatus int, headers map[string]string) (map[string]any, http.Header) {
+	t.Helper()
 	var encoded []byte
 	if body != nil {
 		var err error
@@ -311,6 +348,9 @@ func doSCIMRequest(t *testing.T, url, token, method string, body any, wantStatus
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/scim+json")
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 	response, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +361,7 @@ func doSCIMRequest(t *testing.T, url, token, method string, body any, wantStatus
 		t.Fatalf("%s %s status = %d, want %d: %s", method, url, response.StatusCode, wantStatus, data)
 	}
 	if wantStatus == http.StatusNoContent {
-		return nil
+		return nil, response.Header.Clone()
 	}
 	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "application/scim+json") {
 		t.Fatalf("SCIM Content-Type = %q", contentType)
@@ -330,5 +370,5 @@ func doSCIMRequest(t *testing.T, url, token, method string, body any, wantStatus
 	if err = json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	return result
+	return result, response.Header.Clone()
 }

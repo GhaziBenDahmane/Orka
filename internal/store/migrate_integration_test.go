@@ -378,7 +378,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -816,5 +816,43 @@ func TestMigrateUpgradeFrom092AddsSCIMUserExternalIDs(t *testing.T) {
 	}
 	if _, err = pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,'viewer','directory-user')`, otherOrganizationID, thirdUserID); err != nil {
 		t.Fatalf("external ID was not tenant scoped: %v", err)
+	}
+}
+
+func TestMigrateUpgradeFrom093AddsSCIMResourceVersions(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "093_scim_user_external_ids.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, userID, groupID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SCIM version migration',$2)`, organizationID, "scim-version-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,'viewer')`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO scim_groups(id,organization_id,display_name,role) VALUES($1,$2,'Versioned','viewer')`, groupID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	migratedAt := time.Now().UTC()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var createdAt, updatedAt time.Time
+	var userRevision, groupRevision int64
+	if err := pool.QueryRow(ctx, `SELECT created_at,updated_at,revision FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, organizationID, userID).Scan(&createdAt, &updatedAt, &userRevision); err != nil {
+		t.Fatal(err)
+	}
+	if createdAt.Before(migratedAt.Add(-time.Second)) || updatedAt.Before(migratedAt.Add(-time.Second)) || userRevision != 1 {
+		t.Fatalf("migrated user metadata created=%s updated=%s revision=%d", createdAt, updatedAt, userRevision)
+	}
+	if err := pool.QueryRow(ctx, `SELECT revision FROM scim_groups WHERE id=$1`, groupID).Scan(&groupRevision); err != nil || groupRevision != 1 {
+		t.Fatalf("migrated group revision=%d err=%v", groupRevision, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE scim_groups SET revision=0 WHERE id=$1`, groupID); err == nil {
+		t.Fatal("non-positive SCIM group revision was accepted")
 	}
 }

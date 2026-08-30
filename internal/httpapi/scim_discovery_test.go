@@ -45,6 +45,9 @@ func TestSCIMDiscoveryEndpoints(t *testing.T) {
 		if len(payload["schemas"].([]any)) == 0 {
 			t.Errorf("GET %s omitted schemas", path)
 		}
+		if path == "/scim/v2/ServiceProviderConfig" && payload["etag"].(map[string]any)["supported"] != true {
+			t.Errorf("GET %s did not advertise ETag support: %#v", path, payload["etag"])
+		}
 	}
 
 	for _, path := range []string{"/scim/v2/Schemas/unknown", "/scim/v2/ResourceTypes/unknown"} {

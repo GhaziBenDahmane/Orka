@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -24,13 +25,13 @@ type scimMember struct {
 }
 
 type scimGroupResponse struct {
-	Schemas     []string          `json:"schemas"`
-	ID          string            `json:"id"`
-	ExternalID  string            `json:"externalId,omitempty"`
-	DisplayName string            `json:"displayName"`
-	Role        string            `json:"role"`
-	Members     []scimMember      `json:"members"`
-	Meta        map[string]string `json:"meta"`
+	Schemas     []string         `json:"schemas"`
+	ID          string           `json:"id"`
+	ExternalID  string           `json:"externalId,omitempty"`
+	DisplayName string           `json:"displayName"`
+	Role        string           `json:"role"`
+	Members     []scimMember     `json:"members"`
+	Meta        scimResourceMeta `json:"meta"`
 }
 
 type scimGroupInput struct {
@@ -168,7 +169,13 @@ func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID u
 		scimError(w, 500, "create failed")
 		return
 	}
-	item, _ := s.loadSCIMGroup(r.Context(), orgID, id)
+	item, loadErr := s.loadSCIMGroup(r.Context(), orgID, id)
+	if loadErr != nil {
+		scimError(w, http.StatusInternalServerError, "created group could not be loaded")
+		return
+	}
+	w.Header().Set("Location", item.Meta.Location)
+	w.Header().Set("ETag", item.Meta.Version)
 	scimJSON(w, 201, item)
 }
 
@@ -190,6 +197,8 @@ func (s *Server) scimGroup(w http.ResponseWriter, r *http.Request) {
 			scimError(w, 404, "group not found")
 			return
 		}
+		w.Header().Set("Location", item.Meta.Location)
+		w.Header().Set("ETag", item.Meta.Version)
 		scimJSON(w, 200, item)
 	case http.MethodPut:
 		s.replaceSCIMGroup(w, r, orgID, id)
@@ -230,11 +239,16 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 	}
 	defer tx.Rollback(r.Context())
 	var currentRole string
-	if err = tx.QueryRow(r.Context(), `SELECT role FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&currentRole); errors.Is(err, pgx.ErrNoRows) {
+	var currentRevision int64
+	if err = tx.QueryRow(r.Context(), `SELECT role,revision FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&currentRole, &currentRevision); errors.Is(err, pgx.ErrNoRows) {
 		scimError(w, http.StatusNotFound, "group not found")
 		return
 	} else if err != nil {
 		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
+	if !scimPreconditionMatches(r, currentRevision) {
+		scimError(w, http.StatusPreconditionFailed, "resource version does not match If-Match")
 		return
 	}
 	role := currentRole
@@ -249,7 +263,7 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 	if in.ExternalID != "" {
 		externalID = in.ExternalID
 	}
-	_, err = tx.Exec(r.Context(), `UPDATE scim_groups SET external_id=$3,display_name=$4,role=$5,updated_at=now() WHERE id=$1 AND organization_id=$2`, groupID, orgID, externalID, in.DisplayName, role)
+	_, err = tx.Exec(r.Context(), `UPDATE scim_groups SET external_id=$3,display_name=$4,role=$5,updated_at=now(),revision=revision+1 WHERE id=$1 AND organization_id=$2`, groupID, orgID, externalID, in.DisplayName, role)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		scimError(w, http.StatusConflict, "group displayName or externalId is already in use")
@@ -276,6 +290,8 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 		scimError(w, http.StatusInternalServerError, "replaced group could not be loaded")
 		return
 	}
+	w.Header().Set("Location", item.Meta.Location)
+	w.Header().Set("ETag", item.Meta.Version)
 	scimJSON(w, http.StatusOK, item)
 }
 
@@ -298,11 +314,16 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 	}
 	defer tx.Rollback(r.Context())
 	var lockedGroupID uuid.UUID
-	if err = tx.QueryRow(r.Context(), `SELECT id FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&lockedGroupID); errors.Is(err, pgx.ErrNoRows) {
+	var currentRevision int64
+	if err = tx.QueryRow(r.Context(), `SELECT id,revision FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&lockedGroupID, &currentRevision); errors.Is(err, pgx.ErrNoRows) {
 		scimError(w, 404, "group not found")
 		return
 	} else if err != nil {
 		scimError(w, 500, "patch failed")
+		return
+	}
+	if !scimPreconditionMatches(r, currentRevision) {
+		scimError(w, http.StatusPreconditionFailed, "resource version does not match If-Match")
 		return
 	}
 	for _, op := range operations {
@@ -413,6 +434,11 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 			return
 		}
 	}
+	var revision int64
+	if err = tx.QueryRow(r.Context(), `UPDATE scim_groups SET updated_at=now(),revision=revision+1 WHERE id=$1 AND organization_id=$2 RETURNING revision`, groupID, orgID).Scan(&revision); err != nil {
+		scimError(w, 500, "resource version could not be updated")
+		return
+	}
 	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.group.patch", "scim_group", groupID.String(), r.RemoteAddr, map[string]any{"operationCount": len(operations)}); err != nil {
 		scimError(w, 500, "patch failed")
 		return
@@ -421,6 +447,7 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 		scimError(w, 500, "patch failed")
 		return
 	}
+	w.Header().Set("ETag", scimVersion(revision))
 	w.WriteHeader(204)
 }
 
@@ -497,6 +524,18 @@ func (s *Server) deleteSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, 
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var revision int64
+	if err = tx.QueryRow(r.Context(), `SELECT revision FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&revision); errors.Is(err, pgx.ErrNoRows) {
+		scimError(w, http.StatusNotFound, "group not found")
+		return
+	} else if err != nil {
+		scimError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	if !scimPreconditionMatches(r, revision) {
+		scimError(w, http.StatusPreconditionFailed, "resource version does not match If-Match")
+		return
+	}
 	users, err := groupUserIDs(r.Context(), tx, groupID)
 	if err != nil {
 		scimError(w, 500, "delete failed")
@@ -525,11 +564,14 @@ func (s *Server) deleteSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, 
 }
 
 func (s *Server) loadSCIMGroup(ctx context.Context, orgID, groupID uuid.UUID) (scimGroupResponse, error) {
-	item := scimGroupResponse{Schemas: []string{scimGroupSchema}, ID: groupID.String(), Members: []scimMember{}, Meta: map[string]string{"resourceType": "Group", "location": s.PublicURL + "/scim/v2/Groups/" + groupID.String()}}
+	item := scimGroupResponse{Schemas: []string{scimGroupSchema}, ID: groupID.String(), Members: []scimMember{}}
 	var externalID *string
-	if err := s.Store.Pool.QueryRow(ctx, `SELECT external_id,display_name,role FROM scim_groups WHERE id=$1 AND organization_id=$2`, groupID, orgID).Scan(&externalID, &item.DisplayName, &item.Role); err != nil {
+	var createdAt, updatedAt time.Time
+	var revision int64
+	if err := s.Store.Pool.QueryRow(ctx, `SELECT external_id,display_name,role,created_at,updated_at,revision FROM scim_groups WHERE id=$1 AND organization_id=$2`, groupID, orgID).Scan(&externalID, &item.DisplayName, &item.Role, &createdAt, &updatedAt, &revision); err != nil {
 		return scimGroupResponse{}, err
 	}
+	item.Meta = scimResourceMeta{ResourceType: "Group", Created: createdAt, LastModified: updatedAt, Location: strings.TrimRight(s.PublicURL, "/") + "/scim/v2/Groups/" + groupID.String(), Version: scimVersion(revision)}
 	if externalID != nil {
 		item.ExternalID = *externalID
 	}

@@ -141,6 +141,10 @@ to 100 effective operations after pathless objects are expanded.
 User and group `PUT` requests perform full resource replacement, including
 group membership reconciliation, while preserving a group's internal role when
 the identity provider omits that Orka-specific attribute.
+User and group resources expose standard `meta.created`, `meta.lastModified`,
+and weak `meta.version` values together with `Location` and `ETag` headers.
+`PUT`, `PATCH`, and `DELETE` accept `If-Match` and reject stale versions with
+`412 Precondition Failed`; omitting `If-Match` retains normal SCIM behavior.
 Successful SCIM user and group creates, replacements, patches, and deletes are recorded in
 the tenant audit log without copying profile fields or bearer credentials.
 Deactivation removes access but retains that binding, so identity providers can
