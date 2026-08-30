@@ -116,6 +116,19 @@ validate_secret_file() {
   [ "$size" -gt 0 ] && [ "$size" -le 65536 ] || fail "$label must contain between 1 and 65536 bytes"
 }
 
+validate_agent_ca() {
+  label=$1
+  certificate=$2
+  openssl x509 -in "$certificate" -noout >/dev/null 2>&1 || fail "$label certificate is invalid"
+  openssl verify -CAfile "$certificate" "$certificate" >/dev/null 2>&1 || fail "$label certificate must be a self-signed certificate authority permitted to sign certificates"
+  basic_constraints=$(openssl x509 -in "$certificate" -noout -ext basicConstraints 2>/dev/null) || fail "$label certificate must be a self-signed certificate authority permitted to sign certificates"
+  key_usage=$(openssl x509 -in "$certificate" -noout -ext keyUsage 2>/dev/null) || fail "$label certificate must be a self-signed certificate authority permitted to sign certificates"
+  printf '%s\n' "$basic_constraints" | grep -Eq 'CA:[[:space:]]*TRUE' || fail "$label certificate must be a self-signed certificate authority permitted to sign certificates"
+  printf '%s\n' "$key_usage" | grep -Eq 'Certificate Sign|Certificate Signing' || fail "$label certificate must be a self-signed certificate authority permitted to sign certificates"
+  openssl x509 -checkend 604800 -noout -in "$certificate" >/dev/null || fail "$label certificate must remain valid for at least 7 days"
+  unset basic_constraints key_usage
+}
+
 validate_secret_file DOCKYARD_DB_PASSWORD_FILE "${DOCKYARD_DB_PASSWORD_FILE:-}"
 validate_secret_file DOCKYARD_DATABASE_URL_FILE "${DOCKYARD_DATABASE_URL_FILE:-}"
 validate_secret_file DOCKYARD_MASTER_KEY_FILE "${DOCKYARD_MASTER_KEY_FILE:-}"
@@ -148,7 +161,7 @@ if [ "$mode" = ha ]; then
   validate_secret_file DOCKYARD_AGENT_SERVER_KEY_FILE "${DOCKYARD_AGENT_SERVER_KEY_FILE:-}"
   [ -n "${DOCKYARD_AGENT_HOST:-}" ] || fail "DOCKYARD_AGENT_HOST is required for HA installation"
   is_dns_hostname "$DOCKYARD_AGENT_HOST" || fail "DOCKYARD_AGENT_HOST must be a DNS hostname"
-  openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_CA_CERT_FILE" >/dev/null || fail "agent CA certificate must remain valid for at least 7 days"
+  validate_agent_ca "agent CA" "$DOCKYARD_AGENT_CA_CERT_FILE"
   openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate must remain valid for at least 7 days"
   ca_public=$(openssl pkey -in "$DOCKYARD_AGENT_CA_KEY_FILE" -pubout 2>/dev/null) || fail "invalid agent CA private key"
   ca_certificate_public=$(openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -pubkey -noout 2>/dev/null) || fail "invalid agent CA certificate"
@@ -159,8 +172,7 @@ if [ "$mode" = ha ]; then
   unset ca_public ca_certificate_public server_public server_certificate_public
   if [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
     validate_secret_file DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE"
-    openssl verify -CAfile "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" >/dev/null || fail "previous agent CA must be a valid self-signed certificate"
-    openssl x509 -checkend 604800 -noout -in "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" >/dev/null || fail "previous agent CA certificate must remain valid for at least 7 days"
+    validate_agent_ca "previous agent CA" "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE"
     active_ca_fingerprint=$(openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -noout -fingerprint -sha256)
     previous_ca_fingerprint=$(openssl x509 -in "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" -noout -fingerprint -sha256)
     [ "$active_ca_fingerprint" != "$previous_ca_fingerprint" ] || fail "previous agent CA must differ from the active agent CA"

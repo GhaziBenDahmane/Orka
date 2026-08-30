@@ -299,6 +299,8 @@ for ambiguous_database_url in \
 done
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Dockyard Test CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
   -keyout "$temporary/secrets/agent-ca.key" -out "$temporary/secrets/agent-ca.crt" >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -subj '/CN=agents.example.test' \
   -addext 'subjectAltName=DNS:agents.example.test' \
@@ -322,7 +324,28 @@ for secret in dockyard_agent_ca_cert dockyard_agent_ca_key dockyard_agent_server
   grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
 done
 
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Not A Certificate Authority' \
+  -addext 'basicConstraints=critical,CA:FALSE' \
+  -addext 'keyUsage=critical,digitalSignature' \
+  -keyout "$temporary/secrets/agent-leaf.key" -out "$temporary/secrets/agent-leaf.crt" >/dev/null 2>&1
+chmod 0600 "$temporary/secrets/agent-leaf.key" "$temporary/secrets/agent-leaf.crt"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
+  DOCKYARD_AGENT_CA_CERT_FILE="$temporary/secrets/agent-leaf.crt" \
+  DOCKYARD_AGENT_CA_KEY_FILE="$temporary/secrets/agent-leaf.key" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'HA installer accepted a leaf certificate as the active agent CA' >&2
+  exit 1
+fi
+grep -q 'agent CA certificate must be a self-signed certificate authority permitted to sign certificates' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid active agent CA failure mutated Docker state' >&2
+  exit 1
+fi
+
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Dockyard Replacement CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
   -keyout "$temporary/secrets/agent-ca-new.key" -out "$temporary/secrets/agent-ca-new.crt" >/dev/null 2>&1
 chmod 0600 "$temporary/secrets/agent-ca-new.key" "$temporary/secrets/agent-ca-new.crt"
 : >"$DOCKYARD_INSTALL_TEST_LOG"
@@ -337,6 +360,19 @@ grep -q "stack config -c $root/deploy/swarm.yml -c $root/deploy/swarm-ha.yml -c 
 for secret in dockyard_agent_ca_cert_v2 dockyard_agent_ca_key_v2 dockyard_agent_previous_ca_cert; do
   grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
 done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
+  DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE="$temporary/secrets/agent-leaf.crt" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'HA installer accepted a leaf certificate as the previous agent CA' >&2
+  exit 1
+fi
+grep -q 'previous agent CA certificate must be a self-signed certificate authority permitted to sign certificates' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid previous agent CA failure mutated Docker state' >&2
+  exit 1
+fi
 
 openssl x509 -req -days 1 -CA "$temporary/secrets/agent-ca.crt" -CAkey "$temporary/secrets/agent-ca.key" \
   -set_serial 2 -copy_extensions copy -in "$temporary/agent-server.csr" \
