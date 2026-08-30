@@ -15,6 +15,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_template_repository`
 - `dockyard_oidc_provider`
 - `dockyard_saml_provider`
+- `dockyard_scim_token`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -82,6 +83,16 @@ two-phase signing-certificate rotation remains an explicit `dockyardctl`
 operation because promotion is safe only after the IdP imports the published
 replacement certificate. Destroy disables the provider and retains its audit
 history.
+
+`dockyard_scim_token` issues a time-limited organization provisioning
+credential and retains its one-time bearer value only in sensitive Terraform
+state. All configuration changes replace and revoke the previous credential.
+Refresh removes a token from state when it is revoked or enters the configured
+`renew_before_days` window, so the same plan creates a usable replacement.
+Protect state, pass the token to the identity provider through a sensitive
+output or secret manager, and use `create_before_destroy` to overlap planned
+configuration replacements. SCIM tokens cannot be imported because the API
+never returns their bearer value.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting

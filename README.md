@@ -162,6 +162,12 @@ SAML providers likewise have dedicated CLI and Terraform/OpenTofu management.
 Signing-certificate creation stays server-side; rotation uses explicit
 begin/promote/cancel CLI commands so IdP metadata can be updated before cutover.
 
+SCIM provisioning credentials can be listed, issued, and revoked with
+`scim-tokens`, `create-scim-token JSON`, and `revoke-scim-token ID`, or managed
+as expiring `dockyard_scim_token` Terraform/OpenTofu resources. Use `-` instead
+of JSON to keep token configuration out of shell history; newly issued bearer
+tokens are returned only once.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

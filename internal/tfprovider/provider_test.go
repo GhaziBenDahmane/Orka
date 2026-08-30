@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -24,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 13 {
+	if len(instance.Resources(context.Background())) != 14 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -45,6 +46,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_saml_provider") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_scim_token") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -126,6 +130,45 @@ func TestSAMLProviderMetadataIsSensitiveAndRetained(t *testing.T) {
 	setSAMLProvider(&model, samlProviderResponse{ID: "provider-id", Name: "Workforce", Domains: []string{"example.com"}, EmailAttribute: "email", NameAttribute: "name", DefaultRole: "developer", Enabled: true})
 	if model.MetadataXML.ValueString() != "<EntityDescriptor/>" || model.Domains.IsNull() || !model.SPCertificateNotAfter.IsNull() {
 		t.Fatalf("SAML state did not retain write-only metadata: %#v", model)
+	}
+}
+
+func TestSCIMTokenSecretRetentionAndExpiry(t *testing.T) {
+	var schemaResponse resource.SchemaResponse
+	newSCIMTokenResource().Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+	token, ok := schemaResponse.Schema.Attributes["token"].(resourceschema.StringAttribute)
+	if !ok || !token.Sensitive || !token.Computed {
+		t.Fatalf("token schema = %#v", schemaResponse.Schema.Attributes["token"])
+	}
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	model := scimTokenModel{Token: types.StringValue("one-time-secret"), BaseURL: types.StringValue("https://dockyard.example.com/scim/v2")}
+	item := scimTokenResponse{ID: "token-id", Name: "Workforce", DefaultRole: "developer", CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), ExpiresAt: now.Add(time.Hour).Format(time.RFC3339Nano)}
+	setSCIMToken(&model, item)
+	if model.Token.ValueString() != "one-time-secret" || model.BaseURL.ValueString() != "https://dockyard.example.com/scim/v2" {
+		t.Fatalf("SCIM state did not retain its write-only values: %#v", model)
+	}
+	if usable, err := usableSCIMToken(item, now, 0); err != nil || !usable {
+		t.Fatalf("active SCIM token usable=%v err=%v", usable, err)
+	}
+	if usable, err := usableSCIMToken(item, now, 1); err != nil || usable {
+		t.Fatalf("SCIM token inside renewal window usable=%v err=%v", usable, err)
+	}
+	item.ExpiresAt = now.Format(time.RFC3339Nano)
+	if usable, err := usableSCIMToken(item, now, 0); err != nil || usable {
+		t.Fatalf("expired SCIM token usable=%v err=%v", usable, err)
+	}
+	revoked := now.Add(-time.Minute).Format(time.RFC3339Nano)
+	item.ExpiresAt, item.RevokedAt = now.Add(time.Hour).Format(time.RFC3339Nano), &revoked
+	if usable, err := usableSCIMToken(item, now, 0); err != nil || usable {
+		t.Fatalf("revoked SCIM token usable=%v err=%v", usable, err)
+	}
+	for _, values := range [][2]int64{{0, 0}, {366, 0}, {90, -1}, {90, 90}} {
+		if _, err := validateSCIMTokenWindow(values[0], values[1]); err == nil {
+			t.Errorf("SCIM token window %v accepted", values)
+		}
+	}
+	if _, err := validateSCIMTokenWindow(90, 7); err != nil {
+		t.Fatalf("valid SCIM token window rejected: %v", err)
 	}
 }
 

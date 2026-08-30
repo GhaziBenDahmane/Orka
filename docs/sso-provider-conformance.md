@@ -18,6 +18,13 @@ The SAML CLI lifecycle is `saml-providers`, `create-saml-provider JSON`,
 after the IdP imports the replacement, or `cancel-saml-certificate ID` to abort.
 Pass `-` instead of JSON when metadata should not appear in shell history.
 
+SCIM bearer credentials use `scim-tokens`, `create-scim-token JSON`, and
+`revoke-scim-token ID`, or the `dockyard_scim_token` Terraform/OpenTofu
+resource. The bearer value is returned only at creation. Terraform retains it
+as sensitive state, revokes it on replacement or destroy, and recreates it
+when refresh enters the configured pre-expiry renewal window. Apply regularly
+and update the identity provider while old and new credentials overlap.
+
 The OIDC redirect URI is:
 
 ```text

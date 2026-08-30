@@ -67,6 +67,26 @@ resource "dockyard_saml_provider" "partners" {
   enabled             = true
 }
 
+resource "dockyard_scim_token" "workforce" {
+  name              = "Workforce provisioning"
+  default_role      = "developer"
+  expires_in_days   = 90
+  renew_before_days = 7
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+output "workforce_scim" {
+  description = "Configure this endpoint and bearer token in the identity provider, then move the token to its secret store."
+  sensitive   = true
+  value = {
+    base_url = dockyard_scim_token.workforce.base_url
+    token    = dockyard_scim_token.workforce.token
+  }
+}
+
 resource "dockyard_auth_settings" "organization" {
   require_sso = true
   depends_on  = [dockyard_oidc_provider.workforce, dockyard_saml_provider.partners]

@@ -28,6 +28,9 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"disable-oidc-provider", "provider-id"}, http.MethodDelete, "/v1/sso/oidc-providers/provider-id"},
 		{[]string{"sso-settings"}, http.MethodGet, "/v1/sso/settings"},
 		{[]string{"put-sso-settings", `{}`}, http.MethodPut, "/v1/sso/settings"},
+		{[]string{"scim-tokens"}, http.MethodGet, "/v1/scim/tokens"},
+		{[]string{"create-scim-token", `{}`}, http.MethodPost, "/v1/scim/tokens"},
+		{[]string{"revoke-scim-token", "token-id"}, http.MethodDelete, "/v1/scim/tokens/token-id"},
 		{[]string{"saml-providers"}, http.MethodGet, "/v1/sso/saml-providers"},
 		{[]string{"create-saml-provider", `{}`}, http.MethodPost, "/v1/sso/saml-providers"},
 		{[]string{"update-saml-provider", "provider-id", `{}`}, http.MethodPut, "/v1/sso/saml-providers/provider-id"},
@@ -237,6 +240,17 @@ func TestSAMLProviderCommandBodies(t *testing.T) {
 	}
 	if input.(map[string]string)["confirm"] != "Workforce" {
 		t.Fatalf("SAML promotion input=%#v", input)
+	}
+}
+
+func TestSCIMTokenCommandBody(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-scim-token", "-"}, strings.NewReader(`{"name":"Workforce","defaultRole":"developer","expiresInDays":90}`))
+	if err != nil || method != http.MethodPost || path != "/v1/scim/tokens" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	token := input.(map[string]any)
+	if token["name"] != "Workforce" || token["expiresInDays"] != float64(90) {
+		t.Fatalf("SCIM token input=%#v", token)
 	}
 }
 
