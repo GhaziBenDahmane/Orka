@@ -111,7 +111,9 @@ links for every item below.
   template tags from digest-pinned effective runtime snapshots, reports a
   mutable deployed image, and keeps runtime image identities outside the model
   boundary. It also proves deterministic detection of a managed database left
-  in an error state and audited
+  in an error state, an expired custom TLS certificate, and a missing edge
+  reconciliation target while keeping encrypted certificate and private-key
+  material outside the model boundary, plus audited
   administrator finding triage, atomic rollback when its audit write fails,
   denial of triage to the auditor identity, and prevention of cross-tenant
   finding mutation, and verifies that a new critical finding queues a durable
