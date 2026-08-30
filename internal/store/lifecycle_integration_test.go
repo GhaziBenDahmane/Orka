@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,57 @@ func TestDeploymentCancellationAndDeletionQueue(t *testing.T) {
 	err = db.Pool.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL AND EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$2 AND status='pending') FROM compose_services WHERE id=$1`, serviceID, serviceID.String()).Scan(&deletionQueued)
 	if err != nil || !deletionQueued {
 		t.Fatalf("deletion queued = %v, err = %v", deletionQueued, err)
+	}
+}
+
+func TestRollbackUsesLastImmutableEffectiveSnapshot(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	desired := "services:\n  web:\n    image: registry.example/app:latest\n"
+	effective := "services:\n  web:\n    image: registry.example/app@sha256:" + strings.Repeat("a", 64) + "\n"
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Rollback',$2)`, []any{organizationID, "rollback-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env,revision) VALUES($1,$2,'API','api',$3,$4,'new-secret',2)`, []any{serviceID, environmentID, "rollback-" + serviceID.String(), "services: {web: {image: registry.example/app:new}}"}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,finished_at) VALUES($1,$2,1,$3,$4,'old-secret','succeeded','manual',now())`, []any{uuid.New(), serviceID, desired, effective}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rollback, err := db.QueueRollback(ctx, organizationID, serviceID, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serviceCompose, snapshot, environment string
+	if err = pool.QueryRow(ctx, `SELECT s.compose_yaml,d.compose_snapshot,d.env_snapshot FROM compose_services s JOIN deployments d ON d.compose_service_id=s.id WHERE d.id=$1`, rollback.ID).Scan(&serviceCompose, &snapshot, &environment); err != nil {
+		t.Fatal(err)
+	}
+	if rollback.Trigger != "rollback" || serviceCompose != effective || snapshot != effective || environment != "old-secret" {
+		t.Fatalf("rollback=%#v service=%q snapshot=%q environment=%q", rollback, serviceCompose, snapshot, environment)
+	}
+
+	if _, err = pool.Exec(ctx, `DELETE FROM jobs WHERE payload->>'deploymentId'=$1`, rollback.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `DELETE FROM deployments WHERE compose_service_id=$1`, serviceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,finished_at) VALUES($1,$2,1,$3,'','old-secret','succeeded','manual',now())`, uuid.New(), serviceID, desired); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueRollback(ctx, organizationID, serviceID, uuid.Nil); !errors.Is(err, ErrRollbackUnavailable) {
+		t.Fatalf("rollback without immutable snapshot error=%v, want ErrRollbackUnavailable", err)
 	}
 }
 

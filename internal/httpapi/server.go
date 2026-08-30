@@ -2780,6 +2780,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "ai_audit_finding_limit", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrRollbackUnavailable) {
+		writeError(w, http.StatusConflict, "rollback_unavailable", err.Error())
+		return
+	}
 	var quota *store.QuotaExceededError
 	if errors.As(err, &quota) {
 		writeError(w, http.StatusConflict, "quota_exceeded", quota.Error())

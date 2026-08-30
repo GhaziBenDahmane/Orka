@@ -349,7 +349,7 @@ until an administrator retries them.
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |
 | GET | `/v1/services/{id}/deployments` | Read deployment history |
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |
-| POST | `/v1/services/{id}/rollback` | Redeploy the latest successful snapshot |
+| POST | `/v1/services/{id}/rollback` | Redeploy the latest successful digest-resolved snapshot; returns `409 rollback_unavailable` when no immutable snapshot exists |
 | GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
 | POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |

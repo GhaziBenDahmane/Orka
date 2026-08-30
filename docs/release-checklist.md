@@ -69,7 +69,9 @@ links for every item below.
   original health configuration, and preserve the authenticated session.
 - `make test-lifecycle-conformance` drives the authenticated HTTP API and real
   PostgreSQL queue through successful, failed, cancelled, and rollback
-  deployments. It also verifies a signed provider webhook and replay defense,
+  deployments. The successful deployment records Swarm-resolved image digests,
+  and rollback must redeploy that immutable effective snapshot rather than the
+  original mutable tag. It also verifies a signed provider webhook and replay defense,
   ordered commit-status delivery, a signed failure notification, remote-agent
   command encryption/completion, cancellation/completion serialization, and
   per-attempt fencing after worker takeover. The release attaches the resulting

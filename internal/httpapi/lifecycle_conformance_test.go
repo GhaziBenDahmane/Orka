@@ -231,6 +231,11 @@ func TestLifecycleAPIConformance(t *testing.T) {
 	if !validNotification {
 		t.Fatal("failure notification was not signed correctly")
 	}
+	resolvedImage := "example.invalid/conformance@sha256:" + strings.Repeat("a", 64)
+	var effectiveCompose string
+	if err = db.Pool.QueryRow(ctx, `SELECT effective_compose FROM deployments WHERE id=$1`, successDeployment.ID).Scan(&effectiveCompose); err != nil || !strings.Contains(effectiveCompose, resolvedImage) || strings.Contains(effectiveCompose, "success-v1:1") {
+		t.Fatalf("successful deployment did not persist its resolved image: compose=%q err=%v", effectiveCompose, err)
+	}
 
 	status, body = scopedAPIRequest(t, api.URL+"/v1/services/"+successServiceID.String(), token, organizationID, http.MethodPatch, map[string]any{"composeYaml": successV2})
 	if status != http.StatusOK {
@@ -249,7 +254,7 @@ func TestLifecycleAPIConformance(t *testing.T) {
 		err := db.Pool.QueryRow(ctx, `SELECT status FROM deployments WHERE id=$1`, rollback.ID).Scan(&state)
 		return state == "succeeded", err
 	})
-	if rollback.Trigger != "rollback" || !scheduler.deployedAtLeast("example.invalid/success-v1:1", 2) {
+	if rollback.Trigger != "rollback" || !scheduler.deployedAtLeast(resolvedImage, 1) {
 		t.Fatalf("rollback did not redeploy the last successful snapshot: trigger=%q deploys=%v", rollback.Trigger, scheduler.snapshot())
 	}
 	stop()
@@ -346,6 +351,7 @@ func TestLifecycleAPIConformance(t *testing.T) {
 		"deployFailed":                 true,
 		"deploymentCancelled":          true,
 		"rollbackSucceeded":            true,
+		"resolvedImageSnapshot":        true,
 		"signedWebhookAccepted":        true,
 		"webhookReplayRejected":        true,
 		"commitStatusDelivered":        true,

@@ -30,6 +30,7 @@ var ErrAlreadyMember = errors.New("user is already an organization member")
 var ErrPasswordRequired = errors.New("a password is required for a new local account")
 var ErrUserDisabled = errors.New("user account is disabled")
 var ErrSAMLCertificateRotationPending = errors.New("a SAML certificate rotation is already pending")
+var ErrRollbackUnavailable = errors.New("no successful immutable deployment is available for rollback")
 
 type Store struct {
 	Pool                 *pgxpool.Pool
@@ -1727,9 +1728,8 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	defer tx.Rollback(ctx)
-	var compose, encrypted string
 	var projectID, environmentID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.compose_snapshot,d.env_snapshot,p.id,e.id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND d.status='succeeded' ORDER BY d.finished_at DESC LIMIT 1 FOR UPDATE OF s`, serviceID, organizationID).Scan(&compose, &encrypted, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -1740,6 +1740,14 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
+		return Deployment{}, err
+	}
+	var compose, encrypted string
+	err = tx.QueryRow(ctx, `SELECT d.effective_compose,d.env_snapshot FROM deployments d WHERE d.compose_service_id=$1 AND d.status='succeeded' AND d.effective_compose<>'' ORDER BY d.finished_at DESC,d.created_at DESC LIMIT 1`, serviceID).Scan(&compose, &encrypted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Deployment{}, ErrRollbackUnavailable
+	}
+	if err != nil {
 		return Deployment{}, err
 	}
 	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {

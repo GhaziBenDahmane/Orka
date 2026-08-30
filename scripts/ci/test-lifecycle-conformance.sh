@@ -79,7 +79,8 @@ jq \
 
 jq -e '
   .status == "passed" and .deploySucceeded and .deployFailed and
-  .deploymentCancelled and .rollbackSucceeded and .signedWebhookAccepted and
+  .deploymentCancelled and .rollbackSucceeded and .resolvedImageSnapshot and
+  .signedWebhookAccepted and
   .webhookReplayRejected and .commitStatusDelivered and
   .failureNotificationDelivered and .workerTakeoverFenced and
   .staleCompletionRejected and .cancellationCompletionRace and
