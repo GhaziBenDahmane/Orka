@@ -664,15 +664,33 @@ func (s *Store) ListAIAuditFindings(ctx context.Context, organizationID, runID u
 	return items, rows.Err()
 }
 
-func (s *Store) UpdateAIAuditFindingDisposition(ctx context.Context, principal Principal, findingID uuid.UUID, disposition, note string) (AIAuditFinding, error) {
+func (s *Store) UpdateAIAuditFindingDisposition(ctx context.Context, principal Principal, findingID uuid.UUID, disposition, note, remoteAddr string) (AIAuditFinding, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	defer tx.Rollback(ctx)
 	var item AIAuditFinding
 	var serviceAccountID any
 	if principal.ServiceAccountID != nil {
 		serviceAccountID = *principal.ServiceAccountID
 	}
-	err := s.Pool.QueryRow(ctx, `UPDATE ai_audit_findings f SET disposition=$4,triage_note=$5,triaged_by_user_id=$3,triaged_by_service_account_id=$6,triaged_at=now() FROM ai_audit_runs r WHERE f.id=$1 AND f.run_id=r.id AND r.organization_id=$2 RETURNING f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at`, findingID, principal.OrganizationID, nullableUUID(principal.UserID), disposition, note, serviceAccountID).Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt)
+	err = tx.QueryRow(ctx, `UPDATE ai_audit_findings f SET disposition=$4,triage_note=$5,triaged_by_user_id=$3,triaged_by_service_account_id=$6,triaged_at=now() FROM ai_audit_runs r WHERE f.id=$1 AND f.run_id=r.id AND r.organization_id=$2 RETURNING f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at`, findingID, principal.OrganizationID, nullableUUID(principal.UserID), disposition, note, serviceAccountID).Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AIAuditFinding{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	metadata, err := json.Marshal(map[string]any{"runId": item.RunID})
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,'ai_audit_finding',$5,$6,$7)`, principal.OrganizationID, nullableUUID(principal.UserID), serviceAccountID, "ai_audit_finding."+disposition, findingID.String(), remoteAddr, metadata); err != nil {
+		return AIAuditFinding{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return AIAuditFinding{}, err
+	}
+	return item, nil
 }

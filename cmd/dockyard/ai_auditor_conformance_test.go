@@ -193,6 +193,30 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT id FROM ai_audit_findings WHERE run_id=$1 AND title='Capacity requires review'`, runID).Scan(&findingID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Pool.Exec(ctx, `
+		CREATE FUNCTION reject_ai_triage_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.action LIKE 'ai_audit_finding.%' THEN
+				RAISE EXCEPTION 'forced triage audit failure';
+			END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER reject_ai_triage_audit BEFORE INSERT ON audit_events
+		FOR EACH ROW EXECUTE FUNCTION reject_ai_triage_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	dropAuditFailureTrigger := func() {
+		_, _ = db.Pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS reject_ai_triage_audit ON audit_events; DROP FUNCTION IF EXISTS reject_ai_triage_audit()`)
+	}
+	t.Cleanup(dropAuditFailureTrigger)
+	if _, err = db.UpdateAIAuditFindingDisposition(ctx, store.Principal{UserID: ownerID, OrganizationID: organizationID, Role: "owner"}, findingID, "resolved", "must roll back", "127.0.0.1"); err == nil {
+		t.Fatal("finding triage succeeded when its audit event was rejected")
+	}
+	var rolledBackDisposition string
+	if err = db.Pool.QueryRow(ctx, `SELECT disposition FROM ai_audit_findings WHERE id=$1`, findingID).Scan(&rolledBackDisposition); err != nil || rolledBackDisposition != "open" {
+		t.Fatalf("triage rollback disposition=%q err=%v", rolledBackDisposition, err)
+	}
+	dropAuditFailureTrigger()
 	triage := func(token string, id uuid.UUID, body string) (int, []byte) {
 		request, requestErr := http.NewRequestWithContext(ctx, http.MethodPatch, platform.URL+"/v1/ai/audit-findings/"+id.String(), strings.NewReader(body))
 		if requestErr != nil {
@@ -247,6 +271,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"lifecycleAudited":               true,
 		"auditorLeastPrivilege":          true,
 		"findingTriageAudited":           true,
+		"findingTriageAtomic":            true,
 		"auditorTriageDenied":            true,
 		"triageTenantIsolated":           true,
 	})

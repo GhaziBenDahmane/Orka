@@ -87,8 +87,9 @@ links for every item below.
   endpoint. It proves snapshot secret redaction, prompt trust boundaries,
   durable deterministic and model findings, audited completion, and denial of
   normal workload APIs to the auditor identity. It also proves audited
-  administrator finding triage, denies triage to the auditor identity, and
-  prevents cross-tenant finding mutation. The release attaches
+  administrator finding triage, atomic rollback when its audit write fails,
+  denial of triage to the auditor identity, and prevention of cross-tenant
+  finding mutation. The release attaches
   `ai-audit-conformance.json`.
 - `make test-notification-conformance` drives encrypted provider records and
   durable jobs through signed webhook and Slack-compatible delivery,

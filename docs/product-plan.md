@@ -284,7 +284,7 @@ A release-blocking conformance test now runs the built-in auditor through the
 real tenant-scoped HTTP API and PostgreSQL lifecycle against a disposable
 OpenAI-compatible endpoint. It verifies secret redaction, prompt trust
 boundaries, deterministic and model finding persistence, lifecycle auditing,
-administrator-only audited finding triage, tenant isolation, and denial of
+atomic administrator-only finding triage, tenant isolation, and denial of
 normal workload and triage access to auditors. External 9Router or provider-backed
 model credentials remain a staging requirement.
 

@@ -201,11 +201,10 @@ func (s *Server) updateAIAuditFindingDisposition(w http.ResponseWriter, r *http.
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpdateAIAuditFindingDisposition(r.Context(), p, id, in.Disposition, in.Note)
+	item, err := s.Store.UpdateAIAuditFindingDisposition(r.Context(), p, id, in.Disposition, in.Note, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "ai_audit_finding."+in.Disposition, "ai_audit_finding", id.String(), r.RemoteAddr, map[string]any{"runId": item.RunID})
 	writeJSON(w, http.StatusOK, item)
 }
