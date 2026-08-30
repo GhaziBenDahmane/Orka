@@ -182,6 +182,8 @@ CI deployment hooks use expiring, revocable bearer credentials. Manage them
 with `deploy-tokens SERVICE_ID`, `create-deploy-token SERVICE_ID JSON`, and
 `revoke-deploy-token SERVICE_ID TOKEN_ID`; creation returns the secret URL only
 once, while inventory exposes expiry and last-use timestamps without the token.
+Developers can also create, copy, inspect, and revoke these hooks from a
+service's web-console page; one-time URLs remain only in transient UI state.
 
 Organization, project, and environment maintenance/quota policy can be read or
 updated with the corresponding `policy`/`put-*-policy` CLI commands and managed

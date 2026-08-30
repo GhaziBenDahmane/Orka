@@ -13,6 +13,7 @@ export type Service = { id: string; environmentId: string; name: string; slug: s
 export type ApplicationArtifact = { filename: string; sha256: string; compressedSize: number; updatedAt: string };
 export type ApplicationSource = { composeServiceId: string; sourceType: "git" | "drop"; repositoryUrl: string; gitRef: string; contextDirectory: string; dockerfile: string; buildType: "dockerfile" | "static" | "nixpacks" | "railpack" | "buildpacks" | "heroku_buildpacks"; builderImage?: string; outputDirectory?: string; buildTarget?: string; enableSubmodules: boolean; hasBuildArguments: boolean; hasBuildSecrets: boolean; targetService: string; registryImage: string; gitCredentialId?: string; registryCredentialId?: string; statusProvider?: string; statusCredentialId?: string; statusContext?: string; artifact?: ApplicationArtifact; updatedAt: string };
 export type Deployment = { id: string; revision: number; status: string; trigger: string; error?: string; output?: string; createdAt: string };
+export type DeployToken = { id: string; composeServiceId: string; name: string; expiresAt: string; lastUsedAt?: string; revokedAt?: string; createdAt: string };
 export type TemplateVariable = { name: string; default?: string; generated: boolean; sensitive: boolean };
 export type Template = { id: string; key: string; version: string; name: string; description: string; source: string; variables: TemplateVariable[] };
 export type TemplateRepository = { id: string; name: string; slug: string; repositoryUrl: string; gitRef: string; catalogPath: string; trustedPublicKey?: string; requireSignature: boolean; credentialId?: string; webhookConfigured: boolean; syncIntervalSeconds: number; nextSyncAt?: string; syncRequestedAt?: string; syncStartedAt?: string; enabled: boolean; lastSyncStatus: string; lastSyncError?: string; lastSyncedAt?: string };
@@ -113,6 +114,9 @@ export const api = {
   uploadArtifact: (serviceId: string, file: File) => { const body = new FormData(); body.append("file", file); return request<ApplicationArtifact>(`/v1/services/${serviceId}/artifact-source`, { method: "PUT", body }); },
   deploy: (serviceId: string) => request<Deployment>(`/v1/services/${serviceId}/deployments`, { method: "POST", body: "{}" }),
   deployments: (serviceId: string) => request<Envelope<Deployment>>(`/v1/services/${serviceId}/deployments`),
+  deployTokens: (serviceId: string) => request<Envelope<DeployToken>>(`/v1/services/${serviceId}/deploy-tokens`),
+  createDeployToken: (serviceId: string, name: string, expiresInDays: number) => request<{ deployToken: DeployToken; token: string; url: string }>(`/v1/services/${serviceId}/deploy-tokens`, { method: "POST", body: JSON.stringify({ name, expiresInDays }) }),
+  revokeDeployToken: (serviceId: string, tokenId: string) => request<void>(`/v1/services/${serviceId}/deploy-tokens/${tokenId}`, { method: "DELETE" }),
   logs: (serviceId: string) => request<{ logs: string }>(`/v1/services/${serviceId}/logs`),
   serviceVolumes: (serviceId: string) => request<Envelope<ServiceVolume>>(`/v1/services/${serviceId}/volumes`),
   volumeBackupPolicies: (serviceId: string) => request<Envelope<VolumeBackupPolicy>>(`/v1/services/${serviceId}/volume-backup-policies`),

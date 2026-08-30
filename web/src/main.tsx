@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, ClusterCommand, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, Environment, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceVolume, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, ClusterCommand, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, Environment, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceVolume, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -297,7 +297,52 @@ function ServiceDetail({ service, canWrite, canAdmin, canManageCredentials, clos
       {(sourceForm.buildType === "nixpacks" || sourceForm.buildType === "buildpacks" || sourceForm.buildType === "heroku_buildpacks") && <label className="build-values wide">Build environment <span>Non-secret NAME=value entries passed to {sourceForm.buildType === "nixpacks" ? "Nixpacks" : sourceForm.buildType === "heroku_buildpacks" ? "Heroku Buildpacks" : "Paketo buildpacks"}; values may enter image metadata.</span><textarea className="compact-code" value={sourceForm.buildArguments} onChange={e => setSourceForm({ ...sourceForm, buildArguments: e.target.value })} placeholder="NODE_VERSION=24" spellCheck={false} /></label>}
       {sourceForm.buildType === "railpack" && <><label className="build-values">Build environment <span>{source?.hasBuildArguments ? "Configured values are hidden; leave blank to preserve them." : "Non-secret NAME=value entries."}</span><textarea className="compact-code" value={sourceForm.buildArguments} disabled={sourceForm.clearBuildArguments} onChange={e => setSourceForm({ ...sourceForm, buildArguments: e.target.value })} placeholder="NODE_VERSION=24" spellCheck={false} /></label><label className="build-values">BuildKit secrets <span>{source?.hasBuildSecrets ? "Configured values are hidden; leave blank to preserve them." : "Mounted only during Railpack build steps."}</span><textarea className="compact-code" value={sourceForm.buildSecrets} disabled={sourceForm.clearBuildSecrets} onChange={e => setSourceForm({ ...sourceForm, buildSecrets: e.target.value })} placeholder="NPM_TOKEN=…" spellCheck={false} /></label>{source?.hasBuildArguments && <label className="check clear-setting"><input type="checkbox" checked={sourceForm.clearBuildArguments} onChange={e => setSourceForm({ ...sourceForm, clearBuildArguments: e.target.checked, buildArguments: "" })} /> Clear configured build environment</label>}{source?.hasBuildSecrets && <label className="check clear-setting"><input type="checkbox" checked={sourceForm.clearBuildSecrets} onChange={e => setSourceForm({ ...sourceForm, clearBuildSecrets: e.target.checked, buildSecrets: "" })} /> Clear configured build secrets</label>}</>}
       {sourceForm.sourceType === "git" && <fieldset className="status-settings"><legend>Commit status callback (optional)</legend><label>Provider<select value={sourceForm.statusProvider} onChange={e => setSourceForm({ ...sourceForm, statusProvider: e.target.value, statusCredentialId: e.target.value ? sourceForm.statusCredentialId : "" })}><option value="">Disabled</option><option value="github">GitHub</option><option value="gitlab">GitLab</option><option value="gitea">Gitea</option><option value="bitbucket">Bitbucket</option></select></label><label>Provider token<select value={sourceForm.statusCredentialId} disabled={!sourceForm.statusProvider} required={Boolean(sourceForm.statusProvider)} onChange={e => setSourceForm({ ...sourceForm, statusCredentialId: e.target.value })}><option value="">Select credential</option>{credentials.filter(x => x.kind === "git").map(x => <option key={x.id} value={x.id}>{x.name} · {x.server}</option>)}</select></label><label>Status context<input value={sourceForm.statusContext} disabled={!sourceForm.statusProvider} onChange={e => setSourceForm({ ...sourceForm, statusContext: e.target.value })} placeholder="dockyard/deploy" /></label></fieldset>}
-    </div></form> : <section className="card source-editor"><div className="card-head"><div><h3>Application build</h3><p className="muted">Read-only access. A developer grant is required to change this source.</p></div></div><code>{source ? `${source.buildType} · ${source.repositoryUrl || source.artifact?.filename || "uploaded source"}` : "No application source configured."}</code></section>}<VolumeProtection service={item} canWrite={canWrite} canAdmin={canAdmin} flash={flash} setError={setError} /><section className="card logs"><div className="card-head"><h3>Service logs</h3><button onClick={() => action("logs")}>Load logs</button></div><pre>{logs || "Logs are loaded on demand to avoid unnecessary manager traffic."}</pre></section></>;
+    </div></form> : <section className="card source-editor"><div className="card-head"><div><h3>Application build</h3><p className="muted">Read-only access. A developer grant is required to change this source.</p></div></div><code>{source ? `${source.buildType} · ${source.repositoryUrl || source.artifact?.filename || "uploaded source"}` : "No application source configured."}</code></section>}{canWrite && <DeployTokenPanel service={item} flash={flash} setError={setError} />}<VolumeProtection service={item} canWrite={canWrite} canAdmin={canAdmin} flash={flash} setError={setError} /><section className="card logs"><div className="card-head"><h3>Service logs</h3><button onClick={() => action("logs")}>Load logs</button></div><pre>{logs || "Logs are loaded on demand to avoid unnecessary manager traffic."}</pre></section></>;
+}
+
+type CreatedDeployToken = { name: string; token: string; url: string; expiresAt: string };
+
+function DeployTokenPanel({ service, flash, setError }: { service: Service; flash: (s: string) => void; setError: (s: string) => void }) {
+  const [tokens, setTokens] = useState<DeployToken[]>([]);
+  const [name, setName] = useState("ci-release");
+  const [expiresInDays, setExpiresInDays] = useState(90);
+  const [created, setCreated] = useState<CreatedDeployToken | null>(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => setTokens((await api.deployTokens(service.id)).items), [service.id]);
+
+  useEffect(() => {
+    setCreated(null);
+    refresh().catch(reason => setError(message(reason)));
+  }, [refresh, setError]);
+
+  async function create(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const result = await api.createDeployToken(service.id, name.trim(), expiresInDays);
+      setCreated({ name: result.deployToken.name, token: result.token, url: result.url, expiresAt: result.deployToken.expiresAt });
+      setName("ci-release");
+      await refresh();
+      flash("Deployment hook created");
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  async function revoke(token: DeployToken) {
+    if (!window.confirm(`Revoke the deployment hook “${token.name}”? CI jobs using it will stop working immediately.`)) return;
+    setBusy(true);
+    try {
+      await api.revokeDeployToken(service.id, token.id);
+      await refresh();
+      flash("Deployment hook revoked");
+    } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  return <section className="card deploy-token-panel">
+    <div className="card-head"><div><p className="eyebrow">CI/CD access</p><h3>Deployment hooks</h3><p className="muted">Issue expiring, revocable URLs that can only queue a deployment for this service.</p></div><button type="button" disabled={busy} onClick={() => void refresh().catch(reason => setError(message(reason)))}>Refresh</button></div>
+    {created && <section className="credential-card deploy-token-secret"><p className="eyebrow">Copy now · shown once</p><h3>{created.name}</h3><p className="muted">Store this URL in your CI secret manager. It cannot be recovered after you dismiss or leave this page. Expires {new Date(created.expiresAt).toLocaleString()}.</p><code>{created.url}</code><div className="secret"><span>Bearer token (use the URL above unless your integration needs the raw value)</span><code>{created.token}</code></div><div className="actions"><button type="button" onClick={() => void navigator.clipboard.writeText(created.url)}>Copy URL</button><button type="button" onClick={() => void navigator.clipboard.writeText(created.token)}>Copy token</button><button type="button" onClick={() => setCreated(null)}>I saved it</button></div></section>}
+    <form className="deploy-token-form" onSubmit={create}><label>Name<input value={name} maxLength={100} onChange={event => setName(event.target.value)} required autoComplete="off" /></label><label>Lifetime (days)<input type="number" min="1" max="365" value={expiresInDays} onChange={event => setExpiresInDays(Number(event.target.value))} required /></label><button className="primary" disabled={busy || expiresInDays < 1 || expiresInDays > 365}>{busy ? "Working…" : "Create hook"}</button></form>
+    <div className="admin-items deploy-token-list">{tokens.map(token => { const expired = new Date(token.expiresAt) <= new Date(); const status = token.revokedAt ? "revoked" : expired ? "expired" : "active"; return <article key={token.id}><div><strong>{token.name}</strong><small>Created {new Date(token.createdAt).toLocaleString()} · expires {new Date(token.expiresAt).toLocaleString()}{token.lastUsedAt ? ` · last used ${new Date(token.lastUsedAt).toLocaleString()}` : " · never used"}</small></div><Status value={status} />{!token.revokedAt && <button type="button" className="danger-button" disabled={busy} onClick={() => void revoke(token)}>Revoke</button>}</article>; })}{!tokens.length && <p className="muted">No deployment hooks issued.</p>}</div>
+  </section>;
 }
 
 function VolumeProtection({ service, canWrite, canAdmin, flash, setError }: { service: Service; canWrite: boolean; canAdmin: boolean; flash: (s: string) => void; setError: (s: string) => void }) {
