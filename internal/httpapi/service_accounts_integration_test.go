@@ -186,6 +186,38 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("audit finding update at limit status=%d body=%s", response.StatusCode, data)
 	}
+	findings, err := db.ListAIAuditFindings(ctx, orgID, auditRun.ID)
+	if err != nil || len(findings) != store.MaxAIAuditFindingsPerRun {
+		t.Fatalf("list audit findings count=%d err=%v", len(findings), err)
+	}
+	findingID := findings[0].ID
+	response, data = do(http.MethodPatch, "/v1/ai/audit-findings/"+findingID.String(), userToken, []byte(`{"disposition":"acknowledged","note":"reviewed by owner"}`))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("owner finding triage status=%d body=%s", response.StatusCode, data)
+	}
+	var triaged store.AIAuditFinding
+	if err = json.Unmarshal(data, &triaged); err != nil || triaged.Disposition != "acknowledged" || triaged.TriageNote != "reviewed by owner" || triaged.TriagedByUser == nil || *triaged.TriagedByUser != userID || triaged.TriagedAt == nil {
+		t.Fatalf("owner triaged finding=%#v err=%v", triaged, err)
+	}
+	response, _ = do(http.MethodPatch, "/v1/ai/audit-findings/"+findingID.String(), auditor.Token, []byte(`{"disposition":"resolved"}`))
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("auditor finding triage status=%d, want 403", response.StatusCode)
+	}
+	response, data = do(http.MethodPatch, "/v1/ai/audit-findings/"+findingID.String(), newToken, []byte(`{"disposition":"resolved","note":"resolved by automation"}`))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("admin service account finding triage status=%d body=%s", response.StatusCode, data)
+	}
+	if err = json.Unmarshal(data, &triaged); err != nil || triaged.Disposition != "resolved" || triaged.TriagedByUser != nil || triaged.TriagedByServiceAccount == nil || *triaged.TriagedByServiceAccount != created.ServiceAccount.ID {
+		t.Fatalf("service account triaged finding=%#v err=%v", triaged, err)
+	}
+	response, _ = do(http.MethodPatch, "/v1/ai/audit-findings/"+uuid.NewString(), userToken, []byte(`{"disposition":"resolved"}`))
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown finding triage status=%d, want 404", response.StatusCode)
+	}
+	var findingAuditEvents int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND resource_id=$2 AND action IN ('ai_audit_finding.acknowledged','ai_audit_finding.resolved')`, orgID, findingID.String()).Scan(&findingAuditEvents); err != nil || findingAuditEvents != 2 {
+		t.Fatalf("finding triage audit events=%d err=%v", findingAuditEvents, err)
+	}
 	response, _ = do(http.MethodPatch, "/v1/ai/audit-runs/"+auditRun.ID.String(), auditor.Token, []byte(`{"status":"completed","summary":"`+strings.Repeat("x", 8001)+`"}`))
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized audit summary status=%d, want 400", response.StatusCode)

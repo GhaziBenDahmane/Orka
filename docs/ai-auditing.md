@@ -53,6 +53,10 @@ keys make it a privileged service.
   complete those runs. Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy
   change, or remediation without a separate human-approved workflow.
+- Organization administrators can acknowledge, resolve, or reopen individual
+  findings with an optional operator note. These triage changes are
+  tenant-scoped and enter the platform audit log; auditor identities cannot
+  alter disposition.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds model responses and finding counts, validates every structured
   field, and rejects oversized evidence before submitting results. The API

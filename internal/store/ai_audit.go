@@ -505,18 +505,23 @@ type AIAuditRun struct {
 }
 
 type AIAuditFinding struct {
-	ID           uuid.UUID       `json:"id"`
-	RunID        uuid.UUID       `json:"runId"`
-	Severity     string          `json:"severity"`
-	Category     string          `json:"category"`
-	Title        string          `json:"title"`
-	Description  string          `json:"description"`
-	ResourceType string          `json:"resourceType,omitempty"`
-	ResourceID   string          `json:"resourceId,omitempty"`
-	Evidence     json.RawMessage `json:"evidence"`
-	Remediation  string          `json:"remediation,omitempty"`
-	Fingerprint  string          `json:"fingerprint"`
-	CreatedAt    time.Time       `json:"createdAt"`
+	ID                      uuid.UUID       `json:"id"`
+	RunID                   uuid.UUID       `json:"runId"`
+	Severity                string          `json:"severity"`
+	Category                string          `json:"category"`
+	Title                   string          `json:"title"`
+	Description             string          `json:"description"`
+	ResourceType            string          `json:"resourceType,omitempty"`
+	ResourceID              string          `json:"resourceId,omitempty"`
+	Evidence                json.RawMessage `json:"evidence"`
+	Remediation             string          `json:"remediation,omitempty"`
+	Fingerprint             string          `json:"fingerprint"`
+	CreatedAt               time.Time       `json:"createdAt"`
+	Disposition             string          `json:"disposition"`
+	TriageNote              string          `json:"triageNote,omitempty"`
+	TriagedByUser           *uuid.UUID      `json:"triagedByUserId,omitempty"`
+	TriagedByServiceAccount *uuid.UUID      `json:"triagedByServiceAccountId,omitempty"`
+	TriagedAt               *time.Time      `json:"triagedAt,omitempty"`
 }
 
 func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage) (AIAuditRun, error) {
@@ -643,7 +648,7 @@ func (s *Store) ListAIAuditRuns(ctx context.Context, organizationID uuid.UUID) (
 }
 
 func (s *Store) ListAIAuditFindings(ctx context.Context, organizationID, runID uuid.UUID) ([]AIAuditFinding, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id WHERE f.run_id=$1 AND r.organization_id=$2 ORDER BY CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END,f.created_at`, runID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at FROM ai_audit_findings f JOIN ai_audit_runs r ON r.id=f.run_id WHERE f.run_id=$1 AND r.organization_id=$2 ORDER BY CASE f.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END,f.created_at`, runID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -651,10 +656,23 @@ func (s *Store) ListAIAuditFindings(ctx context.Context, organizationID, runID u
 	items := []AIAuditFinding{}
 	for rows.Next() {
 		var item AIAuditFinding
-		if err = rows.Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) UpdateAIAuditFindingDisposition(ctx context.Context, principal Principal, findingID uuid.UUID, disposition, note string) (AIAuditFinding, error) {
+	var item AIAuditFinding
+	var serviceAccountID any
+	if principal.ServiceAccountID != nil {
+		serviceAccountID = *principal.ServiceAccountID
+	}
+	err := s.Pool.QueryRow(ctx, `UPDATE ai_audit_findings f SET disposition=$4,triage_note=$5,triaged_by_user_id=$3,triaged_by_service_account_id=$6,triaged_at=now() FROM ai_audit_runs r WHERE f.id=$1 AND f.run_id=r.id AND r.organization_id=$2 RETURNING f.id,f.run_id,f.severity,f.category,f.title,f.description,f.resource_type,f.resource_id,f.evidence,f.remediation,f.fingerprint,f.created_at,f.disposition,f.triage_note,f.triaged_by_user_id,f.triaged_by_service_account_id,f.triaged_at`, findingID, principal.OrganizationID, nullableUUID(principal.UserID), disposition, note, serviceAccountID).Scan(&item.ID, &item.RunID, &item.Severity, &item.Category, &item.Title, &item.Description, &item.ResourceType, &item.ResourceID, &item.Evidence, &item.Remediation, &item.Fingerprint, &item.CreatedAt, &item.Disposition, &item.TriageNote, &item.TriagedByUser, &item.TriagedByServiceAccount, &item.TriagedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AIAuditFinding{}, ErrNotFound
+	}
+	return item, err
 }

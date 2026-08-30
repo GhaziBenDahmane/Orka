@@ -181,6 +181,7 @@ renewal/completion is fenced by a per-attempt UUID.
 | PATCH | `/v1/ai/audit-runs/{id}` | Complete or fail the caller's active run |
 | GET | `/v1/ai/audit-runs` | List runs as an organization administrator |
 | GET | `/v1/ai/audit-runs/{id}/findings` | Review findings as an organization administrator |
+| PATCH | `/v1/ai/audit-findings/{id}` | Acknowledge, resolve, or reopen a finding with an operator note |
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a

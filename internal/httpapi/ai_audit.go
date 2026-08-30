@@ -180,3 +180,32 @@ func (s *Server) listAIAuditFindings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
+
+func (s *Server) updateAIAuditFindingDisposition(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("findingID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid audit finding id")
+		return
+	}
+	var in struct {
+		Disposition string `json:"disposition"`
+		Note        string `json:"note"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.Disposition = strings.ToLower(strings.TrimSpace(in.Disposition))
+	in.Note = strings.TrimSpace(in.Note)
+	if (in.Disposition != "open" && in.Disposition != "acknowledged" && in.Disposition != "resolved") || len(in.Note) > 2000 {
+		writeError(w, http.StatusBadRequest, "invalid_disposition", "disposition must be open, acknowledged, or resolved and note must not exceed 2000 bytes")
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.UpdateAIAuditFindingDisposition(r.Context(), p, id, in.Disposition, in.Note)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "ai_audit_finding."+in.Disposition, "ai_audit_finding", id.String(), r.RemoteAddr, map[string]any{"runId": item.RunID})
+	writeJSON(w, http.StatusOK, item)
+}
