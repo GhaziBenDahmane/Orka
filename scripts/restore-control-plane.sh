@@ -25,9 +25,31 @@ esac
 case "$database_user" in
   ""|-*|*[!A-Za-z0-9_]*) echo "invalid DOCKYARD_POSTGRES_USER" >&2; exit 1 ;;
 esac
-for command in awk base64 docker grep jq mktemp openssl sha256sum tr wc; do
+for command in awk base64 docker find grep jq mktemp openssl sha256sum tr wc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
+
+master_key=${DOCKYARD_MASTER_KEY:-}
+master_key_file=${DOCKYARD_MASTER_KEY_FILE:-}
+if [ -n "$master_key" ] && [ -n "$master_key_file" ]; then
+  echo "DOCKYARD_MASTER_KEY and DOCKYARD_MASTER_KEY_FILE cannot both be configured" >&2
+  exit 1
+fi
+if [ -n "$master_key_file" ]; then
+  if [ ! -f "$master_key_file" ] || [ ! -r "$master_key_file" ] || [ -L "$master_key_file" ]; then
+    echo "DOCKYARD_MASTER_KEY_FILE must name a readable regular file, not a symbolic link" >&2
+    exit 1
+  fi
+  if [ -n "$(find "$master_key_file" -prune -perm /077 -print)" ]; then
+    echo "DOCKYARD_MASTER_KEY_FILE must not be accessible by group or other users" >&2
+    exit 1
+  fi
+  master_key=$(tr -d '\r\n' <"$master_key_file")
+fi
+if [ -z "$master_key" ]; then
+  echo "DOCKYARD_MASTER_KEY or DOCKYARD_MASTER_KEY_FILE is required for recovery-set verification" >&2
+  exit 1
+fi
 if [ ! -f "$bundle/manifest.json" ] || [ ! -f "$bundle/manifest.sig" ] || [ ! -f "$bundle/database.dump" ] || [ -L "$bundle/manifest.json" ] || [ -L "$bundle/manifest.sig" ] || [ -L "$bundle/database.dump" ]; then
   echo "recovery bundle must contain regular manifest.json, manifest.sig, and database.dump files" >&2
   exit 1
@@ -117,10 +139,6 @@ if [ "$actual_dump_bytes" -eq 0 ] || [ "$actual_dump_sha256" != "$expected_dump_
   exit 1
 fi
 
-master_key=${DOCKYARD_MASTER_KEY:-}
-if [ -n "${DOCKYARD_MASTER_KEY_FILE:-}" ]; then
-  master_key=$(tr -d '\r\n' <"$DOCKYARD_MASTER_KEY_FILE")
-fi
 temporary=$(mktemp -d)
 staging_database=""
 cleanup() {

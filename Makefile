@@ -13,6 +13,7 @@ test-volume-recovery:
 test-install:
 	./scripts/ci/test-install-swarm.sh
 	./scripts/ci/test-install-agent.sh
+	bash scripts/ci/test-control-plane-recovery.sh
 
 test-keycloak-sso:
 	./scripts/ci/test-keycloak-oidc.sh

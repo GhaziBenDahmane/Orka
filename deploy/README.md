@@ -408,6 +408,10 @@ image ID.
 Copy the bundle, master key, agent CA keypair, artifact storage, stack
 configuration, image digest, and recovery verification key to independently
 protected storage.
+The backup and restore commands accept the master key through either
+`DOCKYARD_MASTER_KEY` or `DOCKYARD_MASTER_KEY_FILE`, never both. Prefer the
+file form: it must be a non-symlink regular file inaccessible to group and
+other users, matching the installer's secret-file policy.
 
 Restore only on the node hosting the PostgreSQL task, with all controller
 replicas stopped. The script refuses to proceed unless the controller service

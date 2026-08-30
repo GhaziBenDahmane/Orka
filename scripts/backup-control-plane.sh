@@ -38,6 +38,28 @@ for command in awk base64 date docker find grep jq mktemp mv openssl sha256sum t
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
+master_key=${DOCKYARD_MASTER_KEY:-}
+master_key_file=${DOCKYARD_MASTER_KEY_FILE:-}
+if [ -n "$master_key" ] && [ -n "$master_key_file" ]; then
+  echo "DOCKYARD_MASTER_KEY and DOCKYARD_MASTER_KEY_FILE cannot both be configured" >&2
+  exit 1
+fi
+if [ -n "$master_key_file" ]; then
+  if [ ! -f "$master_key_file" ] || [ ! -r "$master_key_file" ] || [ -L "$master_key_file" ]; then
+    echo "DOCKYARD_MASTER_KEY_FILE must name a readable regular file, not a symbolic link" >&2
+    exit 1
+  fi
+  if [ -n "$(find "$master_key_file" -prune -perm /077 -print)" ]; then
+    echo "DOCKYARD_MASTER_KEY_FILE must not be accessible by group or other users" >&2
+    exit 1
+  fi
+  master_key=$(tr -d '\r\n' <"$master_key_file")
+fi
+if [ -z "$master_key" ]; then
+  echo "DOCKYARD_MASTER_KEY or DOCKYARD_MASTER_KEY_FILE is required for recovery-set verification" >&2
+  exit 1
+fi
+
 signing_key=${DOCKYARD_RECOVERY_SIGNING_KEY_FILE:-}
 if [ -z "$signing_key" ] || [ ! -f "$signing_key" ] || [ ! -r "$signing_key" ] || [ -L "$signing_key" ]; then
   echo "DOCKYARD_RECOVERY_SIGNING_KEY_FILE must name a readable regular Ed25519 private key" >&2
@@ -98,15 +120,6 @@ fi
 case "$postgres_container" in
   -*|*[!A-Za-z0-9_.-]*) echo "invalid PostgreSQL container name or ID" >&2; exit 1 ;;
 esac
-
-master_key=${DOCKYARD_MASTER_KEY:-}
-if [ -n "${DOCKYARD_MASTER_KEY_FILE:-}" ]; then
-  master_key=$(tr -d '\r\n' <"$DOCKYARD_MASTER_KEY_FILE")
-fi
-if [ -z "$master_key" ]; then
-  echo "DOCKYARD_MASTER_KEY or DOCKYARD_MASTER_KEY_FILE is required for recovery-set verification" >&2
-  exit 1
-fi
 
 umask 077
 temporary=$(mktemp -d "$parent/.dockyard-recovery.XXXXXX")
