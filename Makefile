@@ -11,6 +11,7 @@ test-volume-recovery:
 	DOCKYARD_TEST_VOLUME_RECOVERY=1 go test -timeout 15m -run TestNamedVolumeRecoveryConformance -v -count=1 ./internal/deploy
 
 test-install:
+	./scripts/ci/test-image-reference-validation.sh
 	./scripts/ci/test-install-swarm.sh
 	./scripts/ci/test-install-agent.sh
 	bash scripts/ci/test-control-plane-recovery.sh

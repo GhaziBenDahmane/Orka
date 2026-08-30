@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 release_image="${DOCKYARD_IMAGE:?DOCKYARD_IMAGE is required}"
 evidence_file="${DOCKYARD_SOAK_EVIDENCE:-release-soak-evidence.json}"
 postgres_image="${DOCKYARD_SOAK_POSTGRES_IMAGE:-postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}"
@@ -32,14 +33,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command in curl date docker grep head jq; do
+for command in awk curl date docker grep head jq; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 case "$soak_seconds" in
   ''|*[!0-9]*) fail "DOCKYARD_RELEASE_SOAK_SECONDS must be an integer" ;;
 esac
 (( soak_seconds >= 60 && soak_seconds <= 86400 )) || fail "DOCKYARD_RELEASE_SOAK_SECONDS must be between 60 and 86400"
-if [[ "$release_image" != *@sha256:* && "${DOCKYARD_SOAK_ALLOW_MUTABLE_IMAGE:-false}" != true ]]; then
+if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$postgres_image"; then
+  fail "DOCKYARD_SOAK_POSTGRES_IMAGE must be pinned by digest"
+fi
+if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$release_image" && [[ "${DOCKYARD_SOAK_ALLOW_MUTABLE_IMAGE:-false}" != true ]]; then
   fail "DOCKYARD_IMAGE must be pinned by digest"
 fi
 case "${DOCKYARD_SOAK_SKIP_PULLS:-false}" in

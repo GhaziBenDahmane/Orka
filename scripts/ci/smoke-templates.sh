@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 project="dockyard-template-smoke"
 port="${DOCKYARD_TEMPLATE_SMOKE_PORT:-18081}"
 evidence_file="${DOCKYARD_TEMPLATE_EVIDENCE:-template-conformance.json}"
@@ -154,7 +155,7 @@ for template_key in 9router postgres redis barktrace-sqlite barktrace-postgres; 
   wait_for_service "$service_name"
   probe_product "$template_key" "$service_name" "$stack"
   resolved_image="$(docker service inspect "$service_name" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
-  [[ "$resolved_image" == *@sha256:* ]]
+  "$root_dir/scripts/ci/validate-image-reference.sh" "$resolved_image"
   if [[ "$template_key" == barktrace-* ]]; then
     [[ "$resolved_image" == "ghcr.io/barktrace/bark:$barktrace_version@sha256:"* ]]
   fi
@@ -163,7 +164,7 @@ for template_key in 9router postgres redis barktrace-sqlite barktrace-postgres; 
   data_verification_applicable=true
   if [[ "$template_key" == 9router ]]; then
     headroom_image="$(docker service inspect "${stack}_headroom" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
-    [[ "$headroom_image" == *@sha256:* ]]
+    "$root_dir/scripts/ci/validate-image-reference.sh" "$headroom_image"
     dependency_images="$(jq -cn --arg image "$headroom_image" '[{service:"headroom",image:$image}]')"
     data_verified=false
     data_verification_applicable=false

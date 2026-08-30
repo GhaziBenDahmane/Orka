@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+
 if [ "$#" -ne 1 ]; then
   echo "usage: $0 OUTPUT_DIRECTORY" >&2
   exit 2
@@ -22,7 +24,7 @@ esac
 case "$database_user" in
   ""|-*|*[!A-Za-z0-9_]*) echo "invalid DOCKYARD_POSTGRES_USER" >&2; exit 1 ;;
 esac
-if ! printf '%s\n' "$image" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$'; then
+if ! "$root/scripts/ci/validate-image-reference.sh" "$image"; then
   echo "DOCKYARD_IMAGE must be the deployed image reference pinned by sha256 digest" >&2
   exit 1
 fi

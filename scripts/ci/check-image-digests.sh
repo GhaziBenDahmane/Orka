@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+root=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
+validator="$root/scripts/ci/validate-image-reference.sh"
+
 mode=${1:-controller}
 if [ "$mode" = "build" ]; then
   dockerfile=${DOCKYARD_DOCKERFILE:-Dockerfile}
@@ -10,7 +13,7 @@ if [ "$mode" = "build" ]; then
     exit 1
   fi
   for image in $images; do
-    if ! printf '%s\n' "$image" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$'; then
+    if ! "$validator" "$image"; then
       echo "$dockerfile base image must be pinned by sha256 digest: $image" >&2
       exit 1
     fi
@@ -28,7 +31,7 @@ fi
 
 for variable in $variables; do
   value=$(printenv "$variable" || true)
-  if ! printf '%s\n' "$value" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$'; then
+  if ! "$validator" "$value"; then
     echo "$variable must be an image reference pinned by sha256 digest" >&2
     exit 1
   fi

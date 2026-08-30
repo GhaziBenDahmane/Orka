@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 previous_image="${DOCKYARD_PREVIOUS_IMAGE:?DOCKYARD_PREVIOUS_IMAGE is required}"
 candidate_image="${DOCKYARD_CANDIDATE_IMAGE:?DOCKYARD_CANDIDATE_IMAGE is required}"
 evidence_file="${DOCKYARD_UPGRADE_EVIDENCE:-upgrade-conformance.json}"
@@ -44,10 +45,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command in curl docker jq openssl sha256sum; do
+for command in awk curl docker jq openssl sha256sum; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
-if [[ "$previous_image" != *@sha256:* && "${DOCKYARD_UPGRADE_ALLOW_MUTABLE_PREVIOUS:-false}" != true ]]; then
+if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$postgres_image"; then
+  fail "DOCKYARD_UPGRADE_POSTGRES_IMAGE must be pinned by digest"
+fi
+if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$candidate_image"; then
+  fail "the candidate release image must be pinned by digest"
+fi
+if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$previous_image" && [[ "${DOCKYARD_UPGRADE_ALLOW_MUTABLE_PREVIOUS:-false}" != true ]]; then
   fail "the previous release image must be pinned by digest"
 fi
 [[ "$candidate_image" != "$previous_image" ]] || fail "candidate and previous image must differ"

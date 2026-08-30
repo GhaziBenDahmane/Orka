@@ -22,14 +22,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-for command in docker git jq timeout; do
+for command in awk docker git jq timeout; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "$command is required for Swarm HA conformance" >&2
     exit 1
   fi
 done
 for image in "$dind_image" "$probe_image"; do
-  if [[ ! "$image" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
+  if ! "$root_dir/scripts/ci/validate-image-reference.sh" "$image"; then
     echo "Swarm HA conformance images must be pinned by sha256 digest: $image" >&2
     exit 1
   fi
