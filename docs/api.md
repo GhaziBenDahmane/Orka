@@ -185,9 +185,13 @@ renewal/completion is fenced by a per-attempt UUID.
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a
-new fingerprint after the limit returns `409 ai_audit_finding_limit`.
+fingerprint recurring in a later run by the same auditor identity and agent is
+linked to its previous occurrence. Acknowledgements carry forward, while a
+resolved finding reopens when it recurs. The API reports `previousFindingId`
+and `occurrenceNumber` for this lineage. A new fingerprint after the limit
+returns `409 ai_audit_finding_limit`.
 
-The first four endpoints require an `auditor` service account; the last two
+The first four endpoints require an `auditor` service account; the last three
 require an administrator. Auditor identities have no normal RBAC rank and
 cannot mutate workloads. See `ai-auditing.md` for the deployment contract.
 

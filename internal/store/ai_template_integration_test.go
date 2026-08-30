@@ -132,15 +132,22 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	finding, err := db.AddAIAuditFinding(ctx, organizationID, account.ID, AIAuditFinding{RunID: run.ID, Severity: "high", Category: "backup", Title: "No backup", Description: "No recent successful backup", Evidence: json.RawMessage(`{}`), Fingerprint: "backup:none"})
+	forgedActor := uuid.New()
+	forgedAt := time.Now().UTC()
+	finding, err := db.AddAIAuditFinding(ctx, organizationID, account.ID, AIAuditFinding{RunID: run.ID, Severity: "high", Category: "backup", Title: "No backup", Description: "No recent successful backup", Evidence: json.RawMessage(`{}`), Fingerprint: "backup:none", Disposition: "resolved", TriageNote: "forged", TriagedByUser: &forgedActor, TriagedAt: &forgedAt, OccurrenceNumber: 99})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if finding.ID == uuid.Nil {
-		t.Fatal("finding id is empty")
+	if finding.ID == uuid.Nil || finding.Disposition != "open" || finding.TriageNote != "" || finding.TriagedByUser != nil || finding.TriagedAt != nil || finding.OccurrenceNumber != 1 {
+		t.Fatalf("new finding accepted untrusted lifecycle fields: %#v", finding)
 	}
 	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, run.ID, "completed", "one finding"); err != nil {
 		t.Fatal(err)
+	}
+	triagePrincipal := Principal{UserID: userID, OrganizationID: organizationID, Role: "owner"}
+	finding, err = db.UpdateAIAuditFindingDisposition(ctx, triagePrincipal, finding.ID, "acknowledged", "accepted risk", "127.0.0.1")
+	if err != nil || finding.Disposition != "acknowledged" {
+		t.Fatalf("acknowledge finding=%#v err=%v", finding, err)
 	}
 	previous, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "reliability", "v1", "test", json.RawMessage(`{"kind":"platform"}`))
 	if err != nil {
@@ -162,6 +169,10 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recurrence, err := db.AddAIAuditFinding(ctx, organizationID, account.ID, AIAuditFinding{RunID: parallelRun.ID, Severity: "critical", Category: "backup", Title: "Still no backup", Description: "No recent successful backup", Evidence: json.RawMessage(`{}`), Fingerprint: "backup:none"})
+	if err != nil || recurrence.PreviousFindingID == nil || *recurrence.PreviousFindingID != finding.ID || recurrence.OccurrenceNumber != 2 || recurrence.Disposition != "acknowledged" || recurrence.TriageNote != "accepted risk" || recurrence.TriagedByUser == nil || *recurrence.TriagedByUser != userID {
+		t.Fatalf("acknowledged recurrence=%#v err=%v", recurrence, err)
+	}
 	var activeRuns int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM ai_audit_runs WHERE service_account_id=$1 AND status='running'`, account.ID).Scan(&activeRuns); err != nil || activeRuns != 2 {
 		t.Fatalf("independent active audit runs=%d err=%v", activeRuns, err)
@@ -170,6 +181,20 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, parallelRun.ID, "completed", "parallel specialist completed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.UpdateAIAuditFindingDisposition(ctx, triagePrincipal, recurrence.ID, "resolved", "fixed", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	reopenedRun, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "security", "v3", "test", json.RawMessage(`{"kind":"platform"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := db.AddAIAuditFinding(ctx, organizationID, account.ID, AIAuditFinding{RunID: reopenedRun.ID, Severity: "high", Category: "backup", Title: "No backup again", Description: "The resolved condition recurred", Evidence: json.RawMessage(`{}`), Fingerprint: "backup:none"})
+	if err != nil || reopened.PreviousFindingID == nil || *reopened.PreviousFindingID != recurrence.ID || reopened.OccurrenceNumber != 3 || reopened.Disposition != "open" || reopened.TriageNote != "" || reopened.TriagedByUser != nil || reopened.TriagedAt != nil {
+		t.Fatalf("resolved recurrence=%#v err=%v", reopened, err)
+	}
+	if err = db.FinishAIAuditRun(ctx, organizationID, account.ID, reopenedRun.ID, "completed", "recurrence reopened"); err != nil {
 		t.Fatal(err)
 	}
 	projectID, environmentID, serviceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()

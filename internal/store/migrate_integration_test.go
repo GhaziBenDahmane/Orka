@@ -291,6 +291,40 @@ func TestMigrateRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestMigrateAIFindingRecurrencePreservesExistingTriage(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "078_agent_ca_fingerprints.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, userID, accountID, runID, findingID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'AI recurrence upgrade',$2)`, []any{organizationID, "ai-recurrence-upgrade-" + organizationID.String()}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!upgrade')`, []any{userID, userID.String() + "@example.test"}},
+		{`INSERT INTO service_accounts(id,organization_id,name,role) VALUES($1,$2,'auditor','auditor')`, []any{accountID, organizationID}},
+		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status) VALUES($1,$2,$3,'security','completed')`, []any{runID, organizationID, accountID}},
+		{`INSERT INTO ai_audit_findings(id,run_id,severity,category,title,description,evidence,fingerprint,disposition,triage_note,triaged_by_user_id,triaged_at) VALUES($1,$2,'high','backup','No backup','Missing backup','{}','backup:none','acknowledged','accepted risk',$3,now())`, []any{findingID, runID, userID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var disposition, note string
+	var previousFindingID *uuid.UUID
+	var occurrenceNumber int
+	if err := pool.QueryRow(ctx, `SELECT disposition,triage_note,previous_finding_id,occurrence_number FROM ai_audit_findings WHERE id=$1`, findingID).Scan(&disposition, &note, &previousFindingID, &occurrenceNumber); err != nil {
+		t.Fatal(err)
+	}
+	if disposition != "acknowledged" || note != "accepted risk" || previousFindingID != nil || occurrenceNumber != 1 {
+		t.Fatalf("upgraded finding disposition=%q note=%q previous=%v occurrence=%d", disposition, note, previousFindingID, occurrenceNumber)
+	}
+}
+
 func TestMigrateAIAuditSingleFlightReconcilesExistingRuns(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "075_ai_audit_observability.sql"); err != nil {

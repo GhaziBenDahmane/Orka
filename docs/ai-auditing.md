@@ -57,6 +57,10 @@ keys make it a privileged service.
   findings with an optional operator note. These triage changes are
   tenant-scoped and enter the platform audit log; auditor identities cannot
   alter disposition.
+- A recurring fingerprint from the same auditor identity and agent carries an
+  acknowledged disposition and its operator context into the next run. A
+  finding that reappears after resolution is reopened automatically, linked to
+  the prior occurrence, and shown with its occurrence count.
 - Snapshot strings are explicitly treated as untrusted data. The built-in
   runner bounds model responses and finding counts, validates every structured
   field, and rejects oversized evidence before submitting results. The API
