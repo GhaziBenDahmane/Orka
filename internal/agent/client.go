@@ -583,7 +583,7 @@ func validateTrustUpdate(trustBundle, signingCA []byte) error {
 }
 
 func (c *Client) inspectServiceState(ctx context.Context) (string, string, error) {
-	output, err := exec.CommandContext(ctx, c.cfg.DockerBin, "service", "inspect", "--format", "{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}", c.cfg.ServiceName).CombinedOutput()
+	output, err := boundedAgentCommandOutput(ctx, c.cfg.DockerBin, "service", "inspect", "--format", "{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}", c.cfg.ServiceName)
 	if err != nil {
 		return "", "", fmt.Errorf("inspect agent service: %s: %w", strings.TrimSpace(string(output)), err)
 	}
@@ -721,7 +721,7 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		if !digestImagePattern.MatchString(payload.Image) {
 			return "", errors.New("agent upgrade image must be pinned by sha256 digest")
 		}
-		output, err := exec.CommandContext(ctx, c.cfg.DockerBin, "service", "update", "--detach=true", "--update-order", "start-first", "--with-registry-auth", "--image", payload.Image, c.cfg.ServiceName).CombinedOutput()
+		output, err := boundedAgentCommandOutput(ctx, c.cfg.DockerBin, "service", "update", "--detach=true", "--update-order", "start-first", "--with-registry-auth", "--image", payload.Image, c.cfg.ServiceName)
 		return string(output), err
 	default:
 		return "", fmt.Errorf("unsupported command kind %q", cmd.Kind)
@@ -733,6 +733,42 @@ var (
 	endpointHostnameLabelPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$`)
 )
 var digestImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
+
+const maxAgentDockerOutputBytes = 1 << 20
+
+type boundedAgentOutput struct {
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (w *boundedAgentOutput) Write(value []byte) (int, error) {
+	original := len(value)
+	remaining := maxAgentDockerOutputBytes - w.buffer.Len()
+	if remaining <= 0 {
+		w.truncated = w.truncated || original > 0
+		return original, nil
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+		w.truncated = true
+	}
+	_, _ = w.buffer.Write(value)
+	return original, nil
+}
+
+func boundedAgentCommandOutput(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, executable, args...)
+	output := &boundedAgentOutput{}
+	command.Stdout, command.Stderr = output, output
+	err := command.Run()
+	if output.truncated {
+		if err != nil {
+			return output.buffer.Bytes(), errors.Join(err, errors.New("docker command output exceeded 1 MiB"))
+		}
+		return output.buffer.Bytes(), errors.New("docker command output exceeded 1 MiB")
+	}
+	return output.buffer.Bytes(), err
+}
 
 func (c *Client) executeArtifactJob(ctx context.Context, raw json.RawMessage) (string, error) {
 	var job deploy.RemoteArtifactJob

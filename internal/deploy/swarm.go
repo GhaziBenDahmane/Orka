@@ -67,6 +67,37 @@ var _ VolumeNodeResolver = Swarm{}
 
 var safeRuntimeServiceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
+const maxDockerCommandOutputBytes = 1 << 20
+
+const dockerOutputTruncatedMarker = "\n...[docker output truncated]"
+
+type boundedCommandOutput struct {
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newBoundedCommandOutput(limit int) *boundedCommandOutput {
+	return &boundedCommandOutput{limit: limit}
+}
+
+func (w *boundedCommandOutput) Write(value []byte) (int, error) {
+	original := len(value)
+	remaining := w.limit - w.buffer.Len()
+	if remaining <= 0 {
+		w.truncated = w.truncated || original > 0
+		return original, nil
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+		w.truncated = true
+	}
+	_, _ = w.buffer.Write(value)
+	return original, nil
+}
+
+func (w *boundedCommandOutput) String() string { return w.buffer.String() }
+
 type Node struct {
 	ID            string `json:"id"`
 	Hostname      string `json:"hostname"`
@@ -250,17 +281,24 @@ func (s Swarm) Logs(ctx context.Context, stackName string, tail int) (string, er
 	if err != nil {
 		return "", err
 	}
-	var all strings.Builder
+	all := newBoundedCommandOutput(maxDockerCommandOutputBytes - len(dockerOutputTruncatedMarker))
 	for _, service := range strings.Fields(services) {
-		output, logErr := s.run(ctx, "service", "logs", "--raw", "--timestamps", "--tail", strconv.Itoa(tail), service)
+		output, logErr := s.runAllowTruncated(ctx, "service", "logs", "--raw", "--timestamps", "--tail", strconv.Itoa(tail), service)
 		if logErr != nil {
-			all.WriteString(logErr.Error())
+			_, _ = all.Write([]byte(logErr.Error()))
 		} else {
-			all.WriteString(output)
+			_, _ = all.Write([]byte(output))
 		}
-		all.WriteByte('\n')
+		_, _ = all.Write([]byte{'\n'})
+		if all.truncated {
+			break
+		}
 	}
-	return all.String(), nil
+	result := all.String()
+	if all.truncated {
+		result += dockerOutputTruncatedMarker
+	}
+	return result, nil
 }
 
 func (s Swarm) Status(ctx context.Context, stackName string) (StackStatus, error) {
@@ -634,20 +672,33 @@ func (s Swarm) convergenceStatus(ctx context.Context, stack string, startedAt ti
 }
 
 func (s Swarm) run(ctx context.Context, args ...string) (string, error) {
-	return s.runEnv(ctx, nil, args...)
+	return s.runEnvMode(ctx, nil, false, args...)
 }
 func (s Swarm) runEnv(ctx context.Context, env map[string]string, args ...string) (string, error) {
+	return s.runEnvMode(ctx, env, false, args...)
+}
+func (s Swarm) runAllowTruncated(ctx context.Context, args ...string) (string, error) {
+	return s.runEnvMode(ctx, nil, true, args...)
+}
+func (s Swarm) runEnvMode(ctx context.Context, env map[string]string, allowTruncated bool, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, s.DockerBin, args...)
 	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	output := newBoundedCommandOutput(maxDockerCommandOutputBytes - len(dockerOutputTruncatedMarker))
+	cmd.Stdout = output
+	cmd.Stderr = output
 	err := cmd.Run()
-	if err != nil {
-		return output.String(), fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(output.String()))
+	captured := output.String()
+	if output.truncated {
+		captured += dockerOutputTruncatedMarker
 	}
-	return output.String(), nil
+	if err != nil {
+		return captured, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(captured))
+	}
+	if output.truncated && !allowTruncated {
+		return captured, fmt.Errorf("docker %s: output exceeded %d bytes", strings.Join(args, " "), maxDockerCommandOutputBytes)
+	}
+	return captured, nil
 }

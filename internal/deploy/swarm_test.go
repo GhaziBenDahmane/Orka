@@ -534,3 +534,34 @@ exit 1
 		t.Fatalf("stale rollback blocked no-op reconciliation: done=%v err=%v", done, err)
 	}
 }
+
+func TestDockerCommandOutputIsBounded(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+if [ "$1" = info ]; then yes x | head -c 1100000; exit 0; fi
+if [ "$1" = stack ] && [ "$2" = services ]; then printf '%s\n' test_web test_worker; exit 0; fi
+if [ "$1" = service ] && [ "$2" = logs ]; then yes x | head -c 700000; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	swarm := Swarm{DockerBin: docker}
+	output, err := swarm.run(context.Background(), "info")
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") || len(output) > maxDockerCommandOutputBytes || !strings.HasSuffix(output, dockerOutputTruncatedMarker) {
+		t.Fatalf("strict output bytes=%d err=%v suffix=%v", len(output), err, strings.HasSuffix(output, dockerOutputTruncatedMarker))
+	}
+	logs, err := swarm.Logs(context.Background(), "test", 500)
+	if err != nil || len(logs) > maxDockerCommandOutputBytes || !strings.HasSuffix(logs, dockerOutputTruncatedMarker) {
+		t.Fatalf("logs bytes=%d err=%v suffix=%v", len(logs), err, strings.HasSuffix(logs, dockerOutputTruncatedMarker))
+	}
+}
+
+func TestBoundedCommandOutputReportsConsumedInput(t *testing.T) {
+	output := newBoundedCommandOutput(3)
+	written, err := output.Write([]byte("abcdef"))
+	if err != nil || written != 6 || output.String() != "abc" || !output.truncated {
+		t.Fatalf("written=%d output=%q truncated=%v err=%v", written, output.String(), output.truncated, err)
+	}
+}

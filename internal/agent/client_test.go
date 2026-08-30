@@ -781,3 +781,15 @@ func TestInspectServiceStateReportsImageAndRollout(t *testing.T) {
 		t.Fatalf("image=%q state=%q", gotImage, gotState)
 	}
 }
+
+func TestAgentDockerCommandOutputIsBounded(t *testing.T) {
+	directory := t.TempDir()
+	dockerBin := filepath.Join(directory, "docker")
+	if err := os.WriteFile(dockerBin, []byte("#!/bin/sh\nyes x | head -c 1100000\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := boundedAgentCommandOutput(context.Background(), dockerBin, "info")
+	if err == nil || !strings.Contains(err.Error(), "output exceeded 1 MiB") || len(output) != maxAgentDockerOutputBytes {
+		t.Fatalf("output bytes=%d err=%v", len(output), err)
+	}
+}

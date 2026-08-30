@@ -220,12 +220,24 @@ func (s Swarm) runInput(ctx context.Context, input []byte, args ...string) (stri
 	cmd := exec.CommandContext(ctx, s.DockerBin, args...)
 	cmd.Env = os.Environ()
 	cmd.Stdin = bytes.NewReader(input)
-	var output bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &output, &output
+	output := newBoundedCommandOutput(maxDockerCommandOutputBytes - len(dockerOutputTruncatedMarker))
+	cmd.Stdout, cmd.Stderr = output, output
+	captured := ""
 	if err := cmd.Run(); err != nil {
-		return output.String(), fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(output.String()))
+		captured = output.String()
+		if output.truncated {
+			captured += dockerOutputTruncatedMarker
+		}
+		return captured, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(captured))
 	}
-	return output.String(), nil
+	captured = output.String()
+	if output.truncated {
+		captured += dockerOutputTruncatedMarker
+	}
+	if output.truncated {
+		return captured, fmt.Errorf("docker %s: output exceeded %d bytes", strings.Join(args, " "), maxDockerCommandOutputBytes)
+	}
+	return captured, nil
 }
 
 func reverseNonEmptyLines(value string) []string {

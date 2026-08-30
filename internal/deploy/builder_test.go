@@ -430,3 +430,19 @@ func TestSafeSubmoduleURL(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildCommandOutputModesAreBounded(t *testing.T) {
+	directory := t.TempDir()
+	command := filepath.Join(directory, "build-tool")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nyes x | head -c 1100000\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	strict, err := run(context.Background(), command, nil)
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") || len(strict) > maxDockerCommandOutputBytes || !strings.HasSuffix(strict, dockerOutputTruncatedMarker) {
+		t.Fatalf("strict bytes=%d err=%v", len(strict), err)
+	}
+	verbose, err := runVerbose(context.Background(), command, nil)
+	if err != nil || len(verbose) > maxDockerCommandOutputBytes || !strings.HasSuffix(verbose, dockerOutputTruncatedMarker) {
+		t.Fatalf("verbose bytes=%d err=%v", len(verbose), err)
+	}
+}

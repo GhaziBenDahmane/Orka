@@ -322,7 +322,7 @@ until an administrator retries them.
 | GET | `/v1/services/{id}/deployments` | Read deployment history |
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful snapshot |
-| GET | `/v1/services/{id}/logs` | Read aggregated Swarm service logs |
+| GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
 | POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |
 | DELETE | `/v1/services/{id}/deploy-tokens/{tokenId}` | Revoke a CI deploy-hook credential |
@@ -362,6 +362,11 @@ files, and passed with BuildKit `--secret`. Submodules are restricted to
 relative URLs or the source repository's original protocol, hostname, and
 port. Omitting either build-settings map preserves its stored values; sending
 an empty object clears that map.
+
+Controller and agent Docker subprocesses retain at most 1 MiB of combined
+stdout/stderr. Commands whose output is parsed fail closed when that boundary
+is reached; verbose build and service-log output is explicitly marked as
+truncated so successful work is not discarded merely for being noisy.
 
 Sources with `buildType=static` package an existing repository subdirectory
 from `outputDirectory` into a minimal Caddy image pinned by digest. Static mode
