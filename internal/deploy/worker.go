@@ -683,7 +683,8 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	rows.Close()
 	compiled := compose
-	if trigger != "reconcile" {
+	immutableReplay := trigger == "reconcile" || trigger == "rollback"
+	if !immutableReplay {
 		compiled, err = w.Compiler.Compile(compose, routes)
 	}
 	if err != nil {
@@ -701,7 +702,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	buildOutput := ""
 	var deploymentRegistryCredential *Credential
-	if err == nil && trigger != "reconcile" {
+	if err == nil && !immutableReplay {
 		var source store.ApplicationSource
 		source.ComposeServiceID = uuid.Nil
 		var gitCredentialID, registryCredentialID *uuid.UUID
@@ -779,6 +780,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 			err = sourceErr
 		}
 	}
+	if err == nil && immutableReplay {
+		deploymentRegistryCredential, err = w.registryCredentialForDeployment(ctx, id)
+	}
 	if err == nil {
 		compiled, err = w.pinPersistentStorage(ctx, serviceID, stack, compiled, clusterID)
 	}
@@ -797,6 +801,27 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		w.markDeployment(ctx, j, id, "failed", buildOutput, err)
 	}
 	return err
+}
+
+func (w *Worker) registryCredentialForDeployment(ctx context.Context, deploymentID uuid.UUID) (*Credential, error) {
+	var id uuid.UUID
+	var server, username, encrypted string
+	err := w.Store.Pool.QueryRow(ctx, `SELECT credential.id,credential.server,credential.username,credential.encrypted_secret
+		FROM deployments deployment
+		JOIN application_sources source ON source.compose_service_id=deployment.compose_service_id
+		JOIN source_credentials credential ON credential.id=source.registry_credential_id
+		WHERE deployment.id=$1`, deploymentID).Scan(&id, &server, &username, &encrypted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	plain, err := w.Box.DecryptResource(encrypted, "source-credential", id.String(), "source-credential")
+	if err != nil {
+		return nil, err
+	}
+	return &Credential{Kind: "registry", Server: server, Username: username, Secret: string(plain)}, nil
 }
 
 func (w *Worker) pinPersistentStorage(ctx context.Context, serviceID uuid.UUID, stack, compose string, clusterID *uuid.UUID) (string, error) {

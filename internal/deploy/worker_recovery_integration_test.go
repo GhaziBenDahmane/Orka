@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -337,15 +338,19 @@ func TestFinishSerializesWithCancellation(t *testing.T) {
 }
 
 type takeoverScheduler struct {
-	started chan struct{}
-	release chan struct{}
-	compose chan string
-	output  string
+	started    chan struct{}
+	release    chan struct{}
+	compose    chan string
+	credential chan *Credential
+	output     string
 }
 
-func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string, _ map[string]string, _ *Credential) (DeploymentResult, error) {
+func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string, _ map[string]string, credential *Credential) (DeploymentResult, error) {
 	if s.compose != nil {
 		s.compose <- compose
+	}
+	if s.credential != nil {
+		s.credential <- credential
 	}
 	if s.started != nil {
 		close(s.started)
@@ -362,6 +367,61 @@ func (s takeoverScheduler) Deploy(ctx context.Context, _ string, compose string,
 		resolved["web"] = "registry.example/app@sha256:" + strings.Repeat("b", 64)
 	}
 	return DeploymentResult{Output: s.output, ResolvedImages: resolved}, nil
+}
+
+func TestRollbackDeploymentReplaysImmutableSnapshotWithoutRebuild(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	box, err := cryptox.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID, serviceID, credentialID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	effective := "services:\n  web:\n    image: registry.example/private/app@sha256:" + strings.Repeat("a", 64) + "\n"
+	encryptedCredential, err := box.Encrypt([]byte("registry-secret"), cryptox.ResourceContext("source-credential", credentialID.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'rollback-worker',$2)`, []any{organizationID, "rollback-worker-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'app','app',$3,'services: {web: {image: moving-source}}')`, []any{serviceID, environmentID, "rollback-worker-" + serviceID.String()}},
+		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,'registry','private registry','registry.example','robot',$3)`, []any{credentialID, organizationID, encryptedCredential}},
+		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://invalid.example/repository','web','registry.example/private/app',$2)`, []any{serviceID, credentialID}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,finished_at) VALUES($1,$2,1,'services: {web: {image: moving-old-tag}}',$3,'','succeeded','manual',now())`, []any{uuid.New(), serviceID, effective}},
+	}
+	for _, statement := range statements {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rollback, err := db.QueueRollback(ctx, organizationID, serviceID, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &Worker{Store: db, Box: box, ID: "rollback-test"}
+	claimed, err := worker.claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployed, credential := make(chan string, 1), make(chan *Credential, 1)
+	worker.Swarm = takeoverScheduler{compose: deployed, credential: credential}
+	if err = worker.execute(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-deployed; got != effective {
+		t.Fatalf("rollback rebuilt or recompiled immutable snapshot:\n%s\nwant:\n%s", got, effective)
+	}
+	if got := <-credential; got == nil || got.Server != "registry.example" || got.Username != "robot" || got.Secret != "registry-secret" {
+		t.Fatalf("rollback registry credential=%#v", got)
+	}
+	var status, stored string
+	if err = db.Pool.QueryRow(ctx, `SELECT status,effective_compose FROM deployments WHERE id=$1`, rollback.ID).Scan(&status, &stored); err != nil || status != "succeeded" || stored != effective {
+		t.Fatalf("rollback status=%q effective=%q err=%v", status, stored, err)
+	}
 }
 
 func TestReconciliationDeploymentUsesEffectiveSnapshotWithoutRebuild(t *testing.T) {
