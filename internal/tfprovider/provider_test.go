@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 16 {
+	if len(instance.Resources(context.Background())) != 17 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -55,6 +55,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_resource_policy") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_cluster") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -226,6 +229,20 @@ func TestResourcePolicyStateInputAndImport(t *testing.T) {
 		if _, _, err = splitResourcePolicyImportID(invalid); err == nil {
 			t.Errorf("splitResourcePolicyImportID(%q) succeeded", invalid)
 		}
+	}
+}
+
+func TestClusterStateUsesStringLabelsAndComputedPosture(t *testing.T) {
+	model := clusterModel{}
+	err := setCluster(&model, clusterResponse{
+		ID: "cluster-id", Name: "Paris", Slug: "paris", State: "active", Labels: map[string]any{"region": "eu-west"}, Capacity: map[string]any{"nodes": float64(3)},
+		AgentVersion: "1.2.3", DockerVersion: "28.0", CertificateAuthorityFingerprint: "sha256:abc", CreatedAt: "2026-08-30T12:00:00Z", UpdatedAt: "2026-08-30T12:00:00Z",
+	})
+	if err != nil || model.ID.ValueString() != "cluster-id" || model.State.ValueString() != "active" || model.Labels.IsNull() || model.CapacityJSON.ValueString() != `{"nodes":3}` || !model.LastSeenAt.IsNull() {
+		t.Fatalf("cluster state=%#v err=%v", model, err)
+	}
+	if err = setCluster(&model, clusterResponse{Labels: map[string]any{"region": float64(1)}}); err == nil {
+		t.Fatal("non-string cluster label was accepted")
 	}
 }
 

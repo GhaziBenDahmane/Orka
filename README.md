@@ -176,6 +176,12 @@ Organization, project, and environment maintenance/quota policy can be read or
 updated with the corresponding `policy`/`put-*-policy` CLI commands and managed
 declaratively with `dockyard_resource_policy`.
 
+Remote Swarm registration is available through `create-cluster`,
+`update-cluster`, and `delete-cluster`; `cluster-token` issues the short-lived
+one-time agent credential. Terraform/OpenTofu can own registration and observe
+agent posture with `dockyard_cluster`, while drain/activate transitions remain
+explicit operational actions.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

@@ -91,6 +91,10 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"delete-template-repository", "repository-id"}, http.MethodDelete, "/v1/template-repositories/repository-id"},
 		{[]string{"preview-template", "template-id", `{}`}, http.MethodPost, "/v1/templates/template-id/preview"},
 		{[]string{"template-versions", "service-id"}, http.MethodGet, "/v1/services/service-id/template-versions"},
+		{[]string{"clusters"}, http.MethodGet, "/v1/clusters"},
+		{[]string{"create-cluster", `{}`}, http.MethodPost, "/v1/clusters"},
+		{[]string{"update-cluster", "cluster-id", `{}`}, http.MethodPatch, "/v1/clusters/cluster-id"},
+		{[]string{"delete-cluster", "cluster-id"}, http.MethodDelete, "/v1/clusters/cluster-id"},
 		{[]string{"cluster-token", "cluster-id"}, http.MethodPost, "/v1/clusters/cluster-id/enrollment-tokens"},
 		{[]string{"agent-upgrade", "cluster-id", "repo/image@sha256:digest"}, http.MethodPost, "/v1/clusters/cluster-id/agent-upgrades"},
 		{[]string{"cluster-command", "cluster-id", "command-id"}, http.MethodGet, "/v1/clusters/cluster-id/commands/command-id"},
@@ -285,6 +289,17 @@ func TestResourcePolicyCommandBody(t *testing.T) {
 	policy := input.(map[string]any)
 	if policy["maintenance"] != true || policy["maintenanceReason"] != "upgrade" || policy["maxServices"] != float64(20) {
 		t.Fatalf("resource policy input=%#v", policy)
+	}
+}
+
+func TestClusterCommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"create-cluster", "-"}, strings.NewReader(`{"name":"Paris","labels":{"region":"eu-west"}}`))
+	if err != nil || method != http.MethodPost || path != "/v1/clusters" || input.(map[string]any)["name"] != "Paris" {
+		t.Fatalf("create cluster method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	method, path, input, err = commandRequest([]string{"update-cluster", "cluster-id", `{"state":"draining"}`}, strings.NewReader(""))
+	if err != nil || method != http.MethodPatch || path != "/v1/clusters/cluster-id" || input.(map[string]any)["state"] != "draining" {
+		t.Fatalf("update cluster method=%q path=%q input=%#v err=%v", method, path, input, err)
 	}
 }
 

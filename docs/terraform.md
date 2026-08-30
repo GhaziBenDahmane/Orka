@@ -18,6 +18,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_scim_token`
 - `dockyard_access_grant`
 - `dockyard_resource_policy`
+- `dockyard_cluster`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -110,6 +111,15 @@ to maintenance-disabled, unlimited defaults because policies are virtual
 singletons rather than deletable API objects. Import identifiers are
 `organization`, `project/PROJECT_UUID`, and
 `environment/ENVIRONMENT_UUID`.
+
+`dockyard_cluster` registers a remote Docker Swarm and exposes its observed
+agent, certificate, capacity, and heartbeat posture. Registration identity and
+labels are immutable because the control-plane API does not rename clusters.
+Enrollment tokens and active/draining/disabled transitions remain explicit
+`dockyardctl` operations so a declarative apply cannot activate an unenrolled
+agent or accidentally drain a live scheduler. Destroy queues the cluster
+finalizer and waits for removal; every assigned environment must be moved or
+destroyed first.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting
