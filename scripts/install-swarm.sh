@@ -178,8 +178,8 @@ if [ "$mode" = ha ]; then
     [ "$active_ca_fingerprint" != "$previous_ca_fingerprint" ] || fail "previous agent CA must differ from the active agent CA"
     unset active_ca_fingerprint previous_ca_fingerprint
   fi
-  if ! openssl verify -CAfile "$DOCKYARD_AGENT_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null 2>&1; then
-    [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ] && openssl verify -CAfile "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate verification failed against active and previous CAs"
+  if ! openssl verify -purpose sslserver -CAfile "$DOCKYARD_AGENT_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null 2>&1; then
+    [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ] && openssl verify -purpose sslserver -CAfile "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE" -verify_hostname "$DOCKYARD_AGENT_HOST" "$DOCKYARD_AGENT_SERVER_CERT_FILE" >/dev/null || fail "agent server certificate verification failed against active and previous CAs for TLS server authentication"
   fi
   secret_specs="$secret_specs
 ${agent_ca_cert_secret}:${DOCKYARD_AGENT_CA_CERT_FILE}

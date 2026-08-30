@@ -324,6 +324,28 @@ for secret in dockyard_agent_ca_cert dockyard_agent_ca_key dockyard_agent_server
   grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
 done
 
+openssl req -newkey rsa:2048 -nodes -subj '/CN=agents.example.test' \
+  -addext 'subjectAltName=DNS:agents.example.test' \
+  -addext 'extendedKeyUsage=clientAuth' \
+  -keyout "$temporary/secrets/agent-client-only.key" -out "$temporary/agent-client-only.csr" >/dev/null 2>&1
+openssl x509 -req -days 30 -CA "$temporary/secrets/agent-ca.crt" -CAkey "$temporary/secrets/agent-ca.key" \
+  -set_serial 3 -copy_extensions copy -in "$temporary/agent-client-only.csr" \
+  -out "$temporary/secrets/agent-client-only.crt" >/dev/null 2>&1
+chmod 0600 "$temporary/secrets/agent-client-only.key" "$temporary/secrets/agent-client-only.crt"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
+  DOCKYARD_AGENT_SERVER_CERT_FILE="$temporary/secrets/agent-client-only.crt" \
+  DOCKYARD_AGENT_SERVER_KEY_FILE="$temporary/secrets/agent-client-only.key" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'HA installer accepted a client-only certificate for the agent TLS server' >&2
+  exit 1
+fi
+grep -q 'agent server certificate verification failed against active and previous CAs for TLS server authentication' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid agent server certificate purpose failure mutated Docker state' >&2
+  exit 1
+fi
+
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Not A Certificate Authority' \
   -addext 'basicConstraints=critical,CA:FALSE' \
   -addext 'keyUsage=critical,digitalSignature' \
