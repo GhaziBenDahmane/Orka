@@ -87,9 +87,11 @@ docker stack deploy -c deploy/ai-auditors.yml dockyard-ai
 ```
 
 Set `DOCKYARD_AI_BASE_URL=http://9router:20128/v1` when 9Router shares the
-overlay network, or use another OpenAI-compatible endpoint. Separate replicas
-can use different `DOCKYARD_AI_AGENT_NAME` and `DOCKYARD_AI_AUDIT_FOCUS`
-values. The supplied manifest runs security and reliability specialists daily
+stack's encrypted `ai-control` network, or use another OpenAI-compatible
+endpoint. 9Router and Headroom are intentionally absent from
+`dockyard-public`, preventing tenant workloads attached for ingress from
+reaching the model gateway directly. Separate replicas can use different
+`DOCKYARD_AI_AGENT_NAME` and `DOCKYARD_AI_AUDIT_FOCUS` values. The supplied manifest runs security and reliability specialists daily
 and limits each complete audit lifecycle to ten minutes with
 `DOCKYARD_AI_AUDIT_TIMEOUT`. A replacement process with the same service
 account and agent name marks its predecessor failed before starting, while

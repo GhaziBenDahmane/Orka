@@ -8,14 +8,14 @@ services:
       NODE_ENV: production
       HEADROOM_URL: http://headroom:8787
     volumes: [nine-router-data:/app/data]
-    networks: [dockyard-public]
+    networks: [ai-control]
     deploy:
       replicas: 1
       restart_policy: {condition: on-failure, delay: 10s}
 
   headroom:
     image: ${HEADROOM_IMAGE:?set a digest-pinned Headroom image}
-    networks: [dockyard-public]
+    networks: [ai-control]
     deploy:
       replicas: 1
       restart_policy: {condition: on-failure, delay: 10s}
@@ -34,7 +34,7 @@ services:
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
-    networks: [dockyard-public]
+    networks: [dockyard-public, ai-control]
     read_only: true
     deploy:
       replicas: 1
@@ -56,7 +56,7 @@ services:
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
-    networks: [dockyard-public]
+    networks: [dockyard-public, ai-control]
     read_only: true
     deploy:
       replicas: 1
@@ -69,5 +69,9 @@ secrets:
   dockyard_ai_api_key: {external: true}
 networks:
   dockyard-public: {external: true}
+  ai-control:
+    driver: overlay
+    driver_opts:
+      encrypted: ""
 volumes:
   nine-router-data: {}

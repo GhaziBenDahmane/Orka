@@ -80,6 +80,9 @@ jobs:
           DOCKYARD_IMAGE: example/dockyard@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           POSTGRES_IMAGE: postgres@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           TRAEFIK_IMAGE: traefik@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          NINEROUTER_IMAGE: example/9router@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+          HEADROOM_IMAGE: example/headroom@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+          DOCKYARD_AI_MODEL: provider/model
         run: |
           scripts/ci/check-image-digests.sh build
           scripts/ci/check-image-digests.sh controller
@@ -87,6 +90,7 @@ jobs:
           DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml >/dev/null
           DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml -c deploy/swarm-ha.yml >/dev/null
           DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com docker stack config -c deploy/swarm.yml -c deploy/swarm-ha.yml -c deploy/swarm-agent-ca-rollover.yml >/dev/null
+          docker stack config -c deploy/ai-auditors.yml >/dev/null
 
   smoke:
     runs-on: ubuntu-latest
