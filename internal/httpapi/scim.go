@@ -184,6 +184,12 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		scimError(w, 400, "userName must be an email address")
 		return
 	}
+	var validDisplayName bool
+	in.DisplayName, validDisplayName = canonicalDisplayName(in.DisplayName)
+	if !validDisplayName {
+		scimError(w, 400, "displayName must not exceed 120 bytes")
+		return
+	}
 	tx, err := s.Store.Pool.Begin(r.Context())
 	if err != nil {
 		scimError(w, 500, "create failed")
@@ -371,6 +377,11 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 			name, ok := operation.Value.(string)
 			if !ok {
 				scimError(w, 400, "displayName must be a string")
+				return
+			}
+			name, ok = canonicalDisplayName(name)
+			if !ok {
+				scimError(w, 400, "displayName must not exceed 120 bytes")
 				return
 			}
 			if shared {

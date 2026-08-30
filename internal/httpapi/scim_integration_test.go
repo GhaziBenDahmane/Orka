@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,7 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	for _, invalid := range []string{"missing-at-sign", "Display Name <member@example.test>", "member@example.test@attacker.test"} {
 		doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": invalid, "active": true}, http.StatusBadRequest)
 	}
+	doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "oversized@example.test", "displayName": strings.Repeat("x", 121), "active": true}, http.StatusBadRequest)
 
 	createdUser := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "member-" + orgID.String() + "@example.test", "active": true}, http.StatusCreated)
 	memberID := createdUser["id"].(string)
@@ -74,6 +76,7 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	// attached by PATCH.
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Compromised"}}}, http.StatusNotFound)
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+otherUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": true}}}, http.StatusNotFound)
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": strings.Repeat("x", 121)}}}, http.StatusBadRequest)
 	var otherName string
 	var attached bool
 	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, otherUserID).Scan(&otherName); err != nil || otherName != "" {

@@ -317,7 +317,12 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "domain_not_allowed", "email domain is not allowed")
 		return
 	}
-	userID, err := s.Store.JITOIDCUser(r.Context(), provider, claims.Subject, email, claims.Name)
+	name, validName := canonicalDisplayName(claims.Name)
+	if !validName {
+		writeError(w, 401, "invalid_claims", "identity token display name is too long")
+		return
+	}
+	userID, err := s.Store.JITOIDCUser(r.Context(), provider, claims.Subject, email, name)
 	if err != nil {
 		writeStoreError(w, err)
 		return

@@ -112,10 +112,12 @@ func (s *Server) acceptOrganizationInvitation(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusNotFound, "invalid_invitation", "invitation is invalid or expired")
 		return
 	}
-	if len(input.DisplayName) > 120 || len(input.Password) > 1024 {
+	displayName, validDisplayName := canonicalDisplayName(input.DisplayName)
+	if !validDisplayName || len(input.Password) > 1024 {
 		writeError(w, http.StatusBadRequest, "invalid_invitation_profile", "display name or password is too long")
 		return
 	}
+	input.DisplayName = displayName
 	if !s.allowAuthenticationAttempt(w, r, "invitation-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "invitation", cryptox.Digest(input.Token), 20) {
 		return
 	}

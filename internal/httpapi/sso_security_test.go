@@ -45,6 +45,15 @@ func TestCanonicalEmailIsSharedAcrossIdentityProviders(t *testing.T) {
 	}
 }
 
+func TestCanonicalDisplayNameBoundsProvisionedProfiles(t *testing.T) {
+	if name, ok := canonicalDisplayName("  Example User  "); !ok || name != "Example User" {
+		t.Fatalf("canonical display name=%q valid=%t", name, ok)
+	}
+	if name, ok := canonicalDisplayName(strings.Repeat("a", 121)); ok || name != strings.Repeat("a", 121) {
+		t.Fatalf("oversized display name=%q valid=%t", name, ok)
+	}
+}
+
 func TestOIDCClientRefusesDiscoveryAndTokenRedirects(t *testing.T) {
 	targetRequests := 0
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

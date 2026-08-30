@@ -2731,4 +2731,9 @@ func canonicalEmail(raw string) (string, string, bool) {
 	return email, parts[1], true
 }
 
+func canonicalDisplayName(raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	return name, len(name) <= 120
+}
+
 var _ = fmt.Sprintf

@@ -484,7 +484,11 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "domain_not_allowed", "email domain is not allowed")
 		return
 	}
-	name := samlAttribute(assertion, provider.NameAttribute)
+	name, validName := canonicalDisplayName(samlAttribute(assertion, provider.NameAttribute))
+	if !validName {
+		writeError(w, 401, "invalid_claims", "SAML display name is too long")
+		return
+	}
 	userID, err := s.Store.JITSAMLUser(r.Context(), provider, assertion.Subject.NameID.Value, email, name)
 	if err != nil {
 		writeStoreError(w, err)
