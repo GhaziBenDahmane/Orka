@@ -65,6 +65,17 @@ func TestAuditExportIntegrityPaginationAndRetention(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='default.recent'`, defaultRetentionOrgID).Scan(&defaultRecent); err != nil || defaultRecent != 1 {
 		t.Fatalf("default-retention recent events=%d err=%v", defaultRecent, err)
 	}
+	backupDestinationID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials) VALUES($1,$2,'audit lookup','https://s3.example.test','audit',true,'encrypted')`, backupDestinationID, orgID); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := db.CreateAuditArchiveDestination(ctx, store.AuditArchiveDestination{OrganizationID: orgID, BackupDestinationID: backupDestinationID, Name: "compliance", ObjectPrefix: "audit", RetentionDays: 365})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, body := scopedAPIRequest(t, server.URL+"/v1/audit-archives/"+archive.ID.String(), token, orgID, http.MethodGet, nil); status != http.StatusOK || !bytes.Contains(body, []byte(`"name":"compliance"`)) {
+		t.Fatalf("audit archive lookup status=%d body=%s", status, body)
+	}
 	req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/audit-events/export?limit=2", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Organization-ID", orgID.String())

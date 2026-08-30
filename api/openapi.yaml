@@ -598,6 +598,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
   /v1/audit-archives/{archiveID}:
+    get:
+      operationId: get_v1_audit_archives_archiveID
+      tags: [audit-archives]
+      parameters:
+        - name: archiveID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
     delete:
       operationId: delete_v1_audit_archives_archiveID
       tags: [audit-archives]

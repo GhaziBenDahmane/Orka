@@ -130,6 +130,34 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		}
 		input, err := parseJSONArgument(args[2], stdin)
 		return http.MethodPatch, "/v1/ai/audit-findings/" + args[1], input, err
+	case "audit-retention":
+		return http.MethodGet, "/v1/audit-retention", nil, require(1)
+	case "put-audit-retention":
+		return jsonCommand(args, stdin, http.MethodPut, "/v1/audit-retention", 2)
+	case "audit-archives":
+		return http.MethodGet, "/v1/audit-archives", nil, require(1)
+	case "audit-archive":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/audit-archives/" + args[1], nil, nil
+	case "create-audit-archive":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/audit-archives", 2)
+	case "run-audit-archive":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/audit-archives/" + args[1] + "/run", map[string]any{}, nil
+	case "audit-archive-batches":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/audit-archives/" + args[1] + "/batches", nil, nil
+	case "delete-audit-archive":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/audit-archives/" + args[1], nil, nil
 	case "oidc-providers":
 		return http.MethodGet, "/v1/sso/oidc-providers", nil, require(1)
 	case "create-oidc-provider":
@@ -684,5 +712,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|members|update-member|delete-member|invitations|invitation|create-invitation|revoke-invitation|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|policy|put-policy|project-policy|put-project-policy|environment-policy|put-environment-policy|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|notification-endpoints|create-notification-endpoint|delete-notification-endpoint|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|create-cluster|update-cluster|delete-cluster|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|members|update-member|delete-member|invitations|invitation|create-invitation|revoke-invitation|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|audit-retention|put-audit-retention|audit-archives|audit-archive|create-audit-archive|run-audit-archive|audit-archive-batches|delete-audit-archive|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|policy|put-policy|project-policy|put-project-policy|environment-policy|put-environment-policy|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|notification-endpoints|create-notification-endpoint|delete-notification-endpoint|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|create-cluster|update-cluster|delete-cluster|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }

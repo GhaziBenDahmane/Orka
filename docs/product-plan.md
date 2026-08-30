@@ -240,7 +240,8 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
   expiring SCIM provisioning credentials, service accounts, and invitations,
   project/environment access grants,
   hierarchical maintenance/quota policy, remote cluster registration, and
-  encrypted notification endpoints, and organization authentication policy.
+  encrypted notification endpoints, audit retention and immutable archives,
+  and organization authentication policy.
   The console provides credential,
   backup-destination, OIDC, SAML, hierarchical policy,
   mandatory-SSO, audit retention/archive, and notification administration.

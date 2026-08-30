@@ -150,6 +150,10 @@ resource "dockyard_resource_policy" "organization" {
   max_databases    = 100
 }
 
+resource "dockyard_audit_retention" "organization" {
+  retention_days = 730
+}
+
 resource "dockyard_notification_endpoint" "operations" {
   name = "Operations webhook"
   kind = "webhook"
@@ -209,6 +213,14 @@ resource "dockyard_backup_destination" "primary" {
   use_tls    = true
   access_key = var.backup_access_key
   secret_key = var.backup_secret_key
+}
+
+# The bucket must have S3 Object Lock enabled before this resource is created.
+resource "dockyard_audit_archive" "compliance" {
+  name                  = "Compliance archive"
+  backup_destination_id = dockyard_backup_destination.primary.id
+  object_prefix         = "audit/production"
+  retention_days        = 730
 }
 
 resource "dockyard_volume_backup_policy" "uploads" {

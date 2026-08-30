@@ -22,6 +22,8 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_resource_policy`
 - `dockyard_cluster`
 - `dockyard_notification_endpoint`
+- `dockyard_audit_retention`
+- `dockyard_audit_archive`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -152,6 +154,19 @@ in the sensitive `signing_secret` attribute; protect state and deliver that
 value to the receiver before enabling alerts. Disabled endpoints are treated
 as drift and recreated. The resource is intentionally not importable because
 the API never returns provider credentials or generated signing secrets.
+
+`dockyard_audit_retention` manages the organization-wide 30–3650 day audit
+event and completed AI-audit retention window. Destroy resets the singleton to
+the documented 365-day default instead of deleting audit data.
+
+`dockyard_audit_archive` configures a hash-chained immutable archive in an
+existing `dockyard_backup_destination`. The destination must use TLS and its
+bucket must have S3 Object Lock enabled; creation verifies that capability.
+Archive location and COMPLIANCE retention are immutable, so every change
+creates a separately verified destination and disables the previous one.
+Destroy never deletes already retained archive objects. Manual archive runs
+and delivery-history inspection remain available through `dockyardctl`. Import
+an archive by its UUID; import the retention singleton with `organization`.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting

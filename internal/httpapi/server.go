@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /v1/audit-retention", s.requireRole("admin", http.HandlerFunc(s.putAuditRetention)))
 	mux.Handle("GET /v1/audit-archives", s.requireRole("admin", http.HandlerFunc(s.listAuditArchives)))
 	mux.Handle("POST /v1/audit-archives", s.requireRole("admin", http.HandlerFunc(s.createAuditArchive)))
+	mux.Handle("GET /v1/audit-archives/{archiveID}", s.requireRole("admin", http.HandlerFunc(s.getAuditArchive)))
 	mux.Handle("DELETE /v1/audit-archives/{archiveID}", s.requireRole("admin", http.HandlerFunc(s.deleteAuditArchive)))
 	mux.Handle("POST /v1/audit-archives/{archiveID}/run", s.requireRole("admin", http.HandlerFunc(s.runAuditArchive)))
 	mux.Handle("GET /v1/audit-archives/{archiveID}/batches", s.requireRole("admin", http.HandlerFunc(s.listAuditArchiveBatches)))

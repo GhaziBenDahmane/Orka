@@ -40,6 +40,13 @@ func TestAuditArchiveChainAndExplicitRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	loaded, err := db.GetAuditArchiveDestination(ctx, organizationID, destination.ID)
+	if err != nil || loaded.ID != destination.ID || loaded.BackupDestinationID != backupDestinationID || !loaded.Enabled {
+		t.Fatalf("loaded audit archive=%+v err=%v", loaded, err)
+	}
+	if _, err = db.GetAuditArchiveDestination(ctx, uuid.New(), destination.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant audit archive lookup error=%v, want not found", err)
+	}
 	first, err := db.QueueAuditArchive(ctx, organizationID, destination.ID)
 	if err != nil || first.FirstEventID == 0 || first.LastEventID < first.FirstEventID || first.PreviousSHA256 != "" {
 		t.Fatalf("first batch=%+v err=%v", first, err)

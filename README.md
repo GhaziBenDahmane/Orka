@@ -197,6 +197,12 @@ Expiring service-account credentials can be managed with
 token only in sensitive state and plans a replacement before expiry, while
 destroy disables the old automation identity.
 
+Audit retention and immutable S3 Object Lock archive destinations have
+dedicated `audit-retention`, `put-audit-retention`, and `audit-archive*` CLI
+commands. `dockyard_audit_retention` and `dockyard_audit_archive` provide the
+same policy lifecycle in Terraform/OpenTofu; archive replacement never deletes
+objects already protected by COMPLIANCE retention.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

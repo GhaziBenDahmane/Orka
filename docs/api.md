@@ -55,7 +55,7 @@ and operation durations.
 | GET | `/v1/audit-events/export?afterId=…&limit=…` | Export ascending NDJSON with integrity headers |
 | GET/PUT | `/v1/audit-retention` | Read or set the 30–3650 day retention policy |
 | GET/POST | `/v1/audit-archives` | List or configure S3 Object Lock audit archives |
-| DELETE | `/v1/audit-archives/{id}` | Disable an archive without deleting retained objects |
+| GET/DELETE | `/v1/audit-archives/{id}` | Inspect or disable an archive without deleting retained objects |
 | POST | `/v1/audit-archives/{id}/run` | Queue an archive batch or explicitly retry a failed batch |
 | GET | `/v1/audit-archives/{id}/batches` | Inspect immutable archive delivery history and hashes |
 | GET/PUT | `/v1/policy` | Organization maintenance mode and quotas |

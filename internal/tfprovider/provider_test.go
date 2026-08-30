@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 20 {
+	if len(instance.Resources(context.Background())) != 22 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -67,6 +67,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_notification_endpoint") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_audit_retention") || !slices.Contains(resourceTypes, "dockyard_audit_archive") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -368,6 +371,27 @@ func TestNotificationEndpointConfigurationAndSecretRetention(t *testing.T) {
 	}
 	if !validNotificationKind("smtp") || validNotificationKind("sms") {
 		t.Fatal("notification kind validation mismatch")
+	}
+}
+
+func TestAuditRetentionAndArchiveState(t *testing.T) {
+	retention := auditRetentionModel{}
+	setAuditRetention(&retention, auditRetentionResponse{OrganizationID: "organization-id", RetentionDays: 730, UpdatedAt: "2026-08-30T12:00:00Z"})
+	if retention.ID.ValueString() != "organization-id" || retention.RetentionDays.ValueInt64() != 730 {
+		t.Fatalf("audit retention state=%#v", retention)
+	}
+	archive := auditArchiveModel{}
+	setAuditArchive(&archive, auditArchiveResponse{ID: "archive-id", Name: "Compliance", BackupDestinationID: "destination-id", ObjectPrefix: "audit/production", RetentionDays: 730, Enabled: true, LastArchivedID: 42, LastChainHash: "sha256"})
+	if archive.ID.ValueString() != "archive-id" || archive.BackupDestinationID.ValueString() != "destination-id" || archive.LastArchivedID.ValueInt64() != 42 || !archive.Enabled.ValueBool() {
+		t.Fatalf("audit archive state=%#v", archive)
+	}
+	for _, prefix := range []string{"", "/audit", "audit/", "audit/../secret", " audit"} {
+		if err := validateAuditArchivePrefix(prefix); err == nil {
+			t.Errorf("invalid audit archive prefix %q accepted", prefix)
+		}
+	}
+	if err := validateAuditArchivePrefix("audit/production"); err != nil {
+		t.Fatalf("valid audit archive prefix rejected: %v", err)
 	}
 }
 

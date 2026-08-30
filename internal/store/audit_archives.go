@@ -74,6 +74,17 @@ func (s *Store) ListAuditArchiveDestinations(ctx context.Context, organizationID
 	return items, rows.Err()
 }
 
+func (s *Store) GetAuditArchiveDestination(ctx context.Context, organizationID, id uuid.UUID) (AuditArchiveDestination, error) {
+	var item AuditArchiveDestination
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,backup_destination_id,name,object_prefix,retention_days,enabled,last_archived_id,last_chain_hash,created_at,updated_at FROM audit_archive_destinations WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(
+		&item.ID, &item.OrganizationID, &item.BackupDestinationID, &item.Name, &item.ObjectPrefix, &item.RetentionDays, &item.Enabled, &item.LastArchivedID, &item.LastChainHash, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AuditArchiveDestination{}, ErrNotFound
+	}
+	return item, err
+}
+
 func (s *Store) DisableAuditArchiveDestination(ctx context.Context, organizationID, id uuid.UUID) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {

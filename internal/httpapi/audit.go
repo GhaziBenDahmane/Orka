@@ -108,6 +108,20 @@ func (s *Server) listAuditArchives(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) getAuditArchive(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("archiveID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid audit archive id")
+		return
+	}
+	item, err := s.Store.GetAuditArchiveDestination(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) deleteAuditArchive(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("archiveID"))
 	if err != nil {
