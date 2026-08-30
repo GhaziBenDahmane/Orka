@@ -40,6 +40,62 @@ type fakeScheduler struct {
 	containerCalls     int
 }
 
+func TestValidateAgentEndpointsRequireHTTPSOrigins(t *testing.T) {
+	for _, endpoint := range []string{"https://control.example.test", "https://agents.example.test:8444/"} {
+		if err := validateAgentEndpoint("test URL", endpoint); err != nil {
+			t.Fatalf("valid endpoint %q rejected: %v", endpoint, err)
+		}
+	}
+	for _, endpoint := range []string{"http://agents.example.test", "https://user@agents.example.test", "https://agents.example.test/path", "https://agents.example.test?token=value", "https://agents.example.test/#fragment", "//agents.example.test"} {
+		if err := validateAgentEndpoint("test URL", endpoint); err == nil {
+			t.Errorf("unsafe endpoint %q accepted", endpoint)
+		}
+	}
+}
+
+func TestRunRejectsUnsafeEndpointBeforeWritingAgentState(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		enrollmentURL string
+		agentURL      string
+	}{
+		{name: "plaintext enrollment", enrollmentURL: "http://control.example.test", agentURL: "https://agents.example.test"},
+		{name: "redirectable path origin", enrollmentURL: "https://control.example.test", agentURL: "https://agents.example.test/proxy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "agent-state")
+			err := Run(context.Background(), Config{EnrollmentURL: test.enrollmentURL, AgentURL: test.agentURL, StateDirectory: state, ServiceName: "dockyard-agent_agent"})
+			if err == nil || !strings.Contains(err.Error(), "must be an HTTPS origin") {
+				t.Fatalf("Run error=%v", err)
+			}
+			if _, statErr := os.Stat(state); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("unsafe configuration mutated state directory: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestAgentHTTPClientsRejectRedirects(t *testing.T) {
+	targetCalls := 0
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { targetCalls++ }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	request, err := http.NewRequest(http.MethodPost, redirect.URL, strings.NewReader(`{"token":"secret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second, CheckRedirect: rejectRedirect}
+	if _, err = client.Do(request); err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+		t.Fatalf("redirect error=%v", err)
+	}
+	if targetCalls != 0 {
+		t.Fatalf("redirect target received %d credential-bearing requests", targetCalls)
+	}
+}
+
 func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T) {
 	now := time.Now().UTC()
 	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)

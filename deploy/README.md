@@ -238,7 +238,10 @@ no mutable-tag defaults, and the validation script rejects tags.
 The token is used once. The agent generates its private key locally, stores its
 identity in the `agent-state` volume, verifies the controller using the
 enrollment CA, and uses mTLS for heartbeat and command polling. No inbound port
-or remote Docker socket is exposed on the managed cluster.
+or remote Docker socket is exposed on the managed cluster. The agent binary
+independently requires both controller addresses to be HTTPS origins and
+refuses redirects, preventing an enrollment token or authenticated request
+from being replayed to a different endpoint.
 
 Agents can be upgraded through `POST /v1/clusters/{id}/agent-upgrades` or
 `dockyardctl agent-upgrade CLUSTER_ID IMAGE@sha256:DIGEST`. Only immutable image

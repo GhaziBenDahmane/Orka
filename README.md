@@ -36,7 +36,9 @@ AI deployment and trust boundaries are documented in
 [docs/ai-auditing.md](docs/ai-auditing.md); remote catalog layout is in
 [docs/template-repositories.md](docs/template-repositories.md), and provider
 setup plus release evidence requirements are in
-[docs/sso-provider-conformance.md](docs/sso-provider-conformance.md).
+[docs/sso-provider-conformance.md](docs/sso-provider-conformance.md). The
+production trust boundaries, attacker model, and residual release risks are in
+[docs/threat-model.md](docs/threat-model.md).
 
 ## Installation
 

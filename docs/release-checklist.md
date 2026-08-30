@@ -6,6 +6,9 @@ links for every item below.
 
 ## Automated gates
 
+- Review `docs/threat-model.md` against the release diff. New trust boundaries,
+  privileged integrations, or secret flows require controls and evidence in
+  that document before promotion.
 - Release publication is blocked on the complete reusable CI, ten-engine
   database recovery, real Keycloak SSO, disposable three-manager Swarm HA,
   joined deployment lifecycle, drift reconciliation, real-mTLS agent

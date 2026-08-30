@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.EnrollmentURL == "" || cfg.AgentURL == "" || !filepath.IsAbs(cfg.StateDirectory) {
 		return errors.New("agent enrollment URL, agent URL, and absolute state directory are required")
 	}
+	if err := validateAgentEndpoint("agent enrollment URL", cfg.EnrollmentURL); err != nil {
+		return err
+	}
+	if err := validateAgentEndpoint("agent mTLS URL", cfg.AgentURL); err != nil {
+		return err
+	}
 	if cfg.DockerBin == "" {
 		cfg.DockerBin = "docker"
 	}
@@ -96,6 +103,18 @@ func Run(ctx context.Context, cfg Config) error {
 	c := &Client{cfg: cfg, swarm: deploy.Swarm{DockerBin: cfg.DockerBin, Network: cfg.Network, Timeout: 5 * time.Minute}, http: httpClient}
 	c.serviceState = c.inspectServiceState
 	return c.loop(ctx)
+}
+
+func validateAgentEndpoint(label, rawURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" && parsed.Path != "/" {
+		return fmt.Errorf("%s must be an HTTPS origin without credentials, path, query, or fragment", label)
+	}
+	return nil
+}
+
+func rejectRedirect(*http.Request, []*http.Request) error {
+	return errors.New("agent API redirects are disabled")
 }
 
 func rotateIfNeeded(ctx context.Context, cfg Config, current *http.Client) (*http.Client, error) {
@@ -250,7 +269,7 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	response, err := (&http.Client{Timeout: 30 * time.Second, CheckRedirect: rejectRedirect}).Do(req)
 	if err != nil {
 		return err
 	}
@@ -305,7 +324,7 @@ func mTLSClient(directory string) (*http.Client, error) {
 		return nil, errors.New("invalid saved agent CA")
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{certificate}}}
-	return &http.Client{Transport: transport, Timeout: 40 * time.Second}, nil
+	return &http.Client{Transport: transport, Timeout: 40 * time.Second, CheckRedirect: rejectRedirect}, nil
 }
 
 func (c *Client) loop(ctx context.Context) error {
