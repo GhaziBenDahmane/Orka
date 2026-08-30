@@ -119,6 +119,8 @@ links for every item below.
   must produce a cleanup finding without exposing token material or identity.
   The same gate covers stale unused service-account credentials and raises
   their finding when the aggregate includes a privileged automation identity.
+  It also detects an unreferenced Git/SSH/registry credential older than thirty
+  days without exposing its name, authority, username, or encrypted material.
   The gate additionally verifies audited administrator finding triage, atomic
   rollback when its audit write fails, denial of triage to the auditor identity,
   prevention of cross-tenant finding mutation, and durable notification for a

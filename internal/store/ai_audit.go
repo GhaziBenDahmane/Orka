@@ -26,43 +26,44 @@ var ErrAIAuditFindingLimit = errors.New("AI audit run finding limit reached")
 var aiAuditGitCommit = regexp.MustCompile(`^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$`)
 
 type AIAuditSnapshot struct {
-	GeneratedAt          time.Time                       `json:"generatedAt"`
-	Organization         uuid.UUID                       `json:"organizationId"`
-	Projects             []AIAuditProjectInfo            `json:"projects"`
-	Environments         []AIAuditEnvironmentInfo        `json:"environments"`
-	Services             []AIAuditServiceInfo            `json:"services"`
-	Routes               []AIAuditRouteInfo              `json:"routes"`
-	Databases            []AIAuditDatabaseInfo           `json:"databases"`
-	DatabaseEngines      []AIAuditDatabaseEngineInfo     `json:"databaseEngines"`
-	Clusters             []AIAuditClusterInfo            `json:"clusters"`
-	ManagedNetworks      []AIAuditManagedNetworkInfo     `json:"managedNetworks"`
-	CustomTLSPosture     []AIAuditCustomTLSPosture       `json:"customTlsPosture"`
-	EdgeTLSPosture       []AIAuditEdgeTLSPosture         `json:"edgeTlsPosture"`
-	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
-	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
-	AgentCommandPosture  []AIAuditAgentCommandPosture    `json:"agentCommandPosture"`
-	BackupPosture        []AIAuditBackupPosture          `json:"backupPosture"`
-	VolumeBackupPosture  []AIAuditVolumeBackupPosture    `json:"volumeBackupPosture"`
-	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
-	WorkloadPosture      []AIAuditWorkloadPosture        `json:"workloadPosture"`
-	SourceBuildPosture   []AIAuditSourceBuildPosture     `json:"sourceBuildPosture"`
-	AuditLogPosture      AIAuditLogPosture               `json:"auditLogPosture"`
-	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
-	DeployTokenPosture   AIAuditDeployTokenPosture       `json:"deployTokenPosture"`
-	SAMLPosture          []AIAuditSAMLProviderPosture    `json:"samlPosture"`
-	NotificationPosture  []AIAuditNotificationPosture    `json:"notificationPosture"`
-	WebhookPosture       []AIAuditWebhookPosture         `json:"webhookPosture"`
-	BackupDestinations   []AIAuditBackupDestinationInfo  `json:"backupDestinations"`
-	TemplateRepositories []AIAuditTemplateRepositoryInfo `json:"templateRepositories"`
-	MigrationPosture     []AIAuditMigrationPosture       `json:"migrationPosture"`
-	MigrationBlockers    []AIAuditMigrationBlocker       `json:"migrationBlockers"`
-	ServiceDeployments   []AIAuditServiceDeployment      `json:"serviceDeployments"`
-	ServiceSchedules     []AIAuditServiceSchedulePosture `json:"serviceSchedules"`
-	QueuePosture         AIAuditQueuePosture             `json:"queuePosture"`
-	FinalizerPosture     AIAuditFinalizerPosture         `json:"finalizerPosture"`
-	Reconciliation       []AIAuditReconciliationPosture  `json:"reconciliation"`
-	Signals              []AIAuditSignal                 `json:"signals30d"`
-	AuditEvents          []AIAuditEventInfo              `json:"recentAuditEvents"`
+	GeneratedAt          time.Time                        `json:"generatedAt"`
+	Organization         uuid.UUID                        `json:"organizationId"`
+	Projects             []AIAuditProjectInfo             `json:"projects"`
+	Environments         []AIAuditEnvironmentInfo         `json:"environments"`
+	Services             []AIAuditServiceInfo             `json:"services"`
+	Routes               []AIAuditRouteInfo               `json:"routes"`
+	Databases            []AIAuditDatabaseInfo            `json:"databases"`
+	DatabaseEngines      []AIAuditDatabaseEngineInfo      `json:"databaseEngines"`
+	Clusters             []AIAuditClusterInfo             `json:"clusters"`
+	ManagedNetworks      []AIAuditManagedNetworkInfo      `json:"managedNetworks"`
+	CustomTLSPosture     []AIAuditCustomTLSPosture        `json:"customTlsPosture"`
+	EdgeTLSPosture       []AIAuditEdgeTLSPosture          `json:"edgeTlsPosture"`
+	AgentCAPosture       AIAuditAgentCAPosture            `json:"agentCertificateAuthorityPosture"`
+	AgentUpgradePosture  []AIAuditAgentUpgradePosture     `json:"agentUpgradePosture"`
+	AgentCommandPosture  []AIAuditAgentCommandPosture     `json:"agentCommandPosture"`
+	BackupPosture        []AIAuditBackupPosture           `json:"backupPosture"`
+	VolumeBackupPosture  []AIAuditVolumeBackupPosture     `json:"volumeBackupPosture"`
+	ResourcePolicies     []AIAuditResourcePolicyPosture   `json:"resourcePolicies"`
+	WorkloadPosture      []AIAuditWorkloadPosture         `json:"workloadPosture"`
+	SourceBuildPosture   []AIAuditSourceBuildPosture      `json:"sourceBuildPosture"`
+	SourceCredentials    []AIAuditSourceCredentialPosture `json:"sourceCredentialPosture"`
+	AuditLogPosture      AIAuditLogPosture                `json:"auditLogPosture"`
+	IdentityPosture      AIAuditIdentityPosture           `json:"identityPosture"`
+	DeployTokenPosture   AIAuditDeployTokenPosture        `json:"deployTokenPosture"`
+	SAMLPosture          []AIAuditSAMLProviderPosture     `json:"samlPosture"`
+	NotificationPosture  []AIAuditNotificationPosture     `json:"notificationPosture"`
+	WebhookPosture       []AIAuditWebhookPosture          `json:"webhookPosture"`
+	BackupDestinations   []AIAuditBackupDestinationInfo   `json:"backupDestinations"`
+	TemplateRepositories []AIAuditTemplateRepositoryInfo  `json:"templateRepositories"`
+	MigrationPosture     []AIAuditMigrationPosture        `json:"migrationPosture"`
+	MigrationBlockers    []AIAuditMigrationBlocker        `json:"migrationBlockers"`
+	ServiceDeployments   []AIAuditServiceDeployment       `json:"serviceDeployments"`
+	ServiceSchedules     []AIAuditServiceSchedulePosture  `json:"serviceSchedules"`
+	QueuePosture         AIAuditQueuePosture              `json:"queuePosture"`
+	FinalizerPosture     AIAuditFinalizerPosture          `json:"finalizerPosture"`
+	Reconciliation       []AIAuditReconciliationPosture   `json:"reconciliation"`
+	Signals              []AIAuditSignal                  `json:"signals30d"`
+	AuditEvents          []AIAuditEventInfo               `json:"recentAuditEvents"`
 }
 
 // Inventory types are explicit allowlists rather than aliases of the normal
@@ -327,6 +328,19 @@ type AIAuditSourceBuildPosture struct {
 	DeploymentCommitRecorded     bool      `json:"deploymentCommitRecorded"`
 }
 
+// AIAuditSourceCredentialPosture exposes only an opaque credential identity,
+// its class, age, and reference counts. Names, authorities, usernames, and
+// encrypted secret material stay outside the model boundary.
+type AIAuditSourceCredentialPosture struct {
+	ID                           uuid.UUID `json:"id"`
+	Kind                         string    `json:"kind"`
+	GitReferences                int64     `json:"gitReferences"`
+	RegistryReferences           int64     `json:"registryReferences"`
+	StatusReferences             int64     `json:"statusReferences"`
+	TemplateRepositoryReferences int64     `json:"templateRepositoryReferences"`
+	CreatedAt                    time.Time `json:"createdAt"`
+}
+
 type AIAuditLogPosture struct {
 	RetentionDays     int                     `json:"retentionDays"`
 	CurrentMaxEventID int64                   `json:"currentMaxEventId"`
@@ -537,7 +551,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, SourceCredentials: []AIAuditSourceCredentialPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -940,6 +954,9 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 	if err := s.loadAIAuditSourceBuildPosture(ctx, organizationID, &snapshot.SourceBuildPosture); err != nil {
+		return err
+	}
+	if err := s.loadAIAuditSourceCredentialPosture(ctx, organizationID, &snapshot.SourceCredentials); err != nil {
 		return err
 	}
 	if err := s.loadAIAuditIntegrationPosture(ctx, organizationID, &snapshot.WebhookPosture, &snapshot.BackupDestinations); err != nil {
@@ -1425,6 +1442,55 @@ func (s *Store) loadAIAuditServiceSchedulePosture(ctx context.Context, organizat
 	for rows.Next() {
 		var item AIAuditServiceSchedulePosture
 		if err = rows.Scan(&item.ID, &item.ServiceID, &item.Name, &item.Enabled, &item.DesiredState, &item.Timezone, &item.NextRunAt, &item.LastStatus, &item.LastFinishedAt, &item.Failures24h); err != nil {
+			return err
+		}
+		*posture = append(*posture, item)
+	}
+	return rows.Err()
+}
+
+func (s *Store) loadAIAuditSourceCredentialPosture(ctx context.Context, organizationID uuid.UUID, posture *[]AIAuditSourceCredentialPosture) error {
+	rows, err := s.Pool.Query(ctx, `
+		WITH tenant_sources AS (
+			SELECT source.git_credential_id,source.registry_credential_id,source.status_credential_id
+			FROM application_sources source
+			JOIN compose_services service ON service.id=source.compose_service_id
+			JOIN environments environment ON environment.id=service.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE project.organization_id=$1
+		), application_references AS (
+			SELECT reference.credential_id,
+				count(*) FILTER (WHERE reference.kind='git') AS git_references,
+				count(*) FILTER (WHERE reference.kind='registry') AS registry_references,
+				count(*) FILTER (WHERE reference.kind='status') AS status_references
+			FROM tenant_sources source
+			CROSS JOIN LATERAL (VALUES (source.git_credential_id,'git'),(source.registry_credential_id,'registry'),(source.status_credential_id,'status')) reference(credential_id,kind)
+			WHERE reference.credential_id IS NOT NULL
+			GROUP BY reference.credential_id
+		), catalog_references AS (
+			SELECT repository.credential_id,count(*) AS references
+			FROM template_repositories repository
+			WHERE repository.organization_id=$1 AND repository.credential_id IS NOT NULL
+			GROUP BY repository.credential_id
+		)
+		SELECT credential.id,credential.kind,
+			COALESCE(application.git_references,0),
+			COALESCE(application.registry_references,0),
+			COALESCE(application.status_references,0),
+			COALESCE(catalog.references,0),
+			credential.created_at
+		FROM source_credentials credential
+		LEFT JOIN application_references application ON application.credential_id=credential.id
+		LEFT JOIN catalog_references catalog ON catalog.credential_id=credential.id
+		WHERE credential.organization_id=$1
+		ORDER BY credential.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item AIAuditSourceCredentialPosture
+		if err = rows.Scan(&item.ID, &item.Kind, &item.GitReferences, &item.RegistryReferences, &item.StatusReferences, &item.TemplateRepositoryReferences, &item.CreatedAt); err != nil {
 			return err
 		}
 		*posture = append(*posture, item)

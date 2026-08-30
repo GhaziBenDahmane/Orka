@@ -332,10 +332,14 @@ identities; account names, token hashes, and individual identities remain
 excluded.
 Source-build posture similarly returns only source/build types, transport and
 configuration booleans, artifact/checksum presence, and deployment provenance.
-Repository URLs and refs, output image names, credential identifiers, artifact
+Repository URLs and refs, output image names, credential binding identifiers, artifact
 details, and encrypted build configuration are excluded. The baseline detects
 invalid transports, missing SSH trust credentials, missing drop artifacts,
 undeployed source changes, and successful Git builds without a recorded commit.
+Separate source-credential posture exposes an opaque inventory ID, credential
+class, creation time, and tenant-scoped workload/status/catalog reference
+counts. It excludes names, authorities, usernames, and encrypted secrets; an
+unreferenced credential older than thirty days produces a cleanup finding.
 The `signals30d` collection aggregates tenant-scoped deployment, database and
 volume recovery, migration, audit archive, remote-agent command, commit-status,
 notification, and prior AI-audit counts by status. With at least four

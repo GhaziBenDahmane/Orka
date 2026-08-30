@@ -594,6 +594,25 @@ func TestDeterministicAuditDetectsStaleUnusedServiceAccountCredentials(t *testin
 	}
 }
 
+func TestDeterministicAuditDetectsStaleUnusedSourceCredentials(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	staleID, linkedID := uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		SourceCredentials: []store.AIAuditSourceCredentialPosture{
+			{ID: staleID, Kind: "registry", CreatedAt: now.Add(-45 * 24 * time.Hour)},
+			{ID: linkedID, Kind: "git", TemplateRepositoryReferences: 1, CreatedAt: now.Add(-365 * 24 * time.Hour)},
+			{ID: uuid.New(), Kind: "git-ssh", CreatedAt: now.Add(-7 * 24 * time.Hour)},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Unused source credential is stale" || findings[0].ResourceID != staleID.String() || findings[0].Evidence["kind"] != "registry" || findings[0].Evidence["references"] != int64(0) {
+		t.Fatalf("stale source credential findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsMandatorySSOLockout(t *testing.T) {
 	organizationID := uuid.New()
 	snapshot := store.AIAuditSnapshot{

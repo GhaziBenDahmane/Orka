@@ -24,7 +24,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	credentialID := uuid.New()
+	credentialID, orphanCredentialID, applicationGitCredentialID, registryCredentialID, otherCredentialID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	if _, err := db.CreateSourceCredential(ctx, SourceCredential{ID: credentialID, OrganizationID: organizationID, Kind: "git", Name: "GitHub", Server: "github.com", Username: "token", EncryptedSecret: "ciphertext"}); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +38,13 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	otherOrganizationID := uuid.New()
 	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other AI test',$2)`, otherOrganizationID, "other-ai-"+otherOrganizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret,created_at) VALUES
+		($1,$2,'registry','target-orphan-secret-name','registry.target-secret.example','target-secret-user','target-source-credential-secret',now()-interval '45 days'),
+		($3,$2,'git-ssh','target-app-git-secret-name','target-source-secret.example','target-git-user','target-app-git-secret',now()-interval '1 year'),
+		($4,$2,'registry','target-app-registry-secret-name','target-registry-secret.example','target-registry-user','target-app-registry-secret',now()-interval '1 year'),
+		($5,$6,'git','other-orphan-secret-name','git.other-secret.example','other-secret-user','other-source-credential-secret',now()-interval '1 year')`, orphanCredentialID, organizationID, applicationGitCredentialID, registryCredentialID, otherCredentialID, otherOrganizationID); err != nil {
 		t.Fatal(err)
 	}
 	scimTokenCreatedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
@@ -320,7 +327,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'target-reconciliation-detail-secret',now()-interval '30 seconds')`, []any{serviceID}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}',$3,'deployment-secret','succeeded','manual',$4::timestamptz - interval '1 minute',$4::timestamptz - interval '30 seconds')`, []any{uuid.New(), serviceID, "services: {api: {image: registry.example.test/private-api@sha256:" + strings.Repeat("b", 64) + "}}", latestDeploymentAt}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,created_at) VALUES($1,$2,3,'services: {api: {image: app:v3}}','queued-secret','queued','manual',$3)`, []any{uuid.New(), serviceID, latestDeploymentAt}},
-		{`INSERT INTO application_sources(compose_service_id,source_type,repository_url,git_ref,build_type,enable_submodules,encrypted_build_config,target_service,registry_image) VALUES($1,'git','ssh://git@target-source-secret.example/repository','main','dockerfile',true,'target-build-config-secret','api','target-registry-secret.example/private/api')`, []any{serviceID}},
+		{`INSERT INTO application_sources(compose_service_id,source_type,repository_url,git_ref,build_type,enable_submodules,encrypted_build_config,target_service,registry_image,git_credential_id,registry_credential_id,status_credential_id) VALUES($1,'git','ssh://git@target-source-secret.example/repository','main','dockerfile',true,'target-build-config-secret','api','target-registry-secret.example/private/api',$2,$3,$4)`, []any{serviceID, applicationGitCredentialID, registryCredentialID, credentialID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Primary','primary','postgres','17','encrypted','ready')`, []any{databaseID, environmentID}},
 		{`INSERT INTO resource_policies(organization_id,scope_type,scope_id,maintenance_enabled,maintenance_reason,max_projects,max_environments,max_services,max_databases) VALUES($1,'organization',$1,true,'policy-secret-marker',1,1,1,1)`, []any{organizationID}},
 		{`INSERT INTO dokploy_migration_resources(target_organization_id,source_organization_id,source_kind,source_id,target_id,status,reason,metadata,updated_at) VALUES
@@ -420,8 +427,15 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 		t.Fatalf("source build posture=%#v", snapshot.SourceBuildPosture)
 	}
 	sourcePosture := snapshot.SourceBuildPosture[0]
-	if sourcePosture.ServiceID != serviceID || sourcePosture.SourceType != "git" || sourcePosture.BuildType != "dockerfile" || sourcePosture.RepositoryTransport != "ssh" || sourcePosture.GitRefPinned || sourcePosture.GitCredentialConfigured || sourcePosture.RegistryCredentialConfigured || sourcePosture.StatusReportingConfigured || !sourcePosture.SubmodulesEnabled || !sourcePosture.BuildConfigurationConfigured || sourcePosture.ArtifactPresent || sourcePosture.ArtifactChecksumRecorded || sourcePosture.CurrentSourceDeployed || sourcePosture.DeploymentCommitRecorded {
+	if sourcePosture.ServiceID != serviceID || sourcePosture.SourceType != "git" || sourcePosture.BuildType != "dockerfile" || sourcePosture.RepositoryTransport != "ssh" || sourcePosture.GitRefPinned || !sourcePosture.GitCredentialConfigured || !sourcePosture.RegistryCredentialConfigured || sourcePosture.StatusReportingConfigured || !sourcePosture.SubmodulesEnabled || !sourcePosture.BuildConfigurationConfigured || sourcePosture.ArtifactPresent || sourcePosture.ArtifactChecksumRecorded || sourcePosture.CurrentSourceDeployed || sourcePosture.DeploymentCommitRecorded {
 		t.Fatalf("source build posture=%#v", sourcePosture)
+	}
+	credentialPosture := map[uuid.UUID]AIAuditSourceCredentialPosture{}
+	for _, item := range snapshot.SourceCredentials {
+		credentialPosture[item.ID] = item
+	}
+	if len(credentialPosture) != 4 || credentialPosture[credentialID].Kind != "git" || credentialPosture[credentialID].TemplateRepositoryReferences != 1 || credentialPosture[credentialID].StatusReferences != 1 || credentialPosture[applicationGitCredentialID].Kind != "git-ssh" || credentialPosture[applicationGitCredentialID].GitReferences != 1 || credentialPosture[registryCredentialID].Kind != "registry" || credentialPosture[registryCredentialID].RegistryReferences != 1 || credentialPosture[orphanCredentialID].Kind != "registry" || credentialPosture[orphanCredentialID].GitReferences+credentialPosture[orphanCredentialID].RegistryReferences+credentialPosture[orphanCredentialID].StatusReferences+credentialPosture[orphanCredentialID].TemplateRepositoryReferences != 0 {
+		t.Fatalf("source credential posture=%#v", snapshot.SourceCredentials)
 	}
 	if len(snapshot.ResourcePolicies) != 1 || snapshot.ResourcePolicies[0].ScopeID != organizationID || !snapshot.ResourcePolicies[0].Maintenance || snapshot.ResourcePolicies[0].CurrentProjects != 1 || snapshot.ResourcePolicies[0].CurrentEnvironments != 1 || snapshot.ResourcePolicies[0].CurrentServices != 1 || snapshot.ResourcePolicies[0].CurrentDatabases != 1 {
 		t.Fatalf("resource policy posture=%#v", snapshot.ResourcePolicies)
@@ -536,12 +550,12 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 			t.Fatalf("snapshot leaked identity governance secret %q: body=%s", secret, encodedSnapshot)
 		}
 	}
-	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "target-project-description-secret", "target-placement-secret", "target-cluster-label-secret", "target-cluster-capacity-secret", "SECRET_COMPOSE_VALUE", "registry.example.test/private-api", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "target-pending-command-secret", "target-leased-command-secret", "target-agent-error-secret", "target-reconciliation-detail-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "registry.example.test/other-private-api", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-pending-command-secret", "other-migration-secret", "other-source-org", "target-source-secret.example", "target-build-config-secret", "target-registry-secret.example", "other-source-secret.example", "other-build-config-secret", "other-registry-secret.example", "target-notification-payload-secret", "other-notification-payload-secret", "target-archive-secret-name", "target-secret-bucket", "target-archive-credentials-secret", "target-secret-prefix", "target-chain-secret", "target-secret-object", "target-archive-error-secret", "target-audit-metadata-secret", "disabled-archive-secret-name", "disabled-secret-bucket", "disabled-archive-credentials-secret", "disabled-secret-prefix", "disabled-chain-secret", "other-archive-secret-name", "other-secret-bucket", "other-archive-credentials-secret", "other-secret-prefix", "other-chain-secret", "other-audit-metadata-secret", "target-idp-metadata-secret", "target-sp-certificate-secret", "target-saml-key-secret", "other-idp-metadata-secret", "other-sp-certificate-secret", "other-saml-key-secret"} {
+	for _, secret := range []string{"encrypted-webhook-secret", "other-secret", "policy-secret-marker", "other-policy-secret", "target-project-description-secret", "target-placement-secret", "target-cluster-label-secret", "target-cluster-capacity-secret", "SECRET_COMPOSE_VALUE", "registry.example.test/private-api", "encrypted-service-env", "deployment-secret", "queued-secret", "job-secret-payload", "agent-command-secret", "target-pending-command-secret", "target-leased-command-secret", "target-agent-error-secret", "target-reconciliation-detail-secret", "migration-metadata-secret", "migration-source-secret", "OTHER_COMPOSE_SECRET", "registry.example.test/other-private-api", "other-encrypted-env", "other-deployment-secret", "other-database-secret", "other-agent-command-secret", "other-pending-command-secret", "other-migration-secret", "other-source-org", "target-source-secret.example", "target-build-config-secret", "target-registry-secret.example", "target-app-git-secret", "target-git-user", "target-app-registry-secret", "target-registry-user", "other-source-secret.example", "other-build-config-secret", "other-registry-secret.example", "target-orphan-secret-name", "registry.target-secret.example", "target-secret-user", "target-source-credential-secret", "other-orphan-secret-name", "git.other-secret.example", "other-secret-user", "other-source-credential-secret", "target-notification-payload-secret", "other-notification-payload-secret", "target-archive-secret-name", "target-secret-bucket", "target-archive-credentials-secret", "target-secret-prefix", "target-chain-secret", "target-secret-object", "target-archive-error-secret", "target-audit-metadata-secret", "disabled-archive-secret-name", "disabled-secret-bucket", "disabled-archive-credentials-secret", "disabled-secret-prefix", "disabled-chain-secret", "other-archive-secret-name", "other-secret-bucket", "other-archive-credentials-secret", "other-secret-prefix", "other-chain-secret", "other-audit-metadata-secret", "target-idp-metadata-secret", "target-sp-certificate-secret", "target-saml-key-secret", "other-idp-metadata-secret", "other-sp-certificate-secret", "other-saml-key-secret"} {
 		if strings.Contains(string(encodedSnapshot), secret) {
 			t.Fatalf("snapshot leaked %q: body=%s", secret, encodedSnapshot)
 		}
 	}
-	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherRouteID, otherSAMLProviderID, otherWebhookID, otherAuditArchiveID, otherAuditBackupDestinationID} {
+	for _, otherTenantID := range []uuid.UUID{otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherRouteID, otherSAMLProviderID, otherWebhookID, otherAuditArchiveID, otherAuditBackupDestinationID, otherCredentialID} {
 		if strings.Contains(string(encodedSnapshot), otherTenantID.String()) {
 			t.Fatalf("snapshot leaked cross-tenant resource %s: body=%s", otherTenantID, encodedSnapshot)
 		}

@@ -97,6 +97,12 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 		add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Unused deployment hook credentials are stale", Description: "One or more active deployment-hook credentials have never been used and were created more than thirty days ago.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: evidence, Remediation: "Confirm each unused integration is still planned and revoke abandoned deployment-hook credentials."})
 	}
+	for _, credential := range snapshot.SourceCredentials {
+		references := credential.GitReferences + credential.RegistryReferences + credential.StatusReferences + credential.TemplateRepositoryReferences
+		if references == 0 && now.Sub(credential.CreatedAt) > 30*24*time.Hour {
+			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Unused source credential is stale", Description: "An encrypted Git, SSH, or registry credential has no workload, status, or template-catalog references and is more than thirty days old.", ResourceType: "source_credential", ResourceID: credential.ID.String(), Evidence: map[string]any{"kind": credential.Kind, "createdAt": credential.CreatedAt.UTC().Format(time.RFC3339), "ageDays": int(now.Sub(credential.CreatedAt).Hours() / 24), "references": references}, Remediation: "Confirm the credential has no external consumer, then delete it from the organization credential inventory."})
+		}
+	}
 	if snapshot.IdentityPosture.ActiveSCIMTokens > 0 && snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt != nil && now.Sub(*snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt) > 180*24*time.Hour {
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Long-lived SCIM credential requires rotation", Description: "The oldest active SCIM token is more than 180 days old.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeScimTokens": snapshot.IdentityPosture.ActiveSCIMTokens, "oldestCreatedAt": snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.UTC().Format(time.RFC3339)}, Remediation: "Issue a replacement SCIM token, update the identity provider, verify synchronization, and revoke the old token."})
 	}

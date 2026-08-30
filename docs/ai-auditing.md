@@ -114,6 +114,11 @@ keys make it a privileged service.
   branches and secrets plus object-store endpoints, buckets, prefixes, and
   credentials remain outside the model boundary. The deterministic baseline
   reports every backup destination that permits plaintext object-store traffic.
+- Source-credential posture exposes only opaque IDs, credential class,
+  creation time, and workload/status/catalog reference counts. Credential
+  names, Git or registry authorities, usernames, and encrypted material remain
+  excluded. Unreferenced credentials older than thirty days produce a
+  deterministic cleanup finding.
 - Dokploy migration posture is grouped by source organization and reports
   imported versus unresolved resources plus successful native database
   transfers. Up to 200 unresolved parity records include their source kind,
@@ -187,7 +192,7 @@ keys make it a privileged service.
   mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,
   missing or mutable active-agent images, expiring agent certificates,
   expiring service-account and deployment-hook credentials, stale SCIM credentials,
-  unrevoked expired deployment hooks, agent identities signed
+  unrevoked expired deployment hooks, abandoned source credentials, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues or
   stale running-job lease heartbeats, unclaimed remote commands, expired remote
   command leases that are not recovering,
