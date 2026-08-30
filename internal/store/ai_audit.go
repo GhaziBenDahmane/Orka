@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ const MaxAIAuditFindingsPerRun = 100
 var ErrAIAuditFindingLimit = errors.New("AI audit run finding limit reached")
 
 var aiAuditDigestImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
+var aiAuditGitCommit = regexp.MustCompile(`^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$`)
 
 type AIAuditSnapshot struct {
 	GeneratedAt          time.Time                       `json:"generatedAt"`
@@ -37,6 +39,7 @@ type AIAuditSnapshot struct {
 	VolumeBackupPosture  []AIAuditVolumeBackupPosture    `json:"volumeBackupPosture"`
 	ResourcePolicies     []AIAuditResourcePolicyPosture  `json:"resourcePolicies"`
 	WorkloadPosture      []AIAuditWorkloadPosture        `json:"workloadPosture"`
+	SourceBuildPosture   []AIAuditSourceBuildPosture     `json:"sourceBuildPosture"`
 	AuditLogPosture      AIAuditLogPosture               `json:"auditLogPosture"`
 	IdentityPosture      AIAuditIdentityPosture          `json:"identityPosture"`
 	SAMLPosture          []AIAuditSAMLProviderPosture    `json:"samlPosture"`
@@ -137,6 +140,23 @@ type AIAuditWorkloadPosture struct {
 	MutableImages       int       `json:"mutableImages"`
 	BuildOnlyServices   int       `json:"buildOnlyServices"`
 	MissingImageOrBuild int       `json:"missingImageOrBuild"`
+}
+
+type AIAuditSourceBuildPosture struct {
+	ServiceID                    uuid.UUID `json:"serviceId"`
+	SourceType                   string    `json:"sourceType"`
+	BuildType                    string    `json:"buildType"`
+	RepositoryTransport          string    `json:"repositoryTransport,omitempty"`
+	GitRefPinned                 bool      `json:"gitRefPinned"`
+	GitCredentialConfigured      bool      `json:"gitCredentialConfigured"`
+	RegistryCredentialConfigured bool      `json:"registryCredentialConfigured"`
+	StatusReportingConfigured    bool      `json:"statusReportingConfigured"`
+	SubmodulesEnabled            bool      `json:"submodulesEnabled"`
+	BuildConfigurationConfigured bool      `json:"buildConfigurationConfigured"`
+	ArtifactPresent              bool      `json:"artifactPresent"`
+	ArtifactChecksumRecorded     bool      `json:"artifactChecksumRecorded"`
+	CurrentSourceDeployed        bool      `json:"currentSourceDeployed"`
+	DeploymentCommitRecorded     bool      `json:"deploymentCommitRecorded"`
 }
 
 type AIAuditLogPosture struct {
@@ -256,7 +276,7 @@ type AIAuditQueuePosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []Project{}, Environments: []Environment{}, Services: []ComposeService{}, Routes: []Route{}, Databases: []DatabaseInstance{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []Cluster{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, QueuePosture: AIAuditQueuePosture{Coverage: "resource-keyed-service-and-database-jobs"}, Reconciliation: []ServiceReconciliation{}, Signals: []AIAuditSignal{}, AuditEvents: []AuditEvent{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -380,6 +400,9 @@ func analyzeAIAuditWorkload(serviceID uuid.UUID, composeYAML string) AIAuditWork
 
 func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationID uuid.UUID, snapshot *AIAuditSnapshot) error {
 	if err := s.loadAIAuditLogPosture(ctx, organizationID, &snapshot.AuditLogPosture); err != nil {
+		return err
+	}
+	if err := s.loadAIAuditSourceBuildPosture(ctx, organizationID, &snapshot.SourceBuildPosture); err != nil {
 		return err
 	}
 	rows, err := s.Pool.Query(ctx, `
@@ -671,6 +694,51 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	rows.Close()
 	return nil
+}
+
+func (s *Store) loadAIAuditSourceBuildPosture(ctx context.Context, organizationID uuid.UUID, posture *[]AIAuditSourceBuildPosture) error {
+	rows, err := s.Pool.Query(ctx, `SELECT source.compose_service_id,source.source_type,source.build_type,source.repository_url,source.git_ref,
+		source.git_credential_id IS NOT NULL,source.registry_credential_id IS NOT NULL,
+		source.status_provider<>'' AND source.status_credential_id IS NOT NULL,source.enable_submodules,
+		source.encrypted_build_config<>'',artifact.compose_service_id IS NOT NULL,COALESCE(artifact.sha256,'')<>'',
+		deployment.id IS NOT NULL,COALESCE(deployment.commit_sha,'')<>''
+		FROM application_sources source
+		JOIN compose_services service ON service.id=source.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		LEFT JOIN application_artifacts artifact ON artifact.compose_service_id=source.compose_service_id
+		LEFT JOIN LATERAL (
+			SELECT candidate.id,candidate.commit_sha
+			FROM deployments candidate
+			WHERE candidate.compose_service_id=source.compose_service_id AND candidate.status='succeeded'
+				AND candidate.created_at>=GREATEST(source.updated_at,COALESCE(artifact.updated_at,source.updated_at))
+			ORDER BY candidate.created_at DESC,candidate.id DESC
+			LIMIT 1
+		) deployment ON true
+		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
+		ORDER BY source.compose_service_id`, organizationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item AIAuditSourceBuildPosture
+		var repositoryURL, gitRef string
+		if err = rows.Scan(&item.ServiceID, &item.SourceType, &item.BuildType, &repositoryURL, &gitRef, &item.GitCredentialConfigured, &item.RegistryCredentialConfigured, &item.StatusReportingConfigured, &item.SubmodulesEnabled, &item.BuildConfigurationConfigured, &item.ArtifactPresent, &item.ArtifactChecksumRecorded, &item.CurrentSourceDeployed, &item.DeploymentCommitRecorded); err != nil {
+			return err
+		}
+		if item.SourceType == "git" {
+			parsed, parseErr := url.Parse(repositoryURL)
+			if parseErr == nil && parsed.Host != "" && (parsed.Scheme == "https" || parsed.Scheme == "ssh") {
+				item.RepositoryTransport = parsed.Scheme
+			} else {
+				item.RepositoryTransport = "invalid"
+			}
+			item.GitRefPinned = aiAuditGitCommit.MatchString(gitRef)
+		}
+		*posture = append(*posture, item)
+	}
+	return rows.Err()
 }
 
 func (s *Store) loadAIAuditSAMLPosture(ctx context.Context, organizationID uuid.UUID, posture *[]AIAuditSAMLProviderPosture) error {

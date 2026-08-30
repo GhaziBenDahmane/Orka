@@ -34,6 +34,12 @@ keys make it a privileged service.
   services, and services missing both image and build input. Image names,
   registry paths, build contexts, commands, labels, and all other Compose
   values remain excluded.
+- Source-build posture exposes only the source/build type, repository transport
+  class, credential/configuration booleans, submodule use, artifact/checksum
+  presence, and whether a successful deployment plus Git commit provenance
+  exists after the current source input. Repository URLs and refs, image names,
+  credential IDs, artifact names and digests, and encrypted build configuration
+  remain excluded.
 - The snapshot includes per-database backup policy and restore-drill posture,
   the installed database-driver catalog with default versions, built-in or
   external provenance, executable SHA-256 digest, and backup capability,
@@ -113,7 +119,10 @@ keys make it a privileged service.
   archive, a failed latest archive delivery, or tenant events left unarchived
   for more than five minutes, along with public routes that permit plaintext
   HTTP, malformed workload definitions, mutable image references, and services
-  without an image or build source. These findings survive a model gateway
+  without an image or build source. Invalid source transports, SSH sources
+  without pinned-host credentials, missing uploaded artifacts, undeployed
+  source changes, and successful Git builds lacking commit provenance are also
+  deterministic. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
 - Each run records agent name/version, model, scope, timestamps, summary, and

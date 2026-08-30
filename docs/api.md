@@ -200,6 +200,12 @@ Compose definitions are summarized as image-provenance counts per workload;
 image names, registry paths, build contexts, commands, labels, and environment
 values are not returned. The baseline reports malformed definitions, mutable
 image references, and services missing both an image and a build source.
+Source-build posture similarly returns only source/build types, transport and
+configuration booleans, artifact/checksum presence, and deployment provenance.
+Repository URLs and refs, output image names, credential identifiers, artifact
+details, and encrypted build configuration are excluded. The baseline detects
+invalid transports, missing SSH trust credentials, missing drop artifacts,
+undeployed source changes, and successful Git builds without a recorded commit.
 
 Each run accepts at most 100 distinct finding fingerprints. Re-submitting an
 existing fingerprint updates that finding without consuming another slot; a

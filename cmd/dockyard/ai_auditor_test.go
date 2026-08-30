@@ -389,6 +389,42 @@ func TestDeterministicAuditDetectsWorkloadImageProvenanceGaps(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsSourceBuildTrustGaps(t *testing.T) {
+	invalidID, sshID, dropID, pendingID, provenanceID, healthyID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		SourceBuildPosture: []store.AIAuditSourceBuildPosture{
+			{ServiceID: invalidID, SourceType: "git", BuildType: "dockerfile", RepositoryTransport: "invalid", CurrentSourceDeployed: true, DeploymentCommitRecorded: true},
+			{ServiceID: sshID, SourceType: "git", BuildType: "dockerfile", RepositoryTransport: "ssh", CurrentSourceDeployed: true, DeploymentCommitRecorded: true},
+			{ServiceID: dropID, SourceType: "drop", BuildType: "static", CurrentSourceDeployed: true},
+			{ServiceID: pendingID, SourceType: "git", BuildType: "railpack", RepositoryTransport: "https", GitCredentialConfigured: true},
+			{ServiceID: provenanceID, SourceType: "git", BuildType: "nixpacks", RepositoryTransport: "https", CurrentSourceDeployed: true},
+			{ServiceID: healthyID, SourceType: "git", BuildType: "buildpacks", RepositoryTransport: "https", CurrentSourceDeployed: true, DeploymentCommitRecorded: true},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	want := []struct {
+		title string
+		id    uuid.UUID
+	}{
+		{title: "Source repository transport is invalid", id: invalidID},
+		{title: "SSH source has no pinned-host credential", id: sshID},
+		{title: "Uploaded source artifact is unavailable", id: dropID},
+		{title: "Current source configuration has not been deployed", id: pendingID},
+		{title: "Source deployment lacks commit provenance", id: provenanceID},
+	}
+	if len(findings) != len(want) {
+		t.Fatalf("source findings=%#v", findings)
+	}
+	for index := range want {
+		if findings[index].Title != want[index].title || findings[index].ResourceID != want[index].id.String() {
+			t.Fatalf("source finding %d=%#v, want %#v", index, findings[index], want[index])
+		}
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

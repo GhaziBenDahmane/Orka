@@ -99,6 +99,22 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "high", Category: "deployment", Title: "Workload services lack an image or build source", Description: "One or more Compose services cannot identify a container image or build input.", ResourceType: "service", ResourceID: workload.ServiceID.String(), Evidence: map[string]any{"containerCount": workload.ContainerCount, "missingImageOrBuild": workload.MissingImageOrBuild}, Remediation: "Configure an image or supported build source for every Compose service and validate the resulting revision."})
 		}
 	}
+	for _, source := range snapshot.SourceBuildPosture {
+		if source.SourceType == "git" && source.RepositoryTransport == "invalid" {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Source repository transport is invalid", Description: "A source-built workload does not use the supported HTTPS or pinned-host SSH transport.", ResourceType: "service", ResourceID: source.ServiceID.String(), Evidence: map[string]any{"sourceType": source.SourceType, "repositoryTransport": source.RepositoryTransport, "buildType": source.BuildType}, Remediation: "Configure an HTTPS repository or SSH repository with a pinned-host deploy key before rebuilding."})
+		}
+		if source.SourceType == "git" && source.RepositoryTransport == "ssh" && !source.GitCredentialConfigured {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "SSH source has no pinned-host credential", Description: "An SSH source cannot authenticate with a tenant-scoped deploy key and known-host pin.", ResourceType: "service", ResourceID: source.ServiceID.String(), Evidence: map[string]any{"repositoryTransport": source.RepositoryTransport, "gitCredentialConfigured": false}, Remediation: "Attach a tenant-scoped git-ssh credential containing the expected username, private key, and pinned known-host entry."})
+		}
+		if source.SourceType == "drop" && (!source.ArtifactPresent || !source.ArtifactChecksumRecorded) {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Uploaded source artifact is unavailable", Description: "A drop-source workload has no encrypted artifact with a recorded checksum.", ResourceType: "service", ResourceID: source.ServiceID.String(), Evidence: map[string]any{"artifactPresent": source.ArtifactPresent, "artifactChecksumRecorded": source.ArtifactChecksumRecorded}, Remediation: "Upload and validate a bounded source archive before deploying this workload."})
+		}
+		if !source.CurrentSourceDeployed {
+			add(modelFinding{Severity: "medium", Category: "deployment", Title: "Current source configuration has not been deployed", Description: "No successful deployment was recorded after the current source configuration or uploaded artifact changed.", ResourceType: "service", ResourceID: source.ServiceID.String(), Evidence: map[string]any{"sourceType": source.SourceType, "buildType": source.BuildType}, Remediation: "Review the current source configuration, deploy it, and verify the resulting workload revision."})
+		} else if source.SourceType == "git" && !source.DeploymentCommitRecorded {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Source deployment lacks commit provenance", Description: "The successful source-built deployment did not record the resolved Git commit.", ResourceType: "service", ResourceID: source.ServiceID.String(), Evidence: map[string]any{"sourceType": source.SourceType, "gitRefPinned": source.GitRefPinned, "statusReportingConfigured": source.StatusReportingConfigured}, Remediation: "Rebuild through the source pipeline and verify the deployment records the resolved commit before promotion."})
+		}
+	}
 	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
 	unusableDatabaseDrivers := make(map[uuid.UUID]bool)
 	for _, engine := range snapshot.DatabaseEngines {
