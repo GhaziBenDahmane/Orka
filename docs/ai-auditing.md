@@ -86,8 +86,8 @@ keys make it a privileged service.
   mandatory SSO, stale cluster heartbeats, expiring agent certificates,
   expiring service-account and stale SCIM credentials, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues,
-  notification coverage gaps, unavailable or recovery-incapable database
-  drivers, unhealthy reconciliation, unsigned, failed,
+  notification coverage gaps, unavailable, unbound, mismatched, or
+  recovery-incapable database drivers, unhealthy reconciliation, unsigned, failed,
   never-synchronized, or stale catalogs, undeployed desired revisions, and
   incomplete Dokploy migrations. These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish

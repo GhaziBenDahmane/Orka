@@ -1080,6 +1080,11 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_slug", "invalid slug")
 		return
 	}
+	driver, ok := s.Databases.Engine(in.Engine)
+	if !ok {
+		writeError(w, 400, "invalid_database", "unsupported database engine")
+		return
+	}
 	rendered, err := s.Databases.Render(in.Engine, database.Request{Name: in.Slug, Version: in.Version, Config: in.Config})
 	if err != nil {
 		writeError(w, 400, "invalid_database", err.Error())
@@ -1101,7 +1106,7 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	shortID := strings.Split(serviceID.String(), "-")[0]
 	stackName := "db-" + in.Slug + "-" + shortID
-	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, Config: database.StoredConfig(in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
+	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, DriverSource: driver.Source, DriverDigest: driver.ArtifactDigest, Config: database.StoredConfig(in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
 	if err != nil {
 		writeStoreError(w, err)
 		return

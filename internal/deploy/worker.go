@@ -835,6 +835,26 @@ func (w *Worker) scheduler(clusterID *uuid.UUID) Scheduler {
 	return w.Swarm
 }
 
+func (w *Worker) ensureDatabaseDriver(ctx context.Context, databaseID uuid.UUID, engine, source, digest string) error {
+	if w.Databases == nil {
+		return errors.New("database registry is not configured")
+	}
+	current, exists := w.Databases.Engine(engine)
+	if !exists {
+		return fmt.Errorf("database engine %q is not registered on this worker", engine)
+	}
+	if source == "" || source == "unbound" {
+		if err := w.Store.BindDatabaseDriverIdentity(ctx, databaseID, current.Source, current.ArtifactDigest); err != nil {
+			return fmt.Errorf("bind database driver identity: %w", err)
+		}
+		return nil
+	}
+	if source != current.Source || digest != current.ArtifactDigest {
+		return fmt.Errorf("database engine %q driver identity does not match this worker", engine)
+	}
+	return nil
+}
+
 func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	var payload struct {
 		BackupID       string `json:"backupId"`
@@ -849,14 +869,17 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		return err
 	}
 	var databaseID uuid.UUID
-	var engine, version, stackName, serviceName, encrypted string
+	var engine, version, driverSource, driverDigest, stackName, serviceName, encrypted string
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
 	})
 	if err != nil {
 		return err
+	}
+	if err = w.ensureDatabaseDriver(ctx, databaseID, engine, driverSource, driverDigest); err != nil {
+		return w.failBackup(ctx, j, backupID, err)
 	}
 	plain, err := w.Box.DecryptResource(encrypted, "database-credentials", databaseID.String(), "database-credentials")
 	if err != nil {
@@ -1106,16 +1129,19 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		return err
 	}
 	var backupID, databaseID uuid.UUID
-	var kind, engine, version, stackName, serviceName, encryptedCredentials, path, expectedHash, plaintextHash, encryptedDataKey, objectKey string
+	var kind, engine, version, driverSource, driverDigest, stackName, serviceName, encryptedCredentials, path, expectedHash, plaintextHash, encryptedDataKey, objectKey string
 	var artifactEncrypted bool
 	var expectedSize *int64
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
 	})
 	if err != nil {
 		return err
+	}
+	if err = w.ensureDatabaseDriver(ctx, databaseID, engine, driverSource, driverDigest); err != nil {
+		return w.failRestore(ctx, j, restoreID, err)
 	}
 	if clusterID != nil {
 		remote, ok := w.scheduler(clusterID).(RemoteSwarm)
@@ -1343,10 +1369,10 @@ func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
 		return err
 	}
 	var databaseID uuid.UUID
-	var sourceEngine, sourceVersion, sourceHost, encryptedSource, targetEngine, targetVersion, targetHost, encryptedTarget, stackName, databaseStatus string
+	var sourceEngine, sourceVersion, sourceHost, encryptedSource, targetEngine, targetVersion, driverSource, driverDigest, targetHost, encryptedTarget, stackName, databaseStatus string
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_migrations m SET status='running',started_at=COALESCE(started_at,now()),error='' FROM database_instances d,compose_services s,environments e WHERE m.id=$1 AND d.id=m.database_instance_id AND s.id=d.compose_service_id AND e.id=d.environment_id RETURNING d.id,m.source_engine,m.source_version,m.source_host,m.encrypted_source_config,d.engine,d.version,d.slug,d.encrypted_credentials,s.stack_name,d.status,e.cluster_id`, migrationID).Scan(&databaseID, &sourceEngine, &sourceVersion, &sourceHost, &encryptedSource, &targetEngine, &targetVersion, &targetHost, &encryptedTarget, &stackName, &databaseStatus, &clusterID)
+		return tx.QueryRow(ctx, `UPDATE database_migrations m SET status='running',started_at=COALESCE(started_at,now()),error='' FROM database_instances d,compose_services s,environments e WHERE m.id=$1 AND d.id=m.database_instance_id AND s.id=d.compose_service_id AND e.id=d.environment_id RETURNING d.id,m.source_engine,m.source_version,m.source_host,m.encrypted_source_config,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.slug,d.encrypted_credentials,s.stack_name,d.status,e.cluster_id`, migrationID).Scan(&databaseID, &sourceEngine, &sourceVersion, &sourceHost, &encryptedSource, &targetEngine, &targetVersion, &driverSource, &driverDigest, &targetHost, &encryptedTarget, &stackName, &databaseStatus, &clusterID)
 	})
 	if err != nil {
 		return err
@@ -1363,6 +1389,9 @@ func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
 	}
 	if w.Databases == nil {
 		return fail(errors.New("database registry is not configured"))
+	}
+	if err = w.ensureDatabaseDriver(ctx, databaseID, targetEngine, driverSource, driverDigest); err != nil {
+		return fail(err)
 	}
 	sourcePlain, err := w.Box.Decrypt(encryptedSource, "database-migration-source:"+migrationID.String())
 	if err != nil {

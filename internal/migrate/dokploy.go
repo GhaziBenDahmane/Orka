@@ -518,6 +518,10 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if renderErr != nil {
 			return report, fmt.Errorf("render %s database %s: %w", item.engine, item.id, renderErr)
 		}
+		driver, exists := registry.Engine(item.engine)
+		if !exists {
+			return report, fmt.Errorf("database driver %s disappeared during import", item.engine)
+		}
 		environment := map[string]string{}
 		if item.env != "" {
 			plain, decryptErr := decryptDokploy(item.env, options.EncryptionKeys)
@@ -544,7 +548,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if err != nil {
 			return report, fmt.Errorf("import %s service %s: %w", item.engine, item.id, err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, serviceID, encryptedCredentials, configJSON)
+		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, driver.Source, driver.ArtifactDigest, serviceID, encryptedCredentials, configJSON)
 		if err != nil {
 			return report, fmt.Errorf("import %s database %s: %w", item.engine, item.id, err)
 		}

@@ -230,12 +230,13 @@ func TestDeterministicAuditDetectsTemplateRepositoryFreshness(t *testing.T) {
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()
+	digest := "sha256:" + strings.Repeat("a", 64)
 	snapshot := store.AIAuditSnapshot{
 		Organization:        uuid.New(),
 		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		NotificationPosture: fullyCoveredNotifications(),
-		DatabaseEngines:     []store.AIAuditDatabaseEngineInfo{{Name: "postgres", Source: "built-in", BackupCapable: true, BackupExtension: "dump"}, {Name: "custom", Source: "external"}},
-		Databases:           []store.DatabaseInstance{{ID: unsupportedID, Engine: "custom", Version: "1"}, {ID: missingID, Engine: "removed", Version: "2"}, {ID: protectedID, Engine: "postgres", Version: "17"}},
+		DatabaseEngines:     []store.AIAuditDatabaseEngineInfo{{Name: "postgres", Source: "built-in", BackupCapable: true, BackupExtension: "dump"}, {Name: "custom", Source: "external", ArtifactDigest: digest}},
+		Databases:           []store.DatabaseInstance{{ID: unsupportedID, Engine: "custom", Version: "1", DriverSource: "external", DriverDigest: digest}, {ID: missingID, Engine: "removed", Version: "2", DriverSource: "external", DriverDigest: digest}, {ID: protectedID, Engine: "postgres", Version: "17", DriverSource: "built-in"}},
 		BackupPosture:       []store.AIAuditBackupPosture{{DatabaseID: unsupportedID, Engine: "custom"}, {DatabaseID: missingID, Engine: "removed"}, {DatabaseID: protectedID, Engine: "postgres"}},
 	}
 	findings := deterministicAuditFindings(snapshot, now)
@@ -252,6 +253,28 @@ func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *te
 		if !resources[id.String()] {
 			t.Errorf("database %s has no finding", id)
 		}
+	}
+}
+
+func TestDeterministicAuditDetectsDatabaseDriverIdentityDrift(t *testing.T) {
+	now := time.Now().UTC()
+	unboundID, mismatchID := uuid.New(), uuid.New()
+	digest := "sha256:" + strings.Repeat("a", 64)
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		DatabaseEngines:     []store.AIAuditDatabaseEngineInfo{{Name: "custom", Source: "external", ArtifactDigest: digest, BackupCapable: true, BackupExtension: "dump"}},
+		Databases:           []store.DatabaseInstance{{ID: unboundID, Engine: "custom", Version: "1", DriverSource: "unbound"}, {ID: mismatchID, Engine: "custom", Version: "1", DriverSource: "external", DriverDigest: "sha256:" + strings.Repeat("b", 64)}},
+		BackupPosture:       []store.AIAuditBackupPosture{{DatabaseID: unboundID, Engine: "custom"}, {DatabaseID: mismatchID, Engine: "custom"}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]int{}
+	for _, finding := range findings {
+		titles[finding.Title]++
+	}
+	if titles["Database driver identity is unbound"] != 1 || titles["Database driver identity mismatch"] != 1 || len(findings) != 2 {
+		t.Fatalf("driver identity findings=%#v", findings)
 	}
 }
 

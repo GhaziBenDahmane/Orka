@@ -378,7 +378,9 @@ authenticated context and is never returned by the API.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
-same deployment endpoint, preserving one audit and rollback model.
+same deployment endpoint, preserving one audit and rollback model. Database
+records expose `driverSource` and, for external drivers, the bound
+`driverArtifactDigest`; recovery workers reject a different artifact.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
 optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.

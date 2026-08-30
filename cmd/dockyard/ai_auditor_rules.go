@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/google/uuid"
 )
 
 const maxDeterministicAuditFindings = 100
@@ -36,6 +37,7 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		add(modelFinding{Severity: "medium", Category: "identity", Title: "Long-lived SCIM credential requires rotation", Description: "The oldest active SCIM token is more than 180 days old.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeScimTokens": snapshot.IdentityPosture.ActiveSCIMTokens, "oldestCreatedAt": snapshot.IdentityPosture.OldestActiveSCIMTokenCreatedAt.UTC().Format(time.RFC3339)}, Remediation: "Issue a replacement SCIM token, update the identity provider, verify synchronization, and revoke the old token."})
 	}
 	databaseEngines := make(map[string]store.AIAuditDatabaseEngineInfo, len(snapshot.DatabaseEngines))
+	unusableDatabaseDrivers := make(map[uuid.UUID]bool)
 	for _, engine := range snapshot.DatabaseEngines {
 		databaseEngines[engine.Name] = engine
 	}
@@ -43,8 +45,16 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		for _, managedDatabase := range snapshot.Databases {
 			engine, registered := databaseEngines[managedDatabase.Engine]
 			if !registered {
+				unusableDatabaseDrivers[managedDatabase.ID] = true
 				add(modelFinding{Severity: "high", Category: "backup", Title: "Database engine is unavailable", Description: "A managed database references an engine that is no longer registered with the controller.", ResourceType: "database", ResourceID: managedDatabase.ID.String(), Evidence: map[string]any{"engine": managedDatabase.Engine, "version": managedDatabase.Version}, Remediation: "Restore the exact trusted driver used by this database before attempting deployment, backup, restore, or migration operations."})
+			} else if managedDatabase.DriverSource == "" || managedDatabase.DriverSource == "unbound" {
+				unusableDatabaseDrivers[managedDatabase.ID] = true
+				add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Database driver identity is unbound", Description: "A legacy managed database has not yet been bound to the exact driver implementation allowed to operate on it.", ResourceType: "database", ResourceID: managedDatabase.ID.String(), Evidence: map[string]any{"engine": managedDatabase.Engine, "version": managedDatabase.Version}, Remediation: "Run a controlled backup or migration with the intended driver on one controller to bind its identity, then verify every worker has the same artifact."})
+			} else if managedDatabase.DriverSource != engine.Source || managedDatabase.DriverDigest != engine.ArtifactDigest {
+				unusableDatabaseDrivers[managedDatabase.ID] = true
+				add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Database driver identity mismatch", Description: "The controller's registered driver does not match the implementation bound to this managed database.", ResourceType: "database", ResourceID: managedDatabase.ID.String(), Evidence: map[string]any{"engine": managedDatabase.Engine, "expectedSource": managedDatabase.DriverSource, "expectedDigest": managedDatabase.DriverDigest, "actualSource": engine.Source, "actualDigest": engine.ArtifactDigest}, Remediation: "Deploy the bound driver artifact consistently across controllers or perform an explicitly reviewed driver migration."})
 			} else if !engine.BackupCapable {
+				unusableDatabaseDrivers[managedDatabase.ID] = true
 				add(modelFinding{Severity: "high", Category: "backup", Title: "Database engine has no recovery support", Description: "The registered driver cannot produce verified native backup and restore plans for this managed database.", ResourceType: "database", ResourceID: managedDatabase.ID.String(), Evidence: map[string]any{"engine": engine.Name, "version": managedDatabase.Version, "driverSource": engine.Source, "driverDigest": engine.ArtifactDigest}, Remediation: "Install a trusted backup-capable driver or migrate this database to an engine with verified recovery support."})
 			}
 		}
@@ -59,7 +69,7 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	}
 	for _, backup := range snapshot.BackupPosture {
 		resourceID := backup.DatabaseID.String()
-		if engine, registered := databaseEngines[backup.Engine]; len(databaseEngines) > 0 && (!registered || !engine.BackupCapable) {
+		if len(databaseEngines) > 0 && unusableDatabaseDrivers[backup.DatabaseID] {
 			continue
 		}
 		if !backup.PolicyConfigured {

@@ -257,6 +257,8 @@ console; HTTPS tokens and pinned-host SSH deploy keys are also supported.
 - Ed25519-signed deterministic catalog manifests are implemented and verified
   before import by default. A versioned, bounded process protocol and Go SDK
   support externally packaged database drivers with compatibility tests.
+  Driver executables are digest-bound at discovery, and managed databases
+  persist that identity so heterogeneous HA workers fail closed.
 
 Exit gate: a representative Dokploy installation can be imported, compared,
 deployed, and rolled back without manual database edits.

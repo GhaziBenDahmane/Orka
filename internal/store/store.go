@@ -146,6 +146,8 @@ type DatabaseInstance struct {
 	Slug             string         `json:"slug"`
 	Engine           string         `json:"engine"`
 	Version          string         `json:"version"`
+	DriverSource     string         `json:"driverSource"`
+	DriverDigest     string         `json:"driverArtifactDigest,omitempty"`
 	ComposeServiceID uuid.UUID      `json:"composeServiceId"`
 	Config           map[string]any `json:"config"`
 	Status           string         `json:"status"`
@@ -1692,8 +1694,11 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 	}
 	instance.ComposeServiceID = service.ID
 	instance.Status = "pending"
+	if instance.DriverSource == "" {
+		instance.DriverSource = "unbound"
+	}
 	config, _ := json.Marshal(instance.Config)
-	if err = tx.QueryRow(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,config) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING created_at`, instance.ID, instance.EnvironmentID, instance.Name, instance.Slug, instance.Engine, instance.Version, instance.ComposeServiceID, encryptedCredentials, config).Scan(&instance.CreatedAt); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,compose_service_id,encrypted_credentials,config) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING created_at`, instance.ID, instance.EnvironmentID, instance.Name, instance.Slug, instance.Engine, instance.Version, instance.DriverSource, instance.DriverDigest, instance.ComposeServiceID, encryptedCredentials, config).Scan(&instance.CreatedAt); err != nil {
 		return DatabaseInstance{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1704,15 +1709,32 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 
 func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (DatabaseInstance, error) {
 	var item DatabaseInstance
-	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
 	return item, err
 }
 
+var ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
+
+// BindDatabaseDriverIdentity atomically upgrades a legacy unbound database or
+// verifies that another controller already bound it to the same driver. This
+// prevents HA workers with different external artifacts from processing the
+// same database.
+func (s *Store) BindDatabaseDriverIdentity(ctx context.Context, id uuid.UUID, source, digest string) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE database_instances SET driver_source=$2,driver_artifact_digest=$3,updated_at=now() WHERE id=$1 AND (driver_source='unbound' OR (driver_source=$2 AND driver_artifact_digest=$3))`, id, source, digest)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrDatabaseDriverIdentityMismatch
+	}
+	return nil
+}
+
 func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID uuid.UUID) ([]DatabaseInstance, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.environment_id=$1 AND p.organization_id=$2 ORDER BY d.name`, environmentID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.environment_id=$1 AND p.organization_id=$2 ORDER BY d.name`, environmentID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1720,7 +1742,7 @@ func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID
 	items := []DatabaseInstance{}
 	for rows.Next() {
 		var item DatabaseInstance
-		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

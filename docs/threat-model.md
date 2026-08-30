@@ -146,7 +146,9 @@ remain outside the control-plane trust boundary.
   access, or master-key/CA escrow can take control of the platform.
 - Installed external database drivers are reviewed root-owned control-plane
   code, not sandboxed tenant plugins. Their provenance must be managed with the
-  same release controls as the controller image.
+  same release controls as the controller image. Each managed database is
+  bound to its driver source and SHA-256 artifact identity, preventing HA
+  workers with different plugin builds from silently sharing recovery jobs.
 - The configured identity provider, object store, image registry, DNS/TLS
   infrastructure, and notification providers are trusted for their declared
   roles. Provider compromise is not converted into cross-tenant authorization.

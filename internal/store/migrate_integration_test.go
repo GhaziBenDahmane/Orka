@@ -120,6 +120,45 @@ func TestMigrateUpgradeFrom073AddsTwoPhaseAgentCertificateRotation(t *testing.T)
 	}
 }
 
+func TestMigrateUpgradeFrom079BindsKnownDatabaseDrivers(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "079_ai_finding_recurrence.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Driver migration',$2)`, []any{organizationID, "driver-migration-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Environment','environment')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Built in','built-in','postgres','17','encrypted')`, []any{uuid.New(), environmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'External','external','cockroach','v25.2','encrypted')`, []any{uuid.New(), environmentID}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var builtInSource, builtInDigest, externalSource, externalDigest string
+	if err := pool.QueryRow(ctx, `SELECT driver_source,driver_artifact_digest FROM database_instances WHERE environment_id=$1 AND engine='postgres'`, environmentID).Scan(&builtInSource, &builtInDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT driver_source,driver_artifact_digest FROM database_instances WHERE environment_id=$1 AND engine='cockroach'`, environmentID).Scan(&externalSource, &externalDigest); err != nil {
+		t.Fatal(err)
+	}
+	if builtInSource != "built-in" || builtInDigest != "" || externalSource != "unbound" || externalDigest != "" {
+		t.Fatalf("migrated identities built-in=%s/%q external=%s/%q", builtInSource, builtInDigest, externalSource, externalDigest)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE database_instances SET driver_source='external' WHERE environment_id=$1 AND engine='cockroach'`, environmentID); err == nil {
+		t.Fatal("external source without a digest passed the consistency constraint")
+	}
+}
+
 func TestMigrateUpgradeFrom062AddsRemoteCatalogTrustPolicy(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "062_ai_audits_and_template_repositories.sql"); err != nil {

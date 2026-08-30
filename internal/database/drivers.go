@@ -90,25 +90,26 @@ func (r *Registry) Names() []string {
 // exposes the executable path used by an external driver.
 func (r *Registry) Engines() []EngineInfo {
 	engines := make([]EngineInfo, 0, len(r.drivers))
-	for name, driver := range r.drivers {
-		extension, backupCapable := r.BackupExtension(name)
-		source := "built-in"
-		artifactDigest := ""
-		if external, ok := driver.(*externalDriver); ok {
-			source = "external"
-			artifactDigest = external.digest
-		}
-		engines = append(engines, EngineInfo{
-			Name:            name,
-			DefaultVersion:  driver.DefaultVersion(),
-			Source:          source,
-			ArtifactDigest:  artifactDigest,
-			BackupCapable:   backupCapable,
-			BackupExtension: extension,
-		})
+	for name := range r.drivers {
+		engine, _ := r.Engine(name)
+		engines = append(engines, engine)
 	}
 	sort.Slice(engines, func(i, j int) bool { return engines[i].Name < engines[j].Name })
 	return engines
+}
+
+func (r *Registry) Engine(name string) (EngineInfo, bool) {
+	driver, exists := r.drivers[name]
+	if !exists {
+		return EngineInfo{}, false
+	}
+	extension, backupCapable := r.BackupExtension(name)
+	info := EngineInfo{Name: name, DefaultVersion: driver.DefaultVersion(), Source: "built-in", BackupCapable: backupCapable, BackupExtension: extension}
+	if external, ok := driver.(*externalDriver); ok {
+		info.Source = "external"
+		info.ArtifactDigest = external.digest
+	}
+	return info, true
 }
 func (r *Registry) Render(engine string, request Request) (Result, error) {
 	driver, ok := r.drivers[engine]
