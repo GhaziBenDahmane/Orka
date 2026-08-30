@@ -207,6 +207,11 @@ a run, and only then remove the previous secret. The external secret names may
 change while the files inside each container remain
 `/run/secrets/dockyard_ai_auditor_token` and
 `/run/secrets/dockyard_ai_api_key`.
+Auditor startup fails if a configured secret file is unreadable or empty, or
+if an inline value and its `_FILE` setting are both present. This prevents a
+stale environment value from overriding a rotated Docker secret and prevents
+an unavailable model-key mount from silently degrading to unauthenticated
+gateway requests.
 
 Set `DOCKYARD_AI_BASE_URL=http://9router:20128/v1` when 9Router shares the
 stack's encrypted `ai-control` network, or use another OpenAI-compatible

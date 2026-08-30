@@ -81,7 +81,15 @@ func runAIAuditor(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: modelURL, ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, RetryInterval: retryInterval, Timeout: timeout}
+	dockyardToken, err := auditorSecretValue("DOCKYARD_AI_AUDITOR_TOKEN")
+	if err != nil {
+		return err
+	}
+	modelToken, err := auditorSecretValue("DOCKYARD_AI_API_KEY")
+	if err != nil {
+		return err
+	}
+	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: dockyardToken, ModelURL: modelURL, ModelToken: modelToken, Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, RetryInterval: retryInterval, Timeout: timeout}
 	if cfg.DockyardURL == "" || cfg.DockyardToken == "" || cfg.ModelURL == "" || cfg.Model == "" {
 		return errors.New("control-plane URL, auditor token, AI base URL, and model are required")
 	}
@@ -163,19 +171,28 @@ func privateAuditorHostname(host string) bool {
 	return false
 }
 
-func secretValue(name string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
+func auditorSecretValue(name string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	path := strings.TrimSpace(os.Getenv(name + "_FILE"))
+	if value != "" && path != "" {
+		return "", fmt.Errorf("%s and %s_FILE cannot both be configured", name, name)
 	}
-	file := strings.TrimSpace(os.Getenv(name + "_FILE"))
-	if file == "" {
-		return ""
+	if value != "" {
+		return value, nil
 	}
-	data, err := os.ReadFile(file)
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("read %s_FILE: %w", name, err)
 	}
-	return strings.TrimSpace(string(data))
+	defer clear(data)
+	value = strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("%s_FILE is empty", name)
+	}
+	return value, nil
 }
 
 func auditorHTTPClient(client *http.Client) *http.Client {

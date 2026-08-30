@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -247,6 +248,84 @@ func TestRunAIAuditorRejectsInvalidRetryInterval(t *testing.T) {
 	if err := runAIAuditor([]string{"--once"}); err == nil || !strings.Contains(err.Error(), "DOCKYARD_AI_AUDIT_RETRY_INTERVAL") {
 		t.Fatalf("invalid retry interval error=%v", err)
 	}
+}
+
+func TestAuditorSecretValueFailsClosed(t *testing.T) {
+	t.Run("inline", func(t *testing.T) {
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", " inline-secret ")
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", "")
+		value, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET")
+		if err != nil || value != "inline-secret" {
+			t.Fatalf("secret=%q err=%v", value, err)
+		}
+	})
+	t.Run("file", func(t *testing.T) {
+		path := t.TempDir() + "/secret"
+		if err := os.WriteFile(path, []byte(" file-secret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", "")
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", path)
+		value, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET")
+		if err != nil || value != "file-secret" {
+			t.Fatalf("secret=%q err=%v", value, err)
+		}
+	})
+	for _, test := range []struct {
+		name  string
+		value string
+		path  string
+		want  string
+	}{
+		{name: "ambiguous", value: "inline", path: "/mounted/secret", want: "cannot both be configured"},
+		{name: "unreadable", path: t.TempDir() + "/missing", want: "read DOCKYARD_TEST_AUDITOR_SECRET_FILE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", test.value)
+			t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", test.path)
+			if _, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET"); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
+	}
+	t.Run("empty file", func(t *testing.T) {
+		path := t.TempDir() + "/secret"
+		if err := os.WriteFile(path, []byte(" \n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", "")
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", path)
+		if _, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET"); err == nil || !strings.Contains(err.Error(), "is empty") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+}
+
+func TestRunAIAuditorRejectsInvalidSecretConfiguration(t *testing.T) {
+	configure := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("DOCKYARD_CONTROL_PLANE_URL", "https://dockyard.example.test")
+		t.Setenv("DOCKYARD_AI_BASE_URL", "https://models.example.test/v1")
+		t.Setenv("DOCKYARD_AI_MODEL", "test-model")
+		t.Setenv("DOCKYARD_AI_AUDITOR_TOKEN", "auditor-token")
+		t.Setenv("DOCKYARD_AI_AUDITOR_TOKEN_FILE", "")
+		t.Setenv("DOCKYARD_AI_API_KEY", "")
+		t.Setenv("DOCKYARD_AI_API_KEY_FILE", "")
+	}
+	t.Run("ambiguous auditor token", func(t *testing.T) {
+		configure(t)
+		t.Setenv("DOCKYARD_AI_AUDITOR_TOKEN_FILE", "/run/secrets/auditor")
+		if err := runAIAuditor([]string{"--once"}); err == nil || !strings.Contains(err.Error(), "DOCKYARD_AI_AUDITOR_TOKEN and DOCKYARD_AI_AUDITOR_TOKEN_FILE cannot both be configured") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+	t.Run("unreadable optional model token", func(t *testing.T) {
+		configure(t)
+		t.Setenv("DOCKYARD_AI_API_KEY_FILE", t.TempDir()+"/missing")
+		if err := runAIAuditor([]string{"--once"}); err == nil || !strings.Contains(err.Error(), "read DOCKYARD_AI_API_KEY_FILE") {
+			t.Fatalf("error=%v", err)
+		}
+	})
 }
 
 func TestNormalizedAuditorEndpoint(t *testing.T) {
