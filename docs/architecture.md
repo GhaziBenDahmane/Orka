@@ -25,6 +25,15 @@ Docker Compose remains the portable workload definition.
 7. Rollback creates a new deployment from the last successful snapshot. History
    is never edited in place.
 
+Service stop/start is a durable desired-state transition rather than an
+imperative scaling shortcut. Stop persists `stopped`, cancels queued drift
+repair, and serializes a volume-preserving `docker stack rm` job with every
+other service operation. Start (and any explicit deploy, rollback, or verified
+webhook deployment) atomically restores `running` while queuing a deployment
+of the selected immutable snapshot. Job leases fence local and remote removal
+completion, and stopped services are excluded from reconciliation at both
+candidate selection and repair commit time.
+
 The leader-elected stack reconciler inspects every previously deployed stack
 once per minute through the same local-or-remote scheduler boundary. Missing or
 under-replicated stacks must be observed twice before repair. Repairs replay the

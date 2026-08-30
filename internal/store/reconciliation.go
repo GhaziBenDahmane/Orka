@@ -35,7 +35,7 @@ func (s *Store) ListReconciliationCandidates(ctx context.Context, limit int) ([]
 		JOIN environments e ON e.id=s.environment_id
 		JOIN projects p ON p.id=e.project_id
 		LEFT JOIN service_reconciliations r ON r.compose_service_id=s.id
-		WHERE s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL
+		WHERE s.deletion_requested_at IS NULL AND s.desired_state='running' AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL
 		AND EXISTS(SELECT 1 FROM deployments d WHERE d.compose_service_id=s.id AND d.status='succeeded')
 		AND (e.cluster_id IS NULL OR EXISTS(SELECT 1 FROM clusters c WHERE c.id=e.cluster_id AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes'))
 		ORDER BY r.last_checked_at NULLS FIRST,s.id LIMIT $1`, limit)
@@ -70,7 +70,7 @@ func (s *Store) RecordReconciliation(ctx context.Context, candidate Reconciliati
 	var projectID, environmentID uuid.UUID
 	var clusterID *uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT p.id,e.id,e.cluster_id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
-		WHERE s.id=$1 AND p.organization_id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF s`, candidate.ServiceID, candidate.OrganizationID).Scan(&projectID, &environmentID, &clusterID)
+		WHERE s.id=$1 AND p.organization_id=$2 AND s.desired_state='running' AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF s`, candidate.ServiceID, candidate.OrganizationID).Scan(&projectID, &environmentID, &clusterID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

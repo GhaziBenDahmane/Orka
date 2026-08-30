@@ -1108,7 +1108,7 @@ func TestPerformAIAuditPreservesBaselineWhenModelFails(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"identityPosture":     map[string]any{"requireSso": true, "activeOwners": 1},
 				"migrationPosture":    []map[string]any{{"sourceOrganizationId": "legacy", "resources": 2, "imported": 1, "unresolved": 1}},
-				"notificationPosture": []map[string]any{{"enabled": true, "events": []string{"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical"}}},
+				"notificationPosture": []map[string]any{{"enabled": true, "events": []string{"deployment.failed", "service.stop.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical"}}},
 			})
 		case r.URL.Path == "/v1/ai/audit-runs":
 			w.WriteHeader(http.StatusCreated)
@@ -1261,7 +1261,7 @@ func TestPerformAIAuditFinalizesRunAfterContextDeadline(t *testing.T) {
 
 func fullyCoveredNotifications() []store.AIAuditNotificationPosture {
 	return []store.AIAuditNotificationPosture{{Enabled: true, Events: []string{
-		"deployment.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical",
+		"deployment.failed", "service.stop.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical",
 	}}}
 }
 

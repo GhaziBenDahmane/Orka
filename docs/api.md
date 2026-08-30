@@ -221,7 +221,7 @@ TLS SMTP (`starttls` or implicit `tls`), PagerDuty Events API v2, and the
 Opsgenie Alerts API. SMTP passwords and provider integration keys are
 encrypted and never returned. Generic webhook signing secrets are revealed
 once. All providers use the same idempotent delivery records and retry queue
-for `deployment.failed`, `backup.failed`, `restore.failed`,
+for `deployment.failed`, `service.stop.failed`, `backup.failed`, `restore.failed`,
 `restore.drill.failed`, `database.migration.failed`, and
 `audit.archive.failed`, `ai.audit.failed`, and `ai.finding.critical`. URLs and signing
 secrets are encrypted at rest. The secret is returned once at creation; generic
@@ -384,6 +384,8 @@ until an administrator retries them.
 | GET/DELETE | `/v1/routes/{id}` | Inspect or remove a route |
 | POST | `/v1/services/{id}/deployments` | Enqueue a Swarm deployment |
 | GET | `/v1/services/{id}/deployments` | Read deployment history |
+| POST | `/v1/services/{id}/stop` | Persist stopped intent and asynchronously remove the Swarm stack while preserving named volumes; repeated requests are idempotent |
+| POST | `/v1/services/{id}/start` | Persist running intent and enqueue the current Compose revision as a `start` deployment |
 | POST | `/v1/deployments/{id}/cancel` | Cancel a queued or running deployment |
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful digest-resolved snapshot; returns `409 rollback_unavailable` when no immutable snapshot exists |
 | GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |

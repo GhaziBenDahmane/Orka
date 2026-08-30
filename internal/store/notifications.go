@@ -182,6 +182,9 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 	case "deploy.compose":
 		resourceID, resourceType, eventType = payload["deploymentId"], "deployment", "deployment.failed"
 		query = `SELECT p.organization_id FROM deployments d JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1`
+	case "stop.compose":
+		resourceID, resourceType, eventType = payload["serviceId"], "compose_service", "service.stop.failed"
+		query = `SELECT p.organization_id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1`
 	case "backup.database":
 		resourceID, resourceType, eventType = payload["backupId"], "database_backup", "backup.failed"
 		query = `SELECT p.organization_id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1`

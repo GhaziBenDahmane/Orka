@@ -358,11 +358,21 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		add(modelFinding{Severity: "medium", Category: "operations", Title: "Failure notifications have coverage gaps", Description: "No enabled notification endpoint subscribes to one or more supported failure events.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"missingEvents": missing}, Remediation: "Enable at least one tested notification destination for every supported failure event."})
 	}
 	for _, deployment := range snapshot.ServiceDeployments {
+		if deployment.DesiredState == "stopped" {
+			continue
+		}
 		if !deployment.CurrentRevisionDeployed {
 			add(modelFinding{Severity: "medium", Category: "deployment", Title: "Desired service revision is not deployed", Description: "The service's current desired revision has no successful deployment.", ResourceType: "service", ResourceID: deployment.ServiceID.String(), Evidence: map[string]any{"desiredRevision": deployment.DesiredRevision, "latestDeploymentRevision": deployment.LatestDeploymentRevision, "latestDeploymentStatus": deployment.LatestDeploymentStatus}, Remediation: "Review the pending change and deploy it, or restore the intended revision."})
 		}
 	}
+	stoppedServices := make(map[uuid.UUID]bool, len(snapshot.Services))
+	for _, service := range snapshot.Services {
+		stoppedServices[service.ID] = service.DesiredState == "stopped"
+	}
 	for _, reconciliation := range snapshot.Reconciliation {
+		if stoppedServices[reconciliation.ComposeServiceID] {
+			continue
+		}
 		if reconciliation.State != "healthy" {
 			add(modelFinding{Severity: "high", Category: "availability", Title: "Swarm service reconciliation is unhealthy", Description: "The latest observed runtime state does not match a healthy service.", ResourceType: "service", ResourceID: reconciliation.ComposeServiceID.String(), Evidence: map[string]any{"state": reconciliation.State, "consecutiveFailures": reconciliation.ConsecutiveFailures}, Remediation: "Inspect the current deployment, Swarm tasks, placement capacity, and automatic repair history."})
 		} else if now.Sub(reconciliation.LastCheckedAt) > 5*time.Minute {
@@ -446,6 +456,7 @@ func recoveryAgeEvidence(now time.Time, completedAt *time.Time, intervalSeconds 
 func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) []string {
 	required := map[string]bool{
 		"deployment.failed":         false,
+		"service.stop.failed":       false,
 		"backup.failed":             false,
 		"restore.failed":            false,
 		"restore.drill.failed":      false,

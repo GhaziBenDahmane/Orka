@@ -71,6 +71,8 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"cancel-saml-certificate", "provider-id"}, http.MethodDelete, "/v1/sso/saml-providers/provider-id/certificate-rotation"},
 		{[]string{"environments", "project-id"}, http.MethodGet, "/v1/projects/project-id/environments"},
 		{[]string{"deploy", "service-id"}, http.MethodPost, "/v1/services/service-id/deployments"},
+		{[]string{"stop", "service-id"}, http.MethodPost, "/v1/services/service-id/stop"},
+		{[]string{"start", "service-id"}, http.MethodPost, "/v1/services/service-id/start"},
 		{[]string{"database-engines"}, http.MethodGet, "/v1/database-engines"},
 		{[]string{"backup-destinations"}, http.MethodGet, "/v1/backup-destinations"},
 		{[]string{"create-backup-destination", `{}`}, http.MethodPost, "/v1/backup-destinations"},

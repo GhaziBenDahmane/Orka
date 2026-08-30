@@ -643,6 +643,9 @@ func (w *Worker) updateResourceForJob(ctx context.Context, j job, query string, 
 }
 
 func (w *Worker) execute(ctx context.Context, j job) error {
+	if j.Kind == "stop.compose" {
+		return w.stopComposeService(ctx, j)
+	}
 	if j.Kind == "delete.compose" {
 		return w.deleteComposeService(ctx, j)
 	}
@@ -834,6 +837,49 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 		w.markDeployment(ctx, j, id, "failed", buildOutput, err)
 	}
 	return err
+}
+
+func (w *Worker) stopComposeService(ctx context.Context, j job) error {
+	var payload struct {
+		ServiceID      string `json:"serviceId"`
+		StackName      string `json:"stackName"`
+		OrganizationID string `json:"organizationId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	serviceID, err := uuid.Parse(payload.ServiceID)
+	if err != nil {
+		return err
+	}
+	organizationID, err := uuid.Parse(payload.OrganizationID)
+	if err != nil {
+		return err
+	}
+	var clusterID *uuid.UUID
+	if err = w.Store.Pool.QueryRow(ctx, `SELECT e.cluster_id FROM compose_services s JOIN environments e ON e.id=s.environment_id WHERE s.id=$1`, serviceID).Scan(&clusterID); err != nil {
+		return err
+	}
+	output, err := w.scheduler(clusterID).Remove(ctx, payload.StackName)
+	if err != nil {
+		return err
+	}
+	return w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
+		tag, updateErr := tx.Exec(ctx, `UPDATE compose_services SET updated_at=now() WHERE id=$1`, serviceID)
+		if updateErr != nil {
+			return updateErr
+		}
+		if tag.RowsAffected() != 1 {
+			return store.ErrNotFound
+		}
+		if _, updateErr = tx.Exec(ctx, `UPDATE database_instances SET status='stopped',updated_at=now() WHERE compose_service_id=$1`, serviceID); updateErr != nil {
+			return updateErr
+		}
+		_, updateErr = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,action,resource_type,resource_id,metadata)
+			SELECT $1,'service.stop.completed','compose_service',$2,jsonb_build_object('jobId',$3::text,'output',$4::text)
+			WHERE NOT EXISTS(SELECT 1 FROM audit_events WHERE action='service.stop.completed' AND resource_type='compose_service' AND resource_id=$2 AND metadata->>'jobId'=$3::text)`, organizationID, serviceID.String(), j.ID, truncate(output, 8192))
+		return updateErr
+	})
 }
 
 func (w *Worker) registryCredentialForDeployment(ctx context.Context, deploymentID uuid.UUID) (*Credential, error) {

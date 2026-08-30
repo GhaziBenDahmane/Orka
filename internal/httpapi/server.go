@@ -257,6 +257,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/routes/{routeID}", s.requireResourceRole("viewer", "route", "routeID", http.HandlerFunc(s.getRoute)))
 	mux.Handle("DELETE /v1/routes/{routeID}", s.requireResourceRole("developer", "route", "routeID", http.HandlerFunc(s.deleteRoute)))
 	mux.Handle("POST /v1/services/{serviceID}/deployments", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.deployService)))
+	mux.Handle("POST /v1/services/{serviceID}/stop", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.stopService)))
+	mux.Handle("POST /v1/services/{serviceID}/start", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.startService)))
 	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listDeployments)))
 	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.serviceLogs)))
 	mux.Handle("GET /v1/services/{serviceID}/volumes", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listServiceVolumes)))
@@ -2673,6 +2675,46 @@ func (s *Server) deployService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, item)
 }
 
+func (s *Server) stopService(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid service id")
+		return
+	}
+	p := principal(r)
+	jobID, queued, err := s.Store.QueueServiceStop(r.Context(), p.OrganizationID, serviceID)
+	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "service_busy", "wait for active backup, restore, or migration work before stopping the service")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "service.stop.requested", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"jobId": jobID, "queued": queued})
+	status := http.StatusOK
+	if queued {
+		status = http.StatusAccepted
+	}
+	writeJSON(w, status, map[string]any{"desiredState": "stopped", "jobId": jobID, "queued": queued})
+}
+
+func (s *Server) startService(w http.ResponseWriter, r *http.Request) {
+	serviceID, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid service id")
+		return
+	}
+	p := principal(r)
+	item, err := s.Store.QueueServiceStart(r.Context(), p.OrganizationID, serviceID, p.UserID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "service.start.requested", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"deploymentId": item.ID})
+	writeJSON(w, http.StatusAccepted, item)
+}
+
 func (s *Server) listDeployments(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("serviceID"))
 	if err != nil {
@@ -3011,6 +3053,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrDeploymentActive) {
 		writeError(w, http.StatusConflict, "deployment_active", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrServiceAlreadyRunning) {
+		writeError(w, http.StatusConflict, "service_already_running", err.Error())
 		return
 	}
 	if errors.Is(err, store.ErrBusy) {

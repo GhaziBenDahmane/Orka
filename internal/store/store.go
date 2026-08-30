@@ -20,6 +20,7 @@ var ErrAlreadyBootstrapped = errors.New("instance is already bootstrapped")
 var ErrNotCancellable = errors.New("resource is not cancellable")
 var ErrBusy = errors.New("resource has an operation in progress")
 var ErrDeploymentActive = errors.New("service has a queued or running deployment")
+var ErrServiceAlreadyRunning = errors.New("service is already intended to run")
 var ErrDeleting = errors.New("resource is being deleted")
 var ErrDuplicateDelivery = errors.New("webhook delivery already processed")
 var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
@@ -197,6 +198,7 @@ type ComposeService struct {
 	ComposeYAML   string    `json:"composeYaml,omitempty"`
 	EncryptedEnv  string    `json:"-"`
 	Revision      int64     `json:"revision"`
+	DesiredState  string    `json:"desiredState"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
@@ -1130,6 +1132,7 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 		service.ID = uuid.New()
 	}
 	service.Revision = 1
+	service.DesiredState = "running"
 	err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) SELECT $1,e.id,$3,$4,$5,$6,$7 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$2 AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$8 RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv, organizationID).Scan(&service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
@@ -1157,7 +1160,7 @@ func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uui
 		return ComposeService{}, err
 	}
 	var service ComposeService
-	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services s SET compose_yaml=$3, encrypted_env=$4, revision=revision+1, updated_at=now() FROM environments e, projects p WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2 RETURNING s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.desired_state,s.created_at,s.updated_at`, id, organizationID, composeYAML, encryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, ErrNotFound
 	}
@@ -1341,7 +1344,7 @@ func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id u
 
 func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.UUID) (ComposeService, []Route, error) {
 	var v ComposeService
-	err := s.Pool.QueryRow(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&v.ID, &v.EnvironmentID, &v.Name, &v.Slug, &v.StackName, &v.StorageNodeID, &v.ComposeYAML, &v.EncryptedEnv, &v.Revision, &v.CreatedAt, &v.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.compose_yaml,s.encrypted_env,s.revision,s.desired_state,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&v.ID, &v.EnvironmentID, &v.Name, &v.Slug, &v.StackName, &v.StorageNodeID, &v.ComposeYAML, &v.EncryptedEnv, &v.Revision, &v.DesiredState, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrNotFound
 	}
@@ -1365,7 +1368,7 @@ func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.U
 }
 
 func (s *Store) ListComposeServices(ctx context.Context, organizationID, environmentID uuid.UUID) ([]ComposeService, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.revision,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.environment_id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ORDER BY s.name`, environmentID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT s.id,s.environment_id,s.name,s.slug,s.stack_name,s.storage_node_id,s.revision,s.desired_state,s.created_at,s.updated_at FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.environment_id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 ORDER BY s.name`, environmentID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1373,7 +1376,7 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 	items := []ComposeService{}
 	for rows.Next() {
 		var item ComposeService
-		if err := rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.StackName, &item.StorageNodeID, &item.Revision, &item.DesiredState, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -1448,6 +1451,14 @@ func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) e
 }
 
 func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string) (Deployment, error) {
+	return s.queueDeployment(ctx, organizationID, serviceID, actorID, trigger, false)
+}
+
+func (s *Store) QueueServiceStart(ctx context.Context, organizationID, serviceID, actorID uuid.UUID) (Deployment, error) {
+	return s.queueDeployment(ctx, organizationID, serviceID, actorID, "start", true)
+}
+
+func (s *Store) queueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string, requireStopped bool) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
@@ -1458,14 +1469,17 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 	d.ComposeServiceID = serviceID
 	d.Status = "queued"
 	d.Trigger = trigger
-	var compose, env string
+	var compose, env, desiredState string
 	var projectID, environmentID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&d.Revision, &compose, &env, &projectID, &environmentID)
+	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env,s.desired_state,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&d.Revision, &compose, &env, &desiredState, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
 	if err != nil {
 		return Deployment{}, err
+	}
+	if requireStopped && desiredState != "stopped" {
+		return Deployment{}, ErrServiceAlreadyRunning
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Deployment{}, err
@@ -1474,6 +1488,9 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 		return Deployment{}, err
 	}
 	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
+		return Deployment{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE compose_services SET desired_state='running',updated_at=now() WHERE id=$1`, serviceID); err != nil {
 		return Deployment{}, err
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger,actor_user_id) VALUES($1,$2,$3,$4,$5,'queued',$6,$7) RETURNING created_at`, d.ID, serviceID, d.Revision, compose, env, trigger, nullableUUID(actorID)).Scan(&d.CreatedAt)
@@ -1491,6 +1508,74 @@ func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, 
 		return Deployment{}, err
 	}
 	return d, nil
+}
+
+// QueueServiceStop persists operator intent before scheduling stack removal.
+// Named volumes remain intact so start can replay the current revision.
+func (s *Store) QueueServiceStop(ctx context.Context, organizationID, serviceID uuid.UUID) (uuid.UUID, bool, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	defer tx.Rollback(ctx)
+	var stackName, desiredState string
+	var projectID, environmentID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT s.stack_name,s.desired_state,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF s`, serviceID, organizationID).Scan(&stackName, &desiredState, &projectID, &environmentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return uuid.Nil, false, err
+	}
+	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "service stop requested"); err != nil {
+		return uuid.Nil, false, err
+	}
+	if err = ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
+		return uuid.Nil, false, err
+	}
+	resourceKey := "service:" + serviceID.String()
+	var existingID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM jobs WHERE kind='stop.compose' AND resource_key=$1 AND status IN ('pending','running') ORDER BY created_at,id LIMIT 1`, resourceKey).Scan(&existingID)
+	if err == nil {
+		if desiredState != "stopped" {
+			if _, err = tx.Exec(ctx, `UPDATE compose_services SET desired_state='stopped',updated_at=now() WHERE id=$1`, serviceID); err != nil {
+				return uuid.Nil, false, err
+			}
+		}
+		return existingID, false, tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, err
+	}
+	busy, err := activeServiceOperations(ctx, tx, []uuid.UUID{serviceID})
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if busy {
+		return uuid.Nil, false, ErrBusy
+	}
+	if desiredState == "stopped" {
+		var lastStatus string
+		err = tx.QueryRow(ctx, `SELECT status FROM jobs WHERE kind='stop.compose' AND resource_key=$1 ORDER BY created_at DESC,id DESC LIMIT 1`, resourceKey).Scan(&lastStatus)
+		if err == nil && lastStatus == "succeeded" {
+			return uuid.Nil, false, tx.Commit(ctx)
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, err
+		}
+	}
+	jobID := uuid.New()
+	payload, _ := json.Marshal(map[string]string{"serviceId": serviceID.String(), "stackName": stackName, "organizationId": organizationID.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) VALUES($1,'stop.compose',$2,$3,10)`, jobID, payload, resourceKey); err != nil {
+		return uuid.Nil, false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE compose_services SET desired_state='stopped',updated_at=now() WHERE id=$1`, serviceID); err != nil {
+		return uuid.Nil, false, err
+	}
+	return jobID, true, tx.Commit(ctx)
 }
 
 // snapshotDeploymentRegistryCredentialTx retains the exact encrypted registry
@@ -1526,7 +1611,7 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 	}
 	if deleting {
 		payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": len(deleteVolumes) > 0 && deleteVolumes[0]})
-		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.compose',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, serviceID.String()); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) SELECT $1,'delete.compose',$2,$4,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, serviceID.String(), "service:"+serviceID.String()); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -1549,7 +1634,7 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 		return err
 	}
 	payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": len(deleteVolumes) > 0 && deleteVolumes[0]})
-	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'delete.compose',$2,10)`, uuid.New(), payload); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) VALUES($1,'delete.compose',$2,$3,10)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1731,6 +1816,9 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 		return Deployment{}, err
 	}
 	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
+		return Deployment{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE compose_services SET desired_state='running',updated_at=now() WHERE id=$1`, serviceID); err != nil {
 		return Deployment{}, err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM webhook_deliveries WHERE received_at<now()-interval '30 days'`); err != nil {
@@ -2086,6 +2174,9 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 	if err = cancelQueuedReconciliationTx(ctx, tx, serviceID, "superseded by a requested deployment"); err != nil {
 		return Deployment{}, err
 	}
+	if _, err = tx.Exec(ctx, `UPDATE compose_services SET desired_state='running',updated_at=now() WHERE id=$1`, serviceID); err != nil {
+		return Deployment{}, err
+	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "webhook"}
 	if err = tx.QueryRow(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,env_snapshot,status,trigger) VALUES($1,$2,$3,$4,$5,'queued','webhook') RETURNING created_at`, d.ID, serviceID, revision, compose, env).Scan(&d.CreatedAt); err != nil {
 		return Deployment{}, err
@@ -2160,7 +2251,7 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	var revision int64
-	if err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$2,encrypted_env=$3,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING revision`, serviceID, desiredCompose, encrypted).Scan(&revision); err != nil {
+	if err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$2,encrypted_env=$3,revision=revision+1,desired_state='running',updated_at=now() WHERE id=$1 RETURNING revision`, serviceID, desiredCompose, encrypted).Scan(&revision); err != nil {
 		return Deployment{}, err
 	}
 	d := Deployment{ID: uuid.New(), ComposeServiceID: serviceID, Revision: revision, Status: "queued", Trigger: "rollback"}
@@ -2514,6 +2605,7 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 		service.ID = uuid.New()
 	}
 	service.Revision = 1
+	service.DesiredState = "running"
 	if err = tx.QueryRow(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, service.ID, service.EnvironmentID, service.Name, service.Slug, service.StackName, service.ComposeYAML, service.EncryptedEnv).Scan(&service.CreatedAt, &service.UpdatedAt); err != nil {
 		return ComposeService{}, nil, err
 	}
@@ -2564,7 +2656,7 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 	if err = ensureProtectedVolumesDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
 		return ComposeService{}, nil, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 AND deletion_requested_at IS NULL RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.CreatedAt, &service.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 AND deletion_requested_at IS NULL RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,desired_state,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrBusy
 	}
