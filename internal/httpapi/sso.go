@@ -23,6 +23,12 @@ import (
 const (
 	oidcRequestTimeout   = 15 * time.Second
 	maxOIDCResponseBytes = 4 << 20
+	maxSSOProviderName   = 120
+	maxOIDCIssuerBytes   = 2048
+	maxOIDCClientIDBytes = 1024
+	maxOIDCSecretBytes   = 16 << 10
+	maxOIDCScopes        = 32
+	maxOIDCScopeBytes    = 128
 )
 
 var errOIDCResponseTooLarge = errors.New("OIDC response exceeds 4 MiB")
@@ -42,6 +48,7 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	in.Name = strings.TrimSpace(in.Name)
 	issuer, err := normalizedOIDCIssuer(in.Issuer)
 	if err != nil {
 		writeError(w, 400, "invalid_issuer", "issuer must be an absolute HTTPS URL")
@@ -56,6 +63,11 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.Scopes) == 0 {
 		in.Scopes = []string{"openid", "profile", "email"}
+	}
+	in.Scopes, err = normalizeOIDCScopes(in.Scopes)
+	if err != nil || !validOIDCProviderFields(in.Name, in.ClientID, in.ClientSecret) {
+		writeError(w, 400, "invalid_provider", "OIDC provider configuration exceeds a supported limit or has invalid scopes")
+		return
 	}
 	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
@@ -104,6 +116,7 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	in.Name = strings.TrimSpace(in.Name)
 	issuer, err := normalizedOIDCIssuer(in.Issuer)
 	if err != nil || in.Name == "" || in.ClientID == "" || len(in.Domains) == 0 {
 		writeError(w, 400, "invalid_provider", "name, HTTPS issuer, client ID, and domains are required")
@@ -114,6 +127,11 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.Scopes) == 0 {
 		in.Scopes = []string{"openid", "profile", "email"}
+	}
+	in.Scopes, err = normalizeOIDCScopes(in.Scopes)
+	if err != nil || !validOIDCProviderFields(in.Name, in.ClientID, in.ClientSecret) {
+		writeError(w, 400, "invalid_provider", "OIDC provider configuration exceeds a supported limit or has invalid scopes")
+		return
 	}
 	if roleRank(in.DefaultRole) < 1 || in.DefaultRole == "owner" {
 		writeError(w, 400, "invalid_role", "default role must be admin, developer, or viewer")
@@ -338,6 +356,9 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 
 func normalizedOIDCIssuer(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
+	if len(raw) == 0 || len(raw) > maxOIDCIssuerBytes {
+		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
+	}
 	issuer, err := url.Parse(raw)
 	if err != nil || issuer.Scheme != "https" || issuer.Hostname() == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || issuer.Opaque != "" {
 		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
@@ -345,6 +366,38 @@ func normalizedOIDCIssuer(raw string) (string, error) {
 	issuer.Path = strings.TrimRight(issuer.Path, "/")
 	issuer.RawPath = strings.TrimRight(issuer.RawPath, "/")
 	return issuer.String(), nil
+}
+
+func normalizeOIDCScopes(scopes []string) ([]string, error) {
+	if len(scopes) == 0 || len(scopes) > maxOIDCScopes {
+		return nil, errors.New("OIDC scopes must contain between 1 and 32 values")
+	}
+	normalized := make([]string, 0, len(scopes))
+	seen := make(map[string]struct{}, len(scopes))
+	for _, raw := range scopes {
+		scope := strings.TrimSpace(raw)
+		if len(scope) == 0 || len(scope) > maxOIDCScopeBytes {
+			return nil, errors.New("OIDC scope is empty or too long")
+		}
+		for _, character := range []byte(scope) {
+			if character < 0x21 || character > 0x7e || character == '"' || character == '\\' {
+				return nil, errors.New("OIDC scope contains an invalid character")
+			}
+		}
+		if _, duplicate := seen[scope]; duplicate {
+			continue
+		}
+		seen[scope] = struct{}{}
+		normalized = append(normalized, scope)
+	}
+	if _, ok := seen["openid"]; !ok {
+		return nil, errors.New("OIDC scopes must include openid")
+	}
+	return normalized, nil
+}
+
+func validOIDCProviderFields(name, clientID, clientSecret string) bool {
+	return name != "" && len(name) <= maxSSOProviderName && clientID != "" && len(clientID) <= maxOIDCClientIDBytes && len(clientSecret) <= maxOIDCSecretBytes
 }
 
 func validateOIDCProviderEndpoints(provider *oidc.Provider) error {

@@ -23,6 +23,10 @@ or token limits before outbound discovery, XML/cryptographic processing, or cert
 Rejected requests return 429 with `Retry-After`; stored limiter keys are
 SHA-256 digests rather than email addresses, provider IDs, or credentials.
 Expired limiter state is pruned by the singleton hourly maintenance loop.
+OIDC configuration bounds provider names, issuer and client identifiers,
+secrets, and RFC-compatible scope tokens; `openid` is mandatory. SAML metadata
+is limited to 1 MiB and provider/attribute identifiers have independent bounds
+before XML or certificate processing.
 
 Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a

@@ -22,10 +22,59 @@ func TestNormalizedOIDCIssuer(t *testing.T) {
 	for _, invalid := range []string{
 		"http://login.example.test", "https://user@login.example.test",
 		"https://login.example.test?tenant=one", "https://login.example.test/#fragment",
-		"//login.example.test", "https:///missing-host",
+		"//login.example.test", "https:///missing-host", "https://" + strings.Repeat("a", maxOIDCIssuerBytes),
 	} {
 		if _, err = normalizedOIDCIssuer(invalid); err == nil {
 			t.Errorf("accepted unsafe issuer %q", invalid)
+		}
+	}
+}
+
+func TestNormalizeOIDCScopes(t *testing.T) {
+	got, err := normalizeOIDCScopes([]string{" openid ", "email", "email"})
+	if err != nil || len(got) != 2 || got[0] != "openid" || got[1] != "email" {
+		t.Fatalf("normalized scopes=%v err=%v", got, err)
+	}
+	for _, invalid := range [][]string{
+		{}, {"profile"}, {"openid profile"}, {"openid", "bad\\scope"},
+		append([]string{"openid"}, make([]string, maxOIDCScopes)...),
+		{"openid", strings.Repeat("a", maxOIDCScopeBytes+1)},
+	} {
+		if _, err = normalizeOIDCScopes(invalid); err == nil {
+			t.Errorf("accepted invalid scopes %#v", invalid)
+		}
+	}
+}
+
+func TestOIDCProviderFieldsAreBounded(t *testing.T) {
+	if !validOIDCProviderFields("workforce", "client", "secret") || !validOIDCProviderFields("workforce", "client", "") {
+		t.Fatal("valid OIDC provider fields rejected")
+	}
+	for _, input := range []struct{ name, clientID, secret string }{
+		{"", "client", "secret"},
+		{strings.Repeat("n", maxSSOProviderName+1), "client", "secret"},
+		{"workforce", strings.Repeat("c", maxOIDCClientIDBytes+1), "secret"},
+		{"workforce", "client", strings.Repeat("s", maxOIDCSecretBytes+1)},
+	} {
+		if validOIDCProviderFields(input.name, input.clientID, input.secret) {
+			t.Errorf("accepted invalid OIDC provider fields with lengths name=%d client=%d secret=%d", len(input.name), len(input.clientID), len(input.secret))
+		}
+	}
+}
+
+func TestSAMLProviderFieldsAreBounded(t *testing.T) {
+	if !validSAMLProviderFields("workforce", "<metadata/>", "email", "displayName") {
+		t.Fatal("valid SAML provider fields rejected")
+	}
+	for _, input := range []struct{ name, metadata, emailAttribute, nameAttribute string }{
+		{strings.Repeat("n", maxSSOProviderName+1), "<metadata/>", "email", "name"},
+		{"workforce", strings.Repeat("x", maxSAMLMetadataBytes+1), "email", "name"},
+		{"workforce", "<metadata/>", strings.Repeat("e", maxSAMLAttributeBytes+1), "name"},
+		{"workforce", "<metadata/>", " email", "name"},
+		{"workforce", "<metadata/>", "email", "name\nclaim"},
+	} {
+		if validSAMLProviderFields(input.name, input.metadata, input.emailAttribute, input.nameAttribute) {
+			t.Errorf("accepted invalid SAML provider fields: %#v", input)
 		}
 	}
 }

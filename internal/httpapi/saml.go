@@ -27,6 +27,11 @@ import (
 	"github.com/russellhaering/goxmldsig"
 )
 
+const (
+	maxSAMLMetadataBytes  = 1 << 20
+	maxSAMLAttributeBytes = 512
+)
+
 func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name              string   `json:"name"`
@@ -50,7 +55,7 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	if in.DefaultRole == "" {
 		in.DefaultRole = "developer"
 	}
-	if in.Name == "" || len(in.MetadataXML) == 0 || len(in.Domains) == 0 {
+	if !validSAMLProviderFields(in.Name, in.MetadataXML, in.EmailAttribute, in.NameAttribute) || len(in.Domains) == 0 {
 		writeError(w, 400, "invalid_provider", "name, metadataXml, and domains are required")
 		return
 	}
@@ -139,6 +144,10 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	if in.DefaultRole == "" {
 		in.DefaultRole = "developer"
 	}
+	if !validSAMLProviderFields(in.Name, in.MetadataXML, in.EmailAttribute, in.NameAttribute) {
+		writeError(w, 400, "invalid_provider", "SAML provider configuration exceeds a supported limit")
+		return
+	}
 	metadata, parseErr := samlsp.ParseMetadata([]byte(in.MetadataXML))
 	if in.Name == "" || len(in.Domains) == 0 || parseErr != nil || len(metadata.IDPSSODescriptors) == 0 {
 		writeError(w, 400, "invalid_provider", "name, valid metadataXml, and domains are required")
@@ -171,6 +180,23 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 	setSAMLCertificateStatus(&provider, metadata, time.Now())
 	s.Store.Audit(r.Context(), &p, "sso.saml.update", "saml_provider", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 200, provider)
+}
+
+func validSAMLProviderFields(name, metadataXML, emailAttribute, nameAttribute string) bool {
+	return name != "" && len(name) <= maxSSOProviderName && len(metadataXML) > 0 && len(metadataXML) <= maxSAMLMetadataBytes &&
+		validSAMLAttributeName(emailAttribute) && validSAMLAttributeName(nameAttribute)
+}
+
+func validSAMLAttributeName(value string) bool {
+	if len(value) == 0 || len(value) > maxSAMLAttributeBytes || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) deleteSAMLProvider(w http.ResponseWriter, r *http.Request) {
