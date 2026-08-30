@@ -156,6 +156,24 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		return grantCommand(args, stdin, "environments", http.MethodPut)
 	case "delete-environment-grant":
 		return grantCommand(args, stdin, "environments", http.MethodDelete)
+	case "policy":
+		return http.MethodGet, "/v1/policy", nil, require(1)
+	case "put-policy":
+		return jsonCommand(args, stdin, http.MethodPut, "/v1/policy", 2)
+	case "project-policy":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/projects/" + args[1] + "/policy", nil, nil
+	case "put-project-policy":
+		return scopedJSONCommand(args, stdin, http.MethodPut, "projects", "policy")
+	case "environment-policy":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/environments/" + args[1] + "/policy", nil, nil
+	case "put-environment-policy":
+		return scopedJSONCommand(args, stdin, http.MethodPut, "environments", "policy")
 	case "saml-providers":
 		return http.MethodGet, "/v1/sso/saml-providers", nil, require(1)
 	case "create-saml-provider":
@@ -508,6 +526,14 @@ func grantCommand(args []string, stdin io.Reader, collection, method string) (st
 	return method, path, input, err
 }
 
+func scopedJSONCommand(args []string, stdin io.Reader, method, collection, suffix string) (string, string, any, error) {
+	if len(args) != 3 {
+		return "", "", nil, usageError()
+	}
+	input, err := parseJSONArgument(args[2], stdin)
+	return method, "/v1/" + collection + "/" + args[1] + "/" + suffix, input, err
+}
+
 func parseJSONArgument(argument string, stdin io.Reader) (any, error) {
 	var reader io.Reader = strings.NewReader(argument)
 	if argument == "-" {
@@ -611,5 +637,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|members|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|members|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|policy|put-policy|project-policy|put-project-policy|environment-policy|put-environment-policy|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }

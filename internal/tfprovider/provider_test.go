@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 15 {
+	if len(instance.Resources(context.Background())) != 16 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -52,6 +52,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_access_grant") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_resource_policy") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
@@ -194,6 +197,35 @@ func TestAccessGrantIdentityAndImport(t *testing.T) {
 	}
 	if !validAccessGrantRole("admin") || validAccessGrantRole("owner") {
 		t.Fatal("access grant role validation mismatch")
+	}
+}
+
+func TestResourcePolicyStateInputAndImport(t *testing.T) {
+	limit := int64(10)
+	model := resourcePolicyModel{ScopeType: types.StringValue("organization"), ScopeID: types.StringNull(), MaintenanceReason: types.StringNull()}
+	setResourcePolicy(&model, resourcePolicyResponse{ScopeType: "organization", ScopeID: "server-organization-id", MaxProjects: &limit, UpdatedAt: "2026-08-30T12:00:00Z"})
+	if model.ID.ValueString() != "organization" || !model.ScopeID.IsNull() || !model.MaintenanceReason.IsNull() || model.MaxProjects.ValueInt64() != 10 || !model.MaxServices.IsNull() {
+		t.Fatalf("organization policy state = %#v", model)
+	}
+	model.Maintenance = types.BoolValue(true)
+	model.MaintenanceReason = types.StringValue("planned maintenance")
+	model.MaxProjects = types.Int64Value(10)
+	model.MaxEnvironments = types.Int64Null()
+	model.MaxServices = types.Int64Null()
+	model.MaxDatabases = types.Int64Null()
+	input := resourcePolicyInput(model)
+	if input["maintenance"] != true || input["maintenanceReason"] != "planned maintenance" || input["maxProjects"] != int64(10) || input["maxServices"] != nil {
+		t.Fatalf("resource policy input = %#v", input)
+	}
+	scopeID := "0cc565f8-6b40-4bd7-a6ff-f2f00d3b7ae4"
+	scopeType, parsedID, err := splitResourcePolicyImportID("environment/" + scopeID)
+	if err != nil || scopeType != "environment" || parsedID != scopeID {
+		t.Fatalf("split resource policy = %q %q %v", scopeType, parsedID, err)
+	}
+	for _, invalid := range []string{"", "service/" + scopeID, "project/not-a-uuid", "organization/" + scopeID} {
+		if _, _, err = splitResourcePolicyImportID(invalid); err == nil {
+			t.Errorf("splitResourcePolicyImportID(%q) succeeded", invalid)
+		}
 	}
 }
 

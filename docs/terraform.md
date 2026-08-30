@@ -17,6 +17,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_saml_provider`
 - `dockyard_scim_token`
 - `dockyard_access_grant`
+- `dockyard_resource_policy`
 - `dockyard_auth_settings`
 
 Configure `DOCKYARD_URL` and `DOCKYARD_TOKEN` in the runner environment. An
@@ -101,6 +102,14 @@ membership remains the lower access boundary, and inherited grants continue to
 apply normally. Import an existing grant as
 `project/PROJECT_UUID/USER_UUID` or
 `environment/ENVIRONMENT_UUID/USER_UUID`.
+
+`dockyard_resource_policy` manages maintenance mode and quotas at organization,
+project, or environment scope. Omit `scope_id` for the provider organization;
+use the matching resource UUID for narrower scopes. Destroy resets that scope
+to maintenance-disabled, unlimited defaults because policies are virtual
+singletons rather than deletable API objects. Import identifiers are
+`organization`, `project/PROJECT_UUID`, and
+`environment/ENVIRONMENT_UUID`.
 
 `dockyard_auth_settings` controls mandatory SSO for the selected organization.
 Depend on at least one enabled OIDC or SAML provider before setting

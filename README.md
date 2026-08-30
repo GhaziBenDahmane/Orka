@@ -172,6 +172,10 @@ Organization member IDs are available through `members`. Project and
 environment grants have list, put, and delete CLI commands and can be managed
 declaratively with `dockyard_access_grant`.
 
+Organization, project, and environment maintenance/quota policy can be read or
+updated with the corresponding `policy`/`put-*-policy` CLI commands and managed
+declaratively with `dockyard_resource_policy`.
+
 Database recovery has dedicated commands: `database-engines`, `databases
 ENVIRONMENT_ID`, `database DATABASE_ID`, `backup-policy DATABASE_ID`,
 `put-backup-policy DATABASE_ID JSON`, `delete-backup-policy DATABASE_ID`,

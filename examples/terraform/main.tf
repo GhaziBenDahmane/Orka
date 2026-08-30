@@ -97,6 +97,15 @@ resource "dockyard_auth_settings" "organization" {
   depends_on  = [dockyard_oidc_provider.workforce, dockyard_saml_provider.partners]
 }
 
+resource "dockyard_resource_policy" "organization" {
+  scope_type       = "organization"
+  maintenance      = false
+  max_projects     = 25
+  max_environments = 100
+  max_services     = 500
+  max_databases    = 100
+}
+
 resource "dockyard_environment" "production" {
   project_id        = dockyard_project.example.id
   name              = "Production"

@@ -38,6 +38,12 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"environment-grants", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/grants"},
 		{[]string{"put-environment-grant", "environment-id", "user-id", `{}`}, http.MethodPut, "/v1/environments/environment-id/grants/user-id"},
 		{[]string{"delete-environment-grant", "environment-id", "user-id"}, http.MethodDelete, "/v1/environments/environment-id/grants/user-id"},
+		{[]string{"policy"}, http.MethodGet, "/v1/policy"},
+		{[]string{"put-policy", `{}`}, http.MethodPut, "/v1/policy"},
+		{[]string{"project-policy", "project-id"}, http.MethodGet, "/v1/projects/project-id/policy"},
+		{[]string{"put-project-policy", "project-id", `{}`}, http.MethodPut, "/v1/projects/project-id/policy"},
+		{[]string{"environment-policy", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/policy"},
+		{[]string{"put-environment-policy", "environment-id", `{}`}, http.MethodPut, "/v1/environments/environment-id/policy"},
 		{[]string{"saml-providers"}, http.MethodGet, "/v1/sso/saml-providers"},
 		{[]string{"create-saml-provider", `{}`}, http.MethodPost, "/v1/sso/saml-providers"},
 		{[]string{"update-saml-provider", "provider-id", `{}`}, http.MethodPut, "/v1/sso/saml-providers/provider-id"},
@@ -268,6 +274,17 @@ func TestAccessGrantCommandBody(t *testing.T) {
 	}
 	if input.(map[string]any)["role"] != "developer" {
 		t.Fatalf("access grant input=%#v", input)
+	}
+}
+
+func TestResourcePolicyCommandBody(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"put-project-policy", "project-id", "-"}, strings.NewReader(`{"maintenance":true,"maintenanceReason":"upgrade","maxServices":20}`))
+	if err != nil || method != http.MethodPut || path != "/v1/projects/project-id/policy" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	policy := input.(map[string]any)
+	if policy["maintenance"] != true || policy["maintenanceReason"] != "upgrade" || policy["maxServices"] != float64(20) {
+		t.Fatalf("resource policy input=%#v", policy)
 	}
 }
 
