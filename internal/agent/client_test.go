@@ -141,6 +141,22 @@ func TestArtifactTransferEnforcesPrivateEgressPolicy(t *testing.T) {
 	}
 }
 
+func TestDecodeBoundedJSONRejectsOversizedAndTrailingResponses(t *testing.T) {
+	var output map[string]string
+	if err := decodeBoundedJSON(strings.NewReader(`{"status":"ok"}`), 32, &output); err != nil || output["status"] != "ok" {
+		t.Fatalf("valid response output=%v error=%v", output, err)
+	}
+	if err := decodeBoundedJSON(strings.NewReader(`{"status":"ok"} {}`), 32, &output); err == nil || !strings.Contains(err.Error(), "multiple values") {
+		t.Fatalf("trailing JSON error=%v", err)
+	}
+	if err := decodeBoundedJSON(strings.NewReader(`{"status":"ok"} trailing`), 32, &output); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("trailing data error=%v", err)
+	}
+	if err := decodeBoundedJSON(strings.NewReader(`{"status":"response exceeds limit"}`), 16, &output); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized response error=%v", err)
+	}
+}
+
 func TestArtifactDownloadEnforcesExpectedSizeAndCleansPartialFiles(t *testing.T) {
 	tests := []struct {
 		name        string

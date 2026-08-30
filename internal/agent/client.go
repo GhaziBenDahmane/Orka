@@ -198,7 +198,7 @@ func rotateCertificate(ctx context.Context, cfg Config, current *http.Client, fo
 		CACertificate        string `json:"caCertificate"`
 		SigningCACertificate string `json:"signingCaCertificate"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&rotated); err != nil {
+	if err := decodeBoundedJSON(response.Body, 1<<20, &rotated); err != nil {
 		return current, err
 	}
 	verificationCA := expectedSigningCA
@@ -304,7 +304,7 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 		Certificate   string `json:"certificate"`
 		CACertificate string `json:"caCertificate"`
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&enrolled); err != nil {
+	if err := decodeBoundedJSON(response.Body, 1<<20, &enrolled); err != nil {
 		return err
 	}
 	if err := validateEnrolledAgentIdentity([]byte(enrolled.Certificate), key, []byte(enrolled.CACertificate), time.Now()); err != nil {
@@ -1001,7 +1001,31 @@ func (c *Client) request(ctx context.Context, method, path string, input, output
 		return fmt.Errorf("agent API returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(data)))
 	}
 	if output != nil {
-		return json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(output)
+		return decodeBoundedJSON(response.Body, 4<<20, output)
+	}
+	return nil
+}
+
+func decodeBoundedJSON(reader io.Reader, limit int64, output any) error {
+	if limit <= 0 {
+		return errors.New("JSON response limit must be positive")
+	}
+	encoded, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(encoded)) > limit {
+		return fmt.Errorf("JSON response exceeds %d bytes", limit)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	if err = decoder.Decode(output); err != nil {
+		return err
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("JSON response contains multiple values")
+		}
+		return errors.New("JSON response contains trailing data")
 	}
 	return nil
 }
