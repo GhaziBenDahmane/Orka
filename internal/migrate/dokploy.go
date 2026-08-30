@@ -44,6 +44,8 @@ type DokployReport struct {
 	BackupPolicies        int                     `json:"backupPolicies"`
 	SourceCredentials     int                     `json:"sourceCredentials"`
 	NotificationEndpoints int                     `json:"notificationEndpoints"`
+	Tags                  int                     `json:"tags"`
+	ProjectTags           int                     `json:"projectTags"`
 	Skipped               int                     `json:"skipped"`
 	Warnings              []string                `json:"warnings"`
 	Resources             []DokployResourceReport `json:"resources"`
@@ -61,6 +63,8 @@ type DokployResourceReport struct {
 type sourceProject struct{ id, name, description string }
 type sourceEnvironment struct{ id, projectID, name string }
 type sourceCompose struct{ id, environmentID, name, appName, compose, env string }
+type sourceTag struct{ id, name, color string }
+type sourceProjectTag struct{ id, projectID, tagID string }
 type sourceDatabase struct {
 	id, environmentID, name, appName, engine                   string
 	databaseName, databaseUser, databasePassword, rootPassword string
@@ -121,6 +125,14 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	if err != nil {
 		return report, err
 	}
+	tags, err := readTags(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
+	projectTags, err := readProjectTags(ctx, source, options.SourceOrganizationID)
+	if err != nil {
+		return report, err
+	}
 	services, err := readCompose(ctx, source, options.SourceOrganizationID)
 	if err != nil {
 		return report, err
@@ -137,7 +149,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	if err != nil {
 		return report, err
 	}
-	report.Projects, report.Environments, report.Services = len(projects), len(environments), len(services)
+	report.Projects, report.Environments, report.Services, report.Tags, report.ProjectTags = len(projects), len(environments), len(services), len(tags), len(projectTags)
 	for _, item := range projects {
 		targetID := mappedID(options, "project", item.id)
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "project", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: map[string]any{"name": item.name}})
@@ -145,6 +157,57 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	for _, item := range environments {
 		targetID := mappedID(options, "environment", item.id)
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "environment", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: map[string]any{"name": item.name, "projectId": item.projectID}})
+	}
+	tagIDs := map[string]uuid.UUID{}
+	existingTagIDs := map[string]uuid.UUID{}
+	rows, queryErr := destination.Pool.Query(ctx, `SELECT lower(name),id FROM tags WHERE organization_id=$1`, options.TargetOrganizationID)
+	if queryErr != nil {
+		return report, queryErr
+	}
+	for rows.Next() {
+		var name string
+		var id uuid.UUID
+		if queryErr = rows.Scan(&name, &id); queryErr != nil {
+			rows.Close()
+			return report, queryErr
+		}
+		existingTagIDs[name] = id
+	}
+	if queryErr = rows.Err(); queryErr != nil {
+		rows.Close()
+		return report, queryErr
+	}
+	rows.Close()
+	seenTagNames := map[string]bool{}
+	for _, item := range tags {
+		name := strings.TrimSpace(item.name)
+		color := normalizeTagColor(item.color)
+		metadata := map[string]any{"name": name, "color": color}
+		key := strings.ToLower(name)
+		if name == "" || len([]rune(name)) > 64 || strings.ContainsAny(name, "\x00\r\n\t") || seenTagNames[key] {
+			reason := "tag has an invalid or duplicate case-insensitive name"
+			report.Skipped++
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "tag", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: metadata})
+			continue
+		}
+		seenTagNames[key] = true
+		targetID, exists := existingTagIDs[key]
+		if !exists {
+			targetID = mappedID(options, "tag", item.id)
+		}
+		tagIDs[item.id] = targetID
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "tag", SourceID: item.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
+	}
+	for _, item := range projectTags {
+		tagID, valid := tagIDs[item.tagID]
+		projectID := mappedID(options, "project", item.projectID)
+		metadata := map[string]any{"projectId": projectID.String(), "tagId": tagID.String()}
+		if !valid {
+			report.Skipped++
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "project_tag", SourceID: item.id, Status: "skipped", Reason: "tag was not imported", Metadata: metadata})
+			continue
+		}
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "project_tag", SourceID: item.id, TargetID: &tagID, Status: "imported", Metadata: metadata})
 	}
 
 	validServices := map[string]bool{}
@@ -458,6 +521,28 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		_, err = tx.Exec(ctx, `INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description`, id, options.TargetOrganizationID, item.name, migratedSlug(item.name, id), item.description)
 		if err != nil {
 			return report, fmt.Errorf("import project %s: %w", item.id, err)
+		}
+	}
+	for _, item := range tags {
+		id, valid := tagIDs[item.id]
+		if !valid {
+			continue
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO tags(id,organization_id,name,color) VALUES($1,$2,$3,$4)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,color=excluded.color,updated_at=now()`, id, options.TargetOrganizationID, strings.TrimSpace(item.name), normalizeTagColor(item.color))
+		if err != nil {
+			return report, fmt.Errorf("import tag %s: %w", item.id, err)
+		}
+	}
+	for _, item := range projectTags {
+		tagID, valid := tagIDs[item.tagID]
+		if !valid {
+			continue
+		}
+		projectID := mappedID(options, "project", item.projectID)
+		_, err = tx.Exec(ctx, `INSERT INTO project_tags(project_id,tag_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, projectID, tagID)
+		if err != nil {
+			return report, fmt.Errorf("import project tag %s: %w", item.id, err)
 		}
 	}
 	for _, item := range environments {
@@ -799,6 +884,62 @@ func readCompose(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceCom
 	}
 	return items, rows.Err()
 }
+
+func readTags(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceTag, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('tag') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("inspect Dokploy tag schema: %w", err)
+	}
+	if !exists {
+		return []sourceTag{}, nil
+	}
+	rows, err := db.Query(ctx, `SELECT "tagId",name,COALESCE(color,'') FROM tag WHERE "organizationId"=$1 ORDER BY "tagId"`, org)
+	if err != nil {
+		return nil, fmt.Errorf("read Dokploy tags: %w", err)
+	}
+	defer rows.Close()
+	items := []sourceTag{}
+	for rows.Next() {
+		var item sourceTag
+		if err = rows.Scan(&item.id, &item.name, &item.color); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func readProjectTags(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceProjectTag, error) {
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass('project_tag') IS NOT NULL AND to_regclass('tag') IS NOT NULL`).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("inspect Dokploy project-tag schema: %w", err)
+	}
+	if !exists {
+		return []sourceProjectTag{}, nil
+	}
+	rows, err := db.Query(ctx, `SELECT pt.id,pt."projectId",pt."tagId" FROM project_tag pt JOIN project p ON p."projectId"=pt."projectId" JOIN tag t ON t."tagId"=pt."tagId" WHERE p."organizationId"=$1 AND t."organizationId"=$1 ORDER BY pt.id`, org)
+	if err != nil {
+		return nil, fmt.Errorf("read Dokploy project tags: %w", err)
+	}
+	defer rows.Close()
+	items := []sourceProjectTag{}
+	for rows.Next() {
+		var item sourceProjectTag
+		if err = rows.Scan(&item.id, &item.projectID, &item.tagID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func normalizeTagColor(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if !tagColorPattern.MatchString(value) {
+		return "#64748B"
+	}
+	return value
+}
 func readRoutes(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceRoute, error) {
 	rows, err := db.Query(ctx, `SELECT d."domainId",d."composeId",d.host,COALESCE(d.path,'/'),COALESCE(to_jsonb(d)->>'internalPath','/'),COALESCE((to_jsonb(d)->>'stripPath')::boolean,false),COALESCE(d."serviceName",''),COALESCE(d.port,3000),d.https,d.enabled,COALESCE(d."customCertResolver",'') FROM domain d JOIN compose c ON c."composeId"=d."composeId" JOIN environment e ON e."environmentId"=c."environmentId" JOIN project p ON p."projectId"=e."projectId" WHERE p."organizationId"=$1 AND d."composeId" IS NOT NULL ORDER BY d."domainId"`, org)
 	if err != nil {
@@ -820,7 +961,10 @@ func mappedID(options DokployOptions, kind, sourceID string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("dockyard:dokploy:"+options.TargetOrganizationID.String()+":"+options.SourceOrganizationID+":"+kind+":"+sourceID))
 }
 
-var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
+var (
+	tagColorPattern = regexp.MustCompile(`^#[0-9A-F]{6}$`)
+	nonSlug         = regexp.MustCompile(`[^a-z0-9]+`)
+)
 
 func migratedSlug(name string, id uuid.UUID) string {
 	base := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(name), "-"), "-")

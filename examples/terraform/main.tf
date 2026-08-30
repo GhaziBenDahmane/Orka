@@ -219,6 +219,11 @@ resource "dockyard_service_tags" "whoami" {
   tag_ids     = [dockyard_tag.production.id, dockyard_tag.frontend.id]
 }
 
+resource "dockyard_project_tags" "example" {
+  project_id = dockyard_project.example.id
+  tag_ids    = [dockyard_tag.production.id]
+}
+
 resource "dockyard_deploy_token" "whoami_ci" {
   service_id        = dockyard_service.whoami.id
   name              = "Whoami CI"

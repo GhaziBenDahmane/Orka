@@ -39,6 +39,8 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 	statements := []string{
 		`CREATE SCHEMA ` + quotedSchema,
 		`CREATE TABLE ` + quotedSchema + `.project ("projectId" text PRIMARY KEY,name text NOT NULL,description text,"organizationId" text NOT NULL)`,
+		`CREATE TABLE ` + quotedSchema + `.tag ("tagId" text PRIMARY KEY,name text NOT NULL,color text,"organizationId" text NOT NULL)`,
+		`CREATE TABLE ` + quotedSchema + `.project_tag (id text PRIMARY KEY,"projectId" text NOT NULL,"tagId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.environment ("environmentId" text PRIMARY KEY,"projectId" text NOT NULL,name text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.git_provider ("gitProviderId" text PRIMARY KEY,name text NOT NULL,"providerType" text NOT NULL,"organizationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.github ("githubId" text PRIMARY KEY,"githubUrl" text NOT NULL,"gitProviderId" text NOT NULL)`,
@@ -79,6 +81,9 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 volumes:
   uploads: {}
 ','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","buildArgs","buildSecrets","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime','GO_VERSION=1.26','',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain ("domainId","composeId","applicationId",host,path,"serviceName",port,https,enabled,"customCertResolver","internalPath","stripPath") VALUES('d1','c1',NULL,'`+fixtureHost+`','/public','web',80,true,false,'letsencrypt','/internal',true),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt','/',false)`)
+	if err == nil {
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.tag VALUES('tag1','Production','#22C55E','source-org'); INSERT INTO `+quotedSchema+`.project_tag VALUES('project-tag1','p1','tag1')`)
+	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `
 			INSERT INTO `+quotedSchema+`.postgres VALUES('pg1','e1','Imported PostgreSQL','legacy-postgres','legacydb','legacyuser','legacy-secret','postgres:16','EXTRA=value');
@@ -128,15 +133,15 @@ volumes:
 	parsed.RawQuery = query.Encode()
 	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
-	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 6 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 2 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 {
+	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 6 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 2 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 || report.Tags != 1 || report.ProjectTags != 1 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
 	kindCounts := map[string]int{}
 	for _, resource := range report.Resources {
 		kindCounts[resource.SourceKind]++
 	}
-	expectedKinds := map[string]int{"project": 1, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 6, "backup_destination": 1, "backup_policy": 1, "volume_backup": 1, "source_credential": 2, "notification": 1}
-	if len(report.Resources) != 19 || !reflect.DeepEqual(kindCounts, expectedKinds) {
+	expectedKinds := map[string]int{"project": 1, "tag": 1, "project_tag": 1, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 6, "backup_destination": 1, "backup_policy": 1, "volume_backup": 1, "source_credential": 2, "notification": 1}
+	if len(report.Resources) != 21 || !reflect.DeepEqual(kindCounts, expectedKinds) {
 		t.Fatalf("migration parity resources = %#v", report.Resources)
 	}
 	encodedReport, _ := json.Marshal(report)
@@ -148,7 +153,7 @@ volumes:
 		t.Fatal(err)
 	}
 	controlPlaneVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, nil)
-	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 18 || controlPlaneVerification.Blocked != 1 {
+	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 20 || controlPlaneVerification.Blocked != 1 {
 		t.Fatalf("control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	if _, err = VerifyDokployImport(ctx, destination, targetOrg, "not-imported", false, nil); err == nil || !strings.Contains(err.Error(), "no persisted") {
@@ -156,7 +161,7 @@ volumes:
 	}
 	acknowledgements := []string{"source_credential:github:gh1"}
 	controlPlaneVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, acknowledgements)
-	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 18 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
+	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 20 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
 		t.Fatalf("acknowledged control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	operationalVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
@@ -166,14 +171,14 @@ volumes:
 	if _, err = ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options); err != nil {
 		t.Fatal(err)
 	}
-	var projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications int
+	var projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications, tags, projectTags int
 	var encryptedCredentials, encryptedEnvironment string
 	var storedConfig []byte
-	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &volumeBackupPolicies, &sourceCredentials, &notifications); err != nil {
+	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1),(SELECT count(*) FROM tags WHERE organization_id=$1),(SELECT count(*) FROM project_tags pt JOIN projects p ON p.id=pt.project_id WHERE p.organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &volumeBackupPolicies, &sourceCredentials, &notifications, &tags, &projectTags); err != nil {
 		t.Fatal(err)
 	}
-	if projects != 1 || services != 9 || routes != 2 || databases != 6 || applicationSources != 1 || backupDestinations != 3 || backupPolicies != 1 || volumeBackupPolicies != 1 || sourceCredentials != 1 || notifications != 1 {
-		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications)
+	if projects != 1 || services != 9 || routes != 2 || databases != 6 || applicationSources != 1 || backupDestinations != 3 || backupPolicies != 1 || volumeBackupPolicies != 1 || sourceCredentials != 1 || notifications != 1 || tags != 1 || projectTags != 1 {
+		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications, tags, projectTags)
 	}
 	var importedInternalPath string
 	var importedStripPath, importedRouteEnabled bool
@@ -265,7 +270,7 @@ volumes:
 		t.Fatalf("application build settings were not re-encrypted: %s err=%v", buildConfigJSON, err)
 	}
 	var migrationRecords, applicationMigrationRecords int
-	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 19 || applicationMigrationRecords != 2 {
+	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 21 || applicationMigrationRecords != 2 {
 		t.Fatalf("migration metadata records=%d application records=%d err=%v", migrationRecords, applicationMigrationRecords, err)
 	}
 
@@ -381,7 +386,7 @@ volumes:
 		t.Fatal(err)
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 18 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
+	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 20 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
 		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = destination.Pool.Exec(ctx, `UPDATE service_reconciliations SET state='degraded',last_checked_at=now() WHERE compose_service_id=$1`, composeServiceID); err != nil {

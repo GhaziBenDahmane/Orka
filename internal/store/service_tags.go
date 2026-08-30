@@ -15,6 +15,7 @@ type Tag struct {
 	Name           string    `json:"name"`
 	Color          string    `json:"color"`
 	ServiceCount   int       `json:"serviceCount"`
+	ProjectCount   int       `json:"projectCount"`
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
@@ -35,10 +36,11 @@ func (s *Store) CreateTag(ctx context.Context, organizationID uuid.UUID, item Ta
 
 func (s *Store) GetTag(ctx context.Context, organizationID, id uuid.UUID) (Tag, error) {
 	var item Tag
-	err := s.Pool.QueryRow(ctx, `SELECT t.id,t.organization_id,t.name,t.color,count(st.compose_service_id),t.created_at,t.updated_at
-		FROM tags t LEFT JOIN compose_service_tags st ON st.tag_id=t.id
-		WHERE t.id=$1 AND t.organization_id=$2 GROUP BY t.id`, id, organizationID).
-		Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Color, &item.ServiceCount, &item.CreatedAt, &item.UpdatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT t.id,t.organization_id,t.name,t.color,
+		(SELECT count(*) FROM compose_service_tags st WHERE st.tag_id=t.id),
+		(SELECT count(*) FROM project_tags pt WHERE pt.tag_id=t.id),t.created_at,t.updated_at
+		FROM tags t WHERE t.id=$1 AND t.organization_id=$2`, id, organizationID).
+		Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Color, &item.ServiceCount, &item.ProjectCount, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Tag{}, ErrNotFound
 	}
@@ -46,9 +48,10 @@ func (s *Store) GetTag(ctx context.Context, organizationID, id uuid.UUID) (Tag, 
 }
 
 func (s *Store) ListTags(ctx context.Context, organizationID uuid.UUID) ([]Tag, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT t.id,t.organization_id,t.name,t.color,count(st.compose_service_id),t.created_at,t.updated_at
-		FROM tags t LEFT JOIN compose_service_tags st ON st.tag_id=t.id
-		WHERE t.organization_id=$1 GROUP BY t.id ORDER BY lower(t.name),t.id`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT t.id,t.organization_id,t.name,t.color,
+		(SELECT count(*) FROM compose_service_tags st WHERE st.tag_id=t.id),
+		(SELECT count(*) FROM project_tags pt WHERE pt.tag_id=t.id),t.created_at,t.updated_at
+		FROM tags t WHERE t.organization_id=$1 ORDER BY lower(t.name),t.id`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +59,7 @@ func (s *Store) ListTags(ctx context.Context, organizationID uuid.UUID) ([]Tag, 
 	items := []Tag{}
 	for rows.Next() {
 		var item Tag
-		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Color, &item.ServiceCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Color, &item.ServiceCount, &item.ProjectCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -79,7 +82,71 @@ func (s *Store) UpdateTag(ctx context.Context, organizationID, id uuid.UUID, nam
 	if err = s.Pool.QueryRow(ctx, `SELECT count(*) FROM compose_service_tags WHERE tag_id=$1`, id).Scan(&item.ServiceCount); err != nil {
 		return Tag{}, err
 	}
+	if err = s.Pool.QueryRow(ctx, `SELECT count(*) FROM project_tags WHERE tag_id=$1`, id).Scan(&item.ProjectCount); err != nil {
+		return Tag{}, err
+	}
 	return item, nil
+}
+
+func (s *Store) ListProjectTags(ctx context.Context, organizationID, projectID uuid.UUID) ([]Tag, error) {
+	var exists bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL)`, projectID, organizationID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT t.id,t.organization_id,t.name,t.color,t.created_at,t.updated_at
+		FROM tags t JOIN project_tags pt ON pt.tag_id=t.id
+		WHERE pt.project_id=$1 AND t.organization_id=$2 ORDER BY lower(t.name),t.id`, projectID, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Tag{}
+	for rows.Next() {
+		var item Tag
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Color, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) ReplaceProjectTags(ctx context.Context, organizationID, projectID uuid.UUID, tagIDs []uuid.UUID) ([]Tag, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var lockedID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT id FROM projects WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL FOR UPDATE`, projectID, organizationID).Scan(&lockedID); errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	if len(tagIDs) > 0 {
+		var count int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM tags WHERE organization_id=$1 AND id=ANY($2::uuid[])`, organizationID, tagIDs).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count != len(tagIDs) {
+			return nil, ErrNotFound
+		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM project_tags WHERE project_id=$1`, projectID); err != nil {
+		return nil, err
+	}
+	if len(tagIDs) > 0 {
+		if _, err = tx.Exec(ctx, `INSERT INTO project_tags(project_id,tag_id) SELECT $1,unnest($2::uuid[])`, projectID, tagIDs); err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.ListProjectTags(ctx, organizationID, projectID)
 }
 
 func (s *Store) DeleteTag(ctx context.Context, organizationID, id uuid.UUID) error {

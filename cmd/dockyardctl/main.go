@@ -335,6 +335,17 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		}
 		input, err := parseJSONArgument(args[2], stdin)
 		return http.MethodPut, "/v1/services/" + args[1] + "/tags", input, err
+	case "project-tags":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodGet, "/v1/projects/" + args[1] + "/tags", nil, nil
+	case "set-project-tags":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/projects/" + args[1] + "/tags", input, err
 	case "route":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -890,5 +901,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, tags, create-tag, set-service-tags, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, tags, create-tag, set-project-tags, set-service-tags, create-route, update-route, deploy, stop, start, schedules, create-schedule, run-schedule, schedule-executions)")
 }

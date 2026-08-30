@@ -155,3 +155,55 @@ func (s *Server) replaceServiceTags(w http.ResponseWriter, r *http.Request) {
 	s.Store.Audit(r.Context(), &p, "service.tags.replace", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"count": len(items)})
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
+
+func (s *Server) listProjectTags(w http.ResponseWriter, r *http.Request) {
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid project id")
+		return
+	}
+	items, err := s.Store.ListProjectTags(r.Context(), principal(r).OrganizationID, projectID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) replaceProjectTags(w http.ResponseWriter, r *http.Request) {
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid project id")
+		return
+	}
+	var input struct {
+		TagIDs []uuid.UUID `json:"tagIds"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	if len(input.TagIDs) > 32 {
+		writeError(w, http.StatusBadRequest, "invalid_tags", "a project may have at most 32 tags")
+		return
+	}
+	seen := make(map[uuid.UUID]struct{}, len(input.TagIDs))
+	for _, id := range input.TagIDs {
+		if id == uuid.Nil {
+			writeError(w, http.StatusBadRequest, "invalid_tags", "tag ids must be non-zero UUIDs")
+			return
+		}
+		if _, exists := seen[id]; exists {
+			writeError(w, http.StatusBadRequest, "invalid_tags", "tag ids must be unique")
+			return
+		}
+		seen[id] = struct{}{}
+	}
+	p := principal(r)
+	items, err := s.Store.ReplaceProjectTags(r.Context(), p.OrganizationID, projectID, input.TagIDs)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "project.tags.replace", "project", projectID.String(), r.RemoteAddr, map[string]any{"count": len(items)})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}

@@ -129,6 +129,8 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"delete-tag", "tag-id"}, http.MethodDelete, "/v1/tags/tag-id"},
 		{[]string{"service-tags", "service-id"}, http.MethodGet, "/v1/services/service-id/tags"},
 		{[]string{"set-service-tags", "service-id", `{}`}, http.MethodPut, "/v1/services/service-id/tags"},
+		{[]string{"project-tags", "project-id"}, http.MethodGet, "/v1/projects/project-id/tags"},
+		{[]string{"set-project-tags", "project-id", `{}`}, http.MethodPut, "/v1/projects/project-id/tags"},
 		{[]string{"templates", "opaque+/cursor"}, http.MethodGet, "/v1/templates?limit=200&cursor=opaque%2B%2Fcursor"},
 		{[]string{"template-repositories"}, http.MethodGet, "/v1/template-repositories"},
 		{[]string{"create-template-repository", `{}`}, http.MethodPost, "/v1/template-repositories"},

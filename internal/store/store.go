@@ -175,6 +175,7 @@ type Project struct {
 	Name           string    `json:"name"`
 	Slug           string    `json:"slug"`
 	Description    string    `json:"description"`
+	Tags           []Tag     `json:"tags"`
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
@@ -758,6 +759,7 @@ func (s *Store) CreateProject(ctx context.Context, organizationID uuid.UUID, nam
 		return Project{}, err
 	}
 	p := Project{ID: uuid.New(), OrganizationID: organizationID, Name: name, Slug: slug, Description: description}
+	p.Tags = []Tag{}
 	err = tx.QueryRow(ctx, `INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,$3,$4,$5) RETURNING created_at`, p.ID, p.OrganizationID, p.Name, p.Slug, p.Description).Scan(&p.CreatedAt)
 	if err != nil {
 		return Project{}, err
@@ -779,7 +781,37 @@ func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]P
 		}
 		items = append(items, p)
 	}
-	return items, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return items, nil
+	}
+	byID := make(map[uuid.UUID]*Project, len(items))
+	projectIDs := make([]uuid.UUID, 0, len(items))
+	for index := range items {
+		items[index].Tags = []Tag{}
+		byID[items[index].ID] = &items[index]
+		projectIDs = append(projectIDs, items[index].ID)
+	}
+	tagRows, err := s.Pool.Query(ctx, `SELECT pt.project_id,t.id,t.organization_id,t.name,t.color,t.created_at,t.updated_at
+		FROM project_tags pt JOIN tags t ON t.id=pt.tag_id
+		WHERE pt.project_id=ANY($1::uuid[]) AND t.organization_id=$2 ORDER BY lower(t.name),t.id`, projectIDs, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer tagRows.Close()
+	for tagRows.Next() {
+		var projectID uuid.UUID
+		var tag Tag
+		if err = tagRows.Scan(&projectID, &tag.ID, &tag.OrganizationID, &tag.Name, &tag.Color, &tag.CreatedAt, &tag.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if project := byID[projectID]; project != nil {
+			project.Tags = append(project.Tags, tag)
+		}
+	}
+	return items, tagRows.Err()
 }
 
 func (s *Store) GetProject(ctx context.Context, organizationID, projectID uuid.UUID) (Project, error) {
@@ -787,6 +819,9 @@ func (s *Store) GetProject(ctx context.Context, organizationID, projectID uuid.U
 	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,slug,description,created_at FROM projects WHERE id=$1 AND organization_id=$2`, projectID, organizationID).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.Description, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Project{}, ErrNotFound
+	}
+	if err == nil {
+		item.Tags, err = s.ListProjectTags(ctx, organizationID, projectID)
 	}
 	return item, err
 }

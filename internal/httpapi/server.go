@@ -199,6 +199,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/tags/{tagID}", s.requireRole("admin", http.HandlerFunc(s.deleteTag)))
 	mux.Handle("POST /v1/projects", s.requireRole("developer", http.HandlerFunc(s.createProject)))
 	mux.Handle("GET /v1/projects/{projectID}", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.getProject)))
+	mux.Handle("GET /v1/projects/{projectID}/tags", s.requireResourceRole("viewer", "project", "projectID", http.HandlerFunc(s.listProjectTags)))
+	mux.Handle("PUT /v1/projects/{projectID}/tags", s.requireResourceRole("developer", "project", "projectID", http.HandlerFunc(s.replaceProjectTags)))
 	mux.Handle("DELETE /v1/projects/{projectID}", s.requireResourceRole("admin", "project", "projectID", http.HandlerFunc(s.deleteProject)))
 	mux.Handle("GET /v1/projects/{projectID}/grants", s.requireRole("admin", http.HandlerFunc(s.listProjectGrants)))
 	mux.Handle("PUT /v1/projects/{projectID}/grants/{userID}", s.requireRole("admin", http.HandlerFunc(s.putProjectGrant)))

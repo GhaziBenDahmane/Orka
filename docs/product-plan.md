@@ -184,9 +184,11 @@ durable provider build-status callbacks implemented.
   Service-wide HTTP basic-auth rules are managed through the same surfaces;
   only bcrypt hashes reach PostgreSQL and deployment snapshots, and Traefik
   strips the credential header before proxying upstream.
-- Reusable organization-scoped service tags are managed through the API, CLI,
-  Terraform provider, and console. Assignment replacement is tenant-safe and
-  atomic, and tag names are available to the redacted AI inventory.
+- Reusable organization-scoped tags can classify both projects (matching
+  Dokploy's model) and services through the API, CLI, Terraform provider, and
+  console. Assignment replacement is tenant-safe and atomic, the Dokploy
+  importer preserves project assignments, and tag names are available to the
+  redacted AI inventory.
 
 Exit gate: end-to-end push-to-deploy, cancellation, rollback, alert, and
 disaster-recovery scenarios pass under load.

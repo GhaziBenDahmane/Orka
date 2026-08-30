@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -139,6 +140,26 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		}
 		return "", nil
 	}
+	if resource.SourceKind == "project_tag" {
+		var metadata struct {
+			ProjectID string `json:"projectId"`
+		}
+		if err := json.Unmarshal(resource.Metadata, &metadata); err != nil {
+			return "project-tag parity metadata is invalid", nil
+		}
+		projectID, parseErr := uuid.Parse(metadata.ProjectID)
+		if parseErr != nil {
+			return "project-tag parity metadata has an invalid project id", nil
+		}
+		var exists bool
+		if err := destination.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM project_tags pt JOIN projects p ON p.id=pt.project_id JOIN tags t ON t.id=pt.tag_id WHERE pt.project_id=$1 AND pt.tag_id=$2 AND p.organization_id=$3 AND t.organization_id=$3)`, projectID, id, organizationID).Scan(&exists); err != nil {
+			return "", err
+		}
+		if !exists {
+			return "target project tag assignment is missing", nil
+		}
+		return "", nil
+	}
 	queries := map[string]string{
 		"project":            `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1 AND organization_id=$2)`,
 		"environment":        `SELECT EXISTS(SELECT 1 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2)`,
@@ -147,6 +168,7 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		"backup_destination": `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`,
 		"source_credential":  `SELECT EXISTS(SELECT 1 FROM source_credentials WHERE id=$1 AND organization_id=$2)`,
 		"notification":       `SELECT EXISTS(SELECT 1 FROM notification_endpoints WHERE id=$1 AND organization_id=$2)`,
+		"tag":                `SELECT EXISTS(SELECT 1 FROM tags WHERE id=$1 AND organization_id=$2)`,
 	}
 	query := queries[resource.SourceKind]
 	if query == "" {

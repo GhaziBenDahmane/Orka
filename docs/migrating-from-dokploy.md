@@ -57,6 +57,7 @@ the existing source-to-target records.
 Imported automatically:
 
 - projects and environments;
+- organization tags and their project assignments;
 - inline/raw Compose definitions;
 - Compose environment values when the source key is supplied;
 - Docker-image applications and HTTPS Git applications that use a Dockerfile,

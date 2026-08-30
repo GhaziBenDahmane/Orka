@@ -8,6 +8,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_service`
 - `dockyard_route`
 - `dockyard_tag`
+- `dockyard_project_tags`
 - `dockyard_service_tags`
 - `dockyard_database`
 - `dockyard_source_credential`
@@ -51,10 +52,11 @@ HTTP basic-auth identities deliberately remain outside Terraform state because
 their write-only passwords require explicit rotation through the console, API,
 or `dockyardctl`.
 
-`dockyard_tag` manages a reusable organization tag. `dockyard_service_tags`
-owns the complete set of tag assignments for one service, so define exactly one
-such resource per service and reference `dockyard_tag.*.id` values. Import an
-existing assignment set with the service UUID.
+`dockyard_tag` manages a reusable organization tag. `dockyard_project_tags` and
+`dockyard_service_tags` own the complete assignment set for one project or
+service, so define at most one matching resource and reference
+`dockyard_tag.*.id` values. Import an existing assignment set with its project
+or service UUID.
 
 An environment may set `cluster_id` directly, or use `placement_selector`,
 `minimum_nodes`, `minimum_nano_cpus`, and `minimum_memory_bytes` for

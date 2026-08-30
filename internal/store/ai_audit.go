@@ -70,6 +70,7 @@ type AIAuditProjectInfo struct {
 	OrganizationID uuid.UUID `json:"organizationId"`
 	Name           string    `json:"name"`
 	Slug           string    `json:"slug"`
+	Tags           []string  `json:"tags"`
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
@@ -500,7 +501,11 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	for _, item := range projects {
-		snapshot.Projects = append(snapshot.Projects, AIAuditProjectInfo{ID: item.ID, OrganizationID: item.OrganizationID, Name: item.Name, Slug: item.Slug, CreatedAt: item.CreatedAt})
+		tagNames := make([]string, 0, len(item.Tags))
+		for _, tag := range item.Tags {
+			tagNames = append(tagNames, tag.Name)
+		}
+		snapshot.Projects = append(snapshot.Projects, AIAuditProjectInfo{ID: item.ID, OrganizationID: item.OrganizationID, Name: item.Name, Slug: item.Slug, Tags: tagNames, CreatedAt: item.CreatedAt})
 	}
 	if err = s.loadAIAuditInventory(ctx, organizationID, &snapshot); err != nil {
 		return snapshot, err
