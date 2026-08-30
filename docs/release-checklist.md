@@ -153,7 +153,8 @@ links for every item below.
   and publishes `volume-recovery-conformance.json`. The evidence must prove
   backup and restore quiescence, encrypted-artifact integrity, replacement of
   deliberately corrupted contents, preservation of permissions and safe
-  symlinks, workload resumption, and data survival after a service restart.
+  symlinks, workload resumption, data survival after a service restart, and
+  retention losing safely to a restore queued after candidate selection.
   Repeat the measurement on every production storage driver because the CI
   RTO is not a production SLO.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass

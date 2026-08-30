@@ -1113,31 +1113,97 @@ func (w *Worker) failVolumeRestore(ctx context.Context, j job, id uuid.UUID, cau
 }
 
 func (w *Worker) pruneVolumeBackups(ctx context.Context, newestID uuid.UUID, keep int) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND old.object_key<>'' AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
 	if err != nil {
 		w.Logger.Error("list expired volume backups", "error", err)
 		return
 	}
-	type expired struct {
-		id, destinationID uuid.UUID
-		objectKey         string
+	type candidate struct {
+		id uuid.UUID
+		expiredVolumeBackup
 	}
-	var items []expired
+	var candidates []candidate
 	for rows.Next() {
-		var item expired
+		var item candidate
 		if err = rows.Scan(&item.id, &item.destinationID, &item.objectKey); err != nil {
 			break
 		}
-		items = append(items, item)
+		candidates = append(candidates, item)
 	}
 	rows.Close()
-	for _, item := range items {
-		storage, storageErr := w.s3(ctx, item.destinationID)
-		if storageErr != nil || storage.Delete(ctx, item.objectKey) != nil {
+	if err != nil {
+		w.Logger.Error("scan expired volume backups", "error", err)
+		return
+	}
+	for _, candidate := range candidates {
+		// Resolve and decrypt the destination while the backup's foreign-key
+		// reference still prevents destination deletion.
+		storage, storageErr := w.s3(ctx, candidate.destinationID)
+		if storageErr != nil {
+			w.Logger.Error("open expired volume backup destination", "backup", candidate.id, "error", storageErr)
 			continue
 		}
-		_, _ = w.Store.Pool.Exec(ctx, `DELETE FROM volume_backups WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM volume_restores WHERE volume_backup_id=$1)`, item.id)
+		item, deleted, deleteErr := w.deleteExpiredVolumeBackupMetadata(ctx, candidate.id)
+		if deleteErr != nil {
+			w.Logger.Error("prune volume backup metadata", "backup", candidate.id, "error", deleteErr)
+			continue
+		}
+		if !deleted {
+			// A restore was queued after candidate selection. Its reference wins:
+			// never remove an artifact that a restore can still consume.
+			continue
+		}
+		storageErr = storage.Delete(ctx, item.objectKey)
+		if storageErr != nil {
+			// Metadata is removed first so a restore can never be admitted for an
+			// artifact that retention has already deleted. An object deletion
+			// failure is an orphaned-object leak, not a false restorable backup.
+			w.Logger.Error("delete expired volume backup object", "backup", candidate.id, "objectKey", item.objectKey, "error", storageErr)
+		}
 	}
+}
+
+type expiredVolumeBackup struct {
+	destinationID uuid.UUID
+	objectKey     string
+}
+
+// deleteExpiredVolumeBackupMetadata is the retention admission boundary. It
+// locks the backup row also locked by QueueVolumeRestore, then rechecks restore
+// references before deleting. Exactly one operation wins, so no restore can
+// retain metadata for an object that retention subsequently removes.
+func (w *Worker) deleteExpiredVolumeBackupMetadata(ctx context.Context, id uuid.UUID) (expiredVolumeBackup, bool, error) {
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return expiredVolumeBackup{}, false, err
+	}
+	defer tx.Rollback(ctx)
+	var item expiredVolumeBackup
+	var status string
+	err = tx.QueryRow(ctx, `SELECT destination_id,object_key,status FROM volume_backups WHERE id=$1 FOR UPDATE`, id).Scan(&item.destinationID, &item.objectKey, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return expiredVolumeBackup{}, false, nil
+	}
+	if err != nil {
+		return expiredVolumeBackup{}, false, err
+	}
+	if status != "succeeded" {
+		return expiredVolumeBackup{}, false, nil
+	}
+	if item.objectKey == "" {
+		return expiredVolumeBackup{}, false, errors.New("succeeded volume backup has no object key")
+	}
+	result, err := tx.Exec(ctx, `DELETE FROM volume_backups backup WHERE backup.id=$1 AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=backup.id)`, id)
+	if err != nil {
+		return expiredVolumeBackup{}, false, err
+	}
+	if result.RowsAffected() != 1 {
+		return expiredVolumeBackup{}, false, nil
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return expiredVolumeBackup{}, false, err
+	}
+	return item, true, nil
 }
 
 func containsString(values []string, wanted string) bool {

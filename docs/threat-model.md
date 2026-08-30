@@ -131,8 +131,11 @@ identity, and key binding before committing durable identity state.
 Backup, restore, drill, and migration jobs share a per-database serialization
 key. Artifacts carry encrypted and plaintext checksums, retention is applied
 only after successful writes, and destructive restores require explicit
-confirmation. A backup is not considered production evidence until its native
-engine restore and application-level data checks succeed.
+confirmation. Named-volume restore admission and retention lock the same backup
+record; retention removes metadata before the remote object, so it cannot leave
+a restorable record pointing at an object that it already deleted. A backup is
+not considered production evidence until its native engine restore and
+application-level data checks succeed.
 Managed databases backed by Docker's node-local volume driver persist their
 first storage-node assignment and receive a platform-owned `node.id` placement
 constraint on every deployment. Legacy stacks are adopted only when all

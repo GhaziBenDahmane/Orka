@@ -178,7 +178,7 @@ func (s *Store) QueueVolumeRestore(ctx context.Context, organizationID, backupID
 	defer tx.Rollback(ctx)
 	var serviceID uuid.UUID
 	var slug, status string
-	err = tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service`, backupID, organizationID).Scan(&serviceID, &slug, &status)
+	err = tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound
 	}
