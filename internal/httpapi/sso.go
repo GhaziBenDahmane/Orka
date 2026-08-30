@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/mail"
 	"net/url"
@@ -19,7 +20,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const oidcRequestTimeout = 15 * time.Second
+const (
+	oidcRequestTimeout   = 15 * time.Second
+	maxOIDCResponseBytes = 4 << 20
+)
+
+var errOIDCResponseTooLarge = errors.New("OIDC response exceeds 4 MiB")
 
 func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -208,6 +214,10 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery failed")
 		return
 	}
+	if err = validateOIDCProviderEndpoints(discovery); err != nil {
+		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery contains an unsafe endpoint")
+		return
+	}
 	state, err := auth.NewToken()
 	if err != nil {
 		writeError(w, 500, "state_failed", err.Error())
@@ -265,6 +275,10 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	discovery, err := oidc.NewProvider(providerContext, provider.Issuer)
 	if err != nil {
 		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery failed")
+		return
+	}
+	if err = validateOIDCProviderEndpoints(discovery); err != nil {
+		writeError(w, 502, "oidc_discovery_failed", "identity provider discovery contains an unsafe endpoint")
 		return
 	}
 	cfg := oauth2.Config{ClientID: provider.ClientID, ClientSecret: string(secret), Endpoint: discovery.Endpoint(), RedirectURL: s.PublicURL + "/v1/auth/sso/callback", Scopes: provider.Scopes}
@@ -330,6 +344,28 @@ func normalizedOIDCIssuer(raw string) (string, error) {
 	return issuer.String(), nil
 }
 
+func validateOIDCProviderEndpoints(provider *oidc.Provider) error {
+	var metadata struct {
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		TokenEndpoint         string `json:"token_endpoint"`
+		JWKSURI               string `json:"jwks_uri"`
+	}
+	if err := provider.Claims(&metadata); err != nil {
+		return errors.New("decode OIDC provider endpoints")
+	}
+	for name, raw := range map[string]string{
+		"authorization_endpoint": metadata.AuthorizationEndpoint,
+		"token_endpoint":         metadata.TokenEndpoint,
+		"jwks_uri":               metadata.JWKSURI,
+	} {
+		endpoint, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
+			return errors.New(name + " must be an absolute HTTPS URL")
+		}
+	}
+	return nil
+}
+
 func (s *Server) oidcHTTPClient() *http.Client {
 	client := s.OIDCHTTPClient
 	if client == nil {
@@ -339,8 +375,50 @@ func (s *Server) oidcHTTPClient() *http.Client {
 	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("OIDC redirects are disabled")
 	}
+	secured.Transport = oidcResponseLimitTransport{base: client.Transport}
 	return &secured
 }
+
+type oidcResponseLimitTransport struct {
+	base http.RoundTripper
+}
+
+func (t oidcResponseLimitTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	response, err := base.RoundTrip(request)
+	if err != nil {
+		return nil, err
+	}
+	response.Body = &oidcBoundedBody{body: response.Body, remaining: maxOIDCResponseBytes}
+	return response, nil
+}
+
+type oidcBoundedBody struct {
+	body      io.ReadCloser
+	remaining int64
+}
+
+func (b *oidcBoundedBody) Read(buffer []byte) (int, error) {
+	if b.remaining == 0 {
+		var probe [1]byte
+		n, err := b.body.Read(probe[:])
+		if n > 0 {
+			return 0, errOIDCResponseTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(buffer)) > b.remaining {
+		buffer = buffer[:b.remaining]
+	}
+	n, err := b.body.Read(buffer)
+	b.remaining -= int64(n)
+	return n, err
+}
+
+func (b *oidcBoundedBody) Close() error { return b.body.Close() }
 
 type oidcIdentityClaims struct {
 	Subject           string `json:"sub"`

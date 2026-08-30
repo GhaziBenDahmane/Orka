@@ -2,6 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,5 +55,60 @@ func TestOIDCClientRefusesDiscoveryAndTokenRedirects(t *testing.T) {
 	}
 	if targetRequests != 0 {
 		t.Fatalf("redirect target received %d OIDC request(s)", targetRequests)
+	}
+}
+
+func TestOIDCClientBoundsProviderResponses(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", maxOIDCResponseBytes+1))
+	}))
+	defer provider.Close()
+	server := &Server{OIDCHTTPClient: provider.Client()}
+	response, err := server.oidcHTTPClient().Get(provider.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if _, err = io.ReadAll(response.Body); !errors.Is(err, errOIDCResponseTooLarge) {
+		t.Fatalf("oversized response error=%v", err)
+	}
+}
+
+func TestValidateOIDCProviderEndpoints(t *testing.T) {
+	var issuer string
+	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": issuer, "authorization_endpoint": "https://login.example.test/authorize",
+			"token_endpoint": "https://login.example.test/token", "jwks_uri": "https://keys.example.test/jwks",
+			"response_types_supported": []string{"code"}, "subject_types_supported": []string{"public"},
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	}))
+	defer providerServer.Close()
+	issuer = providerServer.URL
+	provider, err := oidc.NewProvider(context.Background(), issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = validateOIDCProviderEndpoints(provider); err != nil {
+		t.Fatal(err)
+	}
+
+	unsafeProviderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer": issuer, "authorization_endpoint": "https://login.example.test/authorize",
+			"token_endpoint": "http://login.example.test/token", "jwks_uri": "https://keys.example.test/jwks",
+			"response_types_supported": []string{"code"}, "subject_types_supported": []string{"public"},
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	}))
+	defer unsafeProviderServer.Close()
+	issuer = unsafeProviderServer.URL
+	provider, err = oidc.NewProvider(context.Background(), issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = validateOIDCProviderEndpoints(provider); err == nil || !strings.Contains(err.Error(), "token_endpoint") {
+		t.Fatalf("unsafe endpoint error=%v", err)
 	}
 }
