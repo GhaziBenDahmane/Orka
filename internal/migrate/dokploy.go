@@ -438,7 +438,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 		if registryID != "" {
 			credential, ok := preparedCredentials[credentialKey("registry", registryID)]
-			if !ok || credential.server != migrationImageRegistry(options.RegistryPrefix) {
+			if !ok || credential.server != deploy.RegistryHost(options.RegistryPrefix) {
 				report.Warnings = append(report.Warnings, fmt.Sprintf("application %s build registry credential could not be attached to %s", item.ID, options.RegistryPrefix))
 			}
 		}
@@ -537,7 +537,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			if registryID == "" {
 				registryID = item.RegistryID
 			}
-			if credential, ok := preparedCredentials[credentialKey("registry", registryID)]; ok && credential.server == migrationImageRegistry(prepared.source.RegistryImage) {
+			if credential, ok := preparedCredentials[credentialKey("registry", registryID)]; ok && credential.server == deploy.RegistryHost(prepared.source.RegistryImage) {
 				id := credential.id
 				registryCredentialID = &id
 			}

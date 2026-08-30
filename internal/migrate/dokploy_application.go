@@ -260,7 +260,7 @@ func prepareApplication(item sourceApplication, options DokployOptions) (prepare
 		buildConfig := store.ApplicationBuildConfig{Arguments: buildArguments, Secrets: buildSecrets}
 		registryPrefix := strings.TrimSuffix(strings.TrimSpace(options.RegistryPrefix), "/")
 		registryImage := registryPrefix + "/" + slug
-		if registryPrefix == "" || !migrationImagePattern.MatchString(registryImage) || strings.Contains(registryImage, "..") || strings.Contains(registryImage, "@") {
+		if registryPrefix == "" || deploy.ValidateRegistryImage(registryImage) != nil {
 			return preparedApplication{}, warnings, errors.New("Git application requires a valid --registry-prefix")
 		}
 		repositoryURL, gitRef, contextDirectory := applicationRepository(item)

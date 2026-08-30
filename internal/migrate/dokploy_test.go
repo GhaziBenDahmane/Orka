@@ -63,6 +63,12 @@ func TestPrepareGitApplicationRequiresRegistryPrefix(t *testing.T) {
 	if err != nil || prepared.source == nil || prepared.source.RepositoryURL != "https://github.com/acme/web.git" || prepared.source.RegistryImage == "" || prepared.source.BuildTarget != "runtime" || !prepared.source.EnableSubmodules || len(warnings) != 2 {
 		t.Fatalf("prepared = %#v, warnings = %#v, err = %v", prepared, warnings, err)
 	}
+	for _, prefix := range []string{"ghcr.io/Acme", "ghcr.io/acme:latest", "registry.example.test:0/acme", "ghcr.io/acme/../other"} {
+		options.RegistryPrefix = prefix
+		if _, _, err = prepareApplication(item, options); err == nil {
+			t.Errorf("registry prefix %q unexpectedly succeeded", prefix)
+		}
+	}
 }
 
 func TestMigrationApplicationReportDoesNotExposeCredentials(t *testing.T) {

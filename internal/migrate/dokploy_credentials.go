@@ -148,14 +148,6 @@ func migratedCredentialName(raw string, id uuid.UUID) (string, error) {
 	return name + suffix, nil
 }
 
-func migrationImageRegistry(image string) string {
-	first, _, _ := strings.Cut(image, "/")
-	if strings.ContainsAny(first, ".:") || first == "localhost" {
-		return strings.ToLower(first)
-	}
-	return "docker.io"
-}
-
 func credentialKey(kind, sourceID string) string { return kind + "\x00" + sourceID }
 
 func applicationProviderID(item sourceApplication) string {

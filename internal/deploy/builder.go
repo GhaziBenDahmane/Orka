@@ -41,7 +41,7 @@ type BuildCredentials struct {
 }
 
 var safeRef = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,200}$`)
-var registryImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$`)
+var registryPathComponent = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
 var buildSettingName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 var buildTargetName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 var pinnedImage = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}@sha256:[a-f0-9]{64}$`)
@@ -741,18 +741,36 @@ func writeDockerConfig(credential Credential) (string, error) {
 }
 
 func ValidateRegistryImage(image string) error {
-	if !registryImage.MatchString(image) || strings.Contains(image, "..") {
+	if image == "" || image != strings.TrimSpace(image) || len(image) > 255 || strings.ContainsAny(image, "@\x00\r\n") {
 		return errors.New("invalid registry image")
+	}
+	registry, repository := splitRegistryImage(image)
+	if repository == "" {
+		return errors.New("invalid registry image")
+	}
+	endpoint, err := url.Parse("https://" + registry)
+	if err != nil || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" || !netpolicy.ValidURLHost(endpoint) {
+		return errors.New("invalid registry image")
+	}
+	for _, component := range strings.Split(repository, "/") {
+		if len(component) > 255 || !registryPathComponent.MatchString(component) {
+			return errors.New("invalid registry image")
+		}
 	}
 	return nil
 }
 
 func RegistryHost(image string) string {
-	first, _, _ := strings.Cut(image, "/")
-	if strings.ContainsAny(first, ".:") || first == "localhost" {
-		return strings.ToLower(first)
+	registry, _ := splitRegistryImage(image)
+	return strings.ToLower(registry)
+}
+
+func splitRegistryImage(image string) (string, string) {
+	first, rest, hasSlash := strings.Cut(image, "/")
+	if hasSlash && (strings.ContainsAny(first, ".:") || strings.EqualFold(first, "localhost") || strings.HasPrefix(first, "[")) {
+		return first, rest
 	}
-	return "docker.io"
+	return "docker.io", image
 }
 func (b Builder) git() string {
 	if b.GitBin == "" {

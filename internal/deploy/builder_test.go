@@ -124,9 +124,22 @@ func TestSetServiceImage(t *testing.T) {
 }
 
 func TestImageRegistry(t *testing.T) {
-	for image, want := range map[string]string{"postgres": "docker.io", "library/postgres": "docker.io", "ghcr.io/acme/api": "ghcr.io", "localhost:5000/api": "localhost:5000"} {
+	for image, want := range map[string]string{"postgres": "docker.io", "library/postgres": "docker.io", "ghcr.io/acme/api": "ghcr.io", "localhost:5000/api": "localhost:5000", "[2001:db8::1]:5000/acme/api": "[2001:db8::1]:5000"} {
 		if got := RegistryHost(image); got != want {
 			t.Errorf("RegistryHost(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+func TestValidateRegistryImage(t *testing.T) {
+	for _, image := range []string{"postgres", "library/postgres", "ghcr.io/acme/api", "registry.example.test:5000/team/app", "localhost:5000/app", "[2001:db8::1]:5000/acme/app", "team/my_app", "team/my--app"} {
+		if err := ValidateRegistryImage(image); err != nil {
+			t.Errorf("ValidateRegistryImage(%q) returned %v", image, err)
+		}
+	}
+	for _, image := range []string{"", " postgres", "postgres ", "postgres:latest", "ghcr.io/acme/app:latest", "ghcr.io/acme/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ghcr.io//app", "ghcr.io/acme/app/", "ghcr.io/Acme/app", "registry.example.test:0/acme/app", "registry.example.test:65536/acme/app", "bad_label.example.test/acme/app", "localhost:/app", "team/../app"} {
+		if err := ValidateRegistryImage(image); err == nil {
+			t.Errorf("ValidateRegistryImage(%q) unexpectedly succeeded", image)
 		}
 	}
 }
