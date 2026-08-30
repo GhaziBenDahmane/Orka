@@ -210,6 +210,9 @@ func validateSafeService(name string, service map[string]any, publicNetwork stri
 	if capabilities, exists := service["cap_add"]; exists && capabilities != nil {
 		return fmt.Errorf("service %q requests added Linux capabilities", name)
 	}
+	if ports, exists := service["ports"]; exists && ports != nil {
+		return fmt.Errorf("service %q requests direct port publishing", name)
+	}
 	if rawNetworks, exists := service["networks"]; exists && rawNetworks != nil {
 		networks, err := validatedServiceNetworkNames(rawNetworks)
 		if err != nil {

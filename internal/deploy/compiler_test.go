@@ -229,6 +229,7 @@ func TestCompileSafeModeRejectsHostAndCrossTenantPrimitives(t *testing.T) {
 		"service process":         "services:\n  app:\n    image: alpine\n    pid: service:other\n",
 		"container ipc":           "services:\n  app:\n    image: alpine\n    ipc: container:control-plane\n",
 		"host uts":                "services:\n  app:\n    image: alpine\n    uts: host\n",
+		"published port":          "services:\n  app:\n    image: nginx\n    ports: ['8080:80']\n",
 		"host user namespace":     "services:\n  app:\n    image: alpine\n    userns_mode: host\n",
 		"host cgroup namespace":   "services:\n  app:\n    image: alpine\n    cgroup: host\n",
 		"unconfined profile":      "services:\n  app:\n    image: alpine\n    security_opt: [seccomp=unconfined]\n",
