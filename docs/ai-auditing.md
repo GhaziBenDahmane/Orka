@@ -198,6 +198,13 @@ and limits each complete audit lifecycle to ten minutes with
 `DOCKYARD_AI_AUDIT_TIMEOUT`. A replacement process with the same service
 account and agent name marks its predecessor failed before starting, while
 different named specialists remain independent.
+After a failed run, the auditor retries after
+`DOCKYARD_AI_AUDIT_RETRY_INTERVAL` (five minutes by default, or the normal
+interval when it is shorter), doubles that delay after consecutive failures,
+and caps it at the normal audit interval.
+A successful run resets the backoff. The retry interval must be between one
+minute and `DOCKYARD_AI_AUDIT_INTERVAL` so a configuration error cannot create
+a tight failure loop.
 Both base URLs reject embedded credentials, query strings, and fragments. The
 control-plane value must be an origin; the model value may include an API path
 such as `/v1`. Plain HTTP is intended only for these encrypted in-stack

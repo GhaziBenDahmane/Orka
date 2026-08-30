@@ -109,6 +109,32 @@ func TestRunAIAuditorOnce(t *testing.T) {
 	}
 }
 
+func TestAIAuditRetryDelay(t *testing.T) {
+	base, maximum := 5*time.Minute, 24*time.Hour
+	for _, test := range []struct {
+		failures int
+		want     time.Duration
+	}{
+		{failures: 0, want: maximum},
+		{failures: 1, want: 5 * time.Minute},
+		{failures: 2, want: 10 * time.Minute},
+		{failures: 6, want: 160 * time.Minute},
+		{failures: 20, want: maximum},
+	} {
+		if got := aiAuditRetryDelay(test.failures, base, maximum); got != test.want {
+			t.Errorf("aiAuditRetryDelay(%d)=%s, want %s", test.failures, got, test.want)
+		}
+	}
+}
+
+func TestRunAIAuditorRejectsInvalidRetryInterval(t *testing.T) {
+	t.Setenv("DOCKYARD_AI_AUDIT_INTERVAL", "10m")
+	t.Setenv("DOCKYARD_AI_AUDIT_RETRY_INTERVAL", "11m")
+	if err := runAIAuditor([]string{"--once"}); err == nil || !strings.Contains(err.Error(), "DOCKYARD_AI_AUDIT_RETRY_INTERVAL") {
+		t.Fatalf("invalid retry interval error=%v", err)
+	}
+}
+
 func TestNormalizedAuditorEndpoint(t *testing.T) {
 	for _, test := range []struct {
 		name      string

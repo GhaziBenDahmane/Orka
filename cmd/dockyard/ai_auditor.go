@@ -23,7 +23,7 @@ import (
 
 type auditorConfig struct {
 	DockyardURL, DockyardToken, ModelURL, ModelToken, Model, AgentName, AgentVersion, Focus string
-	Interval, Timeout                                                                       time.Duration
+	Interval, RetryInterval, Timeout                                                        time.Duration
 }
 type modelFinding struct {
 	Severity     string         `json:"severity"`
@@ -58,6 +58,14 @@ func runAIAuditor(arguments []string) error {
 	if err != nil || interval < time.Minute {
 		return errors.New("DOCKYARD_AI_AUDIT_INTERVAL must be at least one minute")
 	}
+	retryValue := strings.TrimSpace(os.Getenv("DOCKYARD_AI_AUDIT_RETRY_INTERVAL"))
+	if retryValue == "" {
+		retryValue = min(5*time.Minute, interval).String()
+	}
+	retryInterval, err := time.ParseDuration(retryValue)
+	if err != nil || retryInterval < time.Minute || retryInterval > interval {
+		return errors.New("DOCKYARD_AI_AUDIT_RETRY_INTERVAL must be at least one minute and no longer than DOCKYARD_AI_AUDIT_INTERVAL")
+	}
 	timeout, err := time.ParseDuration(envDefault("DOCKYARD_AI_AUDIT_TIMEOUT", "10m"))
 	if err != nil || timeout < time.Minute {
 		return errors.New("DOCKYARD_AI_AUDIT_TIMEOUT must be at least one minute")
@@ -70,7 +78,7 @@ func runAIAuditor(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: modelURL, ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, Timeout: timeout}
+	cfg := auditorConfig{DockyardURL: controlPlaneURL, DockyardToken: secretValue("DOCKYARD_AI_AUDITOR_TOKEN"), ModelURL: modelURL, ModelToken: secretValue("DOCKYARD_AI_API_KEY"), Model: os.Getenv("DOCKYARD_AI_MODEL"), AgentName: envDefault("DOCKYARD_AI_AGENT_NAME", "dockyard-auditor"), AgentVersion: version, Focus: envDefault("DOCKYARD_AI_AUDIT_FOCUS", "security, availability, backups, failed operations, and anomalous audit activity"), Interval: interval, RetryInterval: retryInterval, Timeout: timeout}
 	if cfg.DockyardURL == "" || cfg.DockyardToken == "" || cfg.ModelURL == "" || cfg.Model == "" {
 		return errors.New("control-plane URL, auditor token, AI base URL, and model are required")
 	}
@@ -85,14 +93,19 @@ func runAIAuditor(arguments []string) error {
 	if *once {
 		return run()
 	}
+	failures := 0
 	for {
 		err = run()
+		delay := cfg.Interval
 		if err != nil {
-			slog.Error("AI audit failed", "error", err)
+			failures++
+			delay = aiAuditRetryDelay(failures, cfg.RetryInterval, cfg.Interval)
+			slog.Error("AI audit failed", "error", err, "consecutive_failures", failures, "retry_after", delay)
 		} else {
+			failures = 0
 			slog.Info("AI audit completed")
 		}
-		timer := time.NewTimer(cfg.Interval)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -100,6 +113,23 @@ func runAIAuditor(arguments []string) error {
 		case <-timer.C:
 		}
 	}
+}
+
+func aiAuditRetryDelay(consecutiveFailures int, base, maximum time.Duration) time.Duration {
+	if consecutiveFailures <= 0 {
+		return maximum
+	}
+	delay := base
+	for attempt := 1; attempt < consecutiveFailures && delay < maximum; attempt++ {
+		if delay > maximum/2 {
+			return maximum
+		}
+		delay *= 2
+	}
+	if delay > maximum {
+		return maximum
+	}
+	return delay
 }
 
 func normalizedAuditorEndpoint(name, raw string, allowPath bool) (string, error) {
