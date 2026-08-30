@@ -81,6 +81,7 @@ func TestNormalizedAuditorEndpoint(t *testing.T) {
 	}{
 		{name: "control", raw: " https://dockyard.example.test/ ", want: "https://dockyard.example.test"},
 		{name: "model", raw: "http://9router:20128/v1/", allowPath: true, want: "http://9router:20128/v1"},
+		{name: "private model", raw: "http://10.20.30.40:20128/v1", allowPath: true, want: "http://10.20.30.40:20128/v1"},
 	} {
 		got, err := normalizedAuditorEndpoint(test.name, test.raw, test.allowPath)
 		if err != nil || got != test.want {
@@ -94,7 +95,7 @@ func TestNormalizedAuditorEndpoint(t *testing.T) {
 		{raw: ""}, {raw: "ftp://dockyard.example.test"},
 		{raw: "https://token@dockyard.example.test"}, {raw: "https://dockyard.example.test?target=evil"},
 		{raw: "https://dockyard.example.test#fragment"}, {raw: "https://dockyard.example.test/prefix"},
-		{raw: "//dockyard.example.test"},
+		{raw: "//dockyard.example.test"}, {raw: "http://models.example.test", allowPath: true},
 	} {
 		if _, err := normalizedAuditorEndpoint("endpoint", test.raw, test.allowPath); err == nil {
 			t.Errorf("accepted unsafe endpoint %q", test.raw)

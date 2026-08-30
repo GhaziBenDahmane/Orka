@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -95,9 +96,23 @@ func normalizedAuditorEndpoint(name, raw string, allowPath bool) (string, error)
 	if !allowPath && endpoint.EscapedPath() != "" && endpoint.EscapedPath() != "/" {
 		return "", fmt.Errorf("%s must be an HTTP(S) origin without a path", name)
 	}
+	if endpoint.Scheme == "http" && !privateAuditorHostname(endpoint.Hostname()) {
+		return "", fmt.Errorf("%s must use HTTPS outside a private or local network", name)
+	}
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
 	endpoint.RawPath = strings.TrimRight(endpoint.RawPath, "/")
 	return endpoint.String(), nil
+}
+
+func privateAuditorHostname(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" || (!strings.Contains(host, ".") && !strings.Contains(host, ":")) {
+		return host != ""
+	}
+	if address := net.ParseIP(host); address != nil {
+		return address.IsLoopback() || address.IsPrivate()
+	}
+	return false
 }
 
 func secretValue(name string) string {
