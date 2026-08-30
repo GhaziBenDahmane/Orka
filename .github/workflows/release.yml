@@ -123,12 +123,14 @@ jobs:
           previous_version="$(jq -r .tag_name <<<"$previous")"
           asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
             --jq '.[] | select(.name == "promotion-manifest.json") | .id' | head -1)"
+          bundle_asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq '.[] | select(.name == "promotion-manifest.sigstore.json") | .id' | head -1)"
           test -n "$asset_id" || { echo "previous release $previous_version has no promotion manifest" >&2; exit 1; }
+          test -n "$bundle_asset_id" || { echo "previous release $previous_version has no signed promotion-manifest bundle" >&2; exit 1; }
           gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
             --header 'Accept: application/octet-stream' >previous-promotion-manifest.json
-          previous_image="$(jq -er --arg version "$previous_version" \
-            'select(.version == $version and (.sourceCommit | test("^[a-f0-9]{40}$"))) | .image | select(test("^ghcr\\.io/.+@sha256:[a-f0-9]{64}$"))' \
-            previous-promotion-manifest.json)"
+          gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$bundle_asset_id" \
+            --header 'Accept: application/octet-stream' >previous-promotion-manifest.sigstore.json
           newest="$(printf '%s\n%s\n' "$previous_version" "$CURRENT_VERSION" | sort --version-sort | tail -1)"
           if [ "$newest" != "$CURRENT_VERSION" ] || [ "$previous_version" = "$CURRENT_VERSION" ]; then
             echo "release $CURRENT_VERSION must be newer than previous release $previous_version" >&2
@@ -136,23 +138,42 @@ jobs:
           fi
           {
             echo "first_release=false"
-            echo "image=$previous_image"
             echo "version=$previous_version"
           } >>"$GITHUB_OUTPUT"
 
       - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
         if: steps.previous.outputs.first_release == 'false'
 
-      - name: Verify previous release signature
+      - name: Verify previous release evidence signature
+        id: previous_verified
         if: steps.previous.outputs.first_release == 'false'
         env:
-          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          PREVIOUS_VERSION: ${{ steps.previous.outputs.version }}
         run: |
           set -euo pipefail
           identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign verify-blob \
+            --bundle previous-promotion-manifest.sigstore.json \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            previous-promotion-manifest.json
+          previous_image="$(jq -er --arg version "$PREVIOUS_VERSION" \
+            'select(.version == $version and (.sourceCommit | test("^[a-f0-9]{40}$")) and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle") | .image | select(test("^ghcr\\.io/.+@sha256:[a-f0-9]{64}$"))' \
+            previous-promotion-manifest.json)"
+          printf 'image=%s\n' "$previous_image" >>"$GITHUB_OUTPUT"
+
+      - name: Verify previous release image signature
+        if: steps.previous.outputs.first_release == 'false'
+        env:
+          PREVIOUS_IMAGE: ${{ steps.previous_verified.outputs.image }}
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
           cosign verify \
             --certificate-identity-regexp "$identity" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-oidc-issuer "$issuer" \
             "$PREVIOUS_IMAGE"
 
       - name: Build upgrade candidate
@@ -164,7 +185,7 @@ jobs:
       - name: Exercise persisted-state upgrade
         if: steps.previous.outputs.first_release == 'false'
         env:
-          DOCKYARD_PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          DOCKYARD_PREVIOUS_IMAGE: ${{ steps.previous_verified.outputs.image }}
           DOCKYARD_CANDIDATE_IMAGE: dockyard:upgrade-candidate
           DOCKYARD_UPGRADE_EVIDENCE: upgrade-conformance.json
           DOCKYARD_UPGRADE_POSTGRES_IMAGE: postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
@@ -415,7 +436,7 @@ jobs:
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .productCount == 5 and ([.products[].template] | sort == ["9router","barktrace-postgres","barktrace-sqlite","postgres","redis"]) and all(.products[]; .deploymentVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and (.barktraceVersion as $version | all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:")))' template-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and (.status == "passed" or (.status == "not_applicable" and .firstRelease == true))' upgrade-conformance.json >/dev/null
 
-      - name: Write promotion manifest
+      - name: Write release checksums and promotion manifest
         env:
           IMAGE: ${{ steps.release.outputs.image }}
           VERSION: ${{ steps.release.outputs.version }}
@@ -425,6 +446,21 @@ jobs:
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           schema_version="$(find internal/store/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1 | cut -d_ -f1)"
           test -n "$schema_version"
+          printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
+          evidence_assets=(
+            image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json
+            sbom.spdx.json database-recovery-evidence.json
+            volume-recovery-conformance.json volume-recovery-conformance.log
+            template-conformance.json template-conformance.log
+            sso-keycloak-evidence.json swarm-ha-conformance.json
+            lifecycle-conformance.json reconciliation-conformance.json
+            agent-certificate-conformance.json ai-audit-conformance.json
+            notification-conformance.json migration-conformance.json
+            upgrade-conformance.json release-soak-evidence.json
+          )
+          sha256sum "${evidence_assets[@]}" > release-evidence.sha256
+          sha256sum --check --strict release-evidence.sha256
+          evidence_checksums_sha256="$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)"
           jq -n \
             --arg version "$VERSION" \
             --arg image "$IMAGE@$DIGEST" \
@@ -433,16 +469,35 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            --arg evidenceChecksumsSHA256 "$evidence_checksums_sha256" \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
-          printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
+
+      - name: Sign and verify promotion manifest
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          issuer="https://token.actions.githubusercontent.com"
+          cosign sign-blob --yes \
+            --bundle promotion-manifest.sigstore.json \
+            promotion-manifest.json
+          cosign verify-blob \
+            --bundle promotion-manifest.sigstore.json \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer "$issuer" \
+            promotion-manifest.json
+          expected_checksums_sha256="$(jq -er '.evidenceChecksumsSHA256 | select(test("^[a-f0-9]{64}$"))' promotion-manifest.json)"
+          test "$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)" = "$expected_checksums_sha256"
+          sha256sum --check --strict release-evidence.sha256
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: promotion-${{ steps.release.outputs.version }}
           path: |
             promotion-manifest.json
+            promotion-manifest.sigstore.json
+            release-evidence.sha256
             image-digest.txt
             image-platforms.json
             trivy-amd64.json
@@ -525,7 +580,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json promotion-manifest.sigstore.json release-evidence.sha256 image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

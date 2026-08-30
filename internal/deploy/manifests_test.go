@@ -156,7 +156,8 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		"- name: Sign and verify immutable digest",
 		"- name: Validate release soak evidence",
 		"- name: Aggregate database recovery evidence",
-		"- name: Write promotion manifest",
+		"- name: Write release checksums and promotion manifest",
+		"- name: Sign and verify promotion manifest",
 	} {
 		position := strings.Index(workflow, requiredGate)
 		if position < candidate || position > promote {
@@ -168,6 +169,9 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	}
 	if strings.Contains(workflow[:promote], "tags: ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}") {
 		t.Fatal("release workflow assigns the public version tag before promotion gates")
+	}
+	if !strings.Contains(workflow, "cosign verify-blob") || !strings.Contains(workflow, "evidenceChecksumsSHA256") || !strings.Contains(workflow, "sha256sum --check --strict release-evidence.sha256") {
+		t.Fatal("release workflow does not authenticate the promotion manifest and its evidence checksums")
 	}
 	promotionBlock := workflow[promote:publish]
 	if !strings.Contains(promotionBlock, `imagetools inspect "$IMAGE:$VERSION"`) || !strings.Contains(promotionBlock, "already exists and cannot be overwritten") {

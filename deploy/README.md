@@ -12,6 +12,25 @@ then injects a failing controller health check and requires Swarm to restore
 the signed digest automatically. Repository administrators may lengthen the
 automated window with the `DOCKYARD_RELEASE_SOAK_SECONDS` Actions variable.
 
+Before trusting downloaded release evidence, fetch all release assets into one
+directory and authenticate the manifest and every file it covers:
+
+```sh
+identity='^https://github.com/GhaziBenDahmane/Orka/.github/workflows/release.yml@refs/(heads|tags)/.+$'
+cosign verify-blob \
+  --bundle promotion-manifest.sigstore.json \
+  --certificate-identity-regexp "$identity" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  promotion-manifest.json
+expected_checksums_sha256="$(jq -er '.evidenceChecksumsSHA256 | select(test("^[a-f0-9]{64}$"))' promotion-manifest.json)"
+test "$(sha256sum release-evidence.sha256 | cut -d ' ' -f1)" = "$expected_checksums_sha256"
+sha256sum --check --strict release-evidence.sha256
+```
+
+The signed manifest names the checksum inventory. A missing or changed
+evidence file is not valid release evidence. Upgrade automation performs the
+same manifest-signature verification before trusting the previous image digest.
+
 Operators can repeat the same disposable check against any published digest
 from a Swarm manager:
 

@@ -204,7 +204,9 @@ links for every item below.
   package-administration rights when the workflow `GITHUB_TOKEN` cannot change
   package visibility; publication fails closed instead of leaving an
   unusable private release. It also creates the matching immutable GitHub
-  Release with `promotion-manifest.json`, `image-digest.txt`,
+  Release with a keyless-Sigstore-signed `promotion-manifest.json`, its
+  `promotion-manifest.sigstore.json` bundle, `release-evidence.sha256`,
+  `image-digest.txt`,
   `image-platforms.json`, per-architecture `trivy-amd64.json` and
   `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
   `database-recovery-evidence.json`,
@@ -222,7 +224,9 @@ links for every item below.
   records the exact promoted digest, observation count, and automatic rollback
   result. The workflow initially pushes only a run-scoped candidate tag; the
   public semantic-version tag is assigned to that exact digest only after
-  vulnerability scans, signatures, soak, and all evidence validation pass.
+  vulnerability scans, image and manifest signatures, checksum verification,
+  soak, and all evidence validation pass. A later release verifies the prior
+  manifest signature before trusting its recorded image digest.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a
