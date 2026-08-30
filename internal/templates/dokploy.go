@@ -159,7 +159,7 @@ func UpgradeOverrides(template DokployTemplate, resolved, savedOverrides, reques
 	return result
 }
 
-var directGenerator = regexp.MustCompile(`^\$\{(?:domain|password(?::[0-9]+)?|base64(?::[0-9]+)?|hash(?::[0-9]+)?|uuid|timestamp|timestampms|timestamps|randomPort|email|username(?::[0-9]+)?|jwt(?::[^}]+)?)\}$`)
+var directGenerator = regexp.MustCompile(`^\$\{(?:domain|password(?::[0-9]+)?|base64(?::[0-9]+)?|hash(?::[0-9]+)?|uuid|timestamp|timestampms(?::[^}]+)?|timestamps(?::[^}]+)?|randomPort|email|username(?::[0-9]+)?|jwt(?::[^}]+)?)\}$`)
 
 // DescribeInstance exposes only deploy topology. It deliberately omits
 // environment values, commands, and inline mount contents; resolved routes are
@@ -577,40 +577,63 @@ func resolve(value string, variables map[string]string, baseDomain string) (stri
 				resolveErr = errors.New("domain helper does not accept parameters")
 				return match
 			}
+			id, err := uuid.NewRandom()
+			if err != nil {
+				resolveErr = fmt.Errorf("generate domain: %w", err)
+				return match
+			}
 			if baseDomain == "" {
-				return uuid.NewString() + ".local"
+				return id.String() + ".local"
 			}
-			return uuid.NewString()[:8] + "." + baseDomain
+			return id.String()[:8] + "." + baseDomain
 		case "password":
-			length, err := generatorLength(parts)
+			length, err := generatorLength(parts, 16)
 			if err != nil {
 				resolveErr = err
 				return match
 			}
-			return randomText(length)
+			generated, err := randomText(length)
+			if err != nil {
+				resolveErr = fmt.Errorf("generate password: %w", err)
+				return match
+			}
+			return generated
 		case "base64":
-			length, err := generatorLength(parts)
+			length, err := generatorLength(parts, 32)
 			if err != nil {
 				resolveErr = err
 				return match
 			}
-			b := randomBytes(length)
-			return base64.RawStdEncoding.EncodeToString(b)
+			b, err := randomBytes(length)
+			if err != nil {
+				resolveErr = fmt.Errorf("generate base64 value: %w", err)
+				return match
+			}
+			return base64.StdEncoding.EncodeToString(b)
 		case "hash":
-			length, err := generatorLength(parts)
+			length, err := generatorLength(parts, 8)
 			if err != nil {
 				resolveErr = err
 				return match
 			}
-			sum := sha256.Sum256(randomBytes(length))
-			return hex.EncodeToString(sum[:])[:min(length, 64)]
+			bytes, err := randomBytes((length + 1) / 2)
+			if err != nil {
+				resolveErr = fmt.Errorf("generate hash: %w", err)
+				return match
+			}
+			return hex.EncodeToString(bytes)[:length]
 		case "username":
-			length, err := generatorLength(parts)
+			length, err := generatorLength(parts, 16)
 			if err != nil {
 				resolveErr = err
 				return match
 			}
-			return strings.ToLower(randomText(length))
+			generated, err := randomText(length)
+			if err != nil {
+				resolveErr = fmt.Errorf("generate username: %w", err)
+				return match
+			}
+			return strings.ToLower(generated)
 		case "timestampms", "timestamps":
 			value, err := timestampValue(parts[0], key)
 			if err != nil {
@@ -625,36 +648,67 @@ func resolve(value string, variables map[string]string, baseDomain string) (stri
 			}
 			switch parts[0] {
 			case "uuid":
-				return uuid.NewString()
+				id, err := uuid.NewRandom()
+				if err != nil {
+					resolveErr = fmt.Errorf("generate UUID: %w", err)
+					return match
+				}
+				return id.String()
 			case "timestamp":
 				return strconv.FormatInt(time.Now().UnixMilli(), 10)
 			case "randomPort":
-				bytes := randomBytes(2)
+				bytes, err := randomBytes(2)
+				if err != nil {
+					resolveErr = fmt.Errorf("generate random port: %w", err)
+					return match
+				}
 				n := int(bytes[0])<<8 + int(bytes[1])
 				return strconv.Itoa(10000 + n%50000)
 			default:
-				return "admin-" + randomText(8) + "@example.com"
+				generated, err := randomText(8)
+				if err != nil {
+					resolveErr = fmt.Errorf("generate email: %w", err)
+					return match
+				}
+				return "admin-" + generated + "@example.com"
 			}
 		case "jwt":
+			payload := map[string]any{"iss": "dokploy", "iat": time.Now().Unix(), "exp": int64(1893456000)}
+			secret := ""
+			if len(parts) == 1 {
+				bytes, err := randomBytes(32)
+				if err != nil {
+					resolveErr = fmt.Errorf("generate jwt secret: %w", err)
+					return match
+				}
+				secret = hex.EncodeToString(bytes)
+			}
 			if len(parts) == 2 {
-				if size, err := strconv.Atoi(parts[1]); err == nil {
+				if size, err := strictDecimal(parts[1]); err == nil {
 					if size < 1 || size > 256 {
 						resolveErr = errors.New("jwt helper length must be between 1 and 256")
 						return match
 					}
-					return hex.EncodeToString(randomBytes(size))
+					bytes, randomErr := randomBytes(size)
+					if randomErr != nil {
+						resolveErr = fmt.Errorf("generate jwt value: %w", randomErr)
+						return match
+					}
+					return hex.EncodeToString(bytes)
 				}
 			}
-			if len(parts) < 2 || len(parts) > 3 {
+			if len(parts) > 3 {
 				resolveErr = errors.New("jwt helper requires a declared secret variable and optional payload variable")
 				return match
 			}
-			secret, ok := variables[parts[1]]
-			if !ok || secret == "" {
-				resolveErr = errors.New("jwt helper secret variable is missing or empty")
-				return match
+			if len(parts) >= 2 {
+				var ok bool
+				secret, ok = variables[parts[1]]
+				if !ok || secret == "" {
+					resolveErr = errors.New("jwt helper secret variable is missing or empty")
+					return match
+				}
 			}
-			payload := map[string]any{"iat": time.Now().Unix(), "exp": time.Now().AddDate(1, 0, 0).Unix()}
 			if len(parts) == 3 {
 				raw, ok := variables[parts[2]]
 				if !ok || raw == "" {
@@ -707,32 +761,42 @@ func timestampValue(helper, key string) (string, error) {
 	return "", fmt.Errorf("%s helper requires an RFC3339 or YYYY-MM-DD date", helper)
 }
 
-func generatorLength(parts []string) (int, error) {
+func generatorLength(parts []string, defaultLength int) (int, error) {
 	if len(parts) == 1 {
-		return 32, nil
+		return defaultLength, nil
 	}
 	if len(parts) != 2 {
 		return 0, fmt.Errorf("%s helper accepts at most one length parameter", parts[0])
 	}
-	length, err := strconv.Atoi(parts[1])
+	length, err := strictDecimal(parts[1])
 	if err != nil || length < 1 || length > 4096 {
 		return 0, fmt.Errorf("%s helper length must be between 1 and 4096", parts[0])
 	}
 	return length, nil
 }
 
-func randomBytes(length int) []byte {
+func strictDecimal(value string) (int, error) {
+	if value == "" || strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return 0, errors.New("not a decimal integer")
+	}
+	return strconv.Atoi(value)
+}
+
+func randomBytes(length int) ([]byte, error) {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
-		panic(err)
+		return nil, err
 	}
-	return b
+	return b, nil
 }
-func randomText(length int) string {
+func randomText(length int) (string, error) {
 	const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	b := randomBytes(length)
+	b, err := randomBytes(length)
+	if err != nil {
+		return "", err
+	}
 	for i := range b {
 		b[i] = alphabet[int(b[i])%len(alphabet)]
 	}
-	return string(b)
+	return string(b), nil
 }

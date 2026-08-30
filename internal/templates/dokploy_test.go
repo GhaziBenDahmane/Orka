@@ -1,6 +1,8 @@
 package templates
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,11 +74,13 @@ func TestInstantiateWithOverridesRejectsUnknownAndOversizedValues(t *testing.T) 
 func TestInstantiateRejectsUnsafeGeneratorParameters(t *testing.T) {
 	for _, definition := range []string{
 		"${jwt:-1}",
+		"${jwt:+1}",
 		"${jwt:257}",
 		"${jwt:999999999}",
 		"${jwt:missing_secret}",
 		"${jwt:secret:missing_payload}",
 		"${password:0}",
+		"${password:+1}",
 		"${password:4097}",
 		"${password:not-a-number}",
 		"${base64:1:2}",
@@ -99,6 +103,44 @@ func TestInstantiateSupportsDokployLargeBase64Generator(t *testing.T) {
 	}
 	if len(instance.Variables["mongo_key"]) != 1008 {
 		t.Fatalf("base64 generator length=%d", len(instance.Variables["mongo_key"]))
+	}
+}
+
+func TestInstantiateMatchesDokployGeneratorDefaults(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{
+		"password":  "${password}",
+		"base64":    "${base64}",
+		"hash":      "${hash}",
+		"long_hash": "${hash:128}",
+		"jwt":       "${jwt}",
+	}}
+	instance, err := Instantiate(template, "services: {}\n", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instance.Variables["password"]) != 16 {
+		t.Fatalf("password length=%d", len(instance.Variables["password"]))
+	}
+	if value := instance.Variables["base64"]; len(value) != 44 || !strings.HasSuffix(value, "=") {
+		t.Fatalf("base64 value does not use padded 32-byte encoding: %q", value)
+	}
+	if len(instance.Variables["hash"]) != 8 || len(instance.Variables["long_hash"]) != 128 {
+		t.Fatalf("hash lengths=%d,%d", len(instance.Variables["hash"]), len(instance.Variables["long_hash"]))
+	}
+	parts := strings.Split(instance.Variables["jwt"], ".")
+	if len(parts) != 3 {
+		t.Fatalf("default JWT has %d segments", len(parts))
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err = json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["iss"] != "dokploy" || payload["exp"] != float64(1893456000) {
+		t.Fatalf("default JWT payload=%#v", payload)
 	}
 }
 

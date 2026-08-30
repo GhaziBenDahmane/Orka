@@ -22,6 +22,9 @@ mapping, domains, and managed files. `docker-compose.yml` remains the workload
 definition and passes through the same Swarm safety compiler as every other
 service. Random `password`, `base64`, `hash`, and `username` helpers accept at
 most one length from 1 through 4096; numeric `jwt` helpers are limited to 256.
+For Dokploy compatibility, their default lengths are 16, 32 bytes, 8, and 16
+respectively, and `base64` uses padded standard encoding. A parameterless
+`jwt` produces a signed token with Dokploy's standard issuer and expiry.
 Signed JWT helpers must reference a declared, non-empty secret variable and may
 reference one declared JSON payload variable. Malformed, missing, negative, or
 unbounded parameters reject the complete catalog snapshot. `timestampms` and
