@@ -52,6 +52,16 @@ identity can enter, while federated sessions remain bound to one tenant.
 Logout and both individual and bulk session revocation use the same atomic
 mutation-and-audit boundary.
 
+Local and owner break-glass identities can enable RFC 6238 TOTP. Secrets are
+AES-GCM encrypted with user-bound associated data and participate in offline
+master-key rotation. Recovery codes are random, shown once, stored only as
+digests, and atomically consumed. Session issuance locks the user record and
+binds the verified password hash and encrypted TOTP secret to the transaction;
+the accepted TOTP counter is advanced in that same transaction to reject code
+replay and stale-credential races. MFA lifecycle changes require a live local
+session, current password where credential state changes, proof of possession,
+session revocation, and durable tenant audit evidence.
+
 The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,
 and bounded-cardinality request metrics. Both listeners bound header size and

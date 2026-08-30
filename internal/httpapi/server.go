@@ -97,6 +97,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/agent/enroll", s.enrollClusterAgent)
 	mux.Handle("POST /v1/auth/logout", s.requireAuth(http.HandlerFunc(s.logout)))
 	mux.Handle("PUT /v1/auth/password", s.requireAuth(http.HandlerFunc(s.changePassword)))
+	mux.Handle("GET /v1/auth/mfa", s.requireAuth(http.HandlerFunc(s.getMFAStatus)))
+	mux.Handle("POST /v1/auth/mfa/enrollment", s.requireAuth(http.HandlerFunc(s.beginMFAEnrollment)))
+	mux.Handle("POST /v1/auth/mfa/enrollment/confirm", s.requireAuth(http.HandlerFunc(s.confirmMFAEnrollment)))
+	mux.Handle("DELETE /v1/auth/mfa", s.requireAuth(http.HandlerFunc(s.disableMFA)))
+	mux.Handle("POST /v1/auth/mfa/recovery-codes", s.requireAuth(http.HandlerFunc(s.regenerateMFARecoveryCodes)))
 	mux.Handle("GET /v1/me", s.requireAuth(http.HandlerFunc(s.me)))
 	mux.Handle("GET /v1/authorization/effective-role", s.requireAuth(http.HandlerFunc(s.getEffectiveRole)))
 	mux.Handle("GET /v1/sessions", s.requireAuth(http.HandlerFunc(s.listSessions)))
@@ -705,17 +710,23 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var in struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email        string `json:"email"`
+		Password     string `json:"password"`
+		TOTPCode     string `json:"totpCode"`
+		RecoveryCode string `json:"recoveryCode"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if len(in.TOTPCode) > maxMFAProofBytes || len(in.RecoveryCode) > maxMFAProofBytes {
+		writeError(w, http.StatusBadRequest, "invalid_mfa", store.ErrInvalidMFAProof.Error())
 		return
 	}
 	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
 	if !s.allowAuthenticationAttempt(w, r, "login-global", cryptox.Digest("instance"), 300) {
 		return
 	}
-	userID, hash, err := s.Store.PasswordLogin(r.Context(), in.Email)
+	credential, err := s.Store.PasswordLoginCredential(r.Context(), in.Email)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			writeStoreError(w, err)
@@ -728,12 +739,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !s.allowAuthenticationAttempt(w, r, "login", cryptox.Digest(in.Email), 10) {
 		return
 	}
-	if !auth.VerifyPassword(hash, in.Password) {
+	if !auth.VerifyPassword(credential.PasswordHash, in.Password) {
 		time.Sleep(150 * time.Millisecond)
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
 		return
 	}
-	allowed, err := s.Store.LocalLoginAllowed(r.Context(), userID)
+	allowed, err := s.Store.LocalLoginAllowed(r.Context(), credential.UserID)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -742,10 +753,32 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "sso_required", "this account must sign in through its identity provider")
 		return
 	}
-	token, err := s.newSession(r, userID, nil, "local", hash, nil)
+	var token string
+	if credential.EncryptedTOTPSecret != "" {
+		if in.TOTPCode == "" && in.RecoveryCode == "" {
+			writeError(w, http.StatusUnauthorized, "mfa_required", store.ErrMFARequired.Error())
+			return
+		}
+		counter, recoveryDigest, valid, proofErr := s.verifyMFAProof(credential.UserID.String(), credential.EncryptedTOTPSecret, in.TOTPCode, in.RecoveryCode)
+		if proofErr != nil {
+			s.writeInternalError(w, r, 500, "mfa_secret_invalid", "stored MFA material could not be authenticated", proofErr)
+			return
+		}
+		if !valid {
+			writeError(w, http.StatusUnauthorized, "invalid_mfa", store.ErrInvalidMFAProof.Error())
+			return
+		}
+		token, err = s.newMFASession(r, credential, counter, recoveryDigest)
+	} else {
+		token, err = s.newSession(r, credential.UserID, nil, "local", credential.PasswordHash, nil)
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrAuthenticationStateChanged) {
 			writeError(w, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
+			return
+		}
+		if errors.Is(err, store.ErrInvalidMFAProof) {
+			writeError(w, http.StatusUnauthorized, "invalid_mfa", store.ErrInvalidMFAProof.Error())
 			return
 		}
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)

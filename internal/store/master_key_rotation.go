@@ -62,6 +62,8 @@ var masterKeyEncryptedColumns = []encryptedColumnSpec{
 	{table: "template_instances", column: "encrypted_overrides", idColumn: "compose_service_id", contextColumn: "compose_service_id", contextKind: "template-overrides"},
 	{table: "template_instances", column: "encrypted_variables", idColumn: "compose_service_id", contextColumn: "compose_service_id", contextKind: "template-variables"},
 	{table: "template_repositories", column: "encrypted_webhook_secret", idColumn: "id", contextColumn: "id", contextKind: "template-repository-webhook"},
+	{table: "users", column: "encrypted_totp_secret", idColumn: "id", contextColumn: "id", contextKind: "user-totp"},
+	{table: "users", column: "pending_encrypted_totp_secret", idColumn: "id", contextColumn: "id", contextKind: "user-totp"},
 	{table: "volume_backups", column: "encrypted_data_key", idColumn: "id", contextColumn: "id", contextKind: "volume-backup-data-key"},
 	{table: "webhook_integrations", column: "encrypted_secret", idColumn: "id", contextColumn: "id", contextKind: "webhook-secret"},
 }

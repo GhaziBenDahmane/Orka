@@ -51,6 +51,11 @@ and operation durations. Send `Authorization: Bearer <metrics-token>` and omit
 | POST | `/v1/auth/login` | Exchange local credentials for a session |
 | POST | `/v1/auth/logout` | Revoke the current session |
 | PUT | `/v1/auth/password` | Change the caller's local password and revoke every other session |
+| GET | `/v1/auth/mfa` | Read TOTP status and remaining recovery-code count |
+| POST | `/v1/auth/mfa/enrollment` | Verify the current password and return a one-time TOTP secret and `otpauth://` URI |
+| POST | `/v1/auth/mfa/enrollment/confirm` | Verify the first TOTP code, enable MFA, and return recovery codes once |
+| DELETE | `/v1/auth/mfa` | Verify password plus TOTP/recovery proof and disable MFA |
+| POST | `/v1/auth/mfa/recovery-codes` | Verify password plus TOTP/recovery proof and replace all recovery codes |
 | GET | `/v1/me` | Return the current principal and role |
 | GET | `/v1/authorization/effective-role?resourceType=…&resourceId=…` | Resolve inherited project/environment RBAC for a resource |
 | GET | `/v1/sessions` | List the caller's active device sessions |
@@ -69,6 +74,20 @@ session is issued atomically with its login event, so a usable session cannot
 exist without durable tenant audit evidence. An unscoped local login is
 recorded in every organization that identity can enter; a federated login
 remains IdP-tenant scoped.
+
+Local login accepts `totpCode` or `recoveryCode` in addition to `email` and
+`password`. Once MFA is enabled, a correct password without a proof returns
+`mfa_required`; exactly one proof may be supplied. TOTP permits one 30-second
+clock step in either direction, while a durable counter prevents reuse of an
+accepted code. Recovery codes are normalized, stored only as SHA-256 digests,
+and consumed transactionally with session issuance. TOTP secrets are encrypted
+with the master key and bound to the user ID. Enrollment, enablement, disable,
+recovery-code replacement, other-session revocation, and audit evidence use
+atomic database transactions. The current local session is retained so a
+successful security change cannot strand its caller.
+The AI audit snapshot exposes only aggregate local-account and MFA enrollment
+counts; it never exposes TOTP material, recovery-code digests, or user-level
+enrollment details.
 | GET | `/v1/members` | List organization members, roles, status, and SCIM ownership |
 | PATCH | `/v1/members/{userID}` | Change a manually managed organization membership role |
 | DELETE | `/v1/members/{userID}` | Remove a manually managed member and their scoped grants |

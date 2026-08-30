@@ -76,6 +76,16 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		return http.MethodGet, "/v1/me", nil, require(1)
 	case "change-password":
 		return jsonCommand(args, stdin, http.MethodPut, "/v1/auth/password", 2)
+	case "mfa-status":
+		return http.MethodGet, "/v1/auth/mfa", nil, require(1)
+	case "begin-mfa":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/auth/mfa/enrollment", 2)
+	case "confirm-mfa":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/auth/mfa/enrollment/confirm", 2)
+	case "disable-mfa":
+		return jsonCommand(args, stdin, http.MethodDelete, "/v1/auth/mfa", 2)
+	case "regenerate-mfa-recovery-codes":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/auth/mfa/recovery-codes", 2)
 	case "members":
 		return http.MethodGet, "/v1/members", nil, require(1)
 	case "update-member":
@@ -652,7 +662,7 @@ func login(_ context.Context, rawURL, organizationID string, args []string, stdi
 	if len(args) != 1 {
 		return errors.New("usage: dockyardctl [flags] login EMAIL < password")
 	}
-	password, err := io.ReadAll(io.LimitReader(stdin, 4096))
+	payload, err := io.ReadAll(io.LimitReader(stdin, 4096))
 	if err != nil {
 		return err
 	}
@@ -661,8 +671,22 @@ func login(_ context.Context, rawURL, organizationID string, args []string, stdi
 		return err
 	}
 	var response strings.Builder
-	passwordValue := strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r")
-	if err := client.Do(context.Background(), http.MethodPost, "/v1/auth/login", map[string]string{"email": args[0], "password": passwordValue}, &response); err != nil {
+	input := map[string]string{"email": args[0]}
+	trimmed := strings.TrimSpace(string(payload))
+	if strings.HasPrefix(trimmed, "{") {
+		var credentials struct {
+			Password     string `json:"password"`
+			TOTPCode     string `json:"totpCode"`
+			RecoveryCode string `json:"recoveryCode"`
+		}
+		if err = json.Unmarshal([]byte(trimmed), &credentials); err != nil {
+			return fmt.Errorf("decode login JSON: %w", err)
+		}
+		input["password"], input["totpCode"], input["recoveryCode"] = credentials.Password, credentials.TOTPCode, credentials.RecoveryCode
+	} else {
+		input["password"] = strings.TrimSuffix(strings.TrimSuffix(string(payload), "\n"), "\r")
+	}
+	if err := client.Do(context.Background(), http.MethodPost, "/v1/auth/login", input, &response); err != nil {
 		return err
 	}
 	var envelope struct {
@@ -738,5 +762,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|change-password|members|update-member|delete-member|deploy-tokens|create-deploy-token|revoke-deploy-token|invitations|invitation|create-invitation|revoke-invitation|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|audit-retention|put-audit-retention|audit-archives|audit-archive|create-audit-archive|run-audit-archive|audit-archive-batches|delete-audit-archive|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|policy|put-policy|project-policy|put-project-policy|environment-policy|put-environment-policy|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|notification-endpoints|create-notification-endpoint|delete-notification-endpoint|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates [cursor]|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|create-cluster|update-cluster|delete-cluster|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <me|change-password|mfa-status|begin-mfa|confirm-mfa|disable-mfa|regenerate-mfa-recovery-codes|members|update-member|delete-member|deploy-tokens|create-deploy-token|revoke-deploy-token|invitations|invitation|create-invitation|revoke-invitation|service-accounts|create-service-account|rotate-service-account|disable-service-account|ai-audit-runs|ai-audit-findings|ai-audit-run-findings|triage-ai-audit-finding|audit-retention|put-audit-retention|audit-archives|audit-archive|create-audit-archive|run-audit-archive|audit-archive-batches|delete-audit-archive|oidc-providers|create-oidc-provider|update-oidc-provider|enable-oidc-provider|disable-oidc-provider|sso-settings|put-sso-settings|scim-tokens|create-scim-token|revoke-scim-token|saml-providers|create-saml-provider|update-saml-provider|enable-saml-provider|disable-saml-provider|rotate-saml-certificate|promote-saml-certificate|cancel-saml-certificate|project-grants|put-project-grant|delete-project-grant|environment-grants|put-environment-grant|delete-environment-grant|policy|put-policy|project-policy|put-project-policy|environment-policy|put-environment-policy|projects|environments|services|deployments|logs|database-engines|backup-destinations|create-backup-destination|update-backup-destination|delete-backup-destination|notification-endpoints|create-notification-endpoint|delete-notification-endpoint|databases|database|backup-policy|put-backup-policy|delete-backup-policy|database-backups|backup-database|database-restores|database-backup|cancel-database-backup|restore-database|database-restore|cancel-database-restore|volumes|volume-policies|put-volume-policy|delete-volume-policy|volume-backups|backup-volume|volume-restores|volume-backup|cancel-volume-backup|restore-volume|volume-restore|cancel-volume-restore|templates [cursor]|template-repositories|create-template-repository|update-template-repository|sync-template-repository|rotate-template-repository-webhook|disable-template-repository-webhook|delete-template-repository|template-versions|clusters|create-cluster|update-cluster|delete-cluster|deploy|rollback|cancel|create-project|create-environment|create-service|create-database|preview-template|instantiate|upgrade-template|cluster-token|agent-upgrade|cluster-command|cancel-agent-upgrade|request>")
 }

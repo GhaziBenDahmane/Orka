@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, ClusterCommand, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, Environment, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceVolume, SessionInfo, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditEvent, BackupDestination, Cluster, ClusterCommand, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, Environment, MFAStatus, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourcePolicy, Role, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceVolume, SessionInfo, SourceCredential, session, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -48,14 +48,21 @@ function Login({ onLogin, invitationToken, clearInvitation }: { onLogin: (princi
   const [inviteName, setInviteName] = useState("");
   const [invitePassword, setInvitePassword] = useState("");
   const [inviteAccepted, setInviteAccepted] = useState("");
+  const [mfaRequired, setMFARequired] = useState(false);
+  const [mfaCode, setMFACode] = useState("");
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError("");
     try {
-      const result = await api.login(email, password);
+      const result = await api.login(email, password, useRecoveryCode ? "" : mfaCode, useRecoveryCode ? mfaCode : "");
       session.set(result.token);
       onLogin(await api.me());
-    } catch (reason) { setError(message(reason)); session.clear(); }
+    } catch (reason) {
+      if (reason instanceof APIError && reason.code === "mfa_required") { setMFARequired(true); setError(""); }
+      else setError(message(reason));
+      session.clear();
+    }
     finally { setBusy(false); }
   }
 
@@ -97,8 +104,9 @@ function Login({ onLogin, invitationToken, clearInvitation }: { onLogin: (princi
         {invitationToken && <section className="invitation-accept"><h3>Accept organization invitation</h3><p className="muted">Choose a display name and, for a new local account, a password of at least 12 characters. Existing and SSO accounts can leave the password empty.</p><label>Display name<input value={inviteName} onChange={event => setInviteName(event.target.value)} maxLength={120} /></label><label>New-account password<input type="password" value={invitePassword} onChange={event => setInvitePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><div className="actions"><button type="button" className="primary" disabled={busy} onClick={() => void acceptInvitation()}>Accept invitation</button><button type="button" disabled={busy} onClick={clearInvitation}>Dismiss</button></div></section>}
         {inviteAccepted && <p className="success-text">{inviteAccepted}</p>}
         <p className="muted">Sign in with your local administrator account.</p>
-        <label>Email<input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)} required /></label>
-        <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
+        <label>Email<input autoFocus type="email" value={email} onChange={e => { setEmail(e.target.value); setMFARequired(false); }} required /></label>
+        <label>Password<input type="password" value={password} onChange={e => { setPassword(e.target.value); setMFARequired(false); }} required /></label>
+        {mfaRequired && <><label>{useRecoveryCode ? "Recovery code" : "Authenticator code"}<input inputMode={useRecoveryCode ? "text" : "numeric"} autoComplete="one-time-code" value={mfaCode} onChange={e => setMFACode(e.target.value)} required autoFocus /></label><button type="button" className="link-button" onClick={() => { setUseRecoveryCode(value => !value); setMFACode(""); }}>{useRecoveryCode ? "Use authenticator code" : "Use a recovery code"}</button></>}
         {error && <p className="error" role="alert">{error}</p>}
         <button className="primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
         <div className="divider"><span>or</span></div>
@@ -205,8 +213,16 @@ function Account({ principal, onSessionRevoked, flash, setError }: { principal: 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [mfa, setMFA] = useState<MFAStatus | null>(null);
+  const [mfaPassword, setMFAPassword] = useState("");
+  const [mfaCode, setMFACode] = useState("");
+  const [mfaRecoveryProof, setMFARecoveryProof] = useState("");
+  const [enrollment, setEnrollment] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const refresh = useCallback(async () => setSessions((await api.sessions()).items), []);
+  const refreshMFA = useCallback(async () => setMFA(await api.mfaStatus()), []);
   useEffect(() => { void refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
+  useEffect(() => { void refreshMFA().catch(reason => setError(message(reason))); }, [refreshMFA, setError]);
 
   async function revoke(item: SessionInfo) {
     if (!window.confirm(item.current ? "Revoke this session and sign out now?" : "Revoke this device session?")) return;
@@ -241,8 +257,34 @@ function Account({ principal, onSessionRevoked, flash, setError }: { principal: 
     } catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
 
+  async function beginMFA(event: FormEvent) {
+    event.preventDefault(); setBusy(true);
+    try { setEnrollment(await api.beginMFAEnrollment(mfaPassword)); setMFACode(""); setRecoveryCodes([]); await refreshMFA(); flash("Authenticator enrollment started"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  async function confirmMFA(event: FormEvent) {
+    event.preventDefault(); setBusy(true);
+    try { const result = await api.confirmMFAEnrollment(mfaCode); setRecoveryCodes(result.recoveryCodes); setEnrollment(null); setMFAPassword(""); setMFACode(""); await Promise.all([refreshMFA(), refresh()]); flash("Multi-factor authentication enabled"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  async function regenerateRecoveryCodes() {
+    if (!window.confirm("Replace every existing recovery code?")) return;
+    setBusy(true);
+    try { const result = await api.regenerateMFARecoveryCodes(mfaPassword, mfaCode, mfaRecoveryProof); setRecoveryCodes(result.recoveryCodes); setMFAPassword(""); setMFACode(""); setMFARecoveryProof(""); await Promise.all([refreshMFA(), refresh()]); flash("Recovery codes replaced"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
+  async function disableMFA() {
+    if (!window.confirm("Disable multi-factor authentication for this account?")) return;
+    setBusy(true);
+    try { await api.disableMFA(mfaPassword, mfaCode, mfaRecoveryProof); setRecoveryCodes([]); setMFAPassword(""); setMFACode(""); setMFARecoveryProof(""); await Promise.all([refreshMFA(), refresh()]); flash("Multi-factor authentication disabled"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+
   return <div className="account-layout">
-    <div className="account-security-column"><section className="card settings-card account-profile"><p className="eyebrow">Signed-in identity</p><h2>{principal.email}</h2><p className="muted">{principal.organization}</p><dl><div><dt>Organization role</dt><dd>{principal.role}</dd></div><div><dt>User ID</dt><dd><code>{principal.userId}</code></dd></div></dl></section><section className="card settings-card password-change"><p className="eyebrow">Local credential</p><h2>Change password</h2><p className="muted">Requires a local login. All other sessions are revoked after a successful change.</p><form onSubmit={changePassword}><label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={event => setNewPassword(event.target.value)} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={12} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} required /></label><button className="primary" disabled={busy}>Change password</button></form></section></div>
+    <div className="account-security-column"><section className="card settings-card account-profile"><p className="eyebrow">Signed-in identity</p><h2>{principal.email}</h2><p className="muted">{principal.organization}</p><dl><div><dt>Organization role</dt><dd>{principal.role}</dd></div><div><dt>User ID</dt><dd><code>{principal.userId}</code></dd></div></dl></section><section className="card settings-card password-change"><p className="eyebrow">Local credential</p><h2>Change password</h2><p className="muted">Requires a local login. All other sessions are revoked after a successful change.</p><form onSubmit={changePassword}><label>Current password<input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label><label>New password<input type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={event => setNewPassword(event.target.value)} required /></label><label>Confirm new password<input type="password" autoComplete="new-password" minLength={12} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} required /></label><button className="primary" disabled={busy}>Change password</button></form></section><section className="card settings-card"><p className="eyebrow">Multi-factor authentication</p><h2>{mfa?.enabled ? "Authenticator enabled" : "Protect local login"}</h2><p className="muted">{mfa?.enabled ? `${mfa.recoveryCodesRemaining} unused recovery codes remain.` : "Use a TOTP authenticator for local and break-glass sign-in."}</p>{!mfa?.enabled && !enrollment && <form onSubmit={beginMFA}><label>Current password<input type="password" autoComplete="current-password" value={mfaPassword} onChange={event => setMFAPassword(event.target.value)} required /></label><button className="primary" disabled={busy}>Set up authenticator</button></form>}{enrollment && <form onSubmit={confirmMFA}><p className="muted">Add this secret to your authenticator, then enter its current code.</p><code>{enrollment.secret}</code><details><summary>Authenticator URI</summary><code>{enrollment.otpauthUri}</code></details><label>Authenticator code<input inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={event => setMFACode(event.target.value)} required /></label><button className="primary" disabled={busy}>Verify and enable</button></form>}{mfa?.enabled && <div><label>Current password<input type="password" autoComplete="current-password" value={mfaPassword} onChange={event => setMFAPassword(event.target.value)} /></label><label>Authenticator code<input inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={event => { setMFACode(event.target.value); setMFARecoveryProof(""); }} /></label><label>Or recovery code<input value={mfaRecoveryProof} onChange={event => { setMFARecoveryProof(event.target.value); setMFACode(""); }} /></label><div className="actions"><button type="button" disabled={busy || !mfaPassword || (!mfaCode && !mfaRecoveryProof)} onClick={() => void regenerateRecoveryCodes()}>Replace recovery codes</button><button type="button" className="danger-button" disabled={busy || !mfaPassword || (!mfaCode && !mfaRecoveryProof)} onClick={() => void disableMFA()}>Disable MFA</button></div></div>}{recoveryCodes.length > 0 && <div className="credential-card spaced"><p className="eyebrow">Save these recovery codes now</p><p className="muted">Each code works once. They will not be shown again.</p><code>{recoveryCodes.join("\n")}</code><div className="actions"><button type="button" onClick={() => void navigator.clipboard.writeText(recoveryCodes.join("\n"))}>Copy codes</button><button type="button" onClick={() => setRecoveryCodes([])}>I saved them</button></div></div>}</section></div>
     <section className="card settings-card account-sessions"><div className="card-head"><div><p className="eyebrow">Security</p><h2>Device sessions</h2><p className="muted">Review where your account is signed in and revoke access you no longer recognize.</p></div><div className="actions"><button type="button" disabled={busy} onClick={() => void refresh().catch(reason => setError(message(reason)))}>Refresh</button><button type="button" className="danger-button" disabled={busy || sessions.filter(item => !item.current).length === 0} onClick={() => void revokeOthers()}>Revoke all others</button></div></div><div className="admin-items session-list">{sessions.map(item => <article key={item.id}><div><strong>{item.current ? "This device" : item.userAgent || "Unknown device"}</strong><small>{item.current && item.userAgent ? `${item.userAgent} · ` : ""}{item.authMethod.toUpperCase()} · {item.ipAddress || "unknown address"}</small><small>Last active {new Date(item.lastSeenAt).toLocaleString()} · expires {new Date(item.expiresAt).toLocaleString()}</small></div><Status value={item.current ? "current" : "active"} /><button type="button" className="danger-button" disabled={busy} onClick={() => void revoke(item)}>{item.current ? "Sign out" : "Revoke"}</button></article>)}{!sessions.length && <p className="muted">No active sessions were returned.</p>}</div></section>
   </div>;
 }

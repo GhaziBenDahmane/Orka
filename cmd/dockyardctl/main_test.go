@@ -249,6 +249,21 @@ func TestChangePasswordCommandBody(t *testing.T) {
 	}
 }
 
+func TestMFACommandBodies(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"begin-mfa", "-"}, strings.NewReader(`{"currentPassword":"secret"}`))
+	if err != nil || method != http.MethodPost || path != "/v1/auth/mfa/enrollment" || input.(map[string]any)["currentPassword"] != "secret" {
+		t.Fatalf("begin MFA method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	method, path, input, err = commandRequest([]string{"disable-mfa", "-"}, strings.NewReader(`{"currentPassword":"secret","recoveryCode":"abcd"}`))
+	if err != nil || method != http.MethodDelete || path != "/v1/auth/mfa" || input.(map[string]any)["recoveryCode"] != "abcd" {
+		t.Fatalf("disable MFA method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	method, path, input, err = commandRequest([]string{"regenerate-mfa-recovery-codes", "-"}, strings.NewReader(`{"currentPassword":"secret","code":"123456"}`))
+	if err != nil || method != http.MethodPost || path != "/v1/auth/mfa/recovery-codes" || input.(map[string]any)["code"] != "123456" {
+		t.Fatalf("regenerate MFA method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+}
+
 func TestOIDCProviderCommandBodies(t *testing.T) {
 	method, path, input, err := commandRequest([]string{"create-oidc-provider", "-"}, strings.NewReader(`{"name":"Workforce","issuer":"https://identity.example.com","clientId":"dockyard","clientSecret":"secret","domains":["example.com"]}`))
 	if err != nil || method != http.MethodPost || path != "/v1/sso/oidc-providers" {

@@ -333,37 +333,41 @@ type AIAuditReconciliationPosture struct {
 }
 
 type AIAuditIdentityPosture struct {
-	RequireSSO                      bool       `json:"requireSso"`
-	EnabledOIDCProviders            int64      `json:"enabledOidcProviders"`
-	EnabledSAMLProviders            int64      `json:"enabledSamlProviders"`
-	ActiveMembers                   int64      `json:"activeMembers"`
-	ActiveOwners                    int64      `json:"activeOwners"`
-	ActiveAdmins                    int64      `json:"activeAdmins"`
-	ActiveDevelopers                int64      `json:"activeDevelopers"`
-	ActiveViewers                   int64      `json:"activeViewers"`
-	DisabledMembers                 int64      `json:"disabledMembers"`
-	ActiveLocalSessions             int64      `json:"activeLocalSessions"`
-	ActiveOIDCSessions              int64      `json:"activeOidcSessions"`
-	ActiveSAMLSessions              int64      `json:"activeSamlSessions"`
-	ActiveServiceAccounts           int64      `json:"activeServiceAccounts"`
-	ActivePrivilegedServiceAccounts int64      `json:"activePrivilegedServiceAccounts"`
-	ExpiringServiceAccounts         int64      `json:"expiringServiceAccounts7d"`
-	ActiveAuditorServiceAccounts    int64      `json:"activeAuditorServiceAccounts"`
-	ActiveSCIMTokens                int64      `json:"activeScimTokens"`
-	OldestActiveSCIMTokenCreatedAt  *time.Time `json:"oldestActiveScimTokenCreatedAt,omitempty"`
-	PendingInvitations              int64      `json:"pendingInvitations"`
-	PendingPrivilegedInvitations    int64      `json:"pendingPrivilegedInvitations"`
-	InvitationsExpiringSoon         int64      `json:"invitationsExpiring24h"`
-	ExpiredInvitations              int64      `json:"expiredInvitations"`
-	ProjectScopedGrants             int64      `json:"projectScopedGrants"`
-	EnvironmentScopedGrants         int64      `json:"environmentScopedGrants"`
-	AdminScopedGrants               int64      `json:"adminScopedGrants"`
-	RedundantScopedGrants           int64      `json:"redundantScopedGrants"`
-	SCIMGroups                      int64      `json:"scimGroups"`
-	WriteCapableSCIMGroups          int64      `json:"writeCapableScimGroups"`
-	SCIMGroupMemberships            int64      `json:"scimGroupMemberships"`
-	PendingSAMLCertificateRotations int64      `json:"pendingSamlCertificateRotations"`
-	OldestPendingSAMLRotationAt     *time.Time `json:"oldestPendingSamlRotationAt,omitempty"`
+	RequireSSO                       bool       `json:"requireSso"`
+	EnabledOIDCProviders             int64      `json:"enabledOidcProviders"`
+	EnabledSAMLProviders             int64      `json:"enabledSamlProviders"`
+	ActiveMembers                    int64      `json:"activeMembers"`
+	ActiveOwners                     int64      `json:"activeOwners"`
+	ActiveAdmins                     int64      `json:"activeAdmins"`
+	ActiveDevelopers                 int64      `json:"activeDevelopers"`
+	ActiveViewers                    int64      `json:"activeViewers"`
+	DisabledMembers                  int64      `json:"disabledMembers"`
+	ActiveLocalMembers               int64      `json:"activeLocalMembers"`
+	MFAEnabledLocalMembers           int64      `json:"mfaEnabledLocalMembers"`
+	PrivilegedLocalMembers           int64      `json:"privilegedLocalMembers"`
+	MFAEnabledPrivilegedLocalMembers int64      `json:"mfaEnabledPrivilegedLocalMembers"`
+	ActiveLocalSessions              int64      `json:"activeLocalSessions"`
+	ActiveOIDCSessions               int64      `json:"activeOidcSessions"`
+	ActiveSAMLSessions               int64      `json:"activeSamlSessions"`
+	ActiveServiceAccounts            int64      `json:"activeServiceAccounts"`
+	ActivePrivilegedServiceAccounts  int64      `json:"activePrivilegedServiceAccounts"`
+	ExpiringServiceAccounts          int64      `json:"expiringServiceAccounts7d"`
+	ActiveAuditorServiceAccounts     int64      `json:"activeAuditorServiceAccounts"`
+	ActiveSCIMTokens                 int64      `json:"activeScimTokens"`
+	OldestActiveSCIMTokenCreatedAt   *time.Time `json:"oldestActiveScimTokenCreatedAt,omitempty"`
+	PendingInvitations               int64      `json:"pendingInvitations"`
+	PendingPrivilegedInvitations     int64      `json:"pendingPrivilegedInvitations"`
+	InvitationsExpiringSoon          int64      `json:"invitationsExpiring24h"`
+	ExpiredInvitations               int64      `json:"expiredInvitations"`
+	ProjectScopedGrants              int64      `json:"projectScopedGrants"`
+	EnvironmentScopedGrants          int64      `json:"environmentScopedGrants"`
+	AdminScopedGrants                int64      `json:"adminScopedGrants"`
+	RedundantScopedGrants            int64      `json:"redundantScopedGrants"`
+	SCIMGroups                       int64      `json:"scimGroups"`
+	WriteCapableSCIMGroups           int64      `json:"writeCapableScimGroups"`
+	SCIMGroupMemberships             int64      `json:"scimGroupMemberships"`
+	PendingSAMLCertificateRotations  int64      `json:"pendingSamlCertificateRotations"`
+	OldestPendingSAMLRotationAt      *time.Time `json:"oldestPendingSamlRotationAt,omitempty"`
 }
 
 type AIAuditDeployTokenPosture struct {
@@ -1114,6 +1118,10 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role='developer' AND u.disabled_at IS NULL),
 		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role='viewer' AND u.disabled_at IS NULL),
 		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.disabled_at IS NOT NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.disabled_at IS NULL AND u.password_hash LIKE '$argon2id$%'),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.disabled_at IS NULL AND u.password_hash LIKE '$argon2id$%' AND u.encrypted_totp_secret IS NOT NULL),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role IN ('owner','admin') AND u.disabled_at IS NULL AND u.password_hash LIKE '$argon2id$%'),
+		(SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND m.role IN ('owner','admin') AND u.disabled_at IS NULL AND u.password_hash LIKE '$argon2id$%' AND u.encrypted_totp_secret IS NOT NULL),
 		(SELECT count(*) FROM sessions session JOIN memberships m ON m.user_id=session.user_id JOIN users u ON u.id=session.user_id WHERE m.organization_id=$1 AND session.organization_id IS NULL AND session.auth_method='local' AND session.expires_at>now() AND u.disabled_at IS NULL AND (m.role='owner' OR NOT COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false))),
 		(SELECT count(*) FROM sessions session JOIN memberships m ON m.user_id=session.user_id AND m.organization_id=session.organization_id JOIN users u ON u.id=session.user_id WHERE session.organization_id=$1 AND session.auth_method='oidc' AND session.expires_at>now() AND u.disabled_at IS NULL),
 		(SELECT count(*) FROM sessions session JOIN memberships m ON m.user_id=session.user_id AND m.organization_id=session.organization_id JOIN users u ON u.id=session.user_id WHERE session.organization_id=$1 AND session.auth_method='saml' AND session.expires_at>now() AND u.disabled_at IS NULL),
@@ -1153,6 +1161,10 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		&snapshot.IdentityPosture.ActiveDevelopers,
 		&snapshot.IdentityPosture.ActiveViewers,
 		&snapshot.IdentityPosture.DisabledMembers,
+		&snapshot.IdentityPosture.ActiveLocalMembers,
+		&snapshot.IdentityPosture.MFAEnabledLocalMembers,
+		&snapshot.IdentityPosture.PrivilegedLocalMembers,
+		&snapshot.IdentityPosture.MFAEnabledPrivilegedLocalMembers,
 		&snapshot.IdentityPosture.ActiveLocalSessions,
 		&snapshot.IdentityPosture.ActiveOIDCSessions,
 		&snapshot.IdentityPosture.ActiveSAMLSessions,

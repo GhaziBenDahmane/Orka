@@ -82,8 +82,10 @@ DOCKYARD_GOPROXY=https://proxy.example.com \
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Every interactive user can inspect active device
 sessions, revoke individual or all other sessions, and rotate a local password
-from the Account page. Password rotation preserves the current session and
-atomically revokes every other session for that identity.
+from the Account page. Users can also enroll a TOTP authenticator, save
+one-time recovery codes, replace those codes, and disable MFA. Password and MFA
+changes preserve the current session and atomically revoke every other session
+for that identity.
 Run `make web` after changing files under `web/`.
 
 Run `make test-templates` to start an isolated controller and instantiate the
@@ -193,6 +195,22 @@ Local users can rotate their credential without placing it in shell history:
 
 ```sh
 printf '%s\n' '{"currentPassword":"...","newPassword":"..."}' | dockyardctl change-password -
+```
+
+TOTP setup and recovery-code rotation are also stdin-safe:
+
+```sh
+printf '%s\n' '{"currentPassword":"..."}' | dockyardctl begin-mfa -
+printf '%s\n' '{"code":"123456"}' | dockyardctl confirm-mfa -
+printf '%s\n' '{"currentPassword":"...","code":"123456"}' | dockyardctl regenerate-mfa-recovery-codes -
+```
+
+After MFA is enabled, CLI login accepts a JSON object on standard input (plain
+password input remains backward compatible):
+
+```sh
+printf '%s\n' '{"password":"...","totpCode":"123456"}' | \
+  dockyardctl --url https://dockyard.example.com login admin@example.com
 ```
 
 CI deployment hooks use expiring, revocable bearer credentials. Manage them

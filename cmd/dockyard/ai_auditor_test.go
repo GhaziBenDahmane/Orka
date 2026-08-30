@@ -563,6 +563,30 @@ func TestDeterministicAuditDetectsMandatorySSOLockout(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsMissingLocalMFA(t *testing.T) {
+	snapshot := store.AIAuditSnapshot{
+		Organization: uuid.New(),
+		IdentityPosture: store.AIAuditIdentityPosture{
+			RequireSSO: true, EnabledOIDCProviders: 1, ActiveOwners: 1,
+			ActiveLocalMembers: 3, MFAEnabledLocalMembers: 1,
+			PrivilegedLocalMembers: 2, MFAEnabledPrivilegedLocalMembers: 1,
+		},
+		NotificationPosture: fullyCoveredNotifications(),
+	}
+	findings := deterministicAuditFindings(snapshot, time.Now().UTC())
+	if len(findings) != 1 || findings[0].Title != "Privileged local accounts lack MFA" || findings[0].Severity != "high" {
+		t.Fatalf("privileged MFA findings=%#v", findings)
+	}
+	snapshot.IdentityPosture.MFAEnabledPrivilegedLocalMembers = 2
+	if findings = deterministicAuditFindings(snapshot, time.Now().UTC()); len(findings) != 1 || findings[0].Title != "Local accounts lack MFA" || findings[0].Severity != "medium" {
+		t.Fatalf("local MFA findings=%#v", findings)
+	}
+	snapshot.IdentityPosture.MFAEnabledLocalMembers = 3
+	if findings = deterministicAuditFindings(snapshot, time.Now().UTC()); len(findings) != 0 {
+		t.Fatalf("complete MFA posture produced findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsStalledRemoteCommands(t *testing.T) {
 	now := time.Now().UTC()
 	clusterID := uuid.New()

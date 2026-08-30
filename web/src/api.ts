@@ -7,6 +7,7 @@ export type Principal = {
 };
 export type Role = Principal["role"];
 export type SessionInfo = { id: string; organizationId?: string; authMethod: string; userAgent: string; ipAddress: string; expiresAt: string; createdAt: string; lastSeenAt: string; current: boolean };
+export type MFAStatus = { enabled: boolean; enrollmentPending: boolean; recoveryCodesRemaining: number };
 
 export type Project = { id: string; name: string; slug: string; description: string };
 export type Environment = { id: string; projectId: string; name: string; slug: string; clusterId?: string; placementSelector?: Record<string, string>; minimumNodes?: number; minimumNanoCpus?: number; minimumMemoryBytes?: number };
@@ -94,9 +95,14 @@ async function download(path: string): Promise<{ blob: Blob; filename: string; s
 }
 
 export const api = {
-  login: (email: string, password: string) => request<{ token: string }>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  login: (email: string, password: string, totpCode = "", recoveryCode = "") => request<{ token: string }>("/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password, totpCode, recoveryCode }) }),
   logout: () => request<void>("/v1/auth/logout", { method: "POST" }),
   changePassword: (currentPassword: string, newPassword: string) => request<{ revoked: number }>("/v1/auth/password", { method: "PUT", body: JSON.stringify({ currentPassword, newPassword }) }),
+  mfaStatus: () => request<MFAStatus>("/v1/auth/mfa"),
+  beginMFAEnrollment: (currentPassword: string) => request<{ secret: string; otpauthUri: string }>("/v1/auth/mfa/enrollment", { method: "POST", body: JSON.stringify({ currentPassword }) }),
+  confirmMFAEnrollment: (code: string) => request<{ recoveryCodes: string[]; revokedSessions: number }>("/v1/auth/mfa/enrollment/confirm", { method: "POST", body: JSON.stringify({ code }) }),
+  disableMFA: (currentPassword: string, code: string, recoveryCode: string) => request<{ enabled: boolean; revokedSessions: number }>("/v1/auth/mfa", { method: "DELETE", body: JSON.stringify({ currentPassword, code, recoveryCode }) }),
+  regenerateMFARecoveryCodes: (currentPassword: string, code: string, recoveryCode: string) => request<{ recoveryCodes: string[]; revokedSessions: number }>("/v1/auth/mfa/recovery-codes", { method: "POST", body: JSON.stringify({ currentPassword, code, recoveryCode }) }),
   me: () => request<Principal>("/v1/me"),
   sessions: () => request<Envelope<SessionInfo>>("/v1/sessions"),
   revokeSession: (sessionId: string) => request<void>(`/v1/sessions/${sessionId}`, { method: "DELETE" }),

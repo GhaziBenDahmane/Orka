@@ -85,7 +85,7 @@ paths:
 					output.WriteString("        - name: filter\n          in: query\n          schema: {type: string}\n        - name: startIndex\n          in: query\n          schema: {type: integer, minimum: 1, default: 1}\n        - name: count\n          in: query\n          schema: {type: integer, minimum: 0, maximum: 100, default: 100}\n")
 				}
 			}
-			if op.method == "post" || op.method == "put" || op.method == "patch" {
+			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {
 				if strings.HasSuffix(op.path, "/artifact-source") {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          multipart/form-data:\n            schema:\n              type: object\n              required: [file]\n              properties:\n                file:\n                  type: string\n                  format: binary\n")
 				} else {

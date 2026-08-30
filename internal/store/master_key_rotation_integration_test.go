@@ -222,11 +222,14 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 	webhookID, notificationID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	commandID, deploymentID, deliveryID := uuid.New(), uuid.New(), uuid.New()
 	migrationID, repositoryID := uuid.New(), uuid.New()
+	userID, pendingMFAUserID := uuid.New(), uuid.New()
 	statements := []struct {
 		query string
 		args  []any
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'rotation',$2)`, []any{organizationID, "rotation-" + organizationID.String()}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!rotation')`, []any{userID, userID.String() + "@rotation.test"}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!rotation')`, []any{pendingMFAUserID, pendingMFAUserID.String() + "@rotation.test"}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'service','service',$3,'services: {}')`, []any{serviceID, environmentID, "rotation-" + serviceID.String()}},
@@ -261,10 +264,15 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 		"notification_endpoints": notificationID, "oidc_providers": providerID, "saml_providers": providerID,
 		"source_credentials": credentialID, "template_instances": serviceID, "template_repositories": repositoryID,
 		"volume_backups": volumeBackupID, "webhook_integrations": webhookID,
+		"users": userID,
 	}
+	ids["users.pending_encrypted_totp_secret"] = pendingMFAUserID
 	result := make([]masterKeyTestRow, 0, len(masterKeyEncryptedColumns))
 	for index, spec := range masterKeyEncryptedColumns {
-		id := ids[spec.table]
+		id := ids[spec.table+"."+spec.column]
+		if id == uuid.Nil {
+			id = ids[spec.table]
+		}
 		contextID := id.String()
 		if spec.table == "commit_status_deliveries" || spec.table == "deployments" {
 			contextID = credentialID.String()
