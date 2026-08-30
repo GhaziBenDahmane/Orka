@@ -27,7 +27,9 @@ jobs:
             .replacementPromotedOnHeartbeat and .oldRejectedAfterPromotion and
             .wrongClusterRejected and .untrustedCARejected and
             .expiredCertificateRejected and .mismatchedKeyRejected and
-            .pendingMetricsConverged and .invalidReplacementPreservesIdentity
+            .pendingMetricsConverged and .invalidReplacementPreservesIdentity and
+            .caDualTrustMigrationVerified and .caFingerprintConverged and
+            .newOnlyListenerVerified and .retiredCARejected
           ' agent-certificate-conformance.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

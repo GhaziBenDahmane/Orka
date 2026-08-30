@@ -157,9 +157,15 @@ enrollment token is stored only as a SHA-256 digest, expires after 15 minutes,
 and is consumed atomically. The issued client certificate is bound to the
 cluster ID and expires after seven days by default.
 Heartbeat traffic is accepted only on the optional dedicated agent listener;
-the client certificate must chain to the configured CA and its serial must
-match the cluster's latest enrollment, allowing immediate supersession during
-rotation.
+the client certificate must chain to the configured active/previous CA trust
+bundle and its serial must match the cluster's latest enrollment. Enrollment,
+heartbeat, and rotation responses return the authenticated trust bundle, the
+active signing CA, and its SHA-256 fingerprint. Agents persist broadened trust
+before atomically rotating to the active signer. Cluster list responses expose
+`certificateAuthorityFingerprint` and a temporary
+`pendingCertificateAuthorityFingerprint`, allowing operators to prove every
+managed cluster converged before retiring the previous CA. See
+`docs/agent-ca-rotation.md` for the required phased procedure.
 Remote environments select a cluster with `clusterId` when they are created.
 Application deploy, removal, logs, and node operations use encrypted-at-rest
 commands claimed by the outbound agent. Expiring leases are retried and every

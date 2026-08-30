@@ -146,11 +146,12 @@ links for every item below.
   Run the equivalent flow against Entra ID, Okta, and Google Workspace, and
   verify tenant isolation with users from two organizations.
 - Rotate the agent listener certificate and CA secrets in a staging controller
-  rollout. Confirm startup rejects a mismatched or expired credential, the
-  replacement listener accepts existing agents, and both control-plane expiry
-  gauges and seven-day alerts move to the new certificate deadlines. The
-  automated client-certificate conformance gate does not replace this
-  listener/CA secret-rotation exercise.
+  rollout by following `docs/agent-ca-rotation.md`. Preserve the phase-one
+  dual-trust deployment, prove every active/draining cluster reports the new CA
+  fingerprint, switch the listener identity, then remove old trust. Confirm
+  startup rejects mismatched or expired credentials and all three
+  control-plane expiry gauges move or disappear as expected. The automated
+  real-TLS CA rollover gate does not replace this production-topology exercise.
 - Restore the control plane from PostgreSQL, master-key/CA escrow, and artifact
   storage into an isolated Swarm. Confirm audit-chain continuity.
 - Re-run the final non-dry-run Dokploy import, deploy the imported current

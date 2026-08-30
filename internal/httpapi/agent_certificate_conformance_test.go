@@ -198,6 +198,10 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	newCAFingerprint, err := agentpki.CertificateFingerprint(newCAPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
 	trustBundle := append(append([]byte{}, newCAPEM...), caPEM...)
 	rolloverAPI := &Server{Store: db, AgentCACertificate: newCAPEM, AgentCATrustBundle: trustBundle, AgentCAKey: newCAKeyPEM, AgentCertificateTTL: 7 * 24 * time.Hour}
 	rolloverRoots, err := AgentTLSConfig(trustBundle)
@@ -212,9 +216,10 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 	var rolloverTrust struct {
 		CACertificate        string `json:"caCertificate"`
 		SigningCACertificate string `json:"signingCaCertificate"`
+		SigningCAFingerprint string `json:"signingCaFingerprint"`
 	}
 	decodeTrustErr := json.Unmarshal(body, &rolloverTrust)
-	if err != nil || status != http.StatusOK || decodeTrustErr != nil || rolloverTrust.SigningCACertificate != string(newCAPEM) || rolloverTrust.CACertificate != string(trustBundle) {
+	if err != nil || status != http.StatusOK || decodeTrustErr != nil || rolloverTrust.SigningCACertificate != string(newCAPEM) || rolloverTrust.CACertificate != string(trustBundle) || rolloverTrust.SigningCAFingerprint != newCAFingerprint {
 		t.Fatalf("dual-trust heartbeat status=%d body=%s err=%v", status, body, err)
 	}
 	caReplacementKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -242,9 +247,40 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("new-CA confirmation status=%d body=%s err=%v", status, body, err)
 	}
+	var activeCAFingerprint, pendingCAFingerprint string
+	if err = db.Pool.QueryRow(ctx, `SELECT certificate_ca_fingerprint,pending_certificate_ca_fingerprint FROM clusters WHERE id=$1`, clusterID).Scan(&activeCAFingerprint, &pendingCAFingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if activeCAFingerprint != newCAFingerprint || pendingCAFingerprint != "" {
+		t.Fatalf("CA fingerprint did not converge: active=%q pending=%q want=%q", activeCAFingerprint, pendingCAFingerprint, newCAFingerprint)
+	}
 	status, body, err = conformanceAgentRequest(ctx, replacementClient, http.MethodPost, rolloverServer.URL+"/v1/agent/heartbeat", heartbeat)
 	if err != nil || status != http.StatusUnauthorized || !bytes.Contains(body, []byte(`"code":"invalid_agent_certificate"`)) {
 		t.Fatalf("old-CA identity after promotion status=%d body=%s err=%v", status, body, err)
+	}
+
+	newServerCertificatePEM, newServerKeyPEM := conformanceServerIdentity(t, newCAPEM, newCAKeyPEM, now)
+	newServerPair, err := tls.X509KeyPair(newServerCertificatePEM, newServerKeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRoots, err := AgentTLSConfig(newCAPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalAPI := &Server{Store: db, AgentCACertificate: newCAPEM, AgentCATrustBundle: newCAPEM, AgentCAKey: newCAKeyPEM, AgentCertificateTTL: 7 * 24 * time.Hour}
+	finalServer := httptest.NewUnstartedServer(finalAPI.AgentHandler())
+	finalServer.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{newServerPair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: newRoots}
+	finalServer.StartTLS()
+	defer finalServer.Close()
+	finalClient := conformanceMTLSClient(t, newCAPEM, []byte(caRotation.Certificate), caReplacementKeyPEM)
+	status, body, err = conformanceAgentRequest(ctx, finalClient, http.MethodPost, finalServer.URL+"/v1/agent/heartbeat", heartbeat)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("new-only listener heartbeat status=%d body=%s err=%v", status, body, err)
+	}
+	retiredIdentityClient := conformanceMTLSClient(t, newCAPEM, []byte(rotation.Certificate), replacementKeyPEM)
+	if status, body, err = conformanceAgentRequest(ctx, retiredIdentityClient, http.MethodPost, finalServer.URL+"/v1/agent/heartbeat", heartbeat); err == nil {
+		t.Fatalf("retired CA identity reached new-only listener: status=%d body=%s", status, body)
 	}
 
 	evidence, _ := json.Marshal(map[string]any{
@@ -261,6 +297,9 @@ func TestAgentCertificateMTLSConformance(t *testing.T) {
 		"mismatchedKeyRejected":          true,
 		"pendingMetricsConverged":        true,
 		"caDualTrustMigrationVerified":   true,
+		"caFingerprintConverged":         true,
+		"newOnlyListenerVerified":        true,
+		"retiredCARejected":              true,
 	})
 	fmt.Printf("AGENT_CERTIFICATE_EVIDENCE %s\n", evidence)
 }

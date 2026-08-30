@@ -159,6 +159,12 @@ DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
 scripts/install-swarm.sh
 ```
 
+Agent CA replacement is a three-phase dual-trust operation, not an in-place
+Docker secret update. Follow [the agent CA rotation runbook](../docs/agent-ca-rotation.md);
+it uses versioned secret names, the temporary
+`deploy/swarm-agent-ca-rollover.yml` overlay, per-cluster CA fingerprints, and
+a reversible old-listener/new-signer transition.
+
 Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
 and scrape `http://dockyard:8080/metrics` with a dedicated viewer service
 account configured as an HTTP bearer token. The rules cover controller outage,
@@ -168,8 +174,8 @@ mode left enabled. They also detect missing remote-cluster heartbeats, stalled
 agent upgrades, missed image-verification deadlines, and paused or rolled-back
 Swarm agent updates, plus expiring, expired, or stalled certificate rotations.
 The `dockyard_control_plane_certificate_expiry_seconds` gauges separately track
-the configured agent CA and server certificate; warning alerts begin seven days
-before expiry. Enabled service-account credentials expose their current token
+the configured active agent CA, optional previous agent CA, and server
+certificate; warning alerts begin seven days before expiry. Enabled service-account credentials expose their current token
 expiry by immutable account ID and role; warning alerts begin seven days before
 expiry and become critical once automation or an AI auditor can no longer
 authenticate. Non-revoked SCIM tokens have equivalent expiry gauges and alerts

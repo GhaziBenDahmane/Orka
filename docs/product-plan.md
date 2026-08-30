@@ -194,7 +194,11 @@ replacement's deployment or job result.
   pending-rotation age and certificate expiry are exported for alerting. A
   release-blocking real-TLS conformance test proves this transition over TLS
   1.3, including rejection of superseded, wrong-cluster, untrusted, expired,
-  and mismatched-key identities and convergence of the rotation metrics.
+  and mismatched-key identities and convergence of the rotation metrics. Agent
+  CA rotation uses authenticated dual-trust distribution, automatic identity
+  replacement, per-cluster CA fingerprints, versioned Swarm secrets, and a
+  documented reversible listener transition. The conformance gate completes
+  the transition to a new-only TLS listener and rejects the retired CA.
 - Run multiple stateless controllers and workers; prove job fencing and leader
   election behavior under partitions. A scheduled disposable three-manager
   Swarm conformance test now proves leader replacement, replica convergence,

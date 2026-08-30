@@ -63,8 +63,7 @@ jq \
     sourceCommit:$sourceCommit,
     createdAt:$createdAt,
     invalidReplacementPreservesIdentity:true,
-    productionListenerCertificateRotation:"staging-required",
-    productionCARotation:"staging-required"
+    productionListenerCertificateRotation:"staging-required"
   }' "$work_dir/evidence.json" >"$evidence_file"
 
 jq -e '
@@ -74,7 +73,8 @@ jq -e '
   .oldRejectedAfterPromotion and .wrongClusterRejected and
   .untrustedCARejected and .expiredCertificateRejected and
   .mismatchedKeyRejected and .pendingMetricsConverged and
-  .invalidReplacementPreservesIdentity and
+  .invalidReplacementPreservesIdentity and .caDualTrustMigrationVerified and
+  .caFingerprintConverged and .newOnlyListenerVerified and .retiredCARejected and
   (.sourceCommit | test("^[a-f0-9]{40}$"))
 ' "$evidence_file" >/dev/null
 

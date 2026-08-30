@@ -102,26 +102,30 @@ validates the replacement against the saved CA and newly generated private key
 before atomic persistence, and records it as pending. The controller promotes
 that serial and revokes the old one only after the replacement successfully
 authenticates, so an interrupted response or disk failure cannot strand the
-agent.
+agent. Each active and pending identity records its signing-CA SHA-256
+fingerprint so CA migration is observable per cluster.
 
 Heartbeats use a separate optional TLS listener configured with
 `DOCKYARD_AGENT_LISTEN_ADDR`, `DOCKYARD_AGENT_SERVER_CERT_FILE`, and
 `DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
 and matches its serial number against the cluster's current or pending database
-record. Reenrollment immediately supersedes both identities. Controller startup
-validates that the configured CA is current, self-signed, signing-capable, and
-matches its private key, then verifies the server certificate chain, server-auth
-usage, validity window, and private key. Prometheus exposes fixed-label expiry
-gauges for the agent CA and server certificate so operators can rotate their
-Swarm secrets before either credential expires.
+record. Reenrollment immediately supersedes both identities. Controller
+startup validates that the configured active CA is current, self-signed,
+signing-capable, and matches its private key. During a bounded CA rollover it
+accepts one different, currently valid previous CA and permits the listener
+certificate to chain to either authority. Authenticated heartbeat and rotation
+responses distribute the combined trust bundle and active signer; agents
+persist trust before replacing their identity. The controller also verifies
+the listener's server-auth usage, validity window, and private key. Prometheus
+exposes fixed-label expiry gauges for the active CA, optional previous CA, and
+listener certificate.
 
-The release gate exercises client-certificate rotation through a real TLS 1.3
-listener. It preserves the active serial while a replacement is pending,
-promotes only after the replacement heartbeat, rejects the old serial after
-promotion, and verifies the database-backed expiry and pending-age metrics.
-Production rotation of the listener certificate and CA secrets remains a
-separate staged operational procedure because it changes controller trust
-roots rather than an individual agent identity.
+The release gate exercises client-certificate and CA rotation through real TLS
+1.3 listeners. It preserves the active serial while a replacement is pending,
+promotes only after the replacement heartbeat, verifies the cluster's CA
+fingerprint, switches to a listener signed by the new CA, removes old trust,
+and rejects a retired-CA identity. Production rollout remains a staging gate
+because it changes the real controller trust roots and every deployed agent.
 
 Remote database utilities run on the target cluster. The controller grants a
 single-operation presigned S3 transfer URL and sends a per-backup encryption
