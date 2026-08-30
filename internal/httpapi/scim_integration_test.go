@@ -91,6 +91,19 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 		t.Fatalf("unexpected externalId filter response: %#v", externalMatch)
 	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": "duplicate-" + orgID.String() + "@example.test", "externalId": externalUserID}, http.StatusConflict)
+	updatedExternalUserID := "updated-" + externalUserID
+	updatedUserName := "updated-" + orgID.String() + "@example.test"
+	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{
+		"Operations": []map[string]any{{"op": "replace", "value": map[string]any{"userName": updatedUserName, "displayName": "Updated Member", "externalId": updatedExternalUserID, "active": true}}},
+	}, http.StatusNoContent)
+	updatedUser := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodGet, nil, http.StatusOK)
+	if updatedUser["userName"] != updatedUserName || updatedUser["displayName"] != "Updated Member" || updatedUser["externalId"] != updatedExternalUserID {
+		t.Fatalf("pathless SCIM patch was not persisted: %#v", updatedUser)
+	}
+	externalMatch = doSCIMRequest(t, server.URL+`/scim/v2/Users?filter=externalId%20eq%20%22`+updatedExternalUserID+`%22`, token, http.MethodGet, nil, http.StatusOK)
+	if externalMatch["totalResults"] != float64(1) {
+		t.Fatalf("updated externalId cannot be resolved: %#v", externalMatch)
+	}
 	userPage := doSCIMRequest(t, server.URL+"/scim/v2/Users?startIndex=2&count=1", token, http.MethodGet, nil, http.StatusOK)
 	if userPage["totalResults"] != float64(2) || userPage["startIndex"] != float64(2) || userPage["itemsPerPage"] != float64(1) || len(userPage["Resources"].([]any)) != 1 {
 		t.Fatalf("unexpected paginated user response: %#v", userPage)
@@ -145,7 +158,7 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+memberID, token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "displayName", "value": "Cross-tenant rename"}}}, http.StatusConflict)
 	var memberName string
-	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, memberID).Scan(&memberName); err != nil || memberName != "" {
+	if err = db.Pool.QueryRow(ctx, `SELECT display_name FROM users WHERE id=$1`, memberID).Scan(&memberName); err != nil || memberName != "Updated Member" {
 		t.Fatalf("shared display name = %q, err = %v", memberName, err)
 	}
 
@@ -177,8 +190,8 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
 
 	var scimAuditEvents int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.patch','scim.user.delete','scim.group.create','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 10 {
-		t.Fatalf("SCIM audit event count=%d, want 10, err=%v", scimAuditEvents, err)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.patch','scim.user.delete','scim.group.create','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 11 {
+		t.Fatalf("SCIM audit event count=%d, want 11, err=%v", scimAuditEvents, err)
 	}
 }
 

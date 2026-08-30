@@ -83,3 +83,33 @@ func TestDecodeSCIMRejectsTrailingJSONWithSCIMError(t *testing.T) {
 		t.Fatalf("invalid SCIM error response: %#v err=%v", response, err)
 	}
 }
+
+func TestNormalizeSCIMUserPatchOperations(t *testing.T) {
+	operations, err := normalizeSCIMUserPatchOperations([]scimUserPatchOperation{{
+		Op: "Replace",
+		Value: map[string]any{
+			"active":      true,
+			"displayName": "Example User",
+			"externalId":  "directory-user",
+			"userName":    "user@example.test",
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"username", "displayname", "externalid", "active"}
+	if len(operations) != len(wantPaths) {
+		t.Fatalf("operation count=%d, want %d", len(operations), len(wantPaths))
+	}
+	for index, want := range wantPaths {
+		if operations[index].Path != want {
+			t.Errorf("operation %d path=%q, want %q", index, operations[index].Path, want)
+		}
+	}
+	if _, err = normalizeSCIMUserPatchOperations([]scimUserPatchOperation{{Op: "add", Path: "active", Value: true}}); err == nil {
+		t.Fatal("unsupported operation was accepted")
+	}
+	if _, err = normalizeSCIMUserPatchOperations([]scimUserPatchOperation{{Op: "replace", Value: map[string]any{"unknown": "value"}}}); err == nil {
+		t.Fatal("unsupported pathless attribute was accepted")
+	}
+}

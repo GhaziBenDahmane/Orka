@@ -124,9 +124,12 @@ User and group collection reads support the SCIM `filter`, one-based
 return the full matching `totalResults` independently of the current page.
 User `externalId` values are preserved, unique within an organization, and can
 be resolved with an `externalId eq` filter for stable directory correlation.
-SCIM writes accept extension attributes within the normal bounded request body;
+SCIM create requests accept extension attributes within the normal bounded request body;
 unsupported attributes are ignored so standard Entra and Okta user payloads do
 not fail solely because they include optional schema fields.
+User PATCH supports explicit paths and the standard pathless `replace` object
+for `userName`, `displayName`, `externalId`, and `active`; shared global
+identities cannot have tenant-owned profile fields changed across organizations.
 Successful SCIM user and group creates, patches, and deletes are recorded in
 the tenant audit log without copying profile fields or bearer credentials.
 Deactivation removes access but retains that binding, so identity providers can

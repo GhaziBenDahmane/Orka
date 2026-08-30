@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -39,6 +40,12 @@ type scimUserInput struct {
 	UserName    string   `json:"userName"`
 	DisplayName string   `json:"displayName"`
 	Active      *bool    `json:"active"`
+}
+
+type scimUserPatchOperation struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value"`
 }
 
 func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
@@ -413,14 +420,15 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, userID uuid.UUID, role string) {
 	var in struct {
-		Schemas    []string `json:"schemas"`
-		Operations []struct {
-			Op    string `json:"op"`
-			Path  string `json:"path"`
-			Value any    `json:"value"`
-		} `json:"Operations"`
+		Schemas    []string                 `json:"schemas"`
+		Operations []scimUserPatchOperation `json:"Operations"`
 	}
 	if !decodeSCIM(w, r, &in) {
+		return
+	}
+	operations, err := normalizeSCIMUserPatchOperations(in.Operations)
+	if err != nil {
+		scimError(w, 400, err.Error())
 		return
 	}
 	tx, err := s.Store.Pool.Begin(r.Context())
@@ -429,15 +437,16 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var currentEmail string
 	var currentRole *string
 	var shared bool
-	err = tx.QueryRow(r.Context(), `SELECT
+	err = tx.QueryRow(r.Context(), `SELECT u.email,
 		(SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2),
 		(EXISTS(SELECT 1 FROM memberships WHERE user_id=$2 AND organization_id<>$1)
 			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE user_id=$2 AND organization_id<>$1))
 		FROM users u WHERE u.id=$2 AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
 			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)
-		) FOR UPDATE OF u`, orgID, userID).Scan(&currentRole, &shared)
+		) FOR UPDATE OF u`, orgID, userID).Scan(&currentEmail, &currentRole, &shared)
 	if errors.Is(err, pgx.ErrNoRows) {
 		scimError(w, 404, "user not found")
 		return
@@ -446,11 +455,7 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 		scimError(w, 500, "patch failed")
 		return
 	}
-	for _, operation := range in.Operations {
-		if !strings.EqualFold(operation.Op, "replace") {
-			scimError(w, 400, "only replace operations are supported")
-			return
-		}
+	for _, operation := range operations {
 		switch strings.ToLower(operation.Path) {
 		case "active":
 			active, ok := operation.Value.(bool)
@@ -495,12 +500,57 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 				scimError(w, 500, "displayName cannot be updated")
 				return
 			}
+		case "username":
+			emailValue, ok := operation.Value.(string)
+			email, _, valid := canonicalEmail(emailValue)
+			if !ok || !valid {
+				scimError(w, 400, "userName must be an email address")
+				return
+			}
+			if email != currentEmail && shared {
+				scimError(w, 409, "userName is shared with another organization")
+				return
+			}
+			if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err == nil {
+				_, err = tx.Exec(r.Context(), `UPDATE users SET email=$2 WHERE id=$1`, userID, email)
+			}
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				scimError(w, 409, "userName is already in use")
+				return
+			}
+			if err != nil {
+				scimError(w, 500, "userName cannot be updated")
+				return
+			}
+			currentEmail = email
+		case "externalid":
+			externalID, ok := operation.Value.(string)
+			externalID = strings.TrimSpace(externalID)
+			if !ok || len(externalID) > 1024 {
+				scimError(w, 400, "externalId must be a string no longer than 1024 bytes")
+				return
+			}
+			var storedExternalID any
+			if externalID != "" {
+				storedExternalID = externalID
+			}
+			_, err = tx.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,$3,$4) ON CONFLICT(organization_id,user_id) DO UPDATE SET external_id=excluded.external_id`, orgID, userID, role, storedExternalID)
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				scimError(w, 409, "externalId is already assigned in this organization")
+				return
+			}
+			if err != nil {
+				scimError(w, 500, "externalId cannot be updated")
+				return
+			}
 		default:
 			scimError(w, 400, "unsupported patch path")
 			return
 		}
 	}
-	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.user.patch", "user", userID.String(), r.RemoteAddr, map[string]any{"operationCount": len(in.Operations)}); err != nil {
+	if err = s.Store.AuditOrganizationTx(r.Context(), tx, orgID, "scim.user.patch", "user", userID.String(), r.RemoteAddr, map[string]any{"operationCount": len(operations)}); err != nil {
 		scimError(w, 500, "patch failed")
 		return
 	}
@@ -510,6 +560,47 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 	}
 	w.WriteHeader(204)
 }
+
+func normalizeSCIMUserPatchOperations(input []scimUserPatchOperation) ([]scimUserPatchOperation, error) {
+	result := make([]scimUserPatchOperation, 0, len(input))
+	for _, operation := range input {
+		if !strings.EqualFold(operation.Op, "replace") {
+			return nil, errors.New("only replace operations are supported")
+		}
+		operation.Path = strings.TrimSpace(operation.Path)
+		if operation.Path != "" {
+			result = append(result, operation)
+			continue
+		}
+		attributes, ok := operation.Value.(map[string]any)
+		if !ok || len(attributes) == 0 {
+			return nil, errors.New("a pathless replace operation must contain attributes")
+		}
+		normalized := make(map[string]any, len(attributes))
+		for name, value := range attributes {
+			key := strings.ToLower(strings.TrimSpace(name))
+			switch key {
+			case "active", "username", "displayname", "externalid":
+			default:
+				return nil, fmt.Errorf("unsupported patch attribute %q", name)
+			}
+			if _, duplicate := normalized[key]; duplicate {
+				return nil, fmt.Errorf("duplicate patch attribute %q", name)
+			}
+			normalized[key] = value
+		}
+		for _, key := range []string{"username", "displayname", "externalid", "active"} {
+			if value, exists := normalized[key]; exists {
+				result = append(result, scimUserPatchOperation{Op: "replace", Path: key, Value: value})
+			}
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("at least one patch operation is required")
+	}
+	return result, nil
+}
+
 func makeSCIMUser(id uuid.UUID, externalID, email, name string, active bool, baseURL string) scimUserResponse {
 	return scimUserResponse{Schemas: []string{scimUserSchema}, ID: id.String(), ExternalID: externalID, UserName: email, DisplayName: name, Active: active, Meta: map[string]string{"resourceType": "User", "location": baseURL + "/scim/v2/Users/" + id.String()}}
 }
