@@ -7,10 +7,10 @@ links for every item below.
 ## Automated gates
 
 - Release publication is blocked on the complete reusable CI, ten-engine
-  database recovery, real Keycloak SSO, and disposable three-manager Swarm HA
-  conformance workflows. Tag pushes do not run detached copies: the release
-  workflow invokes all gates directly and publishes only after every job
-  succeeds.
+  database recovery, real Keycloak SSO, disposable three-manager Swarm HA, and
+  previous-image upgrade conformance workflows. Tag pushes do not run detached
+  copies: the release workflow invokes all gates directly and publishes only
+  after every job succeeds.
 - CI is green for race tests, vet, binary and web builds, generated assets,
   OpenAPI coverage/security classification, migration fresh-install and
   checkpoint-upgrade tests, high-contention exactly-once queue claiming across
@@ -36,10 +36,21 @@ links for every item below.
   Swarm task replacement. The data services also accept authenticated
   application-level writes and reads; the BarkTrace checks verify its SQLite
   file or PostgreSQL migration state survives replacement.
+- Every release after the first boots the previous published image digest,
+  creates authenticated and encrypted tenant state, deploys a live stack, and
+  stops the old controller against its persistent PostgreSQL volume. The
+  candidate then validates every recorded migration checksum, authenticates,
+  reads the preserved resources without exposing secrets, processes an
+  interrupted queued deployment, verifies a pre-upgrade webhook secret, and
+  reconciles the existing stack. Publication fails closed if a prior release
+  lacks an immutable promotion manifest. The first release records an explicit
+  `not_applicable` result rather than pretending an upgrade occurred.
 
 ## Staging gates
 
-- Upgrade a clone of production data from the previous supported release.
+- Upgrade a clone of production data from the previous supported release. The
+  automated disposable-state conformance gate does not replace this staging
+  exercise.
   Confirm migration checksums, login/SSO, secret decryption, resource counts,
   queue recovery, and existing stack reconciliation.
 - Exercise deploy, cancellation, failed deploy, rollback, provider webhook and
@@ -103,7 +114,9 @@ links for every item below.
   Release with `promotion-manifest.json`, `image-digest.txt`, and a downloadable
   `sbom.spdx.json`, ten-engine `database-recovery-evidence.json`,
   `sso-keycloak-evidence.json`, and `swarm-ha-conformance.json`; the same files
-  remain available as a workflow artifact.
+  remain available as a workflow artifact. `upgrade-conformance.json` records
+  the previous immutable image and the authentication, migration, secret,
+  resource-count, queue-recovery, and reconciliation assertions.
   A published version cannot be rerun or have its evidence overwritten. Treat
   the manifest's `image` value—not its discovery tag—as the deployment input.
 - Review schema changes for backward compatibility. Take and verify a

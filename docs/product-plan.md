@@ -273,13 +273,17 @@ Release automation now covers migration checksums, fresh and checkpoint
 upgrades, stale-worker takeover, API security classification, clean Compose
 installation, live Swarm convergence, restart persistence, immutable rollback,
 and a destructive control-plane backup/restore drill with dump, image, schema,
-and key-fingerprint verification. It also covers vulnerability/license checks,
-an SPDX SBOM, container scanning, and a tag/manual promotion workflow that
-publishes an amd64/arm64 digest with BuildKit provenance and SBOM attestations,
-then keylessly signs and verifies it through Sigstore. Each promotion creates
-a non-overwritable GitHub Release with the immutable digest, promotion
-manifest, and downloadable SPDX JSON evidence. An actual signed promotion and
-its soak evidence, plus the staging-only conformance, load, real-provider,
+and key-fingerprint verification. After the initial release it also boots the
+previous signed published digest against persistent state and gates promotion
+on migration checksums, authentication, encrypted-secret compatibility,
+resource preservation, interrupted queue recovery, and live stack
+reconciliation. It also covers vulnerability/license checks, an SPDX SBOM,
+container scanning, and a tag/manual promotion workflow that publishes an
+amd64/arm64 digest with BuildKit provenance and SBOM attestations, then
+keylessly signs and verifies it through Sigstore. Each promotion creates a
+non-overwritable GitHub Release with the immutable digest, promotion manifest,
+and downloadable SPDX JSON evidence. An actual signed promotion and its soak
+evidence, plus the staging production-data upgrade, load, real-provider,
 production-topology partition, full Dokploy cutover, and measured
 disaster-recovery gates, remain open; see
 `docs/release-checklist.md`.

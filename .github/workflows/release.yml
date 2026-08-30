@@ -43,8 +43,113 @@ jobs:
     permissions:
       contents: read
 
+  upgrade-conformance:
+    name: Verify previous release upgrade
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve previous immutable release
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$CURRENT_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "release version must be a v-prefixed SemVer value" >&2
+            exit 1
+          fi
+          releases="$(gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add')"
+          published_count="$(jq '[.[] | select(.draft == false and .prerelease == false)] | length' <<<"$releases")"
+          previous="$(jq -c --arg current "$CURRENT_VERSION" \
+            '[.[] | select(.draft == false and .prerelease == false and .tag_name != $current and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))] | sort_by(.published_at) | reverse | .[0] // empty' \
+            <<<"$releases")"
+          if [ -z "$previous" ]; then
+            if [ "$published_count" -ne 0 ]; then
+              echo "published releases exist but none is an eligible previous stable release" >&2
+              exit 1
+            fi
+            echo "first_release=true" >>"$GITHUB_OUTPUT"
+            jq -n --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sourceCommit "$GITHUB_SHA" \
+              '{status:"not_applicable",firstRelease:true,reason:"no previous published release",sourceCommit:$sourceCommit,createdAt:$createdAt}' \
+              >upgrade-conformance.json
+            exit 0
+          fi
+          release_id="$(jq -r .id <<<"$previous")"
+          previous_version="$(jq -r .tag_name <<<"$previous")"
+          asset_id="$(gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq '.[] | select(.name == "promotion-manifest.json") | .id' | head -1)"
+          test -n "$asset_id" || { echo "previous release $previous_version has no promotion manifest" >&2; exit 1; }
+          gh api "/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+            --header 'Accept: application/octet-stream' >previous-promotion-manifest.json
+          previous_image="$(jq -er --arg version "$previous_version" \
+            'select(.version == $version and (.sourceCommit | test("^[a-f0-9]{40}$"))) | .image | select(test("^ghcr\\.io/.+@sha256:[a-f0-9]{64}$"))' \
+            previous-promotion-manifest.json)"
+          newest="$(printf '%s\n%s\n' "$previous_version" "$CURRENT_VERSION" | sort --version-sort | tail -1)"
+          if [ "$newest" != "$CURRENT_VERSION" ] || [ "$previous_version" = "$CURRENT_VERSION" ]; then
+            echo "release $CURRENT_VERSION must be newer than previous release $previous_version" >&2
+            exit 1
+          fi
+          {
+            echo "first_release=false"
+            echo "image=$previous_image"
+            echo "version=$previous_version"
+          } >>"$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+        if: steps.previous.outputs.first_release == 'false'
+
+      - name: Verify previous release signature
+        if: steps.previous.outputs.first_release == 'false'
+        env:
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+        run: |
+          set -euo pipefail
+          identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
+          cosign verify \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$PREVIOUS_IMAGE"
+
+      - name: Build upgrade candidate
+        if: steps.previous.outputs.first_release == 'false'
+        env:
+          RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+        run: docker build --build-arg "VERSION=$RELEASE_VERSION" --tag dockyard:upgrade-candidate .
+
+      - name: Exercise persisted-state upgrade
+        if: steps.previous.outputs.first_release == 'false'
+        env:
+          DOCKYARD_PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          DOCKYARD_CANDIDATE_IMAGE: dockyard:upgrade-candidate
+          DOCKYARD_UPGRADE_EVIDENCE: upgrade-conformance.json
+          DOCKYARD_UPGRADE_POSTGRES_IMAGE: postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        run: scripts/ci/test-release-upgrade.sh
+
+      - name: Validate upgrade evidence
+        run: |
+          jq -e --arg sourceCommit "$GITHUB_SHA" '
+            .sourceCommit == $sourceCommit and
+            ((.status == "passed" and .migrations.checksumsVerified and .authenticationVerified and .encryptedSecretsVerified and .resourceCountsVerified and .queueRecoveryVerified and .existingStackReconciliationVerified)
+            or (.status == "not_applicable" and .firstRelease == true and .reason == "no previous published release"))
+          ' upgrade-conformance.json >/dev/null
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade-conformance
+          path: upgrade-conformance.json
+          if-no-files-found: error
+
   publish:
-    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance]
+    needs: [verify, database-recovery, sso-conformance, swarm-ha-conformance, upgrade-conformance]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -177,6 +282,12 @@ jobs:
           path: conformance-evidence
           merge-multiple: true
 
+      - name: Download upgrade evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: upgrade-conformance
+          path: upgrade-evidence
+
       - name: Aggregate database recovery evidence
         run: |
           set -euo pipefail
@@ -186,8 +297,10 @@ jobs:
           jq -e 'length == 10 and ([.[].engine] | unique | length) == 10 and all(.[]; .dataVerified == true and .restartVerified == true)' database-recovery-evidence.json >/dev/null
           cp conformance-evidence/sso-keycloak-evidence.json .
           cp conformance-evidence/swarm-ha-conformance.json .
+          cp upgrade-evidence/upgrade-conformance.json .
           jq -e '.oidc and .samlSpInitiated and .samlIdpInitiated and .tenantIsolation and .replayRejected' sso-keycloak-evidence.json >/dev/null
           jq -e '.minorityMutationRejected and .replicasConverged and .managers == 3' swarm-ha-conformance.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and (.status == "passed" or (.status == "not_applicable" and .firstRelease == true))' upgrade-conformance.json >/dev/null
 
       - name: Write promotion manifest
         env:
@@ -207,7 +320,7 @@ jobs:
             --arg operator "$GITHUB_ACTOR" \
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
-            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json"}' \
+            '{version:$version,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",provenance:"slsa",sbom:"spdx-json",databaseRecoveryEvidence:"database-recovery-evidence.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json"}' \
             > promotion-manifest.json
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > image-digest.txt
           cat promotion-manifest.json
@@ -222,6 +335,7 @@ jobs:
             database-recovery-evidence.json
             sso-keycloak-evidence.json
             swarm-ha-conformance.json
+            upgrade-conformance.json
           if-no-files-found: error
 
       - name: Publish immutable release evidence
@@ -230,7 +344,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json)
+          assets=(promotion-manifest.json image-digest.txt sbom.spdx.json database-recovery-evidence.json sso-keycloak-evidence.json swarm-ha-conformance.json upgrade-conformance.json)
           gh release create "$VERSION" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
