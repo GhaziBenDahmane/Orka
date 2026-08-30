@@ -261,12 +261,8 @@ func validateRotatedCertificate(certificatePEM []byte, key *rsa.PrivateKey, prev
 
 func ensureIdentity(ctx context.Context, cfg Config) error {
 	certPath, keyPath, caPath := identityPaths(cfg.StateDirectory)
-	if pair, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil && len(pair.Certificate) > 0 {
-		if certificate, parseErr := x509.ParseCertificate(pair.Certificate[0]); parseErr == nil && time.Until(certificate.NotAfter) > 0 {
-			if ca, readErr := os.ReadFile(caPath); readErr == nil && len(ca) > 0 {
-				return nil
-			}
-		}
+	if validateSavedAgentIdentity(certPath, keyPath, caPath, time.Now()) == nil {
+		return nil
 	}
 	token := strings.TrimSpace(cfg.EnrollmentToken)
 	if token == "" && cfg.EnrollmentTokenFile != "" {
@@ -309,12 +305,74 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&enrolled); err != nil {
 		return err
 	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	identityPEM := append([]byte(enrolled.Certificate), keyPEM...)
-	if err := writeIdentityFile(certPath, identityPEM, 0600); err != nil {
+	if err := validateEnrolledAgentIdentity([]byte(enrolled.Certificate), key, []byte(enrolled.CACertificate), time.Now()); err != nil {
 		return err
 	}
-	return writeIdentityFile(caPath, []byte(enrolled.CACertificate), 0644)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	identityPEM := append([]byte(enrolled.Certificate), keyPEM...)
+	// Write trust first and the identity last. The identity is the commit marker
+	// checked on startup, so an interrupted write cannot make a partial pair
+	// appear usable.
+	if err := writeIdentityFile(caPath, []byte(enrolled.CACertificate), 0644); err != nil {
+		return err
+	}
+	return writeIdentityFile(certPath, identityPEM, 0600)
+}
+
+func validateSavedAgentIdentity(certPath, keyPath, caPath string, now time.Time) error {
+	identityPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return err
+	}
+	pair, err := tls.X509KeyPair(identityPEM, identityPEM)
+	if err != nil || len(pair.Certificate) != 1 {
+		return errors.New("invalid saved agent certificate or private key")
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return errors.New("invalid saved agent certificate")
+	}
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return err
+	}
+	return validateAgentClientCertificate(certificate, caPEM, now)
+}
+
+func validateEnrolledAgentIdentity(certificatePEM []byte, key *rsa.PrivateKey, caPEM []byte, now time.Time) error {
+	block, rest := pem.Decode(certificatePEM)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return errors.New("agent enrollment returned an invalid certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return errors.New("agent enrollment returned an invalid certificate")
+	}
+	publicKey, ok := certificate.PublicKey.(*rsa.PublicKey)
+	if !ok || !publicKey.Equal(&key.PublicKey) {
+		return errors.New("enrolled agent certificate does not match the generated private key")
+	}
+	if err = validateAgentClientCertificate(certificate, caPEM, now); err != nil {
+		return fmt.Errorf("validate enrolled agent identity: %w", err)
+	}
+	return nil
+}
+
+func validateAgentClientCertificate(certificate *x509.Certificate, caPEM []byte, now time.Time) error {
+	if certificate == nil || certificate.IsCA {
+		return errors.New("agent identity must be a leaf certificate")
+	}
+	if _, err := agentpki.ClusterIdentity(certificate); err != nil {
+		return err
+	}
+	roots, _, err := agentpki.ValidateTrustBundle(caPEM, now)
+	if err != nil {
+		return fmt.Errorf("validate agent CA trust bundle: %w", err)
+	}
+	if _, err = certificate.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		return fmt.Errorf("verify agent client certificate: %w", err)
+	}
+	return nil
 }
 
 func writeIdentityFile(path string, data []byte, mode os.FileMode) error {

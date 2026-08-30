@@ -119,6 +119,94 @@ func TestAgentHTTPClientsRejectRedirects(t *testing.T) {
 	}
 }
 
+func TestEnsureIdentityValidatesEnrollmentBeforePersistence(t *testing.T) {
+	now := time.Now().UTC()
+	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedCA, _, err := agentpki.NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterID := uuid.New()
+	for _, test := range []struct {
+		name        string
+		mismatchKey bool
+		returnedCA  []byte
+		certificate string
+		wantErr     string
+	}{
+		{name: "valid identity", returnedCA: caPEM},
+		{name: "mismatched private key", mismatchKey: true, returnedCA: caPEM, wantErr: "does not match the generated private key"},
+		{name: "untrusted certificate", returnedCA: untrustedCA, wantErr: "verify agent client certificate"},
+		{name: "invalid certificate", returnedCA: caPEM, certificate: "not a certificate", wantErr: "invalid certificate"},
+		{name: "invalid CA bundle", returnedCA: []byte("not a CA"), wantErr: "invalid agent CA trust bundle"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var input struct {
+					CSR string `json:"csr"`
+				}
+				if decodeErr := json.NewDecoder(r.Body).Decode(&input); decodeErr != nil {
+					t.Error(decodeErr)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				csr := []byte(input.CSR)
+				if test.mismatchKey {
+					otherKey, keyErr := rsa.GenerateKey(rand.Reader, 2048)
+					if keyErr != nil {
+						t.Error(keyErr)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					otherCSR, csrErr := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "other-agent"}}, otherKey)
+					if csrErr != nil {
+						t.Error(csrErr)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					csr = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: otherCSR})
+				}
+				certificate := test.certificate
+				if certificate == "" {
+					issued, _, signErr := agentpki.SignAgentCSR(caPEM, caKey, csr, clusterID, time.Now(), time.Hour)
+					if signErr != nil {
+						t.Error(signErr)
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					certificate = string(issued)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"certificate": certificate, "caCertificate": string(test.returnedCA)})
+			}))
+			defer server.Close()
+
+			err := ensureIdentity(context.Background(), Config{EnrollmentURL: server.URL, EnrollmentToken: "one-time-token", StateDirectory: directory})
+			certPath, keyPath, caPath := identityPaths(directory)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = validateSavedAgentIdentity(certPath, keyPath, caPath, time.Now()); err != nil {
+					t.Fatalf("saved identity is invalid: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ensureIdentity error=%v, want substring %q", err, test.wantErr)
+			}
+			for _, path := range []string{certPath, caPath} {
+				if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("rejected enrollment persisted %s: %v", filepath.Base(path), statErr)
+				}
+			}
+		})
+	}
+}
+
 func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T) {
 	now := time.Now().UTC()
 	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
