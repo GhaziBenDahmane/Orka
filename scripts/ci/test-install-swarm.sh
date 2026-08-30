@@ -8,7 +8,7 @@ trap cleanup EXIT
 
 mkdir -p "$temporary/bin" "$temporary/secrets"
 printf '%s' 'correct horse battery staple' >"$temporary/secrets/database-password"
-printf '%s' 'postgres://dockyard:safe-value@postgres:5432/dockyard?sslmode=disable' >"$temporary/secrets/database-url"
+printf '%s' 'postgres://dockyard:correct%20horse%20battery%20staple@postgres:5432/dockyard?sslmode=disable' >"$temporary/secrets/database-url"
 printf '%s' 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' >"$temporary/secrets/master-key"
 printf '%s' 'test-metrics-token-at-least-32-bytes' >"$temporary/secrets/metrics-token"
 chmod 0600 "$temporary"/secrets/*
@@ -23,6 +23,9 @@ case "$1 $2" in
     if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
   "run --rm")
     case "$*" in
+      *validate-bundled-database-credentials*)
+        [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_CREDENTIALS:-false}" != true ] &&
+          [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
       *validate-database-url*) [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
       *not-a-cidr*) exit 1 ;;
     esac ;;
@@ -83,8 +86,8 @@ grep -q '^stack config ' "$DOCKYARD_INSTALL_TEST_LOG"
 for image in "$DOCKYARD_IMAGE" "$POSTGRES_IMAGE" "$TRAEFIK_IMAGE"; do
   grep -Fqx "manifest inspect $image" "$DOCKYARD_INSTALL_TEST_LOG"
 done
-grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-database-url --require-tls=false$' "$DOCKYARD_INSTALL_TEST_LOG"
-if grep -q 'postgres://dockyard:safe-value' "$DOCKYARD_INSTALL_TEST_LOG"; then
+grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-bundled-database-credentials$' "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -q 'postgres://dockyard:correct%20horse' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'database URL leaked to Docker command log' >&2
   exit 1
 fi
@@ -111,9 +114,24 @@ if DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL=true "$root/scripts/install-swarm.
   echo 'installer ignored candidate database URL validation failure' >&2
   exit 1
 fi
-grep -q 'does not contain a valid PostgreSQL URL for single mode' "$temporary/err"
+grep -q 'bundled PostgreSQL password and URL credentials are invalid or do not match' "$temporary/err"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'invalid database URL mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_INVALID_DATABASE_CREDENTIALS=true "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer ignored bundled database credential validation failure' >&2
+  exit 1
+fi
+grep -q 'bundled PostgreSQL password and URL credentials are invalid or do not match' "$temporary/err"
+if grep -Eq 'correct horse battery staple|postgres://dockyard:correct%20horse' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'bundled database credentials leaked to Docker command log' >&2
+  exit 1
+fi
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'mismatched bundled database credentials mutated Docker state' >&2
   exit 1
 fi
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -76,6 +77,8 @@ func main() {
 		err = validateEgressPolicy(os.Args[2:])
 	case "validate-database-url":
 		err = validateDatabaseURL(os.Args[2:], os.Stdin)
+	case "validate-bundled-database-credentials":
+		err = validateBundledDatabaseCredentials(os.Args[2:], os.Stdin)
 	case "validate-agent-endpoints":
 		err = validateAgentEndpoints(os.Args[2:])
 	case "volume-artifact":
@@ -90,7 +93,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-database-url|validate-agent-endpoints|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
@@ -125,6 +128,24 @@ func validateDatabaseURL(arguments []string, input io.Reader) error {
 		return errors.New("database URL exceeds 65536 bytes")
 	}
 	return config.ValidateDatabaseURL(strings.TrimSpace(string(data)), *requireTLS)
+}
+
+func validateBundledDatabaseCredentials(arguments []string, input io.Reader) error {
+	if len(arguments) != 0 {
+		return errors.New("usage: dockyard validate-bundled-database-credentials < PASSWORD_NUL_DATABASE_URL")
+	}
+	data, err := io.ReadAll(io.LimitReader(input, 69634))
+	if err != nil {
+		return fmt.Errorf("read bundled database credentials: %w", err)
+	}
+	if len(data) > 69633 {
+		return errors.New("bundled database credentials exceed 69633 bytes")
+	}
+	password, databaseURL, found := bytes.Cut(data, []byte{0})
+	if !found || bytes.Contains(databaseURL, []byte{0}) {
+		return errors.New("bundled database credentials must contain exactly one NUL separator")
+	}
+	return config.ValidateBundledDatabaseCredentials(string(password), string(databaseURL))
 }
 
 func validateAgentEndpoints(arguments []string) error {

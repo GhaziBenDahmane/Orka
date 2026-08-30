@@ -79,7 +79,10 @@ Docker registry credentials, and passes the database URL over stdin to a
 networkless, read-only instance of the exact candidate image for runtime parser
 validation before creating the overlay network or secrets. The URL must include
 a PostgreSQL host and database name, may contain at most one `sslmode`, and in
-HA mode must use `sslmode=verify-full`. It then
+HA mode must use `sslmode=verify-full`. The single-node URL must use the fixed `dockyard` user, `postgres`
+service, `dockyard` database, and `sslmode=disable`, and verifies that its
+decoded password exactly matches the 16–4096 byte password file. Neither
+credential enters Docker's command arguments or logs. It then
 rejects existing routing overlays whose `encrypted` option is absent or
 explicitly disabled, and then
 waits for every service to hold its desired replica count continuously for 90

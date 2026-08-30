@@ -270,6 +270,29 @@ func ValidateDatabaseURL(databaseURL string, requireTLS bool) error {
 	return nil
 }
 
+// ValidateBundledDatabaseCredentials verifies the fixed PostgreSQL identity
+// used by the single-node Swarm profile and prevents deploying a password
+// secret that cannot authenticate the controller URL.
+func ValidateBundledDatabaseCredentials(password, databaseURL string) error {
+	if len(password) < 16 || len(password) > 4096 || strings.ContainsAny(password, "\x00\r\n") {
+		return errors.New("DOCKYARD_DB_PASSWORD_FILE must contain between 16 and 4096 bytes without NUL or line breaks")
+	}
+	if err := ValidateDatabaseURL(databaseURL, false); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(databaseURL)
+	username, urlPassword, hasPassword := "", "", false
+	if parsed.User != nil {
+		username = parsed.User.Username()
+		urlPassword, hasPassword = parsed.User.Password()
+	}
+	sslModes := parsed.Query()["sslmode"]
+	if username != "dockyard" || !hasPassword || urlPassword != password || !strings.EqualFold(parsed.Hostname(), "postgres") || parsed.Path != "/dockyard" || parsed.Port() != "" && parsed.Port() != "5432" || len(sslModes) != 1 || sslModes[0] != "disable" {
+		return errors.New("single-node database URL must use dockyard:<matching password>@postgres[:5432]/dockyard with exactly one sslmode=disable parameter")
+	}
+	return nil
+}
+
 func parseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil

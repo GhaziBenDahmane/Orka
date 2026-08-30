@@ -264,6 +264,36 @@ func TestLoadRequiresVerifiedDatabaseTLSWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestValidateBundledDatabaseCredentials(t *testing.T) {
+	const password = "correct horse battery staple"
+	for _, databaseURL := range []string{
+		"postgres://dockyard:correct%20horse%20battery%20staple@postgres/dockyard?sslmode=disable",
+		"postgresql://dockyard:correct%20horse%20battery%20staple@POSTGRES:5432/dockyard?connect_timeout=5&sslmode=disable",
+	} {
+		if err := ValidateBundledDatabaseCredentials(password, databaseURL); err != nil {
+			t.Fatalf("valid bundled URL %q rejected: %v", databaseURL, err)
+		}
+	}
+	for _, test := range []struct {
+		password    string
+		databaseURL string
+	}{
+		{password: "short", databaseURL: "postgres://dockyard:short@postgres/dockyard?sslmode=disable"},
+		{password: password + "\n", databaseURL: "postgres://dockyard:correct%20horse%20battery%20staple@postgres/dockyard?sslmode=disable"},
+		{password: password, databaseURL: "postgres://dockyard:wrong@postgres/dockyard?sslmode=disable"},
+		{password: password, databaseURL: "postgres://other:correct%20horse%20battery%20staple@postgres/dockyard?sslmode=disable"},
+		{password: password, databaseURL: "postgres://dockyard:correct%20horse%20battery%20staple@database/dockyard?sslmode=disable"},
+		{password: password, databaseURL: "postgres://dockyard:correct%20horse%20battery%20staple@postgres/other?sslmode=disable"},
+		{password: password, databaseURL: "postgres://dockyard:correct%20horse%20battery%20staple@postgres:5433/dockyard?sslmode=disable"},
+		{password: password, databaseURL: "postgres://dockyard:correct%20horse%20battery%20staple@postgres/dockyard"},
+		{password: password, databaseURL: "postgres://dockyard:correct%20horse%20battery%20staple@postgres/dockyard?sslmode=require"},
+	} {
+		if err := ValidateBundledDatabaseCredentials(test.password, test.databaseURL); err == nil {
+			t.Errorf("password length=%d URL %q was accepted", len(test.password), test.databaseURL)
+		}
+	}
+}
+
 func TestLoadRejectsMalformedDatabaseURLWithoutTLSRequirement(t *testing.T) {
 	for _, databaseURL := range []string{
 		"",

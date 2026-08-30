@@ -79,7 +79,7 @@ case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be
 case "$stability_seconds" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_STABILITY_SECONDS must be a non-negative integer" ;; esac
 [ "$stability_seconds" -le "$wait_timeout" ] || fail "DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed DOCKYARD_INSTALL_WAIT_TIMEOUT"
 
-for command in awk base64 date docker find grep mktemp sleep tr wc; do
+for command in awk base64 cat date docker find grep mktemp sleep tr wc; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 [ -n "${DOCKYARD_HOST:-}" ] || fail "DOCKYARD_HOST is required"
@@ -147,6 +147,12 @@ validate_secret_file DOCKYARD_DB_PASSWORD_FILE "${DOCKYARD_DB_PASSWORD_FILE:-}"
 validate_secret_file DOCKYARD_DATABASE_URL_FILE "${DOCKYARD_DATABASE_URL_FILE:-}"
 validate_secret_file DOCKYARD_MASTER_KEY_FILE "${DOCKYARD_MASTER_KEY_FILE:-}"
 validate_secret_file DOCKYARD_METRICS_TOKEN_FILE "${DOCKYARD_METRICS_TOKEN_FILE:-}"
+
+database_password_size=$(wc -c <"$DOCKYARD_DB_PASSWORD_FILE" | tr -d ' ')
+database_password_without_line_breaks_size=$(tr -d '\r\n' <"$DOCKYARD_DB_PASSWORD_FILE" | wc -c | tr -d ' ')
+[ "$database_password_size" -ge 16 ] && [ "$database_password_size" -le 4096 ] || fail "DOCKYARD_DB_PASSWORD_FILE must contain between 16 and 4096 bytes"
+[ "$database_password_without_line_breaks_size" -eq "$database_password_size" ] || fail "DOCKYARD_DB_PASSWORD_FILE must contain one password without line breaks"
+unset database_password_size database_password_without_line_breaks_size
 
 if ! tr -d '\r\n' <"$DOCKYARD_MASTER_KEY_FILE" | base64 -d >"$temporary/master-key" 2>/dev/null; then
   fail "DOCKYARD_MASTER_KEY_FILE must contain valid base64"
@@ -221,9 +227,11 @@ for image_spec in "DOCKYARD_IMAGE:$DOCKYARD_IMAGE" "POSTGRES_IMAGE:$POSTGRES_IMA
   image=${image_spec#*:}
   docker manifest inspect "$image" >/dev/null 2>&1 || fail "$image_label cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
 done
-require_database_tls=false
-[ "$mode" = ha ] && require_database_tls=true
-docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-database-url --require-tls="$require_database_tls" <"$DOCKYARD_DATABASE_URL_FILE" >/dev/null || fail "DOCKYARD_DATABASE_URL_FILE does not contain a valid PostgreSQL URL for $mode mode"
+if [ "$mode" = ha ]; then
+  docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-database-url --require-tls=true <"$DOCKYARD_DATABASE_URL_FILE" >/dev/null || fail "DOCKYARD_DATABASE_URL_FILE does not contain a valid PostgreSQL URL for HA mode"
+else
+  { cat "$DOCKYARD_DB_PASSWORD_FILE"; printf '\0'; cat "$DOCKYARD_DATABASE_URL_FILE"; } | docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-bundled-database-credentials >/dev/null || fail "bundled PostgreSQL password and URL credentials are invalid or do not match"
+fi
 if [ -n "$egress_private_cidrs" ]; then
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
 fi

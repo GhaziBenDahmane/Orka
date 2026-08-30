@@ -51,6 +51,27 @@ func TestValidateDatabaseURLCommand(t *testing.T) {
 	}
 }
 
+func TestValidateBundledDatabaseCredentialsCommand(t *testing.T) {
+	valid := "correct horse battery staple\x00postgres://dockyard:correct%20horse%20battery%20staple@postgres:5432/dockyard?sslmode=disable"
+	if err := validateBundledDatabaseCredentials(nil, strings.NewReader(valid)); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		arguments []string
+		input     string
+	}{
+		{arguments: []string{"unexpected"}, input: valid},
+		{input: "missing separator"},
+		{input: valid + "\x00extra"},
+		{input: "wrong password value\x00postgres://dockyard:correct%20horse%20battery%20staple@postgres:5432/dockyard?sslmode=disable"},
+		{input: strings.Repeat("x", 69634)},
+	} {
+		if err := validateBundledDatabaseCredentials(test.arguments, strings.NewReader(test.input)); err == nil {
+			t.Errorf("arguments=%q input length=%d were accepted", test.arguments, len(test.input))
+		}
+	}
+}
+
 func TestValidateAgentEndpointsCommand(t *testing.T) {
 	valid := []string{
 		"--control-plane-url", "https://dockyard.example.test",
