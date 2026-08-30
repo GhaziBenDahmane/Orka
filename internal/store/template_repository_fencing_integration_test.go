@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,5 +53,106 @@ func TestTemplateRepositorySyncTakeoverFencesStaleAttempt(t *testing.T) {
 	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
 	if err != nil || loaded.LastSyncStatus != "succeeded" || loaded.SyncStartedAt != nil || loaded.SyncAttemptID != nil {
 		t.Fatalf("completed replacement=%#v err=%v", loaded, err)
+	}
+}
+
+func TestTemplateRepositorySignerRotationWithdrawsAndFencesCatalog(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Catalog signer rotation',$2)`, organizationID, "catalog-signer-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Catalog", Slug: "catalog", RepositoryURL: "https://github.com/acme/catalog", GitRef: "main", TrustedPublicKey: "old-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	staleAttempt, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || staleAttempt.SyncAttemptID == nil {
+		t.Fatalf("attempt=%#v err=%v", staleAttempt, err)
+	}
+	item := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/old", Version: "1", Name: "Old", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/old", Checksum: "old"}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.UpdateTemplateRepositorySettings(ctx, organizationID, repository.ID, "new-key", true, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("old signer attempt published after rotation: %v", err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, staleAttempt, "succeeded", ""); !errors.Is(err, ErrBusy) {
+		t.Fatalf("old signer attempt finalized after rotation: %v", err)
+	}
+	items, err := db.ListTemplates(ctx, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("old signer templates remain available: %#v", items)
+	}
+	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TrustedPublicKey != "new-key" || !loaded.RequireSignature || loaded.LastSyncStatus != "never" || loaded.LastSyncedAt != nil || loaded.SyncStartedAt != nil || loaded.SyncAttemptID != nil || loaded.SyncRequestedAt == nil {
+		t.Fatalf("rotated repository=%#v", loaded)
+	}
+	replacement, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || replacement.SyncAttemptID == nil || replacement.TrustedPublicKey != "new-key" || !replacement.RequireSignature {
+		t.Fatalf("replacement attempt=%#v err=%v", replacement, err)
+	}
+}
+
+func TestTemplateRepositoryCredentialRotationFencesButRetainsCatalog(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Catalog credential rotation',$2)`, organizationID, "catalog-credential-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	oldCredentialID, newCredentialID := uuid.New(), uuid.New()
+	for index, credentialID := range []uuid.UUID{oldCredentialID, newCredentialID} {
+		if _, err := db.CreateSourceCredential(ctx, SourceCredential{ID: credentialID, OrganizationID: organizationID, Kind: "git", Name: fmt.Sprintf("GitHub %d", index), Server: "github.com", Username: "token", EncryptedSecret: "ciphertext"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Catalog", Slug: "catalog", RepositoryURL: "https://github.com/acme/catalog", GitRef: "main", CredentialID: &oldCredentialID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	staleAttempt, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/current", Version: "1", Name: "Current", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/current", Checksum: "current"}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.UpdateTemplateRepositorySettings(ctx, organizationID, repository.ID, "", false, &newCredentialID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("old credential attempt published after rotation: %v", err)
+	}
+	items, err := db.ListTemplates(ctx, organizationID)
+	if err != nil || len(items) != 1 || items[0].Key != item.Key {
+		t.Fatalf("verified catalog was not retained: items=%#v err=%v", items, err)
+	}
+	replacement, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || replacement.CredentialID == nil || *replacement.CredentialID != newCredentialID || replacement.SyncAttemptID == nil {
+		t.Fatalf("replacement attempt=%#v err=%v", replacement, err)
 	}
 }

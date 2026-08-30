@@ -36,6 +36,11 @@ fingerprint in every imported template's provenance. A failed or tampered sync
 leaves the previously imported versions intact. Valid snapshots are reconciled
 in one database transaction, including removal of catalog versions no longer
 published by the repository; existing services retain their copied provenance.
+Changing the pinned signer or signature requirement atomically fences any
+in-flight sync, withdraws entries verified under the previous trust policy, and
+queues a fresh sync. Changing the private-repository credential also fences the
+old attempt and queues a refresh, but retains the last verified catalog while
+the new credential is checked. Existing deployed services are unaffected.
 Built-in startup seeding and the signed local catalog importer likewise parse
 the complete catalog first and publish all template versions in one database
 transaction, so an invalid sibling or storage failure cannot expose a partial

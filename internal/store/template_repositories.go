@@ -192,11 +192,51 @@ func (s *Store) FinishTemplateRepositorySync(ctx context.Context, repository Tem
 }
 
 func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizationID, id uuid.UUID, trustedPublicKey string, requireSignature bool, credentialID *uuid.UUID, syncIntervalSeconds int) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET trusted_public_key=$3,require_signature=$4,credential_id=$5,sync_interval_seconds=$6,next_sync_at=CASE WHEN $6>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND ($5::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$5 AND c.organization_id=$2 AND c.kind='git' AND lower(split_part(c.server,':',1))='github.com'))`, id, organizationID, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds)
-	if err == nil && tag.RowsAffected() == 0 {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var currentKey string
+	var currentRequireSignature bool
+	var currentCredentialID *uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT trusted_public_key,require_signature,credential_id FROM template_repositories WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&currentKey, &currentRequireSignature, &currentCredentialID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if credentialID != nil {
+		var lockedCredential uuid.UUID
+		err = tx.QueryRow(ctx, `SELECT id FROM source_credentials WHERE id=$1 AND organization_id=$2 AND kind='git' AND lower(split_part(server,':',1))='github.com' FOR KEY SHARE`, *credentialID, organizationID).Scan(&lockedCredential)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+	}
+	trustChanged := currentKey != trustedPublicKey || currentRequireSignature != requireSignature
+	credentialChanged := !equalOptionalUUID(currentCredentialID, credentialID)
+	if trustChanged {
+		if _, err = tx.Exec(ctx, `DELETE FROM templates WHERE repository_id=$1 AND organization_id=$2`, id, organizationID); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `UPDATE template_repositories SET trusted_public_key=$3,require_signature=$4,credential_id=$5,sync_interval_seconds=$6,next_sync_at=CASE WHEN $6>0 THEN now() ELSE NULL END,sync_requested_at=now(),sync_started_at=NULL,sync_attempt_id=NULL,last_sync_status='never',last_sync_error='',last_synced_at=NULL,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds)
+	} else if credentialChanged {
+		_, err = tx.Exec(ctx, `UPDATE template_repositories SET trusted_public_key=$3,require_signature=$4,credential_id=$5,sync_interval_seconds=$6,next_sync_at=CASE WHEN $6>0 THEN now() ELSE NULL END,sync_requested_at=now(),sync_started_at=NULL,sync_attempt_id=NULL,last_sync_status=CASE WHEN last_sync_status='running' THEN 'failed' ELSE last_sync_status END,last_sync_error=CASE WHEN last_sync_status='running' THEN 'repository credential changed during synchronization' ELSE last_sync_error END,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE template_repositories SET trusted_public_key=$3,require_signature=$4,credential_id=$5,sync_interval_seconds=$6,next_sync_at=CASE WHEN $6>0 THEN now() ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func equalOptionalUUID(left, right *uuid.UUID) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func (s *Store) GetSourceCredential(ctx context.Context, organizationID, id uuid.UUID) (SourceCredential, error) {
