@@ -26,7 +26,7 @@ new mutations instead of weakening authentication or silently skipping checks.
 | PostgreSQL | desired state, encrypted secrets, audit chain, job fences | concurrent controller/worker transactions | TLS in HA, migrations, row/tenant predicates, transactional state changes, leases and fencing |
 | Local Swarm manager | Docker socket, registry credentials | Compose, build sources, image behavior, container logs | safe Compose compiler, argument-only process execution, bounded Docker output, encrypted overlays, temporary credentials, immutable release images |
 | Remote Swarm agent | local Docker socket, mTLS private key | encrypted commands, transfer plans, Docker output | SPIFFE identity, serial binding, TLS 1.3, short leases, command fencing, independent plan validation, bounded command results |
-| Edge proxy contract | Traefik service identity, public-network and file-provider topology | capability heartbeat; future certificate configs | installer preflight, continuous agent inspection, versioned schema, fail-closed readiness |
+| Edge proxy contract | Traefik service identity, public-network and file-provider topology; encrypted custom certificate material | capability heartbeat and certificate configs | installer preflight, continuous agent inspection, versioned schema, bounded independent certificate validation, versioned Docker secrets/configs, fail-closed readiness |
 | Template repositories | pinned Ed25519 public keys, scoped GitHub token | archives, Compose and template metadata | GitHub-only fetches, bounded extraction, signature verification, atomic catalog replacement, safe compiler |
 | Build sources and registries | Git/OCI credentials | repositories, submodules, Dockerfiles, ZIP files | host-bound credentials, pinned SSH host keys, hardened extraction, BuildKit secret mounts, no shell interpolation |
 | Backup/object storage | encrypted destination credentials, per-backup keys | remote objects and checksums | client-side authenticated encryption, presigned single-operation transfers, size/hash verification, restore drills |
@@ -138,6 +138,18 @@ Proxy environment variables are not honored on these HTTP paths because a
 proxy would move destination resolution outside the policy boundary. Docker
 image pulls, build steps, and deployed workloads remain outside this
 process-level control and require node firewall or network-policy enforcement.
+
+Custom edge TLS keys are accepted only through bounded authenticated requests,
+validated as a matching server certificate/key pair, and encrypted under
+resource-specific associated data before PostgreSQL storage. API, console,
+audit, metrics, and AI projections expose metadata only. Route writes require
+current validity and DNS SAN coverage and cannot combine a custom certificate
+with ACME. Reconciliation decrypts only inside the worker, sends remote material
+only inside encrypted mTLS command payloads, revalidates on the target, and
+mounts versioned Docker secrets plus a generated Traefik config. Service update
+failure leaves the target non-ready and blocks dependent deployment; cleanup is
+restricted to resources carrying both Dockyard and exact edge-service ownership
+labels. Expiry and stalled/failed convergence are monitored independently.
 
 ### Replay, stale work, and split brain
 

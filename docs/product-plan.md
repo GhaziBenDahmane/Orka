@@ -76,6 +76,11 @@ Status: substantially implemented.
 - A versioned remote edge-provider capability contract continuously verifies
   the configured Traefik service, dynamic file provider, and public-network
   attachment; the controller-owned Traefik ships the same file-provider base.
+  Organization custom TLS chains and keys are write-only, encrypted at rest,
+  hostname-checked on route attachment, and reconciled through versioned Swarm
+  secrets/configs locally or through encrypted remote-agent commands. The
+  console, CLI, Terraform provider, AI snapshot, metrics, and alerts expose
+  metadata and convergence posture without exposing key material.
 
 Exit gate: upgrade and rollback work during controller restart; no cross-tenant
 access; worker-kill and Docker-daemon-loss tests pass.
@@ -191,6 +196,9 @@ durable provider build-status callbacks implemented.
   rewriting, and temporary or permanent regex redirects compile to isolated
   Traefik middleware labels. The Dokploy importer preserves domain enablement
   and path-rewrite behavior.
+  Routes can select either an ACME resolver or an organization custom
+  certificate, never both. Deployment waits for the selected target's edge-TLS
+  generation to converge and fails closed when the proxy capability is stale.
   Service-wide HTTP basic-auth rules are managed through the same surfaces;
   only bcrypt hashes reach PostgreSQL and deployment snapshots, and Traefik
   strips the credential header before proxying upstream.

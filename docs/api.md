@@ -128,6 +128,8 @@ enrollment details.
 | GET/POST | `/v1/scim/tokens` | Inventory token metadata or create a one-time-visible, 1–365 day SCIM bearer token |
 | DELETE | `/v1/scim/tokens/{id}` | Revoke a tenant-scoped SCIM bearer token |
 | GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
+| GET/POST | `/v1/custom-tls-certificates` | List secret-free certificate metadata or upload an encrypted certificate chain and private key |
+| PUT/DELETE | `/v1/custom-tls-certificates/{id}` | Rotate with an optimistic revision or delete an unattached custom certificate |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
 | GET | `/v1/migration-resources?sourceOrganizationId=…` | Inspect persisted, secret-safe Dokploy application parity records |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
@@ -260,6 +262,17 @@ whether custom-certificate reconciliation is currently safe. An empty object
 means an older agent has not reported capabilities and must be treated as
 unsupported, never as an implicit edge provider.
 
+Custom TLS certificate writes accept a leaf-first PEM certificate chain and a
+matching unencrypted PEM private key. The leaf must have DNS SANs, server-auth
+usage, a supported RSA/ECDSA/Ed25519 key, and more than 24 hours of validity.
+Only certificate metadata is ever returned; both PEM values are encrypted with
+resource-bound contexts and remain write-only. A route selects one with
+`customCertificateId` and must leave `certificateResolver` empty. Hostname
+coverage is checked transactionally. Route attachment and certificate rotation
+queue a generation-fenced edge reconciliation; workload deployment waits until
+the target generation is ready. Remote reconciliation proceeds only while the
+agent reports a fresh, verified custom-certificate edge capability.
+
 ## AI auditing
 
 | Method | Path | Purpose |
@@ -281,6 +294,10 @@ retention, event checkpoints/backlog, and latest batch status/timestamps.
 Destination names, storage details, object keys, chain hashes, credentials,
 and failure text are excluded. Public route metadata is included, and the
 built-in deterministic baseline flags routes that accept plaintext HTTP.
+Custom-certificate references, secret-free validity/attachment posture, and
+the relevant edge reconciliation generations and states are included; PEM,
+keys, certificate names/SAN inventories, ciphertext, and reconciliation errors
+are excluded.
 Enabled SAML providers expose only an opaque provider ID, certificate
 configuration validity, and SP/IdP expiry timestamps; certificates, keys,
 metadata, names, and domains remain excluded. Invalid/expired trust is a high

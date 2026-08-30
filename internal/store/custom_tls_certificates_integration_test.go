@@ -1,9 +1,9 @@
 package store
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -11,17 +11,12 @@ import (
 )
 
 func TestCustomTLSCertificateRouteLifecycleQueuesEdgeReconciliation(t *testing.T) {
-	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	db, err := Open(ctx, databaseURL)
-	if err != nil {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(db.Pool.Close)
+	db := &Store{Pool: pool}
+	var err error
 	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	statements := []struct {
 		query string
@@ -37,10 +32,6 @@ func TestCustomTLSCertificateRouteLifecycleQueuesEdgeReconciliation(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() {
-		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
-	})
-
 	certificate, err := db.CreateCustomTLSCertificate(ctx, CustomTLSCertificate{OrganizationID: organizationID, Name: "Wildcard", EncryptedCertificate: "encrypted-cert", EncryptedPrivateKey: "encrypted-key", Fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CommonName: "*.example.test", DNSNames: []string{"*.example.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(48 * time.Hour)})
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +50,14 @@ func TestCustomTLSCertificateRouteLifecycleQueuesEdgeReconciliation(t *testing.T
 	desired, err := db.ListDesiredEdgeCertificates(ctx, target)
 	if err != nil || len(desired) != 1 || desired[0].ID != certificate.ID {
 		t.Fatalf("desired=%#v error=%v", desired, err)
+	}
+	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil || len(snapshot.CustomTLSPosture) != 1 || snapshot.CustomTLSPosture[0].ID != certificate.ID || snapshot.CustomTLSPosture[0].AttachedRoutes != 1 || snapshot.CustomTLSPosture[0].EnabledRoutes != 1 || len(snapshot.EdgeTLSPosture) != 1 || snapshot.EdgeTLSPosture[0].TargetKey != "local" || snapshot.Routes[0].CustomCertificateID == nil {
+		t.Fatalf("custom TLS audit posture=%#v/%#v routes=%#v error=%v", snapshot.CustomTLSPosture, snapshot.EdgeTLSPosture, snapshot.Routes, err)
+	}
+	encodedSnapshot, err := json.Marshal(snapshot)
+	if err != nil || bytes.Contains(encodedSnapshot, []byte("encrypted-cert")) || bytes.Contains(encodedSnapshot, []byte("encrypted-key")) {
+		t.Fatalf("AI snapshot leaked custom TLS material: error=%v body=%s", err, encodedSnapshot)
 	}
 	if err = db.DeleteCustomTLSCertificate(ctx, organizationID, certificate.ID); !errors.Is(err, ErrBusy) {
 		t.Fatalf("delete associated certificate error=%v", err)
@@ -88,17 +87,12 @@ func TestCustomTLSCertificateRouteLifecycleQueuesEdgeReconciliation(t *testing.T
 }
 
 func TestCustomTLSCertificateRouteRejectsWrongHostname(t *testing.T) {
-	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	db, err := Open(ctx, databaseURL)
-	if err != nil {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(db.Pool.Close)
+	db := &Store{Pool: pool}
+	var err error
 	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
@@ -113,9 +107,6 @@ func TestCustomTLSCertificateRouteRejectsWrongHostname(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() {
-		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
-	})
 	certificate, err := db.CreateCustomTLSCertificate(ctx, CustomTLSCertificate{OrganizationID: organizationID, Name: "Only API", EncryptedCertificate: "cert", EncryptedPrivateKey: "key", Fingerprint: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", DNSNames: []string{"api.example.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(48 * time.Hour)})
 	if err != nil {
 		t.Fatal(err)

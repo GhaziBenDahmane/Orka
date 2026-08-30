@@ -98,6 +98,11 @@ keys make it a privileged service.
 - Public route inventory includes only routing metadata. The deterministic
   baseline reports any Traefik route that permits plaintext HTTP so operators
   can enable certificate-backed TLS or explicitly retire the exposure.
+  Custom-certificate references, certificate validity windows/revisions and
+  attachment counts, plus relevant edge-reconciliation generations and states
+  are included. Certificate names, SAN inventories, PEM chains, private keys,
+  ciphertext, and reconciliation error strings remain outside the model
+  boundary.
 - Delivery and storage integration posture exposes only opaque webhook and
   service IDs, webhook provider/enabled state, opaque backup-destination IDs,
   TLS state, and database/volume/audit-archive reference counts. Webhook names,

@@ -440,13 +440,22 @@ fails before changing state unless that service exists, has
 reports a versioned capability document. The controller and console therefore
 treat custom certificates as unsupported when the proxy disappears, loses the
 file provider, leaves the public network, or is served by an older agent. This
-contract does not transfer certificate material yet; it is the fail-closed
-provider prerequisite for certificate reconciliation.
+contract gates encrypted `swarm.edge-certificates` commands. Agents independently
+validate every certificate/key pair, create versioned Docker secrets and one
+generated Traefik file-provider config, then update the edge service atomically.
+Old Dockyard-owned secrets and configs are removed only after the replacement
+service converges. Certificate material is bounded, never written to command
+logs, and remains encrypted in controller and remote-command storage.
 
 The controller-owned Traefik in `deploy/swarm.yml` enables the watched file
 provider at `/etc/traefik/dynamic` and mounts a valid empty bootstrap config.
 Keep this provider enabled when customizing the stack so later certificate
 configs can be mounted without replacing the Swarm routing provider.
+Create and rotate certificates under **Settings → Custom TLS certificates**, or
+with `dockyardctl create-custom-tls-certificate` and
+`update-custom-tls-certificate`. Attach one in a route by setting
+`customCertificateId` and an empty `certificateResolver`. Prometheus alerts on
+expiry, failed reconciliation, and a target that remains pending.
 
 Managed-database backup and restore on remote clusters requires an
 S3-compatible backup destination whose configured endpoint is reachable from

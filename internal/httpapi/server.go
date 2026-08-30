@@ -144,7 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
 	mux.Handle("DELETE /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.deleteSourceCredential)))
-	mux.Handle("GET /v1/custom-tls-certificates", s.requireRole("admin", http.HandlerFunc(s.listCustomTLSCertificates)))
+	mux.Handle("GET /v1/custom-tls-certificates", s.requireRole("viewer", http.HandlerFunc(s.listCustomTLSCertificates)))
 	mux.Handle("POST /v1/custom-tls-certificates", s.requireRole("admin", http.HandlerFunc(s.createCustomTLSCertificate)))
 	mux.Handle("PUT /v1/custom-tls-certificates/{certificateID}", s.requireRole("admin", http.HandlerFunc(s.updateCustomTLSCertificate)))
 	mux.Handle("DELETE /v1/custom-tls-certificates/{certificateID}", s.requireRole("admin", http.HandlerFunc(s.deleteCustomTLSCertificate)))

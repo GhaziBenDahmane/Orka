@@ -112,7 +112,7 @@ Reported for manual conversion:
 - application mounts, published host ports, custom Swarm health/restart/update/
   placement settings, redirects, and security rules;
 - Compose definitions stored only in a remote Git repository;
-- GitHub App credentials, SSH keys, certificates, unsupported or calendar-based
+- GitHub App credentials, SSH keys, custom TLS certificates, unsupported or calendar-based
   backup schedules, additional policies for the same database, and Compose
   backup policies;
 - Telegram, Discord, Resend, Gotify, ntfy, Mattermost, Pushover, custom, Lark,
@@ -137,6 +137,12 @@ Credentials are never attached across hostnames. Docker-image applications that
 pull from a private registry still require operator validation because they do
 not use an application-source build record. Imported Git builds forward a
 matching registry credential to local or remote Swarm managers.
+
+Dokploy certificate private keys are intentionally not copied by the importer.
+Upload each chain and key through **Settings → Custom TLS certificates**, the
+write-only API/CLI, or `dockyard_custom_tls_certificate`, then attach its ID to
+the imported route with an empty ACME resolver. Dockyard validates SAN coverage
+and reconciles the certificate before permitting the next deployment.
 
 Managed-database import creates the destination Compose service and database
 record, but the control-plane import does not copy persistent volume contents.

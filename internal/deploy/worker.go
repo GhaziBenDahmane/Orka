@@ -807,6 +807,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 			rows.Close()
 			return err
 		}
+		r.Enabled = !r.Disabled
 		routes = append(routes, r)
 	}
 	if err = rows.Err(); err != nil {
@@ -816,7 +817,7 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	rows.Close()
 	customCertificatesRequired := false
 	for _, route := range routes {
-		if route.Enabled && route.CustomCertificateID != nil {
+		if !route.Disabled && route.CustomCertificateID != nil {
 			customCertificatesRequired = true
 			break
 		}

@@ -169,7 +169,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		}
 	}
 	metrics := recorder.Body.String()
-	for _, metric := range []string{"dockyard_deploy_token_expiry_seconds", "dockyard_resource_finalizers", "dockyard_resource_finalizer_oldest_age_seconds"} {
+	for _, metric := range []string{"dockyard_deploy_token_expiry_seconds", "dockyard_resource_finalizers", "dockyard_resource_finalizer_oldest_age_seconds", "dockyard_custom_tls_certificate_expiry_seconds", "dockyard_edge_tls_reconciliation", "dockyard_edge_tls_reconciliation_age_seconds"} {
 		if !strings.Contains(metrics, "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -460,6 +460,28 @@ func TestPrometheusAlertsCoverRemoteClusterUpgradeHealth(t *testing.T) {
 		"expr: dockyard_control_plane_certificate_expiry_seconds > 0 and dockyard_control_plane_certificate_expiry_seconds < 604800",
 		"alert: DockyardControlPlaneCertificateExpired",
 		"expr: dockyard_control_plane_certificate_expiry_seconds <= 0",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverCustomTLSHealth(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardCustomTLSCertificateExpiring",
+		"expr: dockyard_custom_tls_certificate_expiry_seconds > 0 and dockyard_custom_tls_certificate_expiry_seconds < 2592000",
+		"alert: DockyardCustomTLSCertificateExpired",
+		"expr: dockyard_custom_tls_certificate_expiry_seconds <= 0",
+		"alert: DockyardEdgeTLSReconciliationFailed",
+		`expr: dockyard_edge_tls_reconciliation{status="error"} == 1`,
+		"alert: DockyardEdgeTLSReconciliationStalled",
+		`expr: dockyard_edge_tls_reconciliation_age_seconds{status="pending"} > 300`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

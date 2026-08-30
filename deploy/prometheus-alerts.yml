@@ -256,6 +256,41 @@ groups:
           summary: A remote agent certificate rotation is stalled
           description: Cluster {{ $labels.cluster }} has not authenticated with its issued replacement certificate.
 
+      - alert: DockyardCustomTLSCertificateExpiring
+        expr: dockyard_custom_tls_certificate_expiry_seconds > 0 and dockyard_custom_tls_certificate_expiry_seconds < 2592000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A custom edge TLS certificate is approaching expiry
+          description: Certificate {{ $labels.certificate }} expires in less than thirty days; rotate it in organization settings.
+
+      - alert: DockyardCustomTLSCertificateExpired
+        expr: dockyard_custom_tls_certificate_expiry_seconds <= 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A custom edge TLS certificate expired
+          description: Certificate {{ $labels.certificate }} is expired and attached HTTPS routes may be unavailable.
+
+      - alert: DockyardEdgeTLSReconciliationFailed
+        expr: dockyard_edge_tls_reconciliation{status="error"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Edge TLS certificate reconciliation failed
+          description: Target {{ $labels.target }} exhausted its retries; inspect the worker and Traefik edge service before deploying attached workloads.
+
+      - alert: DockyardEdgeTLSReconciliationStalled
+        expr: dockyard_edge_tls_reconciliation_age_seconds{status="pending"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Edge TLS certificate reconciliation is stalled
+          description: Target {{ $labels.target }} has remained pending for more than five minutes.
+
       - alert: DockyardControlPlaneCertificateExpiring
         expr: dockyard_control_plane_certificate_expiry_seconds > 0 and dockyard_control_plane_certificate_expiry_seconds < 604800
         for: 15m

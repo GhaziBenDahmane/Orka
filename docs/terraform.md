@@ -14,6 +14,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_service_networks`
 - `dockyard_database`
 - `dockyard_source_credential`
+- `dockyard_custom_tls_certificate`
 - `dockyard_backup_destination`
 - `dockyard_backup_policy`
 - `dockyard_volume_backup_policy`
@@ -53,7 +54,9 @@ import), and clears all values only when `environment = {}` is explicit.
 
 `dockyard_route` updates in place and supports `enabled`, `strip_path`,
 `internal_path`, `redirect_regex`, `redirect_replacement`, and
-`redirect_permanent`. Route changes become active with the service's next
+`redirect_permanent`. Set `custom_certificate_id` and an empty
+`certificate_resolver` to use a managed custom certificate; otherwise use an
+ACME resolver. Route changes become active with the service's next
 deployment; redirect expressions use Go/Traefik RE2 syntax.
 HTTP basic-auth identities deliberately remain outside Terraform state because
 their write-only passwords require explicit rotation through the console, API,
@@ -98,6 +101,10 @@ stored backup or audit artifacts depend on that location.
 Source credentials similarly retain secret material only in sensitive state;
 use `secret` for Git HTTPS and registry credentials, or `private_key` plus
 `known_hosts` for host-pinned SSH credentials.
+Custom TLS certificate chains and keys are also write-only API values retained
+as sensitive Terraform state. Use an encrypted remote state backend. Updating
+either PEM value performs an optimistic, revision-fenced rotation; destruction
+is refused while a route still references the certificate.
 
 Managed databases are replacement-oriented because changing an engine,
 version, or credential-bearing driver configuration in place is unsafe.

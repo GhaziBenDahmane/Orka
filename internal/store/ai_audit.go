@@ -36,6 +36,8 @@ type AIAuditSnapshot struct {
 	DatabaseEngines      []AIAuditDatabaseEngineInfo     `json:"databaseEngines"`
 	Clusters             []AIAuditClusterInfo            `json:"clusters"`
 	ManagedNetworks      []AIAuditManagedNetworkInfo     `json:"managedNetworks"`
+	CustomTLSPosture     []AIAuditCustomTLSPosture       `json:"customTlsPosture"`
+	EdgeTLSPosture       []AIAuditEdgeTLSPosture         `json:"edgeTlsPosture"`
 	AgentCAPosture       AIAuditAgentCAPosture           `json:"agentCertificateAuthorityPosture"`
 	AgentUpgradePosture  []AIAuditAgentUpgradePosture    `json:"agentUpgradePosture"`
 	AgentCommandPosture  []AIAuditAgentCommandPosture    `json:"agentCommandPosture"`
@@ -117,21 +119,40 @@ type AIAuditManagedNetworkInfo struct {
 }
 
 type AIAuditRouteInfo struct {
-	ID                  uuid.UUID `json:"id"`
-	ComposeServiceID    uuid.UUID `json:"composeServiceId"`
-	ServiceName         string    `json:"serviceName"`
-	Host                string    `json:"host"`
-	PathPrefix          string    `json:"pathPrefix"`
-	InternalPath        string    `json:"internalPath"`
-	StripPath           bool      `json:"stripPath"`
-	Enabled             bool      `json:"enabled"`
-	Disabled            bool      `json:"-"`
-	RedirectConfigured  bool      `json:"redirectConfigured"`
-	RedirectPermanent   bool      `json:"redirectPermanent"`
-	BasicAuthEnabled    bool      `json:"basicAuthEnabled"`
-	TargetPort          int       `json:"targetPort"`
-	TLS                 bool      `json:"tls"`
-	CertificateResolver string    `json:"certificateResolver"`
+	ID                  uuid.UUID  `json:"id"`
+	ComposeServiceID    uuid.UUID  `json:"composeServiceId"`
+	ServiceName         string     `json:"serviceName"`
+	Host                string     `json:"host"`
+	PathPrefix          string     `json:"pathPrefix"`
+	InternalPath        string     `json:"internalPath"`
+	StripPath           bool       `json:"stripPath"`
+	Enabled             bool       `json:"enabled"`
+	Disabled            bool       `json:"-"`
+	RedirectConfigured  bool       `json:"redirectConfigured"`
+	RedirectPermanent   bool       `json:"redirectPermanent"`
+	BasicAuthEnabled    bool       `json:"basicAuthEnabled"`
+	TargetPort          int        `json:"targetPort"`
+	TLS                 bool       `json:"tls"`
+	CertificateResolver string     `json:"certificateResolver"`
+	CustomCertificateID *uuid.UUID `json:"customCertificateId,omitempty"`
+}
+
+type AIAuditCustomTLSPosture struct {
+	ID             uuid.UUID `json:"id"`
+	NotBefore      time.Time `json:"notBefore"`
+	NotAfter       time.Time `json:"notAfter"`
+	Revision       int64     `json:"revision"`
+	AttachedRoutes int64     `json:"attachedRoutes"`
+	EnabledRoutes  int64     `json:"enabledRoutes"`
+}
+
+type AIAuditEdgeTLSPosture struct {
+	TargetKey         string     `json:"targetKey"`
+	ClusterID         *uuid.UUID `json:"clusterId,omitempty"`
+	Generation        int64      `json:"generation"`
+	AppliedGeneration int64      `json:"appliedGeneration"`
+	Status            string     `json:"status"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 type AIAuditServiceSchedulePosture struct {
@@ -511,7 +532,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -675,7 +696,7 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	}
 	rows.Close()
 
-	rows, err = s.Pool.Query(ctx, `SELECT route.id,route.compose_service_id,route.service_name,route.host,route.path_prefix,route.internal_path,route.strip_path,NOT route.enabled,route.redirect_regex<>'',route.redirect_permanent,EXISTS(SELECT 1 FROM route_basic_auth_users auth WHERE auth.compose_service_id=route.compose_service_id),route.target_port,route.tls,route.certificate_resolver
+	rows, err = s.Pool.Query(ctx, `SELECT route.id,route.compose_service_id,route.service_name,route.host,route.path_prefix,route.internal_path,route.strip_path,NOT route.enabled,route.redirect_regex<>'',route.redirect_permanent,EXISTS(SELECT 1 FROM route_basic_auth_users auth WHERE auth.compose_service_id=route.compose_service_id),route.target_port,route.tls,route.certificate_resolver,route.custom_certificate_id
 		FROM routes route
 		JOIN compose_services service ON service.id=route.compose_service_id
 		JOIN environments environment ON environment.id=service.environment_id
@@ -687,12 +708,63 @@ func (s *Store) loadAIAuditInventory(ctx context.Context, organizationID uuid.UU
 	}
 	for rows.Next() {
 		var item AIAuditRouteInfo
-		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.InternalPath, &item.StripPath, &item.Disabled, &item.RedirectConfigured, &item.RedirectPermanent, &item.BasicAuthEnabled, &item.TargetPort, &item.TLS, &item.CertificateResolver); err != nil {
+		if err = rows.Scan(&item.ID, &item.ComposeServiceID, &item.ServiceName, &item.Host, &item.PathPrefix, &item.InternalPath, &item.StripPath, &item.Disabled, &item.RedirectConfigured, &item.RedirectPermanent, &item.BasicAuthEnabled, &item.TargetPort, &item.TLS, &item.CertificateResolver, &item.CustomCertificateID); err != nil {
 			rows.Close()
 			return err
 		}
 		item.Enabled = !item.Disabled
 		snapshot.Routes = append(snapshot.Routes, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `SELECT certificate.id,certificate.not_before,certificate.not_after,certificate.revision,count(route.id),count(route.id) FILTER (WHERE route.enabled AND route.tls)
+		FROM custom_tls_certificates certificate
+		LEFT JOIN routes route ON route.custom_certificate_id=certificate.id
+		WHERE certificate.organization_id=$1
+		GROUP BY certificate.id
+		ORDER BY certificate.id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditCustomTLSPosture
+		if err = rows.Scan(&item.ID, &item.NotBefore, &item.NotAfter, &item.Revision, &item.AttachedRoutes, &item.EnabledRoutes); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.CustomTLSPosture = append(snapshot.CustomTLSPosture, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `SELECT target.target_key,target.cluster_id,target.generation,target.applied_generation,target.status,target.updated_at
+		FROM edge_certificate_targets target
+		WHERE EXISTS (
+			SELECT 1 FROM routes route
+			JOIN custom_tls_certificates certificate ON certificate.id=route.custom_certificate_id
+			JOIN compose_services service ON service.id=route.compose_service_id
+			JOIN environments environment ON environment.id=service.environment_id
+			WHERE certificate.organization_id=$1
+			AND ((target.cluster_id IS NULL AND environment.cluster_id IS NULL) OR target.cluster_id=environment.cluster_id)
+		)
+		ORDER BY target.target_key`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditEdgeTLSPosture
+		if err = rows.Scan(&item.TargetKey, &item.ClusterID, &item.Generation, &item.AppliedGeneration, &item.Status, &item.UpdatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.EdgeTLSPosture = append(snapshot.EdgeTLSPosture, item)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()

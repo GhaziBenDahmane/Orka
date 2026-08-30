@@ -30,23 +30,25 @@ type routeModel struct {
 	TargetPort          types.Int64  `tfsdk:"target_port"`
 	TLS                 types.Bool   `tfsdk:"tls"`
 	CertificateResolver types.String `tfsdk:"certificate_resolver"`
+	CustomCertificateID types.String `tfsdk:"custom_certificate_id"`
 }
 
 type routeResponse struct {
-	ID                  string `json:"id"`
-	ComposeServiceID    string `json:"composeServiceId"`
-	ServiceName         string `json:"serviceName"`
-	Host                string `json:"host"`
-	PathPrefix          string `json:"pathPrefix"`
-	InternalPath        string `json:"internalPath"`
-	StripPath           bool   `json:"stripPath"`
-	Enabled             bool   `json:"enabled"`
-	RedirectRegex       string `json:"redirectRegex"`
-	RedirectReplacement string `json:"redirectReplacement"`
-	RedirectPermanent   bool   `json:"redirectPermanent"`
-	TargetPort          int64  `json:"targetPort"`
-	TLS                 bool   `json:"tls"`
-	CertificateResolver string `json:"certificateResolver"`
+	ID                  string  `json:"id"`
+	ComposeServiceID    string  `json:"composeServiceId"`
+	ServiceName         string  `json:"serviceName"`
+	Host                string  `json:"host"`
+	PathPrefix          string  `json:"pathPrefix"`
+	InternalPath        string  `json:"internalPath"`
+	StripPath           bool    `json:"stripPath"`
+	Enabled             bool    `json:"enabled"`
+	RedirectRegex       string  `json:"redirectRegex"`
+	RedirectReplacement string  `json:"redirectReplacement"`
+	RedirectPermanent   bool    `json:"redirectPermanent"`
+	TargetPort          int64   `json:"targetPort"`
+	TLS                 bool    `json:"tls"`
+	CertificateResolver string  `json:"certificateResolver"`
+	CustomCertificateID *string `json:"customCertificateId"`
 }
 
 func newRouteResource() resource.Resource { return &routeResource{} }
@@ -58,20 +60,21 @@ func (r *routeResource) Metadata(_ context.Context, request resource.MetadataReq
 func (r *routeResource) Schema(_ context.Context, _ resource.SchemaRequest, response *resource.SchemaResponse) {
 	stringReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	response.Schema = schema.Schema{Description: "A Traefik HTTP(S) route for a Compose service.", Attributes: map[string]schema.Attribute{
-		"id":                   schema.StringAttribute{Computed: true},
-		"service_id":           schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
-		"service_name":         schema.StringAttribute{Required: true},
-		"host":                 schema.StringAttribute{Required: true},
-		"path_prefix":          schema.StringAttribute{Required: true},
-		"internal_path":        schema.StringAttribute{Optional: true, Computed: true},
-		"strip_path":           schema.BoolAttribute{Optional: true, Computed: true},
-		"enabled":              schema.BoolAttribute{Optional: true, Computed: true},
-		"redirect_regex":       schema.StringAttribute{Optional: true, Computed: true},
-		"redirect_replacement": schema.StringAttribute{Optional: true, Computed: true},
-		"redirect_permanent":   schema.BoolAttribute{Optional: true, Computed: true},
-		"target_port":          schema.Int64Attribute{Required: true},
-		"tls":                  schema.BoolAttribute{Required: true},
-		"certificate_resolver": schema.StringAttribute{Required: true},
+		"id":                    schema.StringAttribute{Computed: true},
+		"service_id":            schema.StringAttribute{Required: true, PlanModifiers: stringReplace},
+		"service_name":          schema.StringAttribute{Required: true},
+		"host":                  schema.StringAttribute{Required: true},
+		"path_prefix":           schema.StringAttribute{Required: true},
+		"internal_path":         schema.StringAttribute{Optional: true, Computed: true},
+		"strip_path":            schema.BoolAttribute{Optional: true, Computed: true},
+		"enabled":               schema.BoolAttribute{Optional: true, Computed: true},
+		"redirect_regex":        schema.StringAttribute{Optional: true, Computed: true},
+		"redirect_replacement":  schema.StringAttribute{Optional: true, Computed: true},
+		"redirect_permanent":    schema.BoolAttribute{Optional: true, Computed: true},
+		"target_port":           schema.Int64Attribute{Required: true},
+		"tls":                   schema.BoolAttribute{Required: true},
+		"certificate_resolver":  schema.StringAttribute{Required: true},
+		"custom_certificate_id": schema.StringAttribute{Optional: true, Description: "Organization custom TLS certificate ID. When set, certificate_resolver must be empty."},
 	}}
 }
 
@@ -159,6 +162,11 @@ func setRoute(model *routeModel, item routeResponse) {
 	model.TargetPort = types.Int64Value(item.TargetPort)
 	model.TLS = types.BoolValue(item.TLS)
 	model.CertificateResolver = types.StringValue(item.CertificateResolver)
+	if item.CustomCertificateID == nil {
+		model.CustomCertificateID = types.StringNull()
+	} else {
+		model.CustomCertificateID = types.StringValue(*item.CustomCertificateID)
+	}
 }
 
 func routeRequest(model routeModel) map[string]any {
@@ -170,12 +178,16 @@ func routeRequest(model routeModel) map[string]any {
 	if !model.Enabled.IsNull() && !model.Enabled.IsUnknown() {
 		enabled = model.Enabled.ValueBool()
 	}
-	return map[string]any{
+	body := map[string]any{
 		"serviceName": model.ServiceName.ValueString(), "host": model.Host.ValueString(), "pathPrefix": model.PathPrefix.ValueString(),
 		"internalPath": internalPath, "stripPath": model.StripPath.ValueBool(), "enabled": enabled,
 		"redirectRegex": model.RedirectRegex.ValueString(), "redirectReplacement": model.RedirectReplacement.ValueString(), "redirectPermanent": model.RedirectPermanent.ValueBool(),
 		"targetPort": model.TargetPort.ValueInt64(), "tls": model.TLS.ValueBool(), "certificateResolver": model.CertificateResolver.ValueString(),
 	}
+	if !model.CustomCertificateID.IsNull() && !model.CustomCertificateID.IsUnknown() && model.CustomCertificateID.ValueString() != "" {
+		body["customCertificateId"] = model.CustomCertificateID.ValueString()
+	}
+	return body
 }
 
 var _ resource.ResourceWithConfigure = (*routeResource)(nil)

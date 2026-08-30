@@ -11,7 +11,8 @@ The initial implementation includes:
 - durable PostgreSQL jobs with leases, heartbeats, cancellation, and stale-worker recovery;
 - an external-PostgreSQL, three-controller Swarm profile with fenced workers and mandatory remote backups;
 - Docker Swarm stack deployment, rollback, and leader-elected drift repair;
-- Traefik label and overlay-network generation;
+- Traefik label and overlay-network generation, with encrypted custom TLS
+  certificates reconciled through versioned Swarm secrets locally or by agent;
 - a versioned template catalog with Dokploy template import support;
 - multiple GitHub template repositories with namespaced Dokploy-compatible Compose catalogs;
 - startup-seeded PostgreSQL, Redis, 9Router, and BarkTrace SQLite/PostgreSQL
@@ -128,7 +129,7 @@ curl -X POST http://localhost:8080/v1/auth/bootstrap \
 Every HTTP response includes `X-Request-ID`; callers may supply their own
 printable value. `GET /metrics` exposes bounded-route HTTP latency/status,
 background-operation duration/status, queue and lease health, deployment
-state, and backup/restore state and age. It requires the dedicated fleet
+state, edge-TLS expiry/reconciliation, and backup/restore state and age. It requires the dedicated fleet
 operator bearer credential in `DOCKYARD_METRICS_TOKEN`, not a tenant session.
 Set
 `DOCKYARD_OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP/gRPC URL (for example,

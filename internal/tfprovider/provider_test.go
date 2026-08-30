@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 28 {
+	if len(instance.Resources(context.Background())) != 29 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -76,6 +76,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_auth_settings") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_custom_tls_certificate") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_tag") || !slices.Contains(resourceTypes, "dockyard_service_tags") {
@@ -416,5 +419,31 @@ func TestSplitVolumeBackupPolicyImportID(t *testing.T) {
 		if _, _, err = splitVolumeBackupPolicyImportID(invalid); err == nil {
 			t.Errorf("splitVolumeBackupPolicyImportID(%q) succeeded", invalid)
 		}
+	}
+}
+
+func TestCustomTLSCertificateSecretsAndRouteReference(t *testing.T) {
+	var certificateSchema resource.SchemaResponse
+	newCustomTLSCertificateResource().Schema(context.Background(), resource.SchemaRequest{}, &certificateSchema)
+	for _, name := range []string{"certificate_pem", "private_key_pem"} {
+		attribute, ok := certificateSchema.Schema.Attributes[name].(resourceschema.StringAttribute)
+		if !ok || !attribute.Required || !attribute.Sensitive {
+			t.Fatalf("%s schema = %#v", name, certificateSchema.Schema.Attributes[name])
+		}
+	}
+	model := customTLSCertificateModel{CertificatePEM: types.StringValue("certificate-secret"), PrivateKeyPEM: types.StringValue("private-key-secret")}
+	var diagnostics diag.Diagnostics
+	setCustomTLSCertificate(context.Background(), &model, customTLSCertificateResponse{ID: "certificate-id", Name: "Production", Fingerprint: "sha256:abc", DNSNames: []string{"app.example.test"}, NotBefore: "2026-08-30T12:00:00Z", NotAfter: "2027-08-30T12:00:00Z", Revision: 2}, &diagnostics)
+	if diagnostics.HasError() || model.CertificatePEM.ValueString() != "certificate-secret" || model.PrivateKeyPEM.ValueString() != "private-key-secret" || model.Revision.ValueInt64() != 2 || model.DNSNames.IsNull() {
+		t.Fatalf("custom TLS state=%#v diagnostics=%v", model, diagnostics)
+	}
+	certificateID := "0cc565f8-6b40-4bd7-a6ff-f2f00d3b7ae4"
+	route := routeModel{ServiceName: types.StringValue("web"), Host: types.StringValue("app.example.test"), PathPrefix: types.StringValue("/"), TargetPort: types.Int64Value(443), TLS: types.BoolValue(true), CertificateResolver: types.StringValue(""), CustomCertificateID: types.StringValue(certificateID)}
+	if input := routeRequest(route); input["customCertificateId"] != certificateID {
+		t.Fatalf("custom-certificate route input=%#v", input)
+	}
+	setRoute(&route, routeResponse{CustomCertificateID: &certificateID})
+	if route.CustomCertificateID.ValueString() != certificateID {
+		t.Fatalf("custom certificate route state=%#v", route)
 	}
 }
