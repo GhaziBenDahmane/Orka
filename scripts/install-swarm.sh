@@ -21,6 +21,7 @@ dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
 wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
 stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
+egress_private_cidrs=${DOCKYARD_EGRESS_PRIVATE_CIDRS:-}
 
 fail() {
   echo "install-swarm: $*" >&2
@@ -92,6 +93,7 @@ TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
 export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_MASTER_KEY_SECRET DOCKYARD_METRICS_TOKEN_SECRET
 DOCKYARD_TRAEFIK_NETWORK=$network
 export DOCKYARD_TRAEFIK_NETWORK
+export DOCKYARD_EGRESS_PRIVATE_CIDRS="$egress_private_cidrs"
 export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT_SERVER_CERT_SECRET DOCKYARD_AGENT_SERVER_KEY_SECRET DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET
 "$root/scripts/ci/check-image-digests.sh" controller
 
@@ -219,6 +221,9 @@ for image_spec in "DOCKYARD_IMAGE:$DOCKYARD_IMAGE" "POSTGRES_IMAGE:$POSTGRES_IMA
   image=${image_spec#*:}
   docker manifest inspect "$image" >/dev/null 2>&1 || fail "$image_label cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
 done
+if [ -n "$egress_private_cidrs" ]; then
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
+fi
 
 existing=""
 while IFS= read -r spec; do

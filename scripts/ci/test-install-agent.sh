@@ -18,6 +18,8 @@ case "$1 $2" in
   "info --format") printf '%s\n' 'active true' ;;
   "manifest inspect")
     if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
+  "run --rm")
+    case "$*" in *not-a-cidr*) exit 1 ;; esac ;;
   "secret inspect")
     if [ "${DOCKYARD_INSTALL_TEST_SECRET_EXISTS:-false}" = true ]; then exit 0; else exit 1; fi ;;
   "secret create")
@@ -58,6 +60,22 @@ grep -q '^service=edge_agent network=dockyard-public$' "$DOCKYARD_INSTALL_TEST_L
 grep -q '^enrollment-secret=dockyard_agent_enrollment_token$' "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'agent dry-run mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_EGRESS_PRIVATE_CIDRS='10.40.12.0/24,fd00:40:12::/64' \
+  DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-agent.sh" >/dev/null
+grep -q '^run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-egress-policy --cidrs 10.40.12.0/24,fd00:40:12::/64$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_EGRESS_PRIVATE_CIDRS='not-a-cidr' "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted an invalid private egress CIDR' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_EGRESS_PRIVATE_CIDRS must contain' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid agent egress policy mutated Docker state' >&2
   exit 1
 fi
 

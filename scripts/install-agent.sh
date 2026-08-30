@@ -9,6 +9,7 @@ dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
 wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
 stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
+egress_private_cidrs=${DOCKYARD_EGRESS_PRIVATE_CIDRS:-}
 token_secret=${DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET:-dockyard_agent_enrollment_token}
 
 fail() {
@@ -122,8 +123,12 @@ export DOCKYARD_CONTROL_PLANE_URL="$control_plane_url"
 export DOCKYARD_AGENT_URL="$agent_url"
 export DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET="$token_secret"
 export DOCKYARD_AGENT_SERVICE_NAME DOCKYARD_TRAEFIK_NETWORK="$network"
+export DOCKYARD_EGRESS_PRIVATE_CIDRS="$egress_private_cidrs"
 
 docker manifest inspect "$DOCKYARD_IMAGE" >/dev/null 2>&1 || fail "DOCKYARD_IMAGE cannot be resolved from the configured registry; authenticate Docker and verify the immutable digest"
+if [ -n "$egress_private_cidrs" ]; then
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
+fi
 
 if docker secret inspect "$token_secret" >/dev/null 2>&1 && [ "$reuse" != true ]; then
   fail "Docker secret $token_secret already exists; set DOCKYARD_REUSE_EXISTING_SECRETS=true only when the agent identity volume is intact"

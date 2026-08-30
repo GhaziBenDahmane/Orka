@@ -21,6 +21,8 @@ case "$1 $2" in
   "info --format") printf '%s\n' 'active true' ;;
   "manifest inspect")
     if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
+  "run --rm")
+    case "$*" in *not-a-cidr*) exit 1 ;; esac ;;
   "secret inspect")
     case " ${DOCKYARD_INSTALL_TEST_EXISTING_SECRETS:-} " in *" $3 "*) exit 0 ;; *) exit 1 ;; esac ;;
   "secret create")
@@ -80,6 +82,22 @@ for image in "$DOCKYARD_IMAGE" "$POSTGRES_IMAGE" "$TRAEFIK_IMAGE"; do
 done
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'dry-run mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_EGRESS_PRIVATE_CIDRS='10.40.12.0/24,fd00:40:12::/64' \
+  DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-swarm.sh" >/dev/null
+grep -q '^run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-egress-policy --cidrs 10.40.12.0/24,fd00:40:12::/64$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_EGRESS_PRIVATE_CIDRS='not-a-cidr' "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted an invalid private egress CIDR' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_EGRESS_PRIVATE_CIDRS must contain' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid egress policy mutated Docker state' >&2
   exit 1
 fi
 

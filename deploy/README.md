@@ -115,6 +115,11 @@ network authority and do not use broad ranges when a service subnet suffices.
 This control applies to control-plane clients and remote-agent artifact
 transfers. Docker image pulls, build steps, and deployed workloads use Docker's
 network path and still require node firewall and egress-policy enforcement.
+When this allowlist is non-empty, both installers validate it with the exact
+digest-pinned Dockyard image in a temporary, networkless, read-only container
+before mutating Swarm resources. Consequently, an installer dry run may place
+the candidate image layers in Docker's local cache, but it creates no persistent
+container, network, secret, service, or stack.
 All bundled services use Docker's bounded `local` logging driver with five
 20-MiB files by default. Set `DOCKYARD_CONTAINER_LOG_MAX_SIZE` and
 `DOCKYARD_CONTAINER_LOG_MAX_FILES` before rendering any platform, agent, or AI

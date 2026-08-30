@@ -18,6 +18,17 @@ func TestPlatformHTTPServerUsesBoundedTransportSettings(t *testing.T) {
 	}
 }
 
+func TestValidateEgressPolicyCommand(t *testing.T) {
+	if err := validateEgressPolicy([]string{"--cidrs", "10.40.0.0/16,fd00:40::/48"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, arguments := range [][]string{{"--cidrs", "not-a-cidr"}, {"--cidrs", "10.0.0.0/8,10.0.0.0/8"}, {"unexpected"}} {
+		if err := validateEgressPolicy(arguments); err == nil {
+			t.Errorf("arguments %q were accepted", arguments)
+		}
+	}
+}
+
 func TestReadRestrictedMasterKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master-key")
 	want := []byte(strings.Repeat("k", 32))

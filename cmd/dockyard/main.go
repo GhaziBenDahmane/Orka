@@ -72,6 +72,8 @@ func main() {
 		err = rotateMasterKey(os.Args[2:])
 	case "validate-production-certification":
 		err = validateProductionCertification(os.Args[2:])
+	case "validate-egress-policy":
+		err = validateEgressPolicy(os.Args[2:])
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
 	default:
@@ -84,7 +86,23 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|volume-artifact>"
+
+func validateEgressPolicy(arguments []string) error {
+	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
+	cidrs := flags.String("cidrs", "", "comma-separated private egress CIDRs")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("usage: dockyard validate-egress-policy [--cidrs CIDR,...]")
+	}
+	_, err := netpolicy.ParseAllowedCIDRs(*cidrs)
+	if err != nil {
+		return fmt.Errorf("validate egress policy: %w", err)
+	}
+	return nil
+}
 
 func validateProductionCertification(arguments []string) error {
 	flags := flag.NewFlagSet("validate-production-certification", flag.ContinueOnError)
