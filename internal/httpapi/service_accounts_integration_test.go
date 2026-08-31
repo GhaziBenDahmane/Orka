@@ -210,8 +210,15 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if err = json.Unmarshal(data, &auditRun); err != nil || auditRun.ID == uuid.Nil {
 		t.Fatalf("audit run response=%s err=%v", data, err)
 	}
+	otherAuditorID, otherRunID := uuid.New(), uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO service_accounts(id,organization_id,name,role) VALUES($1,$2,'other-ai-auditor','auditor')`, otherAuditorID, orgID); err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,completed_at) VALUES($1,$2,$3,'other-agent','completed',now())`, otherRunID, orgID, otherAuditorID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	response, data = do(http.MethodGet, "/v1/ai/audit-runs/self", auditor.Token, nil)
-	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(auditRun.ID.String())) || !bytes.Contains(data, []byte(`"agentName":"test-auditor"`)) {
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(auditRun.ID.String())) || !bytes.Contains(data, []byte(`"agentName":"test-auditor"`)) || bytes.Contains(data, []byte(otherRunID.String())) {
 		t.Fatalf("auditor own runs status=%d body=%s", response.StatusCode, data)
 	}
 	response, _ = do(http.MethodGet, "/v1/ai/audit-runs/self", newToken, nil)

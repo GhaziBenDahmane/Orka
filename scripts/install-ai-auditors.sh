@@ -3,7 +3,8 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 stack=${DOCKYARD_AI_STACK_NAME:-dockyard-ai}
-token_secret=${DOCKYARD_AI_AUDITOR_TOKEN_SECRET:-dockyard_ai_auditor_token}
+security_token_secret=${DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET:-dockyard_ai_security_auditor_token}
+reliability_token_secret=${DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET:-dockyard_ai_reliability_auditor_token}
 api_key_secret=${DOCKYARD_AI_API_KEY_SECRET:-dockyard_ai_api_key}
 reuse=${DOCKYARD_REUSE_EXISTING_SECRETS:-false}
 dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
@@ -18,10 +19,10 @@ fail() {
 }
 
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_AI_STACK_NAME" ;; esac
-for secret_name in "$token_secret" "$api_key_secret"; do
+for secret_name in "$security_token_secret" "$reliability_token_secret" "$api_key_secret"; do
   case "$secret_name" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid AI Docker secret name" ;; esac
 done
-[ "$token_secret" != "$api_key_secret" ] || fail "AI Docker secret names must be distinct"
+[ "$security_token_secret" != "$reliability_token_secret" ] && [ "$security_token_secret" != "$api_key_secret" ] && [ "$reliability_token_secret" != "$api_key_secret" ] || fail "AI Docker secret names must be distinct"
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
 case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
@@ -44,7 +45,9 @@ DOCKYARD_AI_BASE_URL=${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
 DOCKYARD_AI_MODEL=${DOCKYARD_AI_MODEL:-}
 NINEROUTER_STORAGE_NODE_ID=${NINEROUTER_STORAGE_NODE_ID:-}
 export DOCKYARD_IMAGE NINEROUTER_IMAGE HEADROOM_IMAGE DOCKYARD_CONTROL_PLANE_URL DOCKYARD_AI_BASE_URL DOCKYARD_AI_MODEL NINEROUTER_STORAGE_NODE_ID
-export DOCKYARD_AI_AUDITOR_TOKEN_SECRET="$token_secret" DOCKYARD_AI_API_KEY_SECRET="$api_key_secret"
+export DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET="$security_token_secret"
+export DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET="$reliability_token_secret"
+export DOCKYARD_AI_API_KEY_SECRET="$api_key_secret"
 
 "$root/scripts/ci/check-image-digests.sh" ai
 case "$NINEROUTER_STORAGE_NODE_ID" in ""|*[!a-z0-9]*) fail "NINEROUTER_STORAGE_NODE_ID must be a lowercase Swarm node ID" ;; esac
@@ -68,11 +71,15 @@ validate_secret_file() {
   grep -q '[^[:space:]]' "$path" || fail "$label must not contain only whitespace"
 }
 
-token_file=${DOCKYARD_AI_AUDITOR_TOKEN_FILE:-}
+security_token_file=${DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_FILE:-}
+reliability_token_file=${DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_FILE:-}
 api_key_file=${DOCKYARD_AI_API_KEY_FILE:-}
-validate_secret_file DOCKYARD_AI_AUDITOR_TOKEN_FILE "$token_file"
+validate_secret_file DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_FILE "$security_token_file"
+validate_secret_file DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_FILE "$reliability_token_file"
 validate_secret_file DOCKYARD_AI_API_KEY_FILE "$api_key_file"
-cmp -s "$token_file" "$api_key_file" && fail "auditor and model credentials must be distinct"
+cmp -s "$security_token_file" "$reliability_token_file" && fail "security and reliability auditor credentials must be distinct"
+cmp -s "$security_token_file" "$api_key_file" && fail "auditor and model credentials must be distinct"
+cmp -s "$reliability_token_file" "$api_key_file" && fail "auditor and model credentials must be distinct"
 
 for image_spec in "DOCKYARD_IMAGE:$DOCKYARD_IMAGE" "NINEROUTER_IMAGE:$NINEROUTER_IMAGE" "HEADROOM_IMAGE:$HEADROOM_IMAGE"; do
   image_label=${image_spec%%:*}
@@ -82,7 +89,7 @@ done
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-ai-auditor-config --control-plane-url "$DOCKYARD_CONTROL_PLANE_URL" --model-url "$DOCKYARD_AI_BASE_URL" --model "$DOCKYARD_AI_MODEL" >/dev/null || fail "AI auditor URLs or model name are invalid"
 
 existing=""
-for secret_name in "$token_secret" "$api_key_secret"; do
+for secret_name in "$security_token_secret" "$reliability_token_secret" "$api_key_secret"; do
   if docker secret inspect "$secret_name" >/dev/null 2>&1; then
     existing="$existing $secret_name"
   fi
@@ -117,7 +124,8 @@ create_secret() {
 		created_secrets="$created_secrets $name"
 	fi
 }
-create_secret "$token_secret" "$token_file"
+create_secret "$security_token_secret" "$security_token_file"
+create_secret "$reliability_token_secret" "$reliability_token_file"
 create_secret "$api_key_secret" "$api_key_file"
 
 deployment_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -167,8 +175,14 @@ EOF
   fi
   sleep 2
 done
-docker run --rm -i --network host --read-only --cap-drop ALL --security-opt no-new-privileges \
-  --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" verify-ai-auditor-runs \
-  --control-plane-url "$DOCKYARD_CONTROL_PLANE_URL" --since "$deployment_started_at" \
-  --timeout "${audit_verify_timeout}s" <"$token_file" || fail "both AI auditors did not complete a fresh run within ${audit_verify_timeout}s"
+verify_auditor_run() {
+  auditor_name=$1
+  auditor_token_file=$2
+  docker run --rm -i --network host --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" verify-ai-auditor-runs \
+    --control-plane-url "$DOCKYARD_CONTROL_PLANE_URL" --agent-name "$auditor_name" --since "$deployment_started_at" \
+    --timeout "${audit_verify_timeout}s" <"$auditor_token_file" || fail "$auditor_name did not complete a fresh run within ${audit_verify_timeout}s"
+}
+verify_auditor_run security-auditor "$security_token_file"
+verify_auditor_run reliability-auditor "$reliability_token_file"
 echo "AI auditor stack $stack installed, remained converged for ${stability_seconds}s, and completed both fresh audit runs."

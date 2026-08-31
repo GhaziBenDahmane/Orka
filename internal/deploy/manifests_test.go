@@ -273,17 +273,24 @@ func TestAgentEnrollmentSecretCanBeVersioned(t *testing.T) {
 func TestAIAuditorSecretsCanBeVersioned(t *testing.T) {
 	manifest := readDeploymentManifest(t, "../../deploy/ai-auditors.yml")
 	for logicalName, expectedName := range map[string]string{
-		"dockyard_ai_auditor_token": "${DOCKYARD_AI_AUDITOR_TOKEN_SECRET:-dockyard_ai_auditor_token}",
-		"dockyard_ai_api_key":       "${DOCKYARD_AI_API_KEY_SECRET:-dockyard_ai_api_key}",
+		"dockyard_ai_security_auditor_token":    "${DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET:-dockyard_ai_security_auditor_token}",
+		"dockyard_ai_reliability_auditor_token": "${DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET:-dockyard_ai_reliability_auditor_token}",
+		"dockyard_ai_api_key":                   "${DOCKYARD_AI_API_KEY_SECRET:-dockyard_ai_api_key}",
 	} {
 		secret, ok := manifest.Secrets[logicalName]
 		if !ok || !secret.External || secret.Name != expectedName {
 			t.Errorf("AI secret %s is not configurable and external: %#v", logicalName, secret)
 		}
-		for _, serviceName := range []string{"security-auditor", "reliability-auditor"} {
-			if !slices.Contains(manifest.Services[serviceName].Secrets, any(logicalName)) {
-				t.Errorf("%s does not mount logical AI secret %s at its stable path", serviceName, logicalName)
-			}
+	}
+	if !slices.Contains(manifest.Services["security-auditor"].Secrets, any("dockyard_ai_security_auditor_token")) || slices.Contains(manifest.Services["security-auditor"].Secrets, any("dockyard_ai_reliability_auditor_token")) {
+		t.Error("security auditor token mount is not isolated")
+	}
+	if !slices.Contains(manifest.Services["reliability-auditor"].Secrets, any("dockyard_ai_reliability_auditor_token")) || slices.Contains(manifest.Services["reliability-auditor"].Secrets, any("dockyard_ai_security_auditor_token")) {
+		t.Error("reliability auditor token mount is not isolated")
+	}
+	for _, serviceName := range []string{"security-auditor", "reliability-auditor"} {
+		if !slices.Contains(manifest.Services[serviceName].Secrets, any("dockyard_ai_api_key")) {
+			t.Errorf("%s does not mount the model gateway key", serviceName)
 		}
 	}
 }

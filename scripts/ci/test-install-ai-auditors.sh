@@ -7,11 +7,13 @@ cleanup() { rm -rf -- "$temporary"; }
 trap cleanup EXIT
 
 mkdir -p "$temporary/bin" "$temporary/secrets"
-auditor_token='auditor-token-value'
+security_token='security-auditor-token-value'
+reliability_token='reliability-auditor-token-value'
 model_key='model-gateway-key'
-printf '%s' "$auditor_token" >"$temporary/secrets/auditor-token"
+printf '%s' "$security_token" >"$temporary/secrets/security-token"
+printf '%s' "$reliability_token" >"$temporary/secrets/reliability-token"
 printf '%s' "$model_key" >"$temporary/secrets/model-key"
-chmod 0600 "$temporary/secrets/auditor-token" "$temporary/secrets/model-key"
+chmod 0600 "$temporary/secrets/security-token" "$temporary/secrets/reliability-token" "$temporary/secrets/model-key"
 
 cat >"$temporary/bin/docker" <<'MOCK'
 #!/bin/sh
@@ -29,8 +31,12 @@ case "$1 $2" in
       *' validate-ai-auditor-config '*) ;;
       *' verify-ai-auditor-runs '*)
         read -r token || true
-        [ "$token" = 'auditor-token-value' ] || exit 1
-        [ "${DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY:-false}" != true ] || exit 1 ;;
+        case "$*" in
+          *' --agent-name security-auditor '*) [ "$token" = 'security-auditor-token-value' ] || exit 1 ;;
+          *' --agent-name reliability-auditor '*) [ "$token" = 'reliability-auditor-token-value' ] || exit 1 ;;
+          *) exit 1 ;;
+        esac
+        case "${DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY:-}" in "$token") exit 1 ;; esac ;;
       *) exit 1 ;;
     esac ;;
   "secret inspect")
@@ -38,7 +44,7 @@ case "$1 $2" in
   "secret create")
     [ "${DOCKYARD_AI_INSTALL_TEST_FAIL_SECRET:-}" != "$3" ] || exit 1 ;;
   "stack config")
-    printf 'stack=%s token-secret=%s key-secret=%s\n' "${DOCKYARD_AI_STACK_NAME:-dockyard-ai}" "$DOCKYARD_AI_AUDITOR_TOKEN_SECRET" "$DOCKYARD_AI_API_KEY_SECRET" >>"$DOCKYARD_AI_INSTALL_TEST_LOG" ;;
+    printf 'stack=%s security-secret=%s reliability-secret=%s key-secret=%s\n' "${DOCKYARD_AI_STACK_NAME:-dockyard-ai}" "$DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET" "$DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET" "$DOCKYARD_AI_API_KEY_SECRET" >>"$DOCKYARD_AI_INSTALL_TEST_LOG" ;;
   "stack deploy")
     [ "${DOCKYARD_AI_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
   "stack services")
@@ -69,7 +75,8 @@ export NINEROUTER_STORAGE_NODE_ID='nodeabc123'
 export DOCKYARD_CONTROL_PLANE_URL='https://dockyard.example.test'
 export DOCKYARD_AI_BASE_URL='http://9router:20128/v1'
 export DOCKYARD_AI_MODEL='provider/model'
-export DOCKYARD_AI_AUDITOR_TOKEN_FILE="$temporary/secrets/auditor-token"
+export DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_FILE="$temporary/secrets/security-token"
+export DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_FILE="$temporary/secrets/reliability-token"
 export DOCKYARD_AI_API_KEY_FILE="$temporary/secrets/model-key"
 export DOCKYARD_INSTALL_STABILITY_SECONDS=0
 
@@ -80,7 +87,7 @@ grep -Fqx "manifest inspect $NINEROUTER_IMAGE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -Fqx "manifest inspect $HEADROOM_IMAGE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -Fqx "node inspect --format {{.Status.State}} {{.Spec.Availability}} $NINEROUTER_STORAGE_NODE_ID" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -q ' validate-ai-auditor-config ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
-grep -q '^stack=dockyard-ai token-secret=dockyard_ai_auditor_token key-secret=dockyard_ai_api_key$' "$DOCKYARD_AI_INSTALL_TEST_LOG"
+grep -q '^stack=dockyard-ai security-secret=dockyard_ai_security_auditor_token reliability-secret=dockyard_ai_reliability_auditor_token key-secret=dockyard_ai_api_key$' "$DOCKYARD_AI_INSTALL_TEST_LOG"
 if grep -Eq '^(secret create|stack deploy)' "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
   echo 'AI auditor dry-run mutated Docker state' >&2
   exit 1
@@ -88,14 +95,16 @@ fi
 
 : >"$DOCKYARD_AI_INSTALL_TEST_LOG"
 "$root/scripts/install-ai-auditors.sh" | grep -q 'completed both fresh audit runs'
-grep -Fqx "secret create dockyard_ai_auditor_token $DOCKYARD_AI_AUDITOR_TOKEN_FILE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
+grep -Fqx "secret create dockyard_ai_security_auditor_token $DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_FILE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
+grep -Fqx "secret create dockyard_ai_reliability_auditor_token $DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_FILE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -Fqx "secret create dockyard_ai_api_key $DOCKYARD_AI_API_KEY_FILE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
 for service in dockyard-ai_9router dockyard-ai_headroom dockyard-ai_security-auditor dockyard-ai_reliability-auditor; do
   grep -q "service inspect .* $service$" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 done
-grep -q ' verify-ai-auditor-runs ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
-if grep -Fq "$auditor_token" "$DOCKYARD_AI_INSTALL_TEST_LOG" || grep -Fq "$model_key" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
+grep -q ' verify-ai-auditor-runs .* --agent-name security-auditor ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
+grep -q ' verify-ai-auditor-runs .* --agent-name reliability-auditor ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
+if grep -Fq "$security_token" "$DOCKYARD_AI_INSTALL_TEST_LOG" || grep -Fq "$reliability_token" "$DOCKYARD_AI_INSTALL_TEST_LOG" || grep -Fq "$model_key" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
   echo 'AI credential leaked to Docker command log' >&2
   exit 1
 fi
@@ -108,7 +117,7 @@ if grep -q ' verify-ai-auditor-runs ' "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
 fi
 
 : >"$DOCKYARD_AI_INSTALL_TEST_LOG"
-if DOCKYARD_AI_INSTALL_TEST_EXISTING_SECRETS='dockyard_ai_auditor_token' "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
+if DOCKYARD_AI_INSTALL_TEST_EXISTING_SECRETS='dockyard_ai_security_auditor_token' "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'AI installer accepted an existing secret without explicit reuse' >&2
   exit 1
 fi
@@ -123,7 +132,8 @@ if DOCKYARD_AI_INSTALL_TEST_FAIL_SECRET='dockyard_ai_api_key' "$root/scripts/ins
   echo 'AI installer ignored a Docker secret creation failure' >&2
   exit 1
 fi
-grep -q '^secret rm dockyard_ai_auditor_token$' "$DOCKYARD_AI_INSTALL_TEST_LOG"
+grep -q '^secret rm dockyard_ai_security_auditor_token$' "$DOCKYARD_AI_INSTALL_TEST_LOG"
+grep -q '^secret rm dockyard_ai_reliability_auditor_token$' "$DOCKYARD_AI_INSTALL_TEST_LOG"
 if grep -q '^stack deploy' "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
   echo 'AI installer deployed after a secret creation failure' >&2
   exit 1
@@ -157,13 +167,21 @@ fi
 grep -q 'must contain one value without CR or LF characters' "$temporary/err"
 
 printf '%s' "$model_key" >"$temporary/secrets/model-key"
+printf '%s' "$security_token" >"$temporary/secrets/reliability-token"
+if "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'AI installer accepted one credential for both auditor identities' >&2
+  exit 1
+fi
+grep -q 'security and reliability auditor credentials must be distinct' "$temporary/err"
+printf '%s' "$reliability_token" >"$temporary/secrets/reliability-token"
+
 : >"$DOCKYARD_AI_INSTALL_TEST_LOG"
-if DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY=true DOCKYARD_AI_VERIFY_TIMEOUT=1 "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
+if DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY="$security_token" DOCKYARD_AI_VERIFY_TIMEOUT=1 "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'AI installer reported success after audit verification failed' >&2
   exit 1
 fi
-grep -q 'both AI auditors did not complete a fresh run' "$temporary/err"
-if grep -Fq "$auditor_token" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
+grep -q 'security-auditor did not complete a fresh run' "$temporary/err"
+if grep -Fq "$security_token" "$DOCKYARD_AI_INSTALL_TEST_LOG" || grep -Fq "$reliability_token" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
   echo 'AI auditor token leaked while verifying runs' >&2
   exit 1
 fi

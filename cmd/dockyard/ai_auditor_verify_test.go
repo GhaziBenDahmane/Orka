@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestWaitForAIAuditorRunsRequiresFreshCompletedNamedRuns(t *testing.T) {
+func TestWaitForAIAuditorRunRequiresFreshCompletedNamedRun(t *testing.T) {
 	since := time.Now().UTC().Truncate(time.Second)
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +26,6 @@ func TestWaitForAIAuditorRunsRequiresFreshCompletedNamedRuns(t *testing.T) {
 		if attempt >= 2 {
 			items = []map[string]any{
 				{"agentName": "security-auditor", "status": "completed", "startedAt": since.Add(time.Second)},
-				{"agentName": "reliability-auditor", "status": "completed", "startedAt": since.Add(2 * time.Second)},
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
@@ -34,7 +33,7 @@ func TestWaitForAIAuditorRunsRequiresFreshCompletedNamedRuns(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := waitForAIAuditorRuns(ctx, server.Client(), server.URL, "verifier-token", since, time.Millisecond); err != nil {
+	if err := waitForAIAuditorRun(ctx, server.Client(), server.URL, "verifier-token", "security-auditor", since, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if requests.Load() != 2 {
@@ -42,7 +41,7 @@ func TestWaitForAIAuditorRunsRequiresFreshCompletedNamedRuns(t *testing.T) {
 	}
 }
 
-func TestWaitForAIAuditorRunsFailsClosed(t *testing.T) {
+func TestWaitForAIAuditorRunFailsClosedForWrongIdentity(t *testing.T) {
 	since := time.Now().UTC()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{{"agentName": "security-auditor", "status": "completed", "startedAt": since.Add(time.Second)}}})
@@ -50,14 +49,14 @@ func TestWaitForAIAuditorRunsFailsClosed(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	err := waitForAIAuditorRuns(ctx, server.Client(), server.URL, "token", since, time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "reliability-auditor") || strings.Contains(err.Error(), "security-auditor,") {
+	err := waitForAIAuditorRun(ctx, server.Client(), server.URL, "token", "reliability-auditor", since, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "reliability-auditor") {
 		t.Fatalf("error=%v", err)
 	}
 }
 
 func TestVerifyAIAuditorRunsRejectsTokenLineBreaks(t *testing.T) {
-	err := verifyAIAuditorRuns([]string{"--control-plane-url", "https://dockyard.example.test", "--since", time.Now().UTC().Format(time.RFC3339), "--timeout", "1s", "--poll-interval", "1ms"}, strings.NewReader("token\nsecond"))
+	err := verifyAIAuditorRuns([]string{"--control-plane-url", "https://dockyard.example.test", "--agent-name", "security-auditor", "--since", time.Now().UTC().Format(time.RFC3339), "--timeout", "1s", "--poll-interval", "1ms"}, strings.NewReader("token\nsecond"))
 	if err == nil || !strings.Contains(err.Error(), "without line breaks") {
 		t.Fatalf("error=%v", err)
 	}

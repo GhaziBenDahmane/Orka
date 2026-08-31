@@ -123,9 +123,10 @@ Builders, schedulers, routers, backup stores, identity providers, and database
 engines are application-layer interfaces. External extensions will use a
 versioned RPC protocol instead of Go's ABI-sensitive plugin mechanism.
 
-AI auditors sit outside the trusted control plane. An isolated service-account
-role can read a purpose-built, secret-free inventory and append findings only
-to runs owned by that identity. The default runner has no shell, Docker socket,
+AI auditors sit outside the trusted control plane. Each auditor has an isolated
+service-account identity that can read a purpose-built, secret-free inventory,
+read its own run history, and append findings only to runs owned by that
+identity. The default runner has no shell, Docker socket,
 or direct database access. Its OpenAI-compatible model endpoint can be a
 self-hosted 9Router service; general agents such as Hermes use the same narrow
 API contract rather than privileged infrastructure tools. Findings never

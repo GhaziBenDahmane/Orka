@@ -329,6 +329,7 @@ so failed evidence cannot retain or replace private-key material.
 | POST | `/v1/ai/audit-runs` | Start an attributed audit run |
 | POST | `/v1/ai/audit-runs/{id}/findings` | Upsert a structured finding by fingerprint |
 | PATCH | `/v1/ai/audit-runs/{id}` | Complete or fail the caller's active run |
+| GET | `/v1/ai/audit-runs/self` | List only the authenticating auditor identity's runs for post-deployment verification |
 | GET | `/v1/ai/audit-runs` | List runs as an organization administrator |
 | GET | `/v1/ai/audit-findings` | List the latest finding in every auditor/agent fingerprint lineage |
 | GET | `/v1/ai/audit-runs/{id}/findings` | Review findings as an organization administrator |
@@ -415,7 +416,7 @@ The current-findings endpoint accepts optional `disposition` (`active` selects
 open and acknowledged findings) and `severity` filters plus a `limit` from 1
 to 200 (default 100).
 
-The first four endpoints require an `auditor` service account; the last four
+The first five endpoints require an `auditor` service account; the last four
 require an administrator. Auditor identities have no normal RBAC rank and
 cannot mutate workloads. See `ai-auditing.md` for the deployment contract.
 

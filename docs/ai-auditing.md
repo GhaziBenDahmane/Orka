@@ -239,14 +239,24 @@ keys make it a privileged service.
 
 ## Deploy on Swarm
 
-Create one short-lived auditor service-account token in the API, store it and
-the model gateway key in mode-0600 non-symlink files, then use the supplied
-fail-closed installer:
+Create separate short-lived `auditor` service accounts for the security and
+reliability agents. Store both tokens and the model gateway key in mode-0600
+non-symlink files, then use the supplied fail-closed installer:
 
 ```sh
-export DOCKYARD_AI_AUDITOR_TOKEN_SECRET=dockyard_ai_auditor_token_v1
+dockyardctl create-service-account '{"name":"security-auditor","role":"auditor","expiresInDays":30}'
+dockyardctl create-service-account '{"name":"reliability-auditor","role":"auditor","expiresInDays":30}'
+```
+
+Each command returns its token once. Save it in the corresponding file below;
+do not reuse either token for the other auditor.
+
+```sh
+export DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET=dockyard_ai_security_auditor_token_v1
+export DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET=dockyard_ai_reliability_auditor_token_v1
 export DOCKYARD_AI_API_KEY_SECRET=dockyard_ai_api_key_v1
-export DOCKYARD_AI_AUDITOR_TOKEN_FILE=/secure/dockyard/ai-auditor-token
+export DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_FILE=/secure/dockyard/security-auditor-token
+export DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_FILE=/secure/dockyard/reliability-auditor-token
 export DOCKYARD_AI_API_KEY_FILE=/secure/dockyard/model-gateway-key
 export DOCKYARD_IMAGE='registry.example/dockyard@sha256:...'
 export NINEROUTER_IMAGE='decolua/9router@sha256:...'
@@ -265,22 +275,26 @@ configuration, unsafe secret files, and a missing, drained, or unavailable
 requires explicit `DOCKYARD_REUSE_EXISTING_SECRETS=true` for rotation, deploys
 with registry credentials, and verifies all four services use the requested
 digests and remain converged for the configured stability window. It then
-streams the auditor token over standard input to the immutable candidate image
-and waits for fresh completed `security-auditor` and `reliability-auditor` runs.
-The token is never placed in a process argument or environment variable. Set
+streams each auditor token separately over standard input to the immutable
+candidate image and verifies a fresh completed run from its exact agent name.
+This proves that two independently authenticated agents ran; neither container
+can impersonate the other or read the other's history. Tokens are never placed
+in process arguments or environment variables. Set
 `DOCKYARD_AI_VERIFY_TIMEOUT` to a value from 1 through 3600 seconds when the
 default 15-minute model-run window is unsuitable. The installer fails closed
 if either named run does not complete; `DOCKYARD_INSTALL_SKIP_WAIT=true` is the
 explicit asynchronous deployment escape hatch and skips both convergence and
 run verification.
 
-Docker secrets are immutable. To rotate either credential, create a new
-versioned secret, update `DOCKYARD_AI_AUDITOR_TOKEN_SECRET` or
+Docker secrets are immutable. To rotate a credential, create a new versioned
+secret, update `DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET`,
+`DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET`, or
 `DOCKYARD_AI_API_KEY_SECRET`, redeploy the stack, verify both auditors complete
-a run, and only then remove the previous secret. The external secret names may
-change while the files inside each container remain
-`/run/secrets/dockyard_ai_auditor_token` and
-`/run/secrets/dockyard_ai_api_key`.
+a run, and only then remove the previous secret. External secret names may
+change while their container paths remain stable.
+Deployments created before the identity split must provision both new token
+secrets; the former shared `DOCKYARD_AI_AUDITOR_TOKEN_SECRET` is intentionally
+not accepted as a fallback because that would silently preserve impersonation.
 9Router stores provider configuration in a node-local volume. The manifest
 therefore requires `NINEROUTER_STORAGE_NODE_ID` and constrains the gateway to
 that exact node. A node outage remains visible as unavailability instead of

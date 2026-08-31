@@ -42,7 +42,7 @@ services:
     stop_grace_period: 30s
     environment:
       DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:?set the public HTTPS Dockyard URL}
-      DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_auditor_token
+      DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_security_auditor_token
       DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
       DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
       DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI-compatible model name}
@@ -51,7 +51,7 @@ services:
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_RETRY_INTERVAL: ${DOCKYARD_AI_AUDIT_RETRY_INTERVAL:-5m}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
-    secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
+    secrets: [dockyard_ai_security_auditor_token, dockyard_ai_api_key]
     networks: [ai-control]
     read_only: true
     cap_drop: [ALL]
@@ -74,7 +74,7 @@ services:
     stop_grace_period: 30s
     environment:
       DOCKYARD_CONTROL_PLANE_URL: ${DOCKYARD_CONTROL_PLANE_URL:?set the public HTTPS Dockyard URL}
-      DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_auditor_token
+      DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_reliability_auditor_token
       DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
       DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
       DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI-compatible model name}
@@ -83,7 +83,7 @@ services:
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_RETRY_INTERVAL: ${DOCKYARD_AI_AUDIT_RETRY_INTERVAL:-5m}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
-    secrets: [dockyard_ai_auditor_token, dockyard_ai_api_key]
+    secrets: [dockyard_ai_reliability_auditor_token, dockyard_ai_api_key]
     networks: [ai-control]
     read_only: true
     cap_drop: [ALL]
@@ -101,9 +101,12 @@ services:
         constraints: [node.role == manager]
 
 secrets:
-  dockyard_ai_auditor_token:
+  dockyard_ai_security_auditor_token:
     external: true
-    name: ${DOCKYARD_AI_AUDITOR_TOKEN_SECRET:-dockyard_ai_auditor_token}
+    name: ${DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET:-dockyard_ai_security_auditor_token}
+  dockyard_ai_reliability_auditor_token:
+    external: true
+    name: ${DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET:-dockyard_ai_reliability_auditor_token}
   dockyard_ai_api_key:
     external: true
     name: ${DOCKYARD_AI_API_KEY_SECRET:-dockyard_ai_api_key}
