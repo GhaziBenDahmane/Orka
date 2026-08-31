@@ -219,6 +219,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
 	serviceID, databaseID, backupID, volumeBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	credentialID, destinationID, providerID := uuid.New(), uuid.New(), uuid.New()
+	customTLSCertificateID := uuid.New()
 	webhookID, notificationID, clusterID := uuid.New(), uuid.New(), uuid.New()
 	commandID, deploymentID, deliveryID := uuid.New(), uuid.New(), uuid.New()
 	migrationID, repositoryID := uuid.New(), uuid.New()
@@ -241,6 +242,7 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'backup','https://s3.example.test','bucket','')`, []any{destinationID, organizationID}},
 		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status) VALUES($1,$2,'data','node1',$3,true,'succeeded')`, []any{volumeBackupID, serviceID, destinationID}},
 		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,pending_certificate_pem,pending_encrypted_private_key,pending_certificate_not_after,pending_certificate_created_at) VALUES($1,$2,'saml','metadata','certificate','','pending-certificate','pending',now()+interval '1 day',now())`, []any{providerID, organizationID}},
+		{`INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,dns_names,not_before,not_after) VALUES($1,$2,'edge certificate','','',$3,ARRAY['app.example.test'],now()-interval '1 day',now()+interval '1 day')`, []any{customTLSCertificateID, organizationID, "sha256:" + strings.Repeat("c", 64)}},
 		{`INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret) VALUES($1,$2,'deploy','github','main','')`, []any{webhookID, serviceID}},
 		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'alerts','webhook','','',ARRAY['backup.failed'])`, []any{notificationID, organizationID}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state) VALUES($1,$2,'cluster','cluster','active')`, []any{clusterID, organizationID}},
@@ -260,7 +262,8 @@ func seedMasterKeyRotationRows(t *testing.T, ctx context.Context, pool *pgxpool.
 	ids := map[string]uuid.UUID{
 		"application_artifacts": serviceID, "application_sources": serviceID, "backup_destinations": destinationID,
 		"cluster_commands": commandID, "commit_status_deliveries": deliveryID, "compose_services": serviceID,
-		"database_backups": backupID, "database_instances": databaseID, "database_migrations": migrationID, "deployments": deploymentID,
+		"custom_tls_certificates": customTLSCertificateID,
+		"database_backups":        backupID, "database_instances": databaseID, "database_migrations": migrationID, "deployments": deploymentID,
 		"notification_endpoints": notificationID, "oidc_providers": providerID, "saml_providers": providerID,
 		"source_credentials": credentialID, "template_instances": serviceID, "template_repositories": repositoryID,
 		"volume_backups": volumeBackupID, "webhook_integrations": webhookID,
