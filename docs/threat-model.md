@@ -217,7 +217,9 @@ node inventory fails closed. The operator remains responsible for copying or
 restoring the volume contents before starting on the replacement node. An
 explicit offline restore snapshots the rebound node, requires the durable stop
 job to have succeeded, is serialized against start/rebind/data operations, and
-mounts only that target volume without resuming application services.
+mounts only that target volume without resuming application services. The
+worker rechecks stopped desired state and the Swarm helper independently
+refuses offline mode while any service in the application stack still exists.
 Generic named-volume transfer helpers are scheduled only on an explicitly
 persisted node and must run the same digest-pinned image as the controller or
 cluster agent. Presigned URLs and envelope keys are delivered in an ephemeral

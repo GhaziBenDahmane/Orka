@@ -69,6 +69,15 @@ func (s Swarm) RunVolumeArtifact(ctx context.Context, job VolumeArtifactJob) (re
 	if !safeRuntimeServiceName.MatchString(s.ServiceName) {
 		return result, errors.New("Swarm service name is required for volume artifact jobs")
 	}
+	if job.Offline {
+		services, listErr := s.run(ctx, "service", "ls", "--filter", "label=com.docker.stack.namespace="+job.StackName, "--format", "{{.Name}}")
+		if listErr != nil {
+			return result, fmt.Errorf("verify offline stack state: %w", listErr)
+		}
+		if strings.TrimSpace(services) != "" {
+			return result, fmt.Errorf("offline restore refused because stack %q still has services", job.StackName)
+		}
+	}
 	image, err := s.run(ctx, "service", "inspect", "--format", "{{.Spec.TaskTemplate.ContainerSpec.Image}}", s.ServiceName)
 	image = strings.TrimSpace(image)
 	if err != nil {

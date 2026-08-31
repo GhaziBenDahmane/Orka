@@ -763,6 +763,18 @@ func TestExecuteVolumeArtifactCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteOfflineVolumeArtifactCommandPreservesSafetyMode(t *testing.T) {
+	scheduler := &fakeScheduler{}
+	client := &Client{swarm: scheduler}
+	payload, _ := json.Marshal(deploy.VolumeArtifactJob{Job: volumeartifact.Job{Mode: "restore", TransferURL: "https://objects.example.test/download", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "volume-backup:test", SHA256: strings.Repeat("a", 64), PlaintextSHA256: strings.Repeat("b", 64), SizeBytes: 42}, VolumeName: "stack_data", NodeID: "nodeabc123", StackName: "application", Offline: true})
+	if _, err := client.executeCommand(context.Background(), command{Kind: "swarm.volume-artifact", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if scheduler.volumeArtifact == nil || !scheduler.volumeArtifact.Offline || scheduler.volumeArtifact.Quiesce {
+		t.Fatalf("offline restore mode was not preserved: %#v", scheduler.volumeArtifact)
+	}
+}
+
 func TestExecuteDatabaseTransferCommand(t *testing.T) {
 	scheduler := &fakeScheduler{}
 	client := &Client{swarm: scheduler}

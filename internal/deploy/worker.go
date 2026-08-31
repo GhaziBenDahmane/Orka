@@ -1514,12 +1514,12 @@ func (w *Worker) restoreVolume(ctx context.Context, j job) error {
 		return err
 	}
 	var backupID, destinationID uuid.UUID
-	var stackName, compose, serviceNodeID, volumeName, backupNodeID, targetNodeID, objectKey, expectedHash, plaintextHash, encryptedKey string
+	var stackName, compose, desiredState, serviceNodeID, volumeName, backupNodeID, targetNodeID, objectKey, expectedHash, plaintextHash, encryptedKey string
 	var offline bool
 	var expectedSize int64
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE volume_restores restore SET status='running',started_at=now() FROM volume_backups backup,compose_services service,environments environment WHERE restore.id=$1 AND backup.id=restore.volume_backup_id AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING backup.id,backup.destination_id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.volume_name,backup.storage_node_id,restore.target_storage_node_id,restore.offline,backup.object_key,backup.sha256,backup.plaintext_sha256,backup.encrypted_data_key,backup.size_bytes,environment.cluster_id`, restoreID).Scan(&backupID, &destinationID, &stackName, &compose, &serviceNodeID, &volumeName, &backupNodeID, &targetNodeID, &offline, &objectKey, &expectedHash, &plaintextHash, &encryptedKey, &expectedSize, &clusterID); err != nil {
+		if err := tx.QueryRow(ctx, `UPDATE volume_restores restore SET status='running',started_at=now() FROM volume_backups backup,compose_services service,environments environment WHERE restore.id=$1 AND backup.id=restore.volume_backup_id AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING backup.id,backup.destination_id,service.stack_name,service.compose_yaml,service.desired_state,service.storage_node_id,backup.volume_name,backup.storage_node_id,restore.target_storage_node_id,restore.offline,backup.object_key,backup.sha256,backup.plaintext_sha256,backup.encrypted_data_key,backup.size_bytes,environment.cluster_id`, restoreID).Scan(&backupID, &destinationID, &stackName, &compose, &desiredState, &serviceNodeID, &volumeName, &backupNodeID, &targetNodeID, &offline, &objectKey, &expectedHash, &plaintextHash, &encryptedKey, &expectedSize, &clusterID); err != nil {
 			return err
 		}
 		return store.LockBackupDestinationForOperation(ctx, tx, destinationID)
@@ -1528,6 +1528,12 @@ func (w *Worker) restoreVolume(ctx context.Context, j job) error {
 		return err
 	}
 	fail := func(cause error) error { return w.failVolumeRestore(ctx, j, restoreID, cause) }
+	if offline && desiredState != "stopped" {
+		return fail(store.ErrOfflineRestoreRequiresStopped)
+	}
+	if !offline && desiredState != "running" {
+		return fail(store.ErrServiceStopped)
+	}
 	// Restores queued before target-node snapshots were introduced retain the
 	// original behavior. New restores are fenced to the service assignment
 	// captured at admission, including explicit offline relocation restores.

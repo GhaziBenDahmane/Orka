@@ -177,6 +177,7 @@ func TestRunVolumeArtifactOfflineRestoreDoesNotStartOrScaleWorkload(t *testing.T
 	digest, encryptedHash, plaintextHash := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "` + calls + `"
+if [ "$1" = service ] && [ "$2" = ls ]; then exit 0; fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'registry.example/dockyard@sha256:` + digest + `'; exit 0; fi
 if [ "$1" = secret ] && [ "$2" = create ]; then cat >/dev/null; exit 0; fi
 if [ "$1" = service ] && [ "$2" = create ]; then exit 0; fi
@@ -199,8 +200,33 @@ exit 1
 		t.Fatal(err)
 	}
 	callText := string(logged)
-	if strings.Contains(callText, "service ls") || strings.Contains(callText, "service scale") || !strings.Contains(callText, "service create") {
+	if !strings.Contains(callText, "service ls") || strings.Contains(callText, "service scale") || !strings.Contains(callText, "service create") {
 		t.Fatalf("offline restore touched application replicas or did not create its helper:\n%s", callText)
+	}
+}
+
+func TestRunVolumeArtifactOfflineRestoreRejectsExistingStack(t *testing.T) {
+	directory := t.TempDir()
+	docker, calls := filepath.Join(directory, "docker"), filepath.Join(directory, "calls")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + calls + `"
+if [ "$1" = service ] && [ "$2" = ls ]; then echo app_web; exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+	_, err := (Swarm{DockerBin: docker, ServiceName: "dockyard_dockyard", Timeout: time.Second}).RunVolumeArtifact(context.Background(), VolumeArtifactJob{Job: volumeartifact.Job{Mode: "restore", TransferURL: "https://objects.example.test/download", EncryptionKey: key, EncryptionAAD: "volume-backup:test", SHA256: strings.Repeat("b", 64), PlaintextSHA256: strings.Repeat("c", 64), SizeBytes: 42}, VolumeName: "app_uploads", NodeID: "nodeabc123", StackName: "app", Offline: true})
+	if err == nil || !strings.Contains(err.Error(), "still has services") {
+		t.Fatalf("existing stack offline restore error=%v", err)
+	}
+	logged, readErr := os.ReadFile(calls)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(logged), "secret create") || strings.Contains(string(logged), "service create") {
+		t.Fatalf("offline helper started before stack absence was proven:\n%s", logged)
 	}
 }
 
