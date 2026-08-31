@@ -2791,6 +2791,14 @@ func disableWebhookIntegrationTx(ctx context.Context, tx pgx.Tx, organizationID,
 }
 
 func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA string) (Deployment, error) {
+	return s.queueWebhookDeployment(ctx, integrationID, deliveryID, commitSHA, "", false)
+}
+
+func (s *Store) QueueWebhookDeploymentWithAudit(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA, remoteAddr string) (Deployment, error) {
+	return s.queueWebhookDeployment(ctx, integrationID, deliveryID, commitSHA, remoteAddr, true)
+}
+
+func (s *Store) queueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA, remoteAddr string, audit bool) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
@@ -2844,7 +2852,15 @@ func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.U
 			return Deployment{}, err
 		}
 	}
-	return d, tx.Commit(ctx)
+	if audit {
+		if err = s.AuditOrganizationTx(ctx, tx, organizationID, "deployment.webhook", "deployment", d.ID.String(), remoteAddr, map[string]any{"provider": provider, "deliveryId": deliveryID, "commitSha": commitSHA}); err != nil {
+			return Deployment{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Deployment{}, err
+	}
+	return d, nil
 }
 
 func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databaseID, actorID uuid.UUID, destinationID *uuid.UUID) (DatabaseBackup, error) {

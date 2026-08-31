@@ -472,7 +472,7 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if enrollment.Artifacts.Certificate != "" {
-		s.writeClusterEnrollment(w, r, enrollment.Cluster, enrollment.Artifacts, false)
+		s.writeClusterEnrollment(w, r, enrollment.Cluster, enrollment.Artifacts)
 		return
 	}
 	ttl := s.AgentCertificateTTL
@@ -490,15 +490,15 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	artifacts := store.ClusterEnrollmentArtifacts{Certificate: string(certificate), CABundle: string(s.agentTrustBundle()), SigningCACertificate: string(s.AgentCACertificate), SigningCAFingerprint: caFingerprint}
-	artifacts, created, err := s.Store.CompleteClusterEnrollment(r.Context(), tokenHash, csrHash[:], artifacts, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter)
+	artifacts, _, err = s.Store.CompleteClusterEnrollmentWithAudit(r.Context(), tokenHash, csrHash[:], artifacts, hex.EncodeToString(parsed.SerialNumber.Bytes()), parsed.NotAfter, r.RemoteAddr)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
 		return
 	}
-	s.writeClusterEnrollment(w, r, enrollment.Cluster, artifacts, created)
+	s.writeClusterEnrollment(w, r, enrollment.Cluster, artifacts)
 }
 
-func (s *Server) writeClusterEnrollment(w http.ResponseWriter, r *http.Request, cluster store.Cluster, artifacts store.ClusterEnrollmentArtifacts, audit bool) {
+func (s *Server) writeClusterEnrollment(w http.ResponseWriter, r *http.Request, cluster store.Cluster, artifacts store.ClusterEnrollmentArtifacts) {
 	block, rest := pem.Decode([]byte(artifacts.Certificate))
 	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
 		s.writeInternalError(w, r, http.StatusInternalServerError, "enrollment_state_invalid", "stored agent enrollment certificate is invalid", errors.New("invalid stored enrollment certificate PEM"))
@@ -508,9 +508,6 @@ func (s *Server) writeClusterEnrollment(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		s.writeInternalError(w, r, http.StatusInternalServerError, "enrollment_state_invalid", "stored agent enrollment certificate is invalid", err)
 		return
-	}
-	if audit {
-		s.Store.AuditOrganization(r.Context(), cluster.OrganizationID, "cluster.enroll", "cluster", cluster.ID.String(), r.RemoteAddr, map[string]any{"certificateNotAfter": certificate.NotAfter})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"clusterId": cluster.ID, "certificate": artifacts.Certificate, "caCertificate": artifacts.CABundle, "signingCaCertificate": artifacts.SigningCACertificate, "signingCaFingerprint": artifacts.SigningCAFingerprint, "expiresAt": certificate.NotAfter})
 }

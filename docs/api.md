@@ -553,6 +553,10 @@ replacement are also atomic with their operator audit records. Managed-network
 provisioning, retry and deletion jobs, service network assignments, and service
 environment moves use the same boundary: failed audit persistence rolls back
 both the control-plane mutation and any queued network job.
+First-time agent enrollment atomically consumes its one-time token, activates
+the cluster certificate, and records the system audit event. Signed provider
+webhooks likewise record replay protection, deployment snapshots, worker jobs,
+pending commit status, and their system audit evidence in one transaction.
 
 Service schedules accept standard five-field cron expressions (including
 ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`

@@ -682,6 +682,14 @@ func (s *Store) LookupClusterEnrollmentToken(ctx context.Context, tokenHash, csr
 }
 
 func (s *Store) CompleteClusterEnrollment(ctx context.Context, tokenHash, csrHash []byte, artifacts ClusterEnrollmentArtifacts, serial string, notAfter time.Time) (ClusterEnrollmentArtifacts, bool, error) {
+	return s.completeClusterEnrollment(ctx, tokenHash, csrHash, artifacts, serial, notAfter, "", false)
+}
+
+func (s *Store) CompleteClusterEnrollmentWithAudit(ctx context.Context, tokenHash, csrHash []byte, artifacts ClusterEnrollmentArtifacts, serial string, notAfter time.Time, remoteAddr string) (ClusterEnrollmentArtifacts, bool, error) {
+	return s.completeClusterEnrollment(ctx, tokenHash, csrHash, artifacts, serial, notAfter, remoteAddr, true)
+}
+
+func (s *Store) completeClusterEnrollment(ctx context.Context, tokenHash, csrHash []byte, artifacts ClusterEnrollmentArtifacts, serial string, notAfter time.Time, remoteAddr string, audit bool) (ClusterEnrollmentArtifacts, bool, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ClusterEnrollmentArtifacts{}, false, err
@@ -700,12 +708,18 @@ func (s *Store) CompleteClusterEnrollment(ctx context.Context, tokenHash, csrHas
 	if err != nil {
 		return ClusterEnrollmentArtifacts{}, false, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,certificate_ca_fingerprint=$4,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1 AND state<>'disabled'`, clusterID, serial, notAfter, artifacts.SigningCAFingerprint)
+	var organizationID uuid.UUID
+	err = tx.QueryRow(ctx, `UPDATE clusters SET state='active',certificate_serial=$2,certificate_not_after=$3,certificate_ca_fingerprint=$4,pending_certificate_serial='',pending_certificate_ca_fingerprint='',pending_certificate_not_after=NULL,pending_certificate_created_at=NULL,updated_at=now() WHERE id=$1 AND state<>'disabled' RETURNING organization_id`, clusterID, serial, notAfter, artifacts.SigningCAFingerprint).Scan(&organizationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ClusterEnrollmentArtifacts{}, false, ErrNotFound
+	}
 	if err != nil {
 		return ClusterEnrollmentArtifacts{}, false, err
 	}
-	if tag.RowsAffected() == 0 {
-		return ClusterEnrollmentArtifacts{}, false, ErrNotFound
+	if audit {
+		if err = s.AuditOrganizationTx(ctx, tx, organizationID, "cluster.enroll", "cluster", clusterID.String(), remoteAddr, map[string]any{"certificateNotAfter": notAfter}); err != nil {
+			return ClusterEnrollmentArtifacts{}, false, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return ClusterEnrollmentArtifacts{}, false, err
