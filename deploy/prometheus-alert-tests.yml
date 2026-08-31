@@ -280,3 +280,116 @@ tests:
             exp_annotations:
               summary: A named-volume backup does not pause workload writers
               description: Service service-id volume cache permits writes during archive creation; enable quiescence or validate and document crash-consistent recovery.
+
+  - name: remote cluster capacity and capability failures
+    interval: 1m
+    input_series:
+      - series: 'dockyard_cluster_node_count{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '3x20'
+      - series: 'dockyard_cluster_node_count{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '3x20'
+      - series: 'dockyard_cluster_ready_node_count{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '2x20'
+      - series: 'dockyard_cluster_ready_node_count{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '2x20'
+      - series: 'dockyard_cluster_active_node_count{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '1x20'
+      - series: 'dockyard_cluster_active_node_count{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '1x20'
+      - series: 'dockyard_cluster_schedulable_node_count{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_schedulable_node_count{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_manager_count{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_manager_count{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_docker_swarm_capable{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_docker_swarm_capable{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_docker_compose_capable{instance="10.0.0.1:8080",organization="organization-id",cluster="remote"}'
+        values: '1x20'
+      - series: 'dockyard_cluster_docker_compose_capable{instance="10.0.0.2:8080",organization="organization-id",cluster="remote"}'
+        values: '1x20'
+      - series: 'dockyard_cluster_edge_proxy_ready{instance="10.0.0.1:8080",organization="organization-id",cluster="remote",status="network_missing"}'
+        values: '0x20'
+      - series: 'dockyard_cluster_edge_proxy_ready{instance="10.0.0.2:8080",organization="organization-id",cluster="remote",status="network_missing"}'
+        values: '0x20'
+      - series: 'dockyard_environment_cluster_capacity_satisfied{instance="10.0.0.1:8080",organization="organization-id",environment="environment-id",cluster="remote"}'
+        values: '0x20'
+      - series: 'dockyard_environment_cluster_capacity_satisfied{instance="10.0.0.2:8080",organization="organization-id",environment="environment-id",cluster="remote"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockyardRemoteClusterManagerUnavailable
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              cluster: remote
+              severity: critical
+            exp_annotations:
+              summary: A remote Dockyard cluster has no Swarm manager
+              description: Fresh capacity from cluster remote in organization organization-id reports no manager; restore quorum before scheduling workloads.
+      - eval_time: 6m
+        alertname: DockyardRemoteClusterUnschedulable
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              cluster: remote
+              severity: critical
+            exp_annotations:
+              summary: A remote Dockyard cluster has no schedulable node
+              description: Fresh capacity from cluster remote in organization organization-id reports no node eligible for workloads.
+      - eval_time: 6m
+        alertname: DockyardRemoteClusterNodeReadinessDegraded
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              cluster: remote
+              severity: warning
+            exp_annotations:
+              summary: Remote Dockyard cluster nodes are unavailable
+              description: Cluster remote in organization organization-id reports fewer ready nodes than total nodes.
+      - eval_time: 16m
+        alertname: DockyardRemoteClusterNodesDrained
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              cluster: remote
+              severity: warning
+            exp_annotations:
+              summary: Remote Dockyard cluster nodes remain drained
+              description: Cluster remote in organization organization-id reports ready nodes that are not active for scheduling.
+      - eval_time: 6m
+        alertname: DockyardRemoteClusterCapabilityMissing
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              cluster: remote
+              severity: critical
+            exp_annotations:
+              summary: A remote Dockyard cluster lacks a required runtime capability
+              description: Cluster remote in organization organization-id does not advertise both Docker Swarm and Docker Compose support.
+      - eval_time: 6m
+        alertname: DockyardRemoteEdgeProxyUnavailable
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              cluster: remote
+              status: network_missing
+              severity: critical
+            exp_annotations:
+              summary: A configured remote edge proxy is unavailable
+              description: Cluster remote in organization organization-id reports edge proxy state network_missing; routing or certificate reconciliation may fail.
+      - eval_time: 6m
+        alertname: DockyardEnvironmentClusterCapacityInsufficient
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              environment: environment-id
+              cluster: remote
+              severity: critical
+            exp_annotations:
+              summary: An environment exceeds its remote cluster capacity
+              description: Environment environment-id on cluster remote in organization organization-id cannot satisfy all configured node, CPU, and memory minimums.

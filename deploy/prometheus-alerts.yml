@@ -319,6 +319,69 @@ groups:
           summary: A remote Dockyard cluster has stopped heartbeating
           description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} has been silent for more than two minutes or has never completed its first heartbeat.
 
+      - alert: DockyardRemoteClusterManagerUnavailable
+        expr: max without (instance) (dockyard_cluster_manager_count) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote Dockyard cluster has no Swarm manager
+          description: Fresh capacity from cluster {{ $labels.cluster }} in organization {{ $labels.organization }} reports no manager; restore quorum before scheduling workloads.
+
+      - alert: DockyardRemoteClusterUnschedulable
+        expr: max without (instance) (dockyard_cluster_schedulable_node_count) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote Dockyard cluster has no schedulable node
+          description: Fresh capacity from cluster {{ $labels.cluster }} in organization {{ $labels.organization }} reports no node eligible for workloads.
+
+      - alert: DockyardRemoteClusterNodeReadinessDegraded
+        expr: max without (instance) (dockyard_cluster_ready_node_count) < max without (instance) (dockyard_cluster_node_count)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Remote Dockyard cluster nodes are unavailable
+          description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} reports fewer ready nodes than total nodes.
+
+      - alert: DockyardRemoteClusterNodesDrained
+        expr: max without (instance) (dockyard_cluster_active_node_count) < max without (instance) (dockyard_cluster_ready_node_count)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Remote Dockyard cluster nodes remain drained
+          description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} reports ready nodes that are not active for scheduling.
+
+      - alert: DockyardRemoteClusterCapabilityMissing
+        expr: min without (instance) (dockyard_cluster_docker_swarm_capable) == 0 or min without (instance) (dockyard_cluster_docker_compose_capable) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A remote Dockyard cluster lacks a required runtime capability
+          description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} does not advertise both Docker Swarm and Docker Compose support.
+
+      - alert: DockyardRemoteEdgeProxyUnavailable
+        expr: max without (instance) (dockyard_cluster_edge_proxy_ready) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: A configured remote edge proxy is unavailable
+          description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} reports edge proxy state {{ $labels.status }}; routing or certificate reconciliation may fail.
+
+      - alert: DockyardEnvironmentClusterCapacityInsufficient
+        expr: max without (instance) (dockyard_environment_cluster_capacity_satisfied) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: An environment exceeds its remote cluster capacity
+          description: Environment {{ $labels.environment }} on cluster {{ $labels.cluster }} in organization {{ $labels.organization }} cannot satisfy all configured node, CPU, and memory minimums.
+
       - alert: DockyardAgentUpgradeRollback
         expr: max without (instance) (dockyard_cluster_agent_update_failure) == 1
         for: 1m

@@ -180,8 +180,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','completed',now()-interval '65 minutes',now()-interval '1 hour')`, []any{uuid.New(), organizationA, auditorA}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at,completed_at) VALUES($1,$2,$3,'metrics-agent','failed',now()-interval '10 minutes',now()-interval '5 minutes')`, []any{uuid.New(), organizationA, auditorA}},
 		{`INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,status,started_at) VALUES($1,$2,$3,'metrics-agent','running',now()-interval '20 minutes')`, []any{uuid.New(), organizationA, auditorA}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,certificate_serial,certificate_not_after,pending_certificate_serial,pending_certificate_not_after,pending_certificate_created_at) VALUES($1,$2,'Shared A','shared','active',now(),'current',now()+interval '1 hour','pending',now()+interval '7 days',now()-interval '10 minutes')`, []any{currentCluster, organizationA}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Shared B','shared','active',now()-interval '10 minutes')`, []any{staleCluster, organizationB}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,capacity,capabilities,last_seen_at,certificate_serial,certificate_not_after,pending_certificate_serial,pending_certificate_not_after,pending_certificate_created_at) VALUES($1,$2,'Shared A','shared','active','{"nodes":3,"readyNodes":2,"activeNodes":1,"schedulableNodes":1,"managers":0,"nanoCpus":2000000000,"memoryBytes":4000000000,"secret":"metrics-cluster-secret"}','{"protocolVersion":1,"dockerSwarm":false,"dockerCompose":true,"edgeProxy":{"ready":false,"status":"network_missing","serviceName":"metrics-edge-secret"}}',now(),'current',now()+interval '1 hour','pending',now()+interval '7 days',now()-interval '10 minutes')`, []any{currentCluster, organizationA}},
+		{`UPDATE environments SET cluster_id=$2,minimum_nodes=2,minimum_nano_cpus=4000000000,minimum_memory_bytes=8000000000 WHERE id=$1`, []any{environmentID, currentCluster}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,capacity,last_seen_at) VALUES($1,$2,'Shared B','shared','active','{"nodes":99,"secret":"stale-cluster-secret"}',now()-interval '10 minutes')`, []any{staleCluster, organizationB}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,agent_update_state) VALUES($1,$2,'Never connected','never-connected','draining',NULL,'rollback_completed')`, []any{missingCluster, organizationB}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,deletion_requested_at) VALUES($1,$2,'Deleting','deleting','disabled',now()-interval '20 minutes')`, []any{finalizerClusterID, organizationA}},
 		{`INSERT INTO jobs(id,kind,payload,status,last_error,finished_at) VALUES($1,'delete.cluster',$2,'failed','metrics-finalizer-error',now()-interval '10 minutes')`, []any{uuid.New(), `{"clusterId":"` + finalizerClusterID.String() + `"}`}},
@@ -202,7 +203,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_backup_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_restore_active_age_seconds", "dockyard_volume_restore_last_failure_age_seconds", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_integrity_issues", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_backup_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_restore_active_age_seconds", "dockyard_volume_restore_last_failure_age_seconds", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_integrity_issues", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_node_count", "dockyard_cluster_ready_node_count", "dockyard_cluster_active_node_count", "dockyard_cluster_schedulable_node_count", "dockyard_cluster_manager_count", "dockyard_cluster_cpu_capacity_nanocpus", "dockyard_cluster_memory_capacity_bytes", "dockyard_cluster_docker_swarm_capable", "dockyard_cluster_docker_compose_capable", "dockyard_cluster_edge_proxy_ready", "dockyard_environment_cluster_capacity_satisfied", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -265,6 +266,17 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_cluster_heartbeat_missing{organization="` + organizationA.String() + `",cluster="shared"} 0`,
 		`dockyard_cluster_heartbeat_missing{organization="` + organizationB.String() + `",cluster="shared"} 1`,
 		`dockyard_cluster_heartbeat_missing{organization="` + organizationB.String() + `",cluster="never-connected"} 1`,
+		`dockyard_cluster_node_count{organization="` + organizationA.String() + `",cluster="shared"} 3`,
+		`dockyard_cluster_ready_node_count{organization="` + organizationA.String() + `",cluster="shared"} 2`,
+		`dockyard_cluster_active_node_count{organization="` + organizationA.String() + `",cluster="shared"} 1`,
+		`dockyard_cluster_schedulable_node_count{organization="` + organizationA.String() + `",cluster="shared"} 1`,
+		`dockyard_cluster_manager_count{organization="` + organizationA.String() + `",cluster="shared"} 0`,
+		`dockyard_cluster_cpu_capacity_nanocpus{organization="` + organizationA.String() + `",cluster="shared"} 2e+09`,
+		`dockyard_cluster_memory_capacity_bytes{organization="` + organizationA.String() + `",cluster="shared"} 4e+09`,
+		`dockyard_cluster_docker_swarm_capable{organization="` + organizationA.String() + `",cluster="shared"} 0`,
+		`dockyard_cluster_docker_compose_capable{organization="` + organizationA.String() + `",cluster="shared"} 1`,
+		`dockyard_cluster_edge_proxy_ready{organization="` + organizationA.String() + `",cluster="shared",status="network_missing"} 0`,
+		`dockyard_environment_cluster_capacity_satisfied{organization="` + organizationA.String() + `",environment="` + environmentID.String() + `",cluster="shared"} 0`,
 		`dockyard_cluster_agent_update_failure{organization="` + organizationB.String() + `",cluster="never-connected",state="rollback_completed"} 1`,
 		`dockyard_agent_upgrade_verification_overdue{organization="` + organizationA.String() + `",cluster="shared"} 1`,
 		`dockyard_agent_upgrade_active_age_seconds{organization="` + organizationA.String() + `",cluster="shared",status="verifying"}`,
@@ -314,6 +326,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		if !strings.Contains(metrics, expected) {
 			t.Errorf("missing %q in metrics output", expected)
 		}
+	}
+	if strings.Contains(metrics, "metrics-cluster-secret") || strings.Contains(metrics, "metrics-edge-secret") || strings.Contains(metrics, "stale-cluster-secret") || strings.Contains(metrics, `dockyard_cluster_node_count{organization="`+organizationB.String()) {
+		t.Fatal("cluster metrics exposed raw or stale capacity metadata")
 	}
 }
 
@@ -475,6 +490,15 @@ func TestPrometheusSharedStateAlertsDeduplicateHAReplicas(t *testing.T) {
 		"dockyard_ai_audit_running_age_seconds",
 		"dockyard_maintenance_scopes",
 		"dockyard_cluster_heartbeat_missing",
+		"dockyard_cluster_manager_count",
+		"dockyard_cluster_schedulable_node_count",
+		"dockyard_cluster_ready_node_count",
+		"dockyard_cluster_node_count",
+		"dockyard_cluster_active_node_count",
+		"dockyard_cluster_docker_swarm_capable",
+		"dockyard_cluster_docker_compose_capable",
+		"dockyard_cluster_edge_proxy_ready",
+		"dockyard_environment_cluster_capacity_satisfied",
 		"dockyard_cluster_agent_update_failure",
 		"dockyard_agent_upgrade_verification_overdue",
 		"dockyard_agent_upgrade_active_age_seconds",
@@ -676,6 +700,21 @@ func TestPrometheusAlertsCoverRemoteClusterUpgradeHealth(t *testing.T) {
 	for _, expected := range []string{
 		"alert: DockyardRemoteClusterHeartbeatMissing",
 		"expr: max without (instance) (dockyard_cluster_heartbeat_missing) == 1",
+		"alert: DockyardRemoteClusterManagerUnavailable",
+		"expr: max without (instance) (dockyard_cluster_manager_count) == 0",
+		"alert: DockyardRemoteClusterUnschedulable",
+		"expr: max without (instance) (dockyard_cluster_schedulable_node_count) == 0",
+		"alert: DockyardRemoteClusterNodeReadinessDegraded",
+		"expr: max without (instance) (dockyard_cluster_ready_node_count) < max without (instance) (dockyard_cluster_node_count)",
+		"alert: DockyardRemoteClusterNodesDrained",
+		"expr: max without (instance) (dockyard_cluster_active_node_count) < max without (instance) (dockyard_cluster_ready_node_count)",
+		"alert: DockyardRemoteClusterCapabilityMissing",
+		"dockyard_cluster_docker_swarm_capable",
+		"dockyard_cluster_docker_compose_capable",
+		"alert: DockyardRemoteEdgeProxyUnavailable",
+		"expr: max without (instance) (dockyard_cluster_edge_proxy_ready) == 0",
+		"alert: DockyardEnvironmentClusterCapacityInsufficient",
+		"expr: max without (instance) (dockyard_environment_cluster_capacity_satisfied) == 0",
 		"alert: DockyardAgentUpgradeRollback",
 		"expr: max without (instance) (dockyard_cluster_agent_update_failure) == 1",
 		"alert: DockyardAgentUpgradeVerificationOverdue",

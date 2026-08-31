@@ -290,6 +290,9 @@ replacement's deployment or job result.
   revalidated before mutations. PostgreSQL integration tests simulate
   heartbeat and capacity loss plus recovery; the production multi-host
   topology must still repeat the exercise under real network partitions.
+  Fresh remote capacity, manager/schedulability, Swarm/Compose capability,
+  edge-proxy readiness, and environment-minimum posture are exported as
+  secret-free Prometheus gauges with HA-deduplicated alerts.
 
 Exit gate: loss of a controller or cluster manager does not corrupt desired
 state, duplicate destructive jobs, or expose credentials.

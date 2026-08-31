@@ -481,6 +481,12 @@ failed, and missing deletion jobs plus oldest deletion age without exporting
 job payloads or failure text, including managed-network deletions. Managed
 networks additionally expose aggregate lifecycle state by local/remote scope
 and driver, plus per-network provisioning age for stalled-create alerts.
+Fresh remote-cluster heartbeats expose aggregate total, ready, active,
+schedulable, and manager node counts, CPU and memory capacity, required
+Swarm/Compose capabilities, bounded edge-proxy readiness, and whether each
+assigned environment satisfies its configured minimums. Stale clusters emit
+only the independent heartbeat-loss signal, preventing obsolete capacity from
+being presented as current.
 Provider-webhook creation and disablement likewise commit with their audit
 records; encrypted signing secrets are never included in audit metadata.
 Audit exports are ordered by immutable event ID. Each response includes
