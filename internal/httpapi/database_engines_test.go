@@ -16,7 +16,7 @@ func TestDatabaseEnginesReturnsStructuredExternalMetadataWithoutPaths(t *testing
 	path := filepath.Join(directory, "cockroach-driver")
 	script := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"cockroach","defaultVersion":"v25.2","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"cockroach","defaultVersion":"v25.2","capabilities":["backup-restore"],"backupExtension":"dump","persistentConfigKeys":["region"]}}' ;;
   *) exit 1 ;;
 esac
 `
@@ -47,7 +47,7 @@ esac
 	found := false
 	for _, engine := range response.Engines {
 		if engine.Name == "cockroach" {
-			found = engine.Source == "external" && engine.DefaultVersion == "v25.2" && strings.HasPrefix(engine.ArtifactDigest, "sha256:") && len(engine.ArtifactDigest) == 71 && engine.BackupCapable && engine.BackupExtension == "dump"
+			found = engine.Source == "external" && engine.DefaultVersion == "v25.2" && strings.HasPrefix(engine.ArtifactDigest, "sha256:") && len(engine.ArtifactDigest) == 71 && engine.BackupCapable && engine.BackupExtension == "dump" && len(engine.PersistentConfigKeys) == 1 && engine.PersistentConfigKeys[0] == "region"
 		}
 	}
 	if !found {

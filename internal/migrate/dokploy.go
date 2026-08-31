@@ -840,7 +840,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if encryptErr != nil {
 			return report, encryptErr
 		}
-		configJSON, _ := json.Marshal(database.StoredConfig(config))
+		configJSON, _ := json.Marshal(registry.StoredConfig(item.engine, config))
 		_, err = tx.Exec(ctx, `INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,encrypted_env) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET name=excluded.name,compose_yaml=excluded.compose_yaml,encrypted_env=excluded.encrypted_env,revision=compose_services.revision+1,updated_at=now()`, serviceID, mappedID(options, "environment", item.environmentID), item.name, "db-"+slug, slug, rendered.ComposeYAML, encryptedEnvironment)
 		if err != nil {
 			return report, fmt.Errorf("import %s service %s: %w", item.engine, item.id, err)

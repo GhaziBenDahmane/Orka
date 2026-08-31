@@ -51,8 +51,8 @@ func (panicDriver) Readiness(UtilityRequest) (Plan, error) { panic("unexpected R
 
 func TestServeRejectsMalformedProtocolInput(t *testing.T) {
 	tests := map[string]string{
-		"unknown field":  `{"protocolVersion":1,"operation":"describe","unexpected":true}`,
-		"trailing value": `{"protocolVersion":1,"operation":"describe"} {}`,
+		"unknown field":  `{"protocolVersion":2,"operation":"describe","unexpected":true}`,
+		"trailing value": `{"protocolVersion":2,"operation":"describe"} {}`,
 		"empty input":    ``,
 	}
 	for name, input := range tests {

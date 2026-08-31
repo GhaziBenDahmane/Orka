@@ -121,7 +121,7 @@ func TestOpenAPIDocumentsStructuredDatabaseEngineResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(specification)
-	for _, expected := range []string{"#/components/schemas/DatabaseEngineList", "required: [name, defaultVersion, source, backupCapable, backupExtension]", "enum: [built-in, external]", "artifactDigest: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}"} {
+	for _, expected := range []string{"#/components/schemas/DatabaseEngineList", "required: [name, defaultVersion, source, backupCapable, backupExtension]", "enum: [built-in, external]", "artifactDigest: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}", "persistentConfigKeys:"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("OpenAPI is missing %q", expected)
 		}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
@@ -34,10 +35,15 @@ const maxExternalDriverBytes = 64 << 20
 const externalDriverWaitDelay = time.Second
 
 const (
-	maxExternalRenderEntries    = 128
-	maxExternalRenderValueBytes = 64 << 10
-	maxExternalRenderMapBytes   = 1 << 20
-	maxExternalInternalURLBytes = 16 << 10
+	maxExternalRenderEntries     = 128
+	maxExternalRenderValueBytes  = 64 << 10
+	maxExternalRenderMapBytes    = 1 << 20
+	maxExternalInternalURLBytes  = 16 << 10
+	maxExternalConfigDepth       = 8
+	maxExternalConfigNodes       = 1024
+	maxExternalConfigKeys        = 128
+	maxExternalConfigKeyBytes    = 128
+	maxExternalConfigStringBytes = 64 << 10
 )
 
 var (
@@ -46,6 +52,7 @@ var (
 	externalDatabaseName   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	externalArtifactName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 	externalURLScheme      = regexp.MustCompile(`^[a-z][a-z0-9+.-]{0,31}$`)
+	externalConfigKey      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
 )
 
 func (d *externalDriver) Name() string           { return d.description.Name }
@@ -53,6 +60,9 @@ func (d *externalDriver) DefaultVersion() string { return d.description.DefaultV
 func (d *externalDriver) Render(request Request) (Result, error) {
 	if !externalDatabaseName.MatchString(request.Name) || !safeVersion.MatchString(request.Version) {
 		return Result{}, errors.New("invalid external database render parameters")
+	}
+	if err := validateExternalConfig(request.Config); err != nil {
+		return Result{}, errors.New("invalid external database render configuration")
 	}
 	response, err := d.call(databaseplugin.Request{Render: &databaseplugin.RenderRequest{Name: request.Name, Version: request.Version, Config: request.Config}}, "render")
 	if err != nil || response.Result == nil {
@@ -72,6 +82,81 @@ func (d *externalDriver) Render(request Request) (Result, error) {
 		return Result{}, errors.New("external driver returned an invalid internal URL")
 	}
 	return Result{ComposeYAML: result.ComposeYAML, Environment: result.Environment, Credentials: result.Credentials, InternalURL: result.InternalURL, Version: result.Version}, nil
+}
+
+type externalConfigValidator struct {
+	nodes int
+	keys  int
+}
+
+func validateExternalConfig(config map[string]any) error {
+	validator := externalConfigValidator{}
+	return validator.object(config, 1)
+}
+
+func (v *externalConfigValidator) object(value map[string]any, depth int) error {
+	if depth > maxExternalConfigDepth {
+		return errors.New("depth limit exceeded")
+	}
+	v.keys += len(value)
+	if v.keys > maxExternalConfigKeys {
+		return errors.New("key limit exceeded")
+	}
+	for key, item := range value {
+		if len(key) > maxExternalConfigKeyBytes || !externalConfigKey.MatchString(key) {
+			return errors.New("invalid key")
+		}
+		if err := v.value(item, depth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v *externalConfigValidator) value(value any, depth int) error {
+	v.nodes++
+	if v.nodes > maxExternalConfigNodes {
+		return errors.New("node limit exceeded")
+	}
+	switch item := value.(type) {
+	case nil, bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return nil
+	case float32:
+		if math.IsNaN(float64(item)) || math.IsInf(float64(item), 0) {
+			return errors.New("invalid number")
+		}
+		return nil
+	case float64:
+		if math.IsNaN(item) || math.IsInf(item, 0) {
+			return errors.New("invalid number")
+		}
+		return nil
+	case json.Number:
+		number, err := item.Float64()
+		if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+			return errors.New("invalid number")
+		}
+		return nil
+	case string:
+		if len(item) > maxExternalConfigStringBytes || !utf8.ValidString(item) || strings.ContainsRune(item, '\x00') {
+			return errors.New("invalid string")
+		}
+		return nil
+	case []any:
+		if depth >= maxExternalConfigDepth {
+			return errors.New("depth limit exceeded")
+		}
+		for _, child := range item {
+			if err := v.value(child, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		return v.object(item, depth+1)
+	default:
+		return errors.New("unsupported value")
+	}
 }
 
 func validateExternalStringMap(values map[string]string, namePattern *regexp.Regexp) error {
@@ -355,6 +440,7 @@ func (r *Registry) LoadExternal(directory string) error {
 		if !validExternalDescription(driver.description) {
 			return fmt.Errorf("invalid external database driver description from %s", entry.Name())
 		}
+		sort.Strings(driver.description.PersistentConfigKeys)
 		if _, exists := r.drivers[driver.Name()]; exists {
 			return fmt.Errorf("database driver %q is already registered", driver.Name())
 		}
@@ -375,6 +461,19 @@ func (r *Registry) LoadExternal(directory string) error {
 func validExternalDescription(description databaseplugin.Description) bool {
 	if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`).MatchString(description.Name) || !safeVersion.MatchString(description.DefaultVersion) {
 		return false
+	}
+	if len(description.PersistentConfigKeys) > maxExternalConfigKeys {
+		return false
+	}
+	persistentKeys := make(map[string]struct{}, len(description.PersistentConfigKeys))
+	for _, key := range description.PersistentConfigKeys {
+		if len(key) > maxExternalConfigKeyBytes || !externalConfigKey.MatchString(key) {
+			return false
+		}
+		if _, exists := persistentKeys[key]; exists {
+			return false
+		}
+		persistentKeys[key] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(description.Capabilities))
 	for _, capability := range description.Capabilities {

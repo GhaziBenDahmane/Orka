@@ -2,6 +2,7 @@ package database
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,9 +19,9 @@ func TestExternalDriverProtocol(t *testing.T) {
 	script := `#!/bin/sh
 request=$(cat)
 case "$request" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"cockroach","defaultVersion":"v25.2","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
-  *'"operation":"render"'*) echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{"username":"root","password":"generated","database":"defaultdb"},"internalUrl":"postgres://data:26257/defaultdb","version":"v25.2"}}' ;;
-  *) echo '{"protocolVersion":1,"plan":{"image":"cockroachdb/cockroach:v25.2","command":["cockroach","version"],"environment":{},"extension":"dump"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"cockroach","defaultVersion":"v25.2","capabilities":["backup-restore"],"backupExtension":"dump","persistentConfigKeys":["region"]}}' ;;
+  *'"operation":"render"'*) echo '{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{"username":"root","password":"generated","database":"defaultdb"},"internalUrl":"postgres://data:26257/defaultdb","version":"v25.2"}}' ;;
+  *) echo '{"protocolVersion":2,"plan":{"image":"cockroachdb/cockroach:v25.2","command":["cockroach","version"],"environment":{},"extension":"dump"}}' ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
@@ -48,7 +49,7 @@ esac
 			break
 		}
 	}
-	if metadata == nil || metadata.DefaultVersion != "v25.2" || metadata.Source != "external" || !strings.HasPrefix(metadata.ArtifactDigest, "sha256:") || len(metadata.ArtifactDigest) != 71 || !metadata.BackupCapable || metadata.BackupExtension != "dump" {
+	if metadata == nil || metadata.DefaultVersion != "v25.2" || metadata.Source != "external" || !strings.HasPrefix(metadata.ArtifactDigest, "sha256:") || len(metadata.ArtifactDigest) != 71 || !metadata.BackupCapable || metadata.BackupExtension != "dump" || len(metadata.PersistentConfigKeys) != 1 || metadata.PersistentConfigKeys[0] != "region" {
 		t.Fatalf("external metadata=%#v", metadata)
 	}
 	encoded, err := json.Marshal(metadata)
@@ -60,6 +61,10 @@ esac
 	}
 	if plan, err := registry.Backup("cockroach", "v25.2", "data", map[string]string{}, "backup.dump"); err != nil || len(plan.Command) == 0 {
 		t.Fatalf("backup plan=%#v err=%v", plan, err)
+	}
+	stored := registry.StoredConfig("cockroach", map[string]any{"region": "eu-west", "apiKey": "plaintext-secret"})
+	if len(stored) != 1 || stored["region"] != "eu-west" {
+		t.Fatalf("external persisted config=%#v", stored)
 	}
 }
 
@@ -86,13 +91,31 @@ func TestExternalDriverRequiresAtLeastOneTrustedExecutable(t *testing.T) {
 	}
 }
 
+func TestExternalDriverConfigIsRenderOnlyByDefault(t *testing.T) {
+	directory := t.TempDir()
+	script := `#!/bin/sh
+echo '{"protocolVersion":2,"description":{"name":"render-only","defaultVersion":"1","capabilities":[]}}'
+`
+	if err := os.WriteFile(filepath.Join(directory, "render-only"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err != nil {
+		t.Fatal(err)
+	}
+	stored := registry.StoredConfig("render-only", map[string]any{"region": "eu-west", "apiKey": "plaintext-secret"})
+	if len(stored) != 0 {
+		t.Fatalf("external render-only config was retained: %#v", stored)
+	}
+}
+
 func TestExternalDriverDiscoveryIsAtomic(t *testing.T) {
 	directory := t.TempDir()
 	valid := `#!/bin/sh
-echo '{"protocolVersion":1,"description":{"name":"atomic-test","defaultVersion":"1","capabilities":[]}}'
+echo '{"protocolVersion":2,"description":{"name":"atomic-test","defaultVersion":"1","capabilities":[]}}'
 `
 	invalid := `#!/bin/sh
-echo '{"protocolVersion":1,"description":{"name":"INVALID","defaultVersion":"1","capabilities":[]}}'
+echo '{"protocolVersion":2,"description":{"name":"INVALID","defaultVersion":"1","capabilities":[]}}'
 `
 	if err := os.WriteFile(filepath.Join(directory, "a-valid"), []byte(valid), 0700); err != nil {
 		t.Fatal(err)
@@ -114,8 +137,8 @@ func TestExternalDriverRejectsExecutableReplacementAfterDescription(t *testing.T
 	path := filepath.Join(directory, "replaceable-driver")
 	original := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"replaceable","defaultVersion":"1","capabilities":[]}}' ;;
-  *) echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"replaceable","defaultVersion":"1","capabilities":[]}}' ;;
+  *) echo '{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(original), 0700); err != nil {
@@ -194,8 +217,8 @@ func TestExternalDriverRevalidatesExecutableBeforeEveryCall(t *testing.T) {
 	path := filepath.Join(directory, "mutable-driver")
 	script := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"mutable","defaultVersion":"1","capabilities":[]}}' ;;
-  *) echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"mutable","defaultVersion":"1","capabilities":[]}}' ;;
+  *) echo '{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
@@ -228,7 +251,7 @@ func TestExternalDriverDoesNotExposeControlledErrors(t *testing.T) {
 		failed string
 	}{
 		{name: "stderr", failed: `echo 'password=driver-secret' >&2; exit 1`},
-		{name: "protocol", failed: `echo '{"protocolVersion":1,"error":"password=driver-secret"}'`},
+		{name: "protocol", failed: `echo '{"protocolVersion":2,"error":"password=driver-secret"}'`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
@@ -236,7 +259,7 @@ func TestExternalDriverDoesNotExposeControlledErrors(t *testing.T) {
 			script := `#!/bin/sh
 request=$(cat)
 case "$request" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"secret-test","defaultVersion":"1","capabilities":[]}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"secret-test","defaultVersion":"1","capabilities":[]}}' ;;
   *) ` + test.failed + ` ;;
 esac
 `
@@ -264,7 +287,7 @@ func TestExternalDriverUsesSanitizedEnvironment(t *testing.T) {
 	script := `#!/bin/sh
 [ "$PATH" = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' ] || exit 9
 [ -z "${DOCKYARD_MASTER_KEY:-}" ] || exit 10
-echo '{"protocolVersion":1,"description":{"name":"environment-test","defaultVersion":"1","capabilities":[]}}'
+echo '{"protocolVersion":2,"description":{"name":"environment-test","defaultVersion":"1","capabilities":[]}}'
 `
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -283,8 +306,8 @@ func TestExternalDriverBoundsInheritedOutputDescriptors(t *testing.T) {
 	script := strings.Replace(`#!/bin/sh
 request=$(cat)
 case "$request" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"forking-test","defaultVersion":"1","capabilities":[]}}' ;;
-  *) sleep 30 & child=$!; printf '%s' "$child" >'__PID_FILE__'; echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"forking-test","defaultVersion":"1","capabilities":[]}}' ;;
+  *) sleep 30 & child=$!; printf '%s' "$child" >'__PID_FILE__'; echo '{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
 esac
 `, "__PID_FILE__", pidFile, 1)
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
@@ -333,8 +356,8 @@ func TestExternalDriverRejectsBackupExtensionWithoutCapability(t *testing.T) {
 	path := filepath.Join(directory, "no-recovery-driver")
 	script := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"no-recovery","defaultVersion":"1","capabilities":[],"backupExtension":"dump"}}' ;;
-  *) echo '{"protocolVersion":1,"plan":{"image":"tools:1","command":["dump"],"extension":"dump"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"no-recovery","defaultVersion":"1","capabilities":[],"backupExtension":"dump"}}' ;;
+  *) echo '{"protocolVersion":2,"plan":{"image":"tools:1","command":["dump"],"extension":"dump"}}' ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
@@ -351,8 +374,8 @@ func TestExternalDriverRequiresConsistentArtifactExtension(t *testing.T) {
 	path := filepath.Join(directory, "extension-driver")
 	script := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"extension-test","defaultVersion":"1","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
-  *) echo '{"protocolVersion":1,"plan":{"image":"tools:1","command":["dump"],"extension":"sql"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"extension-test","defaultVersion":"1","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
+  *) echo '{"protocolVersion":2,"plan":{"image":"tools:1","command":["dump"],"extension":"sql"}}' ;;
 esac
 `
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
@@ -369,12 +392,12 @@ esac
 
 func TestExternalDriverRejectsInvalidRenderBoundaries(t *testing.T) {
 	tests := map[string]string{
-		"unsafe version":   `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"../../latest"}}`,
-		"environment name": `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{"BAD-NAME":"secret"},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
-		"credential name":  `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{"bad name":"secret"},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
-		"relative URL":     `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"data:5432/db","version":"1"}}`,
-		"unicode control":  `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data\u0085:5432/db","version":"1"}}`,
-		"unicode format":   `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data\u202e:5432/db","version":"1"}}`,
+		"unsafe version":   `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"../../latest"}}`,
+		"environment name": `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{"BAD-NAME":"secret"},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
+		"credential name":  `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{"bad name":"secret"},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
+		"relative URL":     `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"data:5432/db","version":"1"}}`,
+		"unicode control":  `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data\u0085:5432/db","version":"1"}}`,
+		"unicode format":   `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data\u202e:5432/db","version":"1"}}`,
 	}
 	for name, response := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -394,11 +417,27 @@ func TestExternalDriverRejectsInvalidUTF8InternalURL(t *testing.T) {
 
 func TestExternalDriverRejectsInvalidRenderRequestsBeforeExecution(t *testing.T) {
 	driver := &externalDriver{path: filepath.Join(t.TempDir(), "missing-driver"), description: databaseplugin.Description{Name: "render-test", DefaultVersion: "1"}}
+	deep := any("value")
+	for range maxExternalConfigDepth {
+		deep = map[string]any{"nested": deep}
+	}
+	manyKeys := make(map[string]any, maxExternalConfigKeys+1)
+	for index := range maxExternalConfigKeys + 1 {
+		manyKeys["key"+strconv.Itoa(index)] = index
+	}
+	manyNodes := make([]any, maxExternalConfigNodes+1)
 	tests := []Request{
 		{Name: "../data", Version: "1"},
 		{Name: "data", Version: "../../latest"},
 		{Name: "data", Version: "1", Config: map[string]any{"unsupported": make(chan int)}},
 		{Name: "data", Version: "1", Config: map[string]any{"oversized": strings.Repeat("x", databaseplugin.MaxRequestBytes)}},
+		{Name: "data", Version: "1", Config: map[string]any{"bad key": "value"}},
+		{Name: "data", Version: "1", Config: map[string]any{"value": "bad\x00value"}},
+		{Name: "data", Version: "1", Config: map[string]any{"value": string([]byte{0xff})}},
+		{Name: "data", Version: "1", Config: map[string]any{"value": math.NaN()}},
+		{Name: "data", Version: "1", Config: map[string]any{"nested": deep}},
+		{Name: "data", Version: "1", Config: manyKeys},
+		{Name: "data", Version: "1", Config: map[string]any{"values": manyNodes}},
 	}
 	for _, request := range tests {
 		if _, err := driver.Render(request); err == nil || strings.Contains(err.Error(), "open database driver") {
@@ -435,9 +474,9 @@ func TestExternalDriverRejectsInvalidUtilityRequestsBeforeExecution(t *testing.T
 
 func TestExternalDriverRejectsInvalidProtocolResponseShape(t *testing.T) {
 	tests := map[string]string{
-		"unknown field":         `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"},"unexpected":true}`,
-		"wrong operation field": `{"protocolVersion":1,"description":{"name":"other","defaultVersion":"1","capabilities":[]},"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
-		"trailing JSON":         `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}} {}`,
+		"unknown field":         `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"},"unexpected":true}`,
+		"wrong operation field": `{"protocolVersion":2,"description":{"name":"other","defaultVersion":"1","capabilities":[]},"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
+		"trailing JSON":         `{"protocolVersion":2,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}} {}`,
 	}
 	for name, response := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -454,12 +493,14 @@ func TestExternalDriverRejectsInvalidDescriptions(t *testing.T) {
 		"unknown capability":   `{"name":"invalid-description","defaultVersion":"1","capabilities":["shell"]}`,
 		"duplicate capability": `{"name":"invalid-description","defaultVersion":"1","capabilities":["backup-restore","backup-restore"],"backupExtension":"dump"}`,
 		"missing extension":    `{"name":"invalid-description","defaultVersion":"1","capabilities":["backup-restore"]}`,
+		"invalid config key":   `{"name":"invalid-description","defaultVersion":"1","capabilities":[],"persistentConfigKeys":["bad key"]}`,
+		"duplicate config key": `{"name":"invalid-description","defaultVersion":"1","capabilities":[],"persistentConfigKeys":["region","region"]}`,
 	}
 	for name, description := range tests {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()
 			path := filepath.Join(directory, "invalid-description-driver")
-			script := "#!/bin/sh\necho '{\"protocolVersion\":1,\"description\":" + description + "}'\n"
+			script := "#!/bin/sh\necho '{\"protocolVersion\":2,\"description\":" + description + "}'\n"
 			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -476,7 +517,7 @@ func externalRenderRegistry(t *testing.T, renderResponse string) *Registry {
 	path := filepath.Join(directory, "render-driver")
 	script := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"render-test","defaultVersion":"1","capabilities":[]}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"render-test","defaultVersion":"1","capabilities":[]}}' ;;
   *) echo '` + renderResponse + `' ;;
 esac
 `

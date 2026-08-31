@@ -1383,7 +1383,7 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	shortID := strings.Split(serviceID.String(), "-")[0]
 	stackName := "db-" + in.Slug + "-" + shortID
-	instance, err := s.Store.CreateDatabaseWithAudit(r.Context(), p, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, DriverSource: driver.Source, DriverDigest: driver.ArtifactDigest, Config: database.StoredConfig(in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials, r.RemoteAddr)
+	instance, err := s.Store.CreateDatabaseWithAudit(r.Context(), p, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, DriverSource: driver.Source, DriverDigest: driver.ArtifactDigest, Config: s.Databases.StoredConfig(in.Engine, in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return

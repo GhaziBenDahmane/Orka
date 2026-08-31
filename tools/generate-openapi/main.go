@@ -246,6 +246,11 @@ paths:
         artifactDigest: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
         backupCapable: {type: boolean}
         backupExtension: {type: string}
+        persistentConfigKeys:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items: {type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,127}$'}
     DatabaseEngineList:
       type: object
       required: [items, backupCapable, engines]

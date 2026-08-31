@@ -10,15 +10,16 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	MaxRequestBytes = 4 << 20
 )
 
 type Description struct {
-	Name            string   `json:"name"`
-	DefaultVersion  string   `json:"defaultVersion"`
-	Capabilities    []string `json:"capabilities"`
-	BackupExtension string   `json:"backupExtension,omitempty"`
+	Name                 string   `json:"name"`
+	DefaultVersion       string   `json:"defaultVersion"`
+	Capabilities         []string `json:"capabilities"`
+	BackupExtension      string   `json:"backupExtension,omitempty"`
+	PersistentConfigKeys []string `json:"persistentConfigKeys,omitempty"`
 }
 
 type RenderRequest struct {

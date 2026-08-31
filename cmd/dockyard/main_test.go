@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
 	"github.com/google/uuid"
 )
 
@@ -20,7 +21,7 @@ func TestInspectDatabaseDriversProducesPathFreeDeterministicInventory(t *testing
 	driverPath := filepath.Join(directory, "example-driver")
 	driver := `#!/bin/sh
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"exampledb","defaultVersion":"1.2.3","capabilities":[]}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"exampledb","defaultVersion":"1.2.3","capabilities":[]}}' ;;
   *) exit 1 ;;
 esac
 `
@@ -49,7 +50,7 @@ esac
 	if err := json.Unmarshal(first.Bytes(), &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if inventory.ProtocolVersion != 1 || len(inventory.Drivers) != 1 || inventory.Drivers[0].Name != "exampledb" || inventory.Drivers[0].Source != "external" || !strings.HasPrefix(inventory.Drivers[0].ArtifactDigest, "sha256:") || !strings.HasPrefix(inventory.Digest, "sha256:") {
+	if inventory.ProtocolVersion != databaseplugin.ProtocolVersion || len(inventory.Drivers) != 1 || inventory.Drivers[0].Name != "exampledb" || inventory.Drivers[0].Source != "external" || !strings.HasPrefix(inventory.Drivers[0].ArtifactDigest, "sha256:") || !strings.HasPrefix(inventory.Digest, "sha256:") {
 		t.Fatalf("unexpected inventory: %#v", inventory)
 	}
 }

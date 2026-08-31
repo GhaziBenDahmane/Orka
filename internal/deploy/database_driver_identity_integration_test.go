@@ -69,8 +69,8 @@ func externalDriverRegistry(t *testing.T, marker string) *database.Registry {
 	script := `#!/bin/sh
 ` + marker + `
 case "$(cat)" in
-  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"shared-driver","defaultVersion":"1","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
-  *) echo '{"protocolVersion":1,"plan":{"image":"example/database:1","command":["true"],"environment":{},"extension":"dump"}}' ;;
+  *'"operation":"describe"'*) echo '{"protocolVersion":2,"description":{"name":"shared-driver","defaultVersion":"1","capabilities":["backup-restore"],"backupExtension":"dump"}}' ;;
+  *) echo '{"protocolVersion":2,"plan":{"image":"example/database:1","command":["true"],"environment":{},"extension":"dump"}}' ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(directory, "driver"), []byte(script), 0700); err != nil {

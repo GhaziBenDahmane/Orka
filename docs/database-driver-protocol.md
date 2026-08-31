@@ -1,5 +1,9 @@
 # External database driver protocol
 
+The current wire protocol is version 2. Drivers built for version 1 must be
+rebuilt with the current SDK; version 2 adds explicit non-secret configuration
+persistence metadata and keeps exact-version negotiation fail closed.
+
 Trusted executable drivers extend the built-in database catalog without being
 linked into the controller. Set `DOCKYARD_DATABASE_DRIVER_DIRECTORY` to an
 absolute directory containing executable files owned by the controller's OS
@@ -11,9 +15,10 @@ executable driver or if any discovered driver is invalid; discovery registers
 the complete artifact set atomically. Driver names cannot replace built-ins.
 External drivers are supported only on Linux. Every invocation opens the driver
 without following symlinks, revalidates the opened inode, and executes that file
-descriptor so a path swap cannot bypass the startup checks. The controller also hashes the executable
-used for `describe`, rejects files larger than 64 MiB, and refuses every later
-operation if the newly opened artifact no longer matches that startup digest.
+descriptor so a path swap cannot bypass the startup checks. The controller also
+hashes the executable used for `describe`, rejects files larger than 64 MiB,
+and refuses every later operation if the newly opened artifact no longer
+matches that startup digest.
 The digest, but never the host path, is exposed in engine inventory and AI
 audit snapshots for release provenance.
 
@@ -43,7 +48,7 @@ stop signal for recovery and migration work; reconcile controller artifacts
 before using the audited rebind endpoint.
 
 Dockyard starts a fresh process for each call, writes one JSON request to stdin,
-and reads one JSON response from stdout. Protocol version 1 supports
+and reads one JSON response from stdout. Protocol version 2 supports
 `describe`, `render`, `backup`, `restore`, and `readiness`. Calls time out after
 15 seconds, each invocation and its descendants run in a dedicated process
 group that is terminated on return, post-exit output-pipe draining is bounded,
@@ -97,13 +102,21 @@ func main() {
 ```
 
 `Describe` returns a lowercase unique name, default image version, and optional
-`backup-restore` capability with `backupExtension`. `Render` returns Compose
-YAML, runtime environment, one-time credentials, internal URL, and resolved
-version. Descriptions reject unknown or duplicate capabilities and require the
-backup extension to agree with `backup-restore`. Rendered versions, environment
-and credential maps, and absolute internal URLs are bounded and validated at
-the process boundary. Internal URLs must be valid UTF-8 and cannot contain
-Unicode control or formatting characters. Rendered Compose is passed through
+`backup-restore` capability with `backupExtension`. It may also declare
+`persistentConfigKeys`, a bounded list of non-secret render-input keys that the
+controller may retain as database metadata. External configuration is
+render-only by default: undeclared keys are never persisted, so drivers must
+return operational secrets through the encrypted `credentials` or `environment`
+result maps. Key names and recursively nested JSON configuration are bounded
+and validated before the executable runs.
+
+`Render` returns Compose YAML, runtime environment, one-time credentials,
+internal URL, and resolved version. Descriptions reject unknown or duplicate
+capabilities and persistence keys and require the backup extension to agree
+with `backup-restore`. Rendered versions, environment and credential maps, and
+absolute internal URLs are bounded and validated at the process boundary.
+Internal URLs must be valid UTF-8 and cannot contain Unicode control or
+formatting characters. Rendered Compose is passed through
 the configured compiler policy used for user services before it can be persisted
 or used by a restore drill. Protocol responses reject unknown fields, trailing JSON, and fields that
 do not belong to the requested operation. Utility methods return an image,

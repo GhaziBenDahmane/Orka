@@ -698,6 +698,11 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/PUT/DELETE | `/v1/backup-destinations…` | Manage and rotate credentials for encrypted S3-compatible destinations |
 
+External engine metadata includes `persistentConfigKeys`. Only those
+driver-declared, non-secret input keys are retained in a database record;
+all other external render inputs are ephemeral and must be returned through
+the encrypted credential or environment maps when needed operationally.
+
 Backup-destination rotation is rejected with `resource_busy` while a database
 or volume backup/restore or immutable audit-archive batch is running. Worker
 operation start and destination mutation share a PostgreSQL advisory fence, so

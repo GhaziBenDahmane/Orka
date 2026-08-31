@@ -49,12 +49,13 @@ type RestorePlan = BackupPlan
 type Registry struct{ drivers map[string]Driver }
 
 type EngineInfo struct {
-	Name            string `json:"name"`
-	DefaultVersion  string `json:"defaultVersion"`
-	Source          string `json:"source"`
-	ArtifactDigest  string `json:"artifactDigest,omitempty"`
-	BackupCapable   bool   `json:"backupCapable"`
-	BackupExtension string `json:"backupExtension"`
+	Name                 string   `json:"name"`
+	DefaultVersion       string   `json:"defaultVersion"`
+	Source               string   `json:"source"`
+	ArtifactDigest       string   `json:"artifactDigest,omitempty"`
+	BackupCapable        bool     `json:"backupCapable"`
+	BackupExtension      string   `json:"backupExtension"`
+	PersistentConfigKeys []string `json:"persistentConfigKeys,omitempty"`
 }
 
 var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -117,6 +118,7 @@ func (r *Registry) Engine(name string) (EngineInfo, bool) {
 	if external, ok := driver.(*externalDriver); ok {
 		info.Source = "external"
 		info.ArtifactDigest = external.digest
+		info.PersistentConfigKeys = append([]string(nil), external.description.PersistentConfigKeys...)
 	}
 	return info, true
 }
@@ -517,6 +519,27 @@ func StoredConfig(config map[string]any) map[string]any {
 	stored := make(map[string]any, len(config))
 	for key, value := range config {
 		if key != "password" && key != "rootPassword" {
+			stored[key] = value
+		}
+	}
+	return stored
+}
+
+// StoredConfig returns the non-secret subset of a render configuration that
+// may be persisted for the selected engine. External drivers opt keys in
+// explicitly; undeclared values are render-only and fail closed as secrets.
+func (r *Registry) StoredConfig(engine string, config map[string]any) map[string]any {
+	driver, exists := r.drivers[engine]
+	if !exists {
+		return map[string]any{}
+	}
+	external, isExternal := driver.(*externalDriver)
+	if !isExternal {
+		return StoredConfig(config)
+	}
+	stored := make(map[string]any, len(external.description.PersistentConfigKeys))
+	for _, key := range external.description.PersistentConfigKeys {
+		if value, exists := config[key]; exists {
 			stored[key] = value
 		}
 	}
