@@ -175,7 +175,7 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" \
             --arg sourceCommit "$previous_commit" \
             --arg imageRepository "$image_repository" \
-            'select(.version == $version and .repository == $repository and .sourceCommit == $sourceCommit and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle" and .productionCertification == "production-certification.json" and .productionCertificationSignatureBundle == "production-certification.sigstore.json") | .image | select(startswith($imageRepository + "@sha256:") and test("@sha256:[a-f0-9]{64}$"))' \
+            'select(.version == $version and .repository == $repository and .sourceCommit == $sourceCommit and .evidenceChecksums == "release-evidence.sha256" and (.evidenceChecksumsSHA256 | test("^[a-f0-9]{64}$")) and .manifestSignature == "sigstore-keyless-bundle" and .productionCertification == "production-certification.json" and .productionCertificationSignatureBundle == "production-certification.sigstore.json" and .controlPlaneRecoveryEvidence == "control-plane-recovery-conformance.json") | .image | select(startswith($imageRepository + "@sha256:") and test("@sha256:[a-f0-9]{64}$"))' \
             previous-promotion-manifest.json)"
           certification_identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/production-certification.yml@refs/(heads|tags)/.+$"
           cosign verify-blob \
@@ -524,6 +524,8 @@ jobs:
           jq -e --arg sourceCommit "$GITHUB_SHA" 'length == 10 and ([.[].engine] | unique | length) == 10 and all(.[]; .status == "passed" and .sourceCommit == $sourceCommit and .dataVerified == true and .restartVerified == true and .replacementVerified == true and .persistentVolumeVerified == true and .imageIdentityVerified == true and .replacementImageId == .serverImage.id and all(.serverImage,.backupImage,.restoreImage; (.id | test("^sha256:[a-f0-9]{64}$")) and (.digest | test("@sha256:[a-f0-9]{64}$"))) and .artifactBytes > 0 and .rpoSeconds >= 0 and .rtoSeconds >= 0)' database-recovery-evidence.json >/dev/null
           cp conformance-evidence/sso-keycloak-evidence.json .
           cp conformance-evidence/swarm-ha-conformance.json .
+          cp conformance-evidence/control-plane-recovery-conformance.json .
+          cp conformance-evidence/control-plane-recovery-conformance.log .
           cp conformance-evidence/lifecycle-conformance.json .
           cp conformance-evidence/reconciliation-conformance.json .
           cp conformance-evidence/agent-certificate-conformance.json .
@@ -538,6 +540,7 @@ jobs:
           jq -er '.dindImage,.probeImage' swarm-ha-conformance.json | while IFS= read -r image; do
             scripts/ci/validate-image-reference.sh "$image"
           done
+          jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and (.controllerImage | test("@sha256:[a-f0-9]{64}$")) and (.schemaVersion | test("^[A-Za-z0-9._-]+$")) and .databaseBytes > 0 and .signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound and .runningControllerRejected and .tamperedManifestRejected and .tamperedDumpRejected and .wrongMasterKeyRejected and .schemaMismatchRejected and .privateDumpSnapshotVerified and .stagedCutoverVerified and .rollbackDatabaseRetained and .authenticatedStateRecovered and .auditChainContinuity == "production-required"' control-plane-recovery-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .deploySucceeded and .deployFailed and .deploymentCancelled and .rollbackSucceeded and .resolvedImageSnapshot and .signedWebhookAccepted and .webhookReplayRejected and .commitStatusDelivered and .failureNotificationDelivered and .workerTakeoverFenced and .staleCompletionRejected and .cancellationCompletionRace and .remoteAgentCommand' lifecycle-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .localMissingStackRepaired and .twoObservationThreshold and .duplicateRepairSuppressed and .immutableSnapshotPreserved and .desiredEditsPreserved and .maintenanceSuppressed and .activeDeploymentSuppressed and .remoteHeartbeatSuppressed and .remoteCapacitySuppressed and .remoteCapacityRecoveryQueued and .metricsExposed and .aiAuditSnapshotExposed' reconciliation-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .tlsVersion == "1.3" and .oldCertificateAuthenticated and .replacementIssuedPending and .oldValidBeforeConfirmation and .replacementPromotedOnHeartbeat and .oldRejectedAfterPromotion and .wrongClusterRejected and .untrustedCARejected and .expiredCertificateRejected and .mismatchedKeyRejected and .pendingMetricsConverged and .invalidReplacementPreservesIdentity and .caDualTrustMigrationVerified and .caFingerprintConverged and .newOnlyListenerVerified and .retiredCARejected' agent-certificate-conformance.json >/dev/null
@@ -566,6 +569,8 @@ jobs:
             template-conformance.log
             sso-keycloak-evidence.json
             swarm-ha-conformance.json
+            control-plane-recovery-conformance.json
+            control-plane-recovery-conformance.log
             lifecycle-conformance.json
             reconciliation-conformance.json
             agent-certificate-conformance.json
@@ -688,6 +693,7 @@ jobs:
             volume-recovery-conformance.json volume-recovery-conformance.log
             template-conformance.json template-conformance.log
             sso-keycloak-evidence.json swarm-ha-conformance.json
+            control-plane-recovery-conformance.json control-plane-recovery-conformance.log
             lifecycle-conformance.json reconciliation-conformance.json
             agent-certificate-conformance.json ai-audit-conformance.json
             ai-gateway-recovery-conformance.json ai-gateway-recovery-conformance.log
@@ -708,7 +714,7 @@ jobs:
             --arg workflowRun "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg createdAt "$created_at" \
             --arg evidenceChecksumsSHA256 "$evidence_checksums_sha256" \
-            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,productionCertification:"production-certification.json",productionCertificationSignatureBundle:"production-certification.sigstore.json",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",aiGatewayRecoveryConformanceEvidence:"ai-gateway-recovery-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
+            '{version:$version,repository:$repository,image:$image,sourceCommit:$sourceCommit,schemaVersion:$schemaVersion,operator:$operator,workflowRun:$workflowRun,createdAt:$createdAt,signature:"sigstore-keyless",manifestSignature:"sigstore-keyless-bundle",evidenceChecksums:"release-evidence.sha256",evidenceChecksumsSHA256:$evidenceChecksumsSHA256,productionCertification:"production-certification.json",productionCertificationSignatureBundle:"production-certification.sigstore.json",provenance:"slsa",sbom:"spdx-json",platformEvidence:"image-platforms.json",amd64VulnerabilityEvidence:"trivy-amd64.json",arm64VulnerabilityEvidence:"trivy-arm64.json",databaseRecoveryEvidence:"database-recovery-evidence.json",volumeRecoveryEvidence:"volume-recovery-conformance.json",controlPlaneRecoveryEvidence:"control-plane-recovery-conformance.json",templateConformanceEvidence:"template-conformance.json",ssoConformanceEvidence:"sso-keycloak-evidence.json",swarmHAEvidence:"swarm-ha-conformance.json",lifecycleConformanceEvidence:"lifecycle-conformance.json",reconciliationConformanceEvidence:"reconciliation-conformance.json",agentCertificateConformanceEvidence:"agent-certificate-conformance.json",aiAuditConformanceEvidence:"ai-audit-conformance.json",aiGatewayRecoveryConformanceEvidence:"ai-gateway-recovery-conformance.json",notificationConformanceEvidence:"notification-conformance.json",migrationConformanceEvidence:"migration-conformance.json",upgradeConformanceEvidence:"upgrade-conformance.json",releaseSoakEvidence:"release-soak-evidence.json"}' \
             > promotion-manifest.json
           cat promotion-manifest.json
 
@@ -750,6 +756,8 @@ jobs:
             template-conformance.log
             sso-keycloak-evidence.json
             swarm-ha-conformance.json
+            control-plane-recovery-conformance.json
+            control-plane-recovery-conformance.log
             lifecycle-conformance.json
             reconciliation-conformance.json
             agent-certificate-conformance.json
@@ -827,7 +835,7 @@ jobs:
           VERSION: ${{ needs.candidate.outputs.version }}
         run: |
           set -euo pipefail
-          assets=(promotion-manifest.json promotion-manifest.sigstore.json production-certification.json production-certification.sigstore.json release-evidence.sha256 image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json ai-gateway-recovery-conformance.json ai-gateway-recovery-conformance.log notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
+          assets=(promotion-manifest.json promotion-manifest.sigstore.json production-certification.json production-certification.sigstore.json release-evidence.sha256 image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log control-plane-recovery-conformance.json control-plane-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json ai-gateway-recovery-conformance.json ai-gateway-recovery-conformance.log notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
           release_json="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName,targetCommitish,name 2>/dev/null || true)"
           if [ -n "$release_json" ]; then
             jq -e --arg version "$VERSION" --arg commit "$GITHUB_SHA" --arg title "Dockyard $VERSION" \

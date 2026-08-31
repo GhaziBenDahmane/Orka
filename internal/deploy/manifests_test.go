@@ -417,6 +417,17 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 			t.Errorf("release workflow is missing AI gateway recovery evidence contract %q", recoveryEvidenceContract)
 		}
 	}
+	for _, controlPlaneRecoveryContract := range []string{
+		"control-plane-recovery-conformance.json control-plane-recovery-conformance.log",
+		`controlPlaneRecoveryEvidence:"control-plane-recovery-conformance.json"`,
+		`.signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound`,
+		`.privateDumpSnapshotVerified and .stagedCutoverVerified and .rollbackDatabaseRetained`,
+		`.auditChainContinuity == "production-required"`,
+	} {
+		if !strings.Contains(workflow, controlPlaneRecoveryContract) {
+			t.Errorf("release workflow is missing control-plane recovery evidence contract %q", controlPlaneRecoveryContract)
+		}
+	}
 	for _, resumableReleaseGuard := range []string{
 		`gh release create "$VERSION"`,
 		`--draft`,

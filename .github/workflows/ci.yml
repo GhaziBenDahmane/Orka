@@ -104,7 +104,19 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Clean-install and restart smoke test
-        run: scripts/ci/smoke-compose.sh
+        env:
+          DOCKYARD_CONTROL_PLANE_RECOVERY_EVIDENCE: ${{ github.workspace }}/control-plane-recovery-conformance.json
+        run: |
+          set -euo pipefail
+          scripts/ci/smoke-compose.sh | tee control-plane-recovery-conformance.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: control-plane-recovery-conformance
+          path: |
+            control-plane-recovery-conformance.json
+            control-plane-recovery-conformance.log
+          if-no-files-found: error
 
   template-smoke:
     runs-on: ubuntu-latest

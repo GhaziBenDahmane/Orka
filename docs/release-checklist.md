@@ -288,6 +288,7 @@ links for every item below.
   `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
   `database-recovery-evidence.json`,
   `volume-recovery-conformance.json`,
+  `control-plane-recovery-conformance.json`,
   `template-conformance.json`,
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,

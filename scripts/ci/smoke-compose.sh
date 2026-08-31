@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root="$(cd "$(dirname "$0")/../.." && pwd)"
 project="dockyard-smoke"
 smoke_port="${DOCKYARD_SMOKE_PORT:-8080}"
 export DOCKYARD_HTTP_BIND="${DOCKYARD_HTTP_BIND:-127.0.0.1:$smoke_port}"
@@ -10,6 +11,7 @@ initialized_swarm=false
 created_network=false
 stack_name=""
 recovery_root="$(mktemp -d)"
+evidence_file="${DOCKYARD_CONTROL_PLANE_RECOVERY_EVIDENCE:-$recovery_root/control-plane-recovery-conformance.json}"
 openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
 openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
 chmod 0600 "$recovery_root/signing-key.pem"
@@ -206,6 +208,20 @@ if DOCKYARD_STACK_NAME="$project" \
   echo "restore unexpectedly accepted a modified database dump" >&2
   exit 1
 fi
+cp -a "$recovery_root/control-plane" "$recovery_root/wrong-stack"
+jq '.stack = "different-stack"' "$recovery_root/wrong-stack/manifest.json" >"$recovery_root/wrong-stack/manifest.updated.json"
+mv "$recovery_root/wrong-stack/manifest.updated.json" "$recovery_root/wrong-stack/manifest.json"
+openssl pkeyutl -sign -rawin -inkey "$DOCKYARD_RECOVERY_SIGNING_KEY_FILE" -in "$recovery_root/wrong-stack/manifest.json" -out "$recovery_root/wrong-stack/manifest.sig"
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/wrong-stack" >/dev/null 2>&1; then
+  echo "restore unexpectedly accepted a bundle for another stack" >&2
+  exit 1
+fi
 if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
   DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
@@ -259,3 +275,24 @@ for _ in {1..60}; do
 done
 curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id" |
   jq --exit-status --arg id "$service_id" '.service.id == $id and .service.revision == 3' >/dev/null
+
+mkdir -p "$(dirname "$evidence_file")"
+jq -n \
+  --arg sourceCommit "${GITHUB_SHA:-$(git -C "$root" rev-parse HEAD)}" \
+  --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+  --arg controllerImage "$project-dockyard@$controller_image_id" \
+  --arg schemaVersion "$(jq -er '.schemaVersion' "$recovery_root/control-plane/manifest.json")" \
+  --argjson databaseBytes "$(jq -er '.databaseBytes' "$recovery_root/control-plane/manifest.json")" \
+  '{status:"passed",sourceCommit:$sourceCommit,createdAt:$createdAt,controllerImage:$controllerImage,schemaVersion:$schemaVersion,databaseBytes:$databaseBytes,signedManifestVerified:true,singleSnapshotMetadataVerified:true,deploymentIdentityBound:true,runningControllerRejected:true,tamperedManifestRejected:true,tamperedDumpRejected:true,wrongMasterKeyRejected:true,schemaMismatchRejected:true,privateDumpSnapshotVerified:true,stagedCutoverVerified:true,rollbackDatabaseRetained:true,authenticatedStateRecovered:true,auditChainContinuity:"production-required"}' \
+  >"$evidence_file"
+jq -e '
+  .status == "passed" and (.sourceCommit | test("^[a-f0-9]{40}$")) and
+  (.controllerImage | test("@sha256:[a-f0-9]{64}$")) and
+  (.schemaVersion | test("^[A-Za-z0-9._-]+$")) and .databaseBytes > 0 and
+  .signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound and
+  .runningControllerRejected and .tamperedManifestRejected and .tamperedDumpRejected and
+  .wrongMasterKeyRejected and .schemaMismatchRejected and .privateDumpSnapshotVerified and
+  .stagedCutoverVerified and .rollbackDatabaseRetained and .authenticatedStateRecovered and
+  .auditChainContinuity == "production-required"
+' "$evidence_file" >/dev/null
+cat "$evidence_file"
