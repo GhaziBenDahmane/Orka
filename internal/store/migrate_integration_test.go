@@ -91,6 +91,67 @@ func TestMigrateFreshInstallIsCompleteAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestBackupArtifactValidityIsDatabaseDerived(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	serviceID, databaseID, destinationID := uuid.New(), uuid.New(), uuid.New()
+	databaseBackupID, volumeBackupID := uuid.New(), uuid.New()
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Artifact validity',$2)`, []any{organizationID, "artifact-validity-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,storage_node_id) VALUES($1,$2,'Database','database',$3,'services: {}','node1')`, []any{serviceID, environmentID, "artifact-validity-" + serviceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17',$3,'ciphertext')`, []any{databaseID, environmentID, serviceID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'archive','https://objects.example.test','backups','ciphertext')`, []any{destinationID, organizationID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id) VALUES($1,$2,'queued','native',$3)`, []any{databaseBackupID, databaseID, destinationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status) VALUES($1,$2,'data','node1',$3,true,'queued')`, []any{volumeBackupID, serviceID, destinationID}},
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertValidity := func(wantDatabase, wantVolume bool) {
+		t.Helper()
+		var databaseValid, volumeValid bool
+		if err := pool.QueryRow(ctx, `SELECT artifact_valid FROM database_backups WHERE id=$1`, databaseBackupID).Scan(&databaseValid); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT artifact_valid FROM volume_backups WHERE id=$1`, volumeBackupID).Scan(&volumeValid); err != nil {
+			t.Fatal(err)
+		}
+		if databaseValid != wantDatabase || volumeValid != wantVolume {
+			t.Fatalf("artifact validity database=%v volume=%v want database=%v volume=%v", databaseValid, volumeValid, wantDatabase, wantVolume)
+		}
+	}
+	assertValidity(false, false)
+	if _, err := pool.Exec(ctx, `UPDATE database_backups SET status='succeeded',object_key='database/object.enc',size_bytes=42,sha256=$2,encrypted=true,plaintext_sha256=$3,encrypted_data_key='wrapped',finished_at=now() WHERE id=$1`, databaseBackupID, strings.Repeat("a", 64), strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE volume_backups SET status='succeeded',object_key='volumes/object.enc',size_bytes=42,sha256=$2,plaintext_sha256=$3,encrypted_data_key='wrapped',finished_at=now() WHERE id=$1`, volumeBackupID, strings.Repeat("c", 64), strings.Repeat("d", 64)); err != nil {
+		t.Fatal(err)
+	}
+	assertValidity(true, true)
+	if _, err := pool.Exec(ctx, `UPDATE database_backups SET sha256='INVALID' WHERE id=$1`, databaseBackupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE volume_backups SET size_bytes=NULL WHERE id=$1`, volumeBackupID); err != nil {
+		t.Fatal(err)
+	}
+	assertValidity(false, false)
+
+	var indexes int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND indexname IN ('database_backups_valid_instance_finished_idx','volume_backups_valid_service_finished_idx')`).Scan(&indexes); err != nil || indexes != 2 {
+		t.Fatalf("artifact-validity indexes=%d err=%v", indexes, err)
+	}
+}
+
 func TestMigrateSerializesConcurrentControllerStartup(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	const controllers = 3
@@ -476,7 +537,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql", "115_database_utility_image_evidence.sql", "116_backup_artifact_validity.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)

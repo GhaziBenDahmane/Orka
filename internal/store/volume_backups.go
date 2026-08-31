@@ -35,6 +35,7 @@ type VolumeBackup struct {
 	DestinationID        uuid.UUID  `json:"destinationId"`
 	Quiesce              bool       `json:"quiesce"`
 	Status               string     `json:"status"`
+	ArtifactValid        bool       `json:"artifactValid"`
 	ObjectKey            string     `json:"objectKey,omitempty"`
 	SizeBytes            *int64     `json:"sizeBytes,omitempty"`
 	SHA256               string     `json:"sha256,omitempty"`
@@ -296,7 +297,7 @@ func queueVolumeBackupTx(ctx context.Context, tx pgx.Tx, organizationID, service
 }
 
 func (s *Store) ListVolumeBackups(ctx context.Context, organizationID, serviceID uuid.UUID) ([]VolumeBackup, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT backup.id,backup.volume_backup_policy_id,backup.compose_service_id,backup.volume_name,backup.storage_node_id,backup.destination_id,backup.quiesce,backup.status,backup.object_key,backup.size_bytes,backup.sha256,backup.plaintext_sha256,backup.error,backup.created_at,backup.started_at,backup.finished_at FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND p.organization_id=$2 ORDER BY backup.created_at DESC LIMIT 100`, serviceID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT backup.id,backup.volume_backup_policy_id,backup.compose_service_id,backup.volume_name,backup.storage_node_id,backup.destination_id,backup.quiesce,backup.status,backup.artifact_valid,backup.object_key,backup.size_bytes,backup.sha256,backup.plaintext_sha256,backup.error,backup.created_at,backup.started_at,backup.finished_at FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND p.organization_id=$2 ORDER BY backup.created_at DESC LIMIT 100`, serviceID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +305,7 @@ func (s *Store) ListVolumeBackups(ctx context.Context, organizationID, serviceID
 	items := []VolumeBackup{}
 	for rows.Next() {
 		var item VolumeBackup
-		if err = rows.Scan(&item.ID, &item.VolumeBackupPolicyID, &item.ComposeServiceID, &item.VolumeName, &item.StorageNodeID, &item.DestinationID, &item.Quiesce, &item.Status, &item.ObjectKey, &item.SizeBytes, &item.SHA256, &item.PlaintextSHA256, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.VolumeBackupPolicyID, &item.ComposeServiceID, &item.VolumeName, &item.StorageNodeID, &item.DestinationID, &item.Quiesce, &item.Status, &item.ArtifactValid, &item.ObjectKey, &item.SizeBytes, &item.SHA256, &item.PlaintextSHA256, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -314,7 +315,7 @@ func (s *Store) ListVolumeBackups(ctx context.Context, organizationID, serviceID
 
 func (s *Store) GetVolumeBackup(ctx context.Context, organizationID, id uuid.UUID, includeSecret bool) (VolumeBackup, error) {
 	var item VolumeBackup
-	err := s.Pool.QueryRow(ctx, `SELECT backup.id,backup.volume_backup_policy_id,backup.compose_service_id,backup.volume_name,backup.storage_node_id,backup.destination_id,backup.quiesce,backup.status,backup.object_key,backup.size_bytes,backup.sha256,backup.plaintext_sha256,CASE WHEN $3 THEN backup.encrypted_data_key ELSE '' END,backup.error,backup.created_at,backup.started_at,backup.finished_at FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2`, id, organizationID, includeSecret).Scan(&item.ID, &item.VolumeBackupPolicyID, &item.ComposeServiceID, &item.VolumeName, &item.StorageNodeID, &item.DestinationID, &item.Quiesce, &item.Status, &item.ObjectKey, &item.SizeBytes, &item.SHA256, &item.PlaintextSHA256, &item.EncryptedDataKey, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT backup.id,backup.volume_backup_policy_id,backup.compose_service_id,backup.volume_name,backup.storage_node_id,backup.destination_id,backup.quiesce,backup.status,backup.artifact_valid,backup.object_key,backup.size_bytes,backup.sha256,backup.plaintext_sha256,CASE WHEN $3 THEN backup.encrypted_data_key ELSE '' END,backup.error,backup.created_at,backup.started_at,backup.finished_at FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2`, id, organizationID, includeSecret).Scan(&item.ID, &item.VolumeBackupPolicyID, &item.ComposeServiceID, &item.VolumeName, &item.StorageNodeID, &item.DestinationID, &item.Quiesce, &item.Status, &item.ArtifactValid, &item.ObjectKey, &item.SizeBytes, &item.SHA256, &item.PlaintextSHA256, &item.EncryptedDataKey, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackup{}, ErrNotFound
 	}
@@ -380,9 +381,7 @@ func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backup
 	var slug, status, storageNodeID string
 	var deleting, artifactValid bool
 	var desiredState string
-	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state,service.storage_node_id,
-		COALESCE(backup.size_bytes>0 AND backup.sha256~'^[a-f0-9]{64}$' AND backup.plaintext_sha256~'^[a-f0-9]{64}$'
-			AND backup.encrypted_data_key<>'' AND backup.object_key<>'' AND backup.finished_at IS NOT NULL,false)
+	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state,service.storage_node_id,backup.artifact_valid
 		FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState, &storageNodeID, &artifactValid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound

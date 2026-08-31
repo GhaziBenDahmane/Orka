@@ -350,6 +350,7 @@ type DatabaseBackup struct {
 	ID                 uuid.UUID  `json:"id"`
 	DatabaseInstanceID uuid.UUID  `json:"databaseInstanceId"`
 	Status             string     `json:"status"`
+	ArtifactValid      bool       `json:"artifactValid"`
 	Format             string     `json:"format"`
 	Path               string     `json:"-"`
 	SizeBytes          *int64     `json:"sizeBytes,omitempty"`
@@ -3376,7 +3377,7 @@ func deleteBackupDestinationTx(ctx context.Context, tx pgx.Tx, organizationID, i
 
 func (s *Store) GetDatabaseBackup(ctx context.Context, organizationID, id uuid.UUID) (DatabaseBackup, error) {
 	var b DatabaseBackup
-	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.status,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.utility_image,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&b.ID, &b.DatabaseInstanceID, &b.Status, &b.Format, &b.Path, &b.SizeBytes, &b.SHA256, &b.Encrypted, &b.PlaintextSHA256, &b.EncryptedDataKey, &b.DestinationID, &b.ObjectKey, &b.UtilityImage, &b.Error, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.status,b.artifact_valid,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.utility_image,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&b.ID, &b.DatabaseInstanceID, &b.Status, &b.ArtifactValid, &b.Format, &b.Path, &b.SizeBytes, &b.SHA256, &b.Encrypted, &b.PlaintextSHA256, &b.EncryptedDataKey, &b.DestinationID, &b.ObjectKey, &b.UtilityImage, &b.Error, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseBackup{}, ErrNotFound
 	}
@@ -3423,10 +3424,7 @@ func queueDatabaseRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, back
 	var backupDatabaseID uuid.UUID
 	var composeServiceID *uuid.UUID
 	var artifactValid bool
-	err := tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id,
-		COALESCE(b.size_bytes>0 AND b.sha256~'^[a-f0-9]{64}$' AND b.finished_at IS NOT NULL
-			AND (NOT b.encrypted OR (b.plaintext_sha256~'^[a-f0-9]{64}$' AND b.encrypted_data_key<>''))
-			AND ((b.destination_id IS NULL AND b.path<>'') OR (b.destination_id IS NOT NULL AND b.object_key<>'' AND b.encrypted)),false)
+	err := tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id,b.artifact_valid
 		FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status, &composeServiceID, &artifactValid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound

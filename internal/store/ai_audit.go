@@ -1027,8 +1027,7 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		JOIN compose_services service ON service.id=policy.compose_service_id
 		JOIN environments environment ON environment.id=service.environment_id
 		JOIN projects project ON project.id=environment.project_id
-		LEFT JOIN LATERAL (SELECT backup.id,backup.status,backup.finished_at,backup.created_at,
-			backup.size_bytes>0 AND backup.sha256~'^[a-f0-9]{64}$' AND backup.plaintext_sha256~'^[a-f0-9]{64}$' AND backup.encrypted_data_key<>'' AND backup.object_key<>'' AND backup.finished_at IS NOT NULL AS artifact_valid
+		LEFT JOIN LATERAL (SELECT backup.id,backup.status,backup.finished_at,backup.created_at,backup.artifact_valid
 			FROM volume_backups backup WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY backup.created_at DESC LIMIT 1) last_backup ON true
 		LEFT JOIN LATERAL (SELECT restore.status,restore.finished_at,restore.created_at,restore.offline,restore.target_storage_node_id FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY restore.created_at DESC LIMIT 1) last_restore ON true
 		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
@@ -1087,10 +1086,7 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		JOIN environments e ON e.id=d.environment_id
 		JOIN projects p ON p.id=e.project_id
 		LEFT JOIN backup_policies bp ON bp.database_instance_id=d.id
-		LEFT JOIN LATERAL (SELECT b.status,b.finished_at,b.created_at,b.utility_image,
-			b.size_bytes>0 AND b.sha256~'^[a-f0-9]{64}$' AND b.finished_at IS NOT NULL
-			AND (NOT b.encrypted OR (b.plaintext_sha256~'^[a-f0-9]{64}$' AND b.encrypted_data_key<>''))
-			AND ((b.destination_id IS NULL AND b.path<>'') OR (b.destination_id IS NOT NULL AND b.object_key<>'' AND b.encrypted)) AS artifact_valid
+		LEFT JOIN LATERAL (SELECT b.status,b.finished_at,b.created_at,b.utility_image,b.artifact_valid
 			FROM database_backups b WHERE b.database_instance_id=d.id ORDER BY b.created_at DESC LIMIT 1) last_backup ON true
 		LEFT JOIN LATERAL (SELECT r.status,r.finished_at,r.created_at,r.utility_image,r.readiness_image FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id WHERE b.database_instance_id=d.id AND r.kind='drill' ORDER BY r.created_at DESC LIMIT 1) last_drill ON true
 		WHERE p.organization_id=$1 ORDER BY d.name,d.id`, organizationID)

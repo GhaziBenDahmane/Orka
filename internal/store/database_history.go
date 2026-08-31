@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Store) ListDatabaseBackups(ctx context.Context, organizationID, databaseInstanceID uuid.UUID) ([]DatabaseBackup, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT b.id,b.database_instance_id,b.status,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.utility_image,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.database_instance_id=$1 AND p.organization_id=$2 ORDER BY b.created_at DESC LIMIT 100`, databaseInstanceID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT b.id,b.database_instance_id,b.status,b.artifact_valid,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.utility_image,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.database_instance_id=$1 AND p.organization_id=$2 ORDER BY b.created_at DESC LIMIT 100`, databaseInstanceID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -17,7 +17,7 @@ func (s *Store) ListDatabaseBackups(ctx context.Context, organizationID, databas
 	items := []DatabaseBackup{}
 	for rows.Next() {
 		var item DatabaseBackup
-		if err = rows.Scan(&item.ID, &item.DatabaseInstanceID, &item.Status, &item.Format, &item.Path, &item.SizeBytes, &item.SHA256, &item.Encrypted, &item.PlaintextSHA256, &item.EncryptedDataKey, &item.DestinationID, &item.ObjectKey, &item.UtilityImage, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.DatabaseInstanceID, &item.Status, &item.ArtifactValid, &item.Format, &item.Path, &item.SizeBytes, &item.SHA256, &item.Encrypted, &item.PlaintextSHA256, &item.EncryptedDataKey, &item.DestinationID, &item.ObjectKey, &item.UtilityImage, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

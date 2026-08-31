@@ -781,6 +781,9 @@ Retention likewise counts only recovery points with complete restore metadata,
 so a malformed successful row cannot evict an older valid database or
 named-volume artifact. Invalid rows remain visible to integrity metrics and the
 AI auditor instead of silently displacing usable recovery history.
+Backup history exposes this database-derived decision as `artifactValid`; the
+console explains invalid successful records and does not offer a restore action
+for them.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the

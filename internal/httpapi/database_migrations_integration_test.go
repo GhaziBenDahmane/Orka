@@ -70,7 +70,7 @@ func TestDatabaseMigrationHistoryAndCancellationAPI(t *testing.T) {
 	var backups struct {
 		Items []store.DatabaseBackup `json:"items"`
 	}
-	if err = json.Unmarshal(body, &backups); status != http.StatusOK || err != nil || len(backups.Items) != 1 || backups.Items[0].ID != backupID {
+	if err = json.Unmarshal(body, &backups); status != http.StatusOK || err != nil || len(backups.Items) != 1 || backups.Items[0].ID != backupID || !backups.Items[0].ArtifactValid {
 		t.Fatalf("backup history status=%d body=%s err=%v", status, body, err)
 	}
 	if bytes.Contains(body, []byte("/private/controller/path")) || bytes.Contains(body, []byte("wrapped-key")) {

@@ -128,7 +128,7 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String(), token, organizationID, http.MethodGet, nil)
-	if status != http.StatusOK || bytes.Contains(body, []byte("wrapped-secret")) {
+	if status != http.StatusOK || !bytes.Contains(body, []byte(`"artifactValid":true`)) || bytes.Contains(body, []byte("wrapped-secret")) {
 		t.Fatalf("get backup status=%d body=%s", status, body)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String()+"/restore", token, organizationID, http.MethodPost, map[string]string{"confirm": "wrong"})

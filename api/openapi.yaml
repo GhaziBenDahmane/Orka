@@ -5511,11 +5511,12 @@ components:
   schemas:
     DatabaseBackup:
       type: object
-      required: [id, databaseInstanceId, status, format, encrypted, createdAt]
+      required: [id, databaseInstanceId, status, artifactValid, format, encrypted, createdAt]
       properties:
         id: {type: string, format: uuid}
         databaseInstanceId: {type: string, format: uuid}
         status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        artifactValid: {type: boolean, description: True only when a successful backup has complete metadata required for restore.}
         format: {type: string}
         sizeBytes: {type: integer, format: int64, minimum: 0}
         sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
