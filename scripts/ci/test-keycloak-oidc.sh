@@ -6,12 +6,22 @@ run_id="$$-${RANDOM}"
 keycloak_container="dockyard-keycloak-${run_id}"
 postgres_container="dockyard-keycloak-postgres-${run_id}"
 work_dir=$(mktemp -d)
+evidence_file="${DOCKYARD_SSO_EVIDENCE:-sso-keycloak-evidence.json}"
+keycloak_image="${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak@sha256:98fab020a3a490aba0978f237e2a06cd0ea42bf149c6cf10f11c0aaf27728ff2}"
+postgres_image="${POSTGRES_IMAGE:-postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}"
 
 cleanup() {
   docker rm -f "$keycloak_container" "$postgres_container" >/dev/null 2>&1 || true
   rm -rf "$work_dir"
 }
 trap cleanup EXIT INT TERM
+
+# A failed run must not leave a prior successful record available to callers
+# or the always-upload artifact step.
+rm -f -- "$evidence_file"
+
+"$root_dir/scripts/ci/validate-image-reference.sh" "$keycloak_image"
+"$root_dir/scripts/ci/validate-image-reference.sh" "$postgres_image"
 
 # Compile before replacing SSL_CERT_FILE with the ephemeral Keycloak CA so a
 # cold Go module cache can still use the host's normal public trust roots.
@@ -24,7 +34,7 @@ chmod 644 "$work_dir/keycloak.key" "$work_dir/keycloak.crt"
 
 docker run -d --name "$postgres_container" -p 127.0.0.1::5432 \
   -e POSTGRES_USER=dockyard -e POSTGRES_PASSWORD=dockyard -e POSTGRES_DB=dockyard_test \
-  "${POSTGRES_IMAGE:-postgres@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}" >/dev/null
+  "$postgres_image" >/dev/null
 postgres_port=$(docker port "$postgres_container" 5432/tcp | awk -F: 'NR==1 {print $NF}')
 
 docker run -d --name "$keycloak_container" -p 127.0.0.1::8443 \
@@ -32,7 +42,7 @@ docker run -d --name "$keycloak_container" -p 127.0.0.1::8443 \
   -v "$work_dir/keycloak.crt:/opt/keycloak/conf/server.crt:ro" \
   -v "$work_dir/keycloak.key:/opt/keycloak/conf/server.key:ro" \
   -v "$root_dir/deploy/conformance/keycloak-realm.json:/opt/keycloak/data/import/dockyard-conformance-realm.json:ro" \
-  "${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak@sha256:98fab020a3a490aba0978f237e2a06cd0ea42bf149c6cf10f11c0aaf27728ff2}" start-dev --import-realm \
+  "$keycloak_image" start-dev --import-realm \
   --https-certificate-file=/opt/keycloak/conf/server.crt \
   --https-certificate-key-file=/opt/keycloak/conf/server.key \
   --hostname-strict=false >/dev/null
@@ -70,3 +80,13 @@ test_log="$work_dir/keycloak-sso-tests.log"
 "$work_dir/httpapi-conformance.test" -test.timeout=5m -test.run='^TestKeycloak(OIDC|SAML)Conformance$' -test.count=1 -test.v | tee "$test_log"
 grep -Eq '^--- PASS: TestKeycloakOIDCConformance ' "$test_log"
 grep -Eq '^--- PASS: TestKeycloakSAMLConformance ' "$test_log"
+
+source_commit="${GITHUB_SHA:-$(git -C "$root_dir" rev-parse HEAD)}"
+jq -n \
+  --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg sourceCommit "$source_commit" \
+  --arg keycloakImage "$keycloak_image" \
+  --arg postgresImage "$postgres_image" \
+  '{schemaVersion:1,status:"passed",createdAt:$createdAt,sourceCommit:$sourceCommit,provider:"keycloak",keycloakImage:$keycloakImage,postgresImage:$postgresImage,flows:{oidc:{test:"TestKeycloakOIDCConformance",status:"passed"},saml:{test:"TestKeycloakSAMLConformance",status:"passed"}},oidc:true,samlSpInitiated:true,samlIdpInitiated:true,tenantIsolation:true,replayRejected:true}' \
+  >"$work_dir/sso-keycloak-evidence.json"
+mv "$work_dir/sso-keycloak-evidence.json" "$evidence_file"

@@ -247,6 +247,9 @@ links for every item below.
   JIT provisioning, session authentication, and assertion replay rejection.
   The harness requires explicit PASS records from both named flows before CI
   may emit positive SSO evidence; an empty or stale test selector fails closed.
+  The harness, rather than the workflow wrapper, writes the structured evidence
+  only after both records are observed and includes the exact immutable
+  Keycloak and PostgreSQL image references used by the run.
   Exercise two-phase SAML SP certificate rollover against each configured
   provider: publish the replacement, refresh IdP metadata, prove the old key
   remains active before promotion, promote, and verify a new login.

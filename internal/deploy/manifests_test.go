@@ -538,6 +538,52 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	}
 }
 
+func TestSSOConformanceEvidenceIsEmittedByTheHarness(t *testing.T) {
+	workflowBytes, err := os.ReadFile("../../.github/workflows/sso-conformance.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(workflowBytes)
+	if strings.Contains(workflow, "jq -n") {
+		t.Fatal("SSO workflow fabricates conformance evidence instead of consuming harness output")
+	}
+	for _, contract := range []string{
+		"DOCKYARD_SSO_EVIDENCE: sso-keycloak-evidence.json",
+		`.schemaVersion == 1 and .status == "passed"`,
+		`.flows.oidc == {test:"TestKeycloakOIDCConformance",status:"passed"}`,
+		`.flows.saml == {test:"TestKeycloakSAMLConformance",status:"passed"}`,
+		"scripts/ci/validate-image-reference.sh",
+	} {
+		if !strings.Contains(workflow, contract) {
+			t.Errorf("SSO workflow is missing harness evidence contract %q", contract)
+		}
+	}
+
+	harnessBytes, err := os.ReadFile("../../scripts/ci/test-keycloak-oidc.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness := string(harnessBytes)
+	oidcPass := strings.Index(harness, "grep -Eq '^--- PASS: TestKeycloakOIDCConformance '")
+	samlPass := strings.Index(harness, "grep -Eq '^--- PASS: TestKeycloakSAMLConformance '")
+	evidenceWrite := strings.Index(harness, "'{schemaVersion:1,status:\"passed\"")
+	evidencePublish := strings.Index(harness, "mv \"$work_dir/sso-keycloak-evidence.json\" \"$evidence_file\"")
+	if oidcPass < 0 || samlPass < 0 || evidenceWrite <= oidcPass || evidenceWrite <= samlPass || evidencePublish <= evidenceWrite {
+		t.Fatal("SSO harness can publish positive evidence before both named tests pass")
+	}
+	for _, contract := range []string{
+		`rm -f -- "$evidence_file"`,
+		`validate-image-reference.sh" "$keycloak_image"`,
+		`validate-image-reference.sh" "$postgres_image"`,
+		`--arg keycloakImage "$keycloak_image"`,
+		`--arg postgresImage "$postgres_image"`,
+	} {
+		if !strings.Contains(harness, contract) {
+			t.Errorf("SSO harness is missing evidence guard %q", contract)
+		}
+	}
+}
+
 func TestControlPlaneRestoreUsesAuthenticatedPrivateSnapshots(t *testing.T) {
 	contents, err := os.ReadFile("../../scripts/restore-control-plane.sh")
 	if err != nil {
