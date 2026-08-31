@@ -287,6 +287,7 @@ links for every item below.
   `sso-keycloak-evidence.json`, `swarm-ha-conformance.json`,
   `lifecycle-conformance.json`, `reconciliation-conformance.json`,
   `agent-certificate-conformance.json`, `ai-audit-conformance.json`,
+  `ai-gateway-recovery-conformance.json`,
   `notification-conformance.json`, `migration-conformance.json`,
   `upgrade-conformance.json`, and
   `release-soak-evidence.json`; the same files

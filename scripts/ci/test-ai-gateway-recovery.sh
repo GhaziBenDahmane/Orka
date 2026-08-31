@@ -5,6 +5,11 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 temporary="$(mktemp -d)"
 cleanup() { rm -rf -- "$temporary"; }
 trap cleanup EXIT
+evidence_file="${DOCKYARD_AI_GATEWAY_RECOVERY_EVIDENCE:-$temporary/ai-gateway-recovery-conformance.json}"
+
+for command in git go jq openssl; do
+  command -v "$command" >/dev/null || { echo "$command is required for AI gateway recovery conformance" >&2; exit 1; }
+done
 
 mkdir -p "$temporary/bin" "$temporary/output"
 openssl genpkey -algorithm ED25519 -out "$temporary/signing-key.pem" >/dev/null 2>&1
@@ -49,8 +54,8 @@ digest_a='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 digest_b='sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 export PATH="$temporary/bin:$PATH"
 export ORKA_AI_RECOVERY_TEST_LOG="$temporary/docker.log"
-export DOCKYARD_IMAGE="example/dockyard@$digest_a"
-export NINEROUTER_IMAGE="example/9router@$digest_b"
+export DOCKYARD_IMAGE="${DOCKYARD_AI_GATEWAY_RECOVERY_DOCKYARD_IMAGE:-example/dockyard@$digest_a}"
+export NINEROUTER_IMAGE="${DOCKYARD_AI_GATEWAY_RECOVERY_NINEROUTER_IMAGE:-example/9router@$digest_b}"
 export NINEROUTER_STORAGE_NODE_ID='nodeabc123'
 export DOCKYARD_AI_BACKUP_OBJECT_REF='s3://recovery/ai-gateway.enc'
 export DOCKYARD_AI_BACKUP_URL_FILE="$temporary/put-url"
@@ -74,6 +79,7 @@ if grep -Fq 'upload-secret' "$bundle/manifest.json" || grep -Fq "$(<"$DOCKYARD_A
 fi
 grep -q '^service scale --detach=false dockyard-ai_9router=0$' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
+grep -q -- '--constraint node.id==nodeabc123' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q 'type=volume,source=dockyard-ai_nine-router-data,target=/volume,readonly' "$ORKA_AI_RECOVERY_TEST_LOG"
 if grep -Fq 'upload-secret' "$ORKA_AI_RECOVERY_TEST_LOG" || grep -Fq "$(<"$DOCKYARD_AI_BACKUP_KEY_FILE")" "$ORKA_AI_RECOVERY_TEST_LOG"; then
   echo 'backup credentials leaked into Docker arguments' >&2
@@ -131,3 +137,52 @@ if DOCKYARD_AI_RESTORE_CONFIRM='restore:dockyard-ai:9router' ORKA_AI_RECOVERY_TE
   exit 1
 fi
 grep -q 'metadata signature is invalid' "$temporary/err"
+
+(cd "$root" && go test -run '^(TestEncryptedBackupAndRestoreRoundTrip|TestLocalEncryptedBackupAndRestoreRoundTrip|TestRestoreRejectsTamperedCiphertextWithoutChangingVolume)$' -count=1 ./internal/volumeartifact) >"$temporary/volumeartifact.log"
+
+mkdir -p "$(dirname "$evidence_file")"
+jq -n \
+  --arg sourceCommit "${GITHUB_SHA:-$(git -C "$root" rev-parse HEAD)}" \
+  --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg dockyardImage "$DOCKYARD_IMAGE" \
+  --arg nineRouterImage "$NINEROUTER_IMAGE" \
+  '{
+    status:"passed",
+    sourceCommit:$sourceCommit,
+    createdAt:$createdAt,
+    dockyardImage:$dockyardImage,
+    nineRouterImage:$nineRouterImage,
+    encryptedRoundTripVerified:true,
+    tamperedCiphertextRejected:true,
+    signedMetadataVerified:true,
+    tamperedMetadataRejected:true,
+    credentialsExcludedFromMetadata:true,
+    credentialsExcludedFromDockerArguments:true,
+    backupQuiesced:true,
+    backupFailureResumedService:true,
+    failedHelperTaskRejected:true,
+    restoreConfirmationRequired:true,
+    runningServiceRestoreRejected:true,
+    wrongEncryptionKeyRejected:true,
+    restoreLeftOffline:true,
+    backupMountReadOnly:true,
+    nodePinned:true,
+    postRestoreDualAuditorVerification:"production-required"
+  }' >"$evidence_file"
+
+jq -e '
+  .status == "passed" and
+  (.sourceCommit | test("^[a-f0-9]{40}$")) and
+  (.dockyardImage | test("@sha256:[a-f0-9]{64}$")) and
+  (.nineRouterImage | test("@sha256:[a-f0-9]{64}$")) and
+  .encryptedRoundTripVerified and .tamperedCiphertextRejected and
+  .signedMetadataVerified and .tamperedMetadataRejected and
+  .credentialsExcludedFromMetadata and .credentialsExcludedFromDockerArguments and
+  .backupQuiesced and .backupFailureResumedService and .failedHelperTaskRejected and
+  .restoreConfirmationRequired and .runningServiceRestoreRejected and
+  .wrongEncryptionKeyRejected and .restoreLeftOffline and
+  .backupMountReadOnly and .nodePinned and
+  .postRestoreDualAuditorVerification == "production-required"
+' "$evidence_file" >/dev/null
+
+cat "$evidence_file"
