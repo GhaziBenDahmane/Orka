@@ -355,7 +355,8 @@ configured replica count. `DockyardControllerReplicaShortfall` detects missing
 scrape targets and `DockyardControllerBuildFleetMismatch` detects mixed builds,
 including interrupted rollouts.
 The rules cover controller outage,
-stale worker leases, queue backlog, failed operations, stale backups, overdue
+stale worker leases, queue backlog, failed operations, fleet-wide stale backups,
+per-database overdue backups, overdue
 restore drills, stalled durable artifact deletion, stalled or failed Dokploy
 database migrations, and maintenance mode left enabled. They also detect
 missing remote-cluster heartbeats, stalled agent upgrades, missed

@@ -850,9 +850,10 @@ successful scheduled backup. Drills create a temporary isolated Swarm stack,
 restore the verified artifact with fresh credentials, record the result as a
 `kind: "drill"` restore, and always remove the temporary stack. They never
 target the production database service.
-Prometheus exposes the latest successful drill duration and an overdue signal
-per database. A drill is overdue after twice the configured backup interval,
-with a 24-hour minimum; the supplied alert rules page on that signal. Migration
+Prometheus exposes overdue backup and latest successful drill duration signals
+per database. A backup is overdue after twice its configured interval, with a
+30-minute minimum; a drill is overdue after twice the configured backup interval,
+with a 24-hour minimum; the supplied alert rules page on those signals. Migration
 metrics expose counts by engine/state, active age by database, latest terminal
 duration, and the age of the latest failure. Together, backup age and drill
 duration are the measured inputs for deployment-specific RPO and RTO

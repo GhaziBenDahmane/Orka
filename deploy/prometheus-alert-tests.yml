@@ -132,3 +132,19 @@ tests:
             exp_annotations:
               summary: A referenced Dockyard backup destination does not use TLS
               description: Backup destination destination-id in organization organization-id can expose object-store credentials in transit; move it to a certificate-validated HTTPS endpoint before running backup or restore operations.
+
+  - name: overdue database backup
+    interval: 1m
+    input_series:
+      - series: 'dockyard_database_backup_overdue{database="database-id"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DockyardDatabaseBackupOverdue
+        exp_alerts:
+          - exp_labels:
+              database: database-id
+              severity: critical
+            exp_annotations:
+              summary: A database backup is overdue
+              description: Database database-id has no successful encrypted backup within twice its configured interval.

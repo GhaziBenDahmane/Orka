@@ -159,6 +159,15 @@ groups:
           summary: No successful Dockyard database backup in 24 hours
           description: Review backup policies, queue health, and remote storage availability.
 
+      - alert: DockyardDatabaseBackupOverdue
+        expr: dockyard_database_backup_overdue == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: A database backup is overdue
+          description: Database {{ $labels.database }} has no successful encrypted backup within twice its configured interval.
+
       - alert: DockyardBackupArtifactDeletionStalled
         expr: dockyard_backup_artifact_deletion_oldest_age_seconds > 900
         for: 15m
