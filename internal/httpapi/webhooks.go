@@ -57,12 +57,11 @@ func (s *Server) createWebhookIntegration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateWebhookIntegration(r.Context(), p.OrganizationID, store.WebhookIntegration{ID: id, ComposeServiceID: serviceID, Name: in.Name, Provider: in.Provider, Branch: in.Branch, EncryptedSecret: encrypted})
+	item, err := s.Store.CreateWebhookIntegrationWithAudit(r.Context(), p, store.WebhookIntegration{ID: id, ComposeServiceID: serviceID, Name: in.Name, Provider: in.Provider, Branch: in.Branch, EncryptedSecret: encrypted}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "webhook.create", "webhook_integration", item.ID.String(), r.RemoteAddr, map[string]any{"provider": item.Provider, "branch": item.Branch})
 	writeJSON(w, 201, map[string]any{"integration": item, "secret": secret, "url": s.PublicURL + "/v1/hooks/provider/" + item.ID.String()})
 }
 
@@ -87,11 +86,10 @@ func (s *Server) deleteWebhookIntegration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DisableWebhookIntegration(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DisableWebhookIntegrationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "webhook.disable", "webhook_integration", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

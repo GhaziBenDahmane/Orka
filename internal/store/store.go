@@ -2204,13 +2204,37 @@ func (s *Store) CreateWebhookIntegration(ctx context.Context, organizationID uui
 		return WebhookIntegration{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, _, err = lockActiveServiceForMutation(ctx, tx, organizationID, item.ComposeServiceID); err != nil {
+	item, err = s.createWebhookIntegrationTx(ctx, tx, organizationID, item)
+	if err != nil {
+		return WebhookIntegration{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateWebhookIntegrationWithAudit(ctx context.Context, principal Principal, item WebhookIntegration, remoteAddr string) (WebhookIntegration, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return WebhookIntegration{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = s.createWebhookIntegrationTx(ctx, tx, principal.OrganizationID, item)
+	if err != nil {
+		return WebhookIntegration{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "webhook.create", "webhook_integration", item.ID.String(), remoteAddr, map[string]any{"provider": item.Provider, "branch": item.Branch}); err != nil {
+		return WebhookIntegration{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) createWebhookIntegrationTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, item WebhookIntegration) (WebhookIntegration, error) {
+	if _, _, err := lockActiveServiceForMutation(ctx, tx, organizationID, item.ComposeServiceID); err != nil {
 		return WebhookIntegration{}, err
 	}
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret)
+	err := tx.QueryRow(ctx, `INSERT INTO webhook_integrations(id,compose_service_id,name,provider,branch,encrypted_secret)
 		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$7
 		RETURNING enabled,created_at,updated_at`, item.ID, item.ComposeServiceID, item.Name, item.Provider, item.Branch, item.EncryptedSecret, organizationID).Scan(&item.Enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -2220,7 +2244,7 @@ func (s *Store) CreateWebhookIntegration(ctx context.Context, organizationID uui
 	if err != nil {
 		return WebhookIntegration{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListWebhookIntegrations(ctx context.Context, organizationID, serviceID uuid.UUID) ([]WebhookIntegration, error) {
@@ -2250,7 +2274,34 @@ func (s *Store) GetWebhookIntegration(ctx context.Context, id uuid.UUID) (Webhoo
 }
 
 func (s *Store) DisableWebhookIntegration(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE webhook_integrations i SET enabled=false,updated_at=now() FROM compose_services s,environments e,projects p WHERE i.id=$1 AND s.id=i.compose_service_id AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = disableWebhookIntegrationTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DisableWebhookIntegrationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = disableWebhookIntegrationTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "webhook.disable", "webhook_integration", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func disableWebhookIntegrationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE webhook_integrations i SET enabled=false,updated_at=now() FROM compose_services s,environments e,projects p WHERE i.id=$1 AND s.id=i.compose_service_id AND e.id=s.environment_id AND p.id=e.project_id AND p.organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
 	}
