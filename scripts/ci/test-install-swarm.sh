@@ -617,6 +617,27 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
   exit 1
 fi
 
+openssl req -new -key "$temporary/secrets/agent-ca.key" -subj '/CN=agents.example.test' \
+  -addext 'subjectAltName=DNS:agents.example.test' \
+  -out "$temporary/agent-server-reused-ca-key.csr" >/dev/null 2>&1
+openssl x509 -req -days 30 -CA "$temporary/secrets/agent-ca.crt" -CAkey "$temporary/secrets/agent-ca.key" \
+  -set_serial 4 -copy_extensions copy -in "$temporary/agent-server-reused-ca-key.csr" \
+  -out "$temporary/secrets/agent-server-reused-ca-key.crt" >/dev/null 2>&1
+chmod 0600 "$temporary/secrets/agent-server-reused-ca-key.crt"
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true \
+  DOCKYARD_AGENT_SERVER_CERT_FILE="$temporary/secrets/agent-server-reused-ca-key.crt" \
+  DOCKYARD_AGENT_SERVER_KEY_FILE="$temporary/secrets/agent-ca.key" \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'HA installer accepted agent CA key reuse for its TLS server identity' >&2
+  exit 1
+fi
+grep -q 'agent server certificate must use a key distinct from the agent CA' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'agent CA key reuse failure mutated Docker state' >&2
+  exit 1
+fi
+
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj '/CN=Not A Certificate Authority' \
   -addext 'basicConstraints=critical,CA:FALSE' \
   -addext 'keyUsage=critical,digitalSignature' \

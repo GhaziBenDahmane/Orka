@@ -105,6 +105,10 @@ Defaults are `4.0` CPU/`4G` memory for the controller and remote agent,
 reservation defaults are `0.25`/`256M`, `0.25`/`256M`, and `0.10`/`64M`.
 The full variable prefixes are `DOCKYARD_CONTROLLER`, `DOCKYARD_AGENT`,
 `DOCKYARD_POSTGRES`, and `DOCKYARD_TRAEFIK`.
+HA preflight also requires the agent TLS server certificate to use a private
+key distinct from the agent CA key; reusing the CA key for a leaf identity is
+rejected before Docker state changes.
+
 The controller and remote agent run with a read-only root filesystem, all Linux
 capabilities dropped, `no-new-privileges`, and a bounded one-GiB `/tmp` tmpfs
 for transient Compose, Git, registry, and build material. Their state and

@@ -213,6 +213,7 @@ if [ "$mode" = ha ]; then
   server_public=$(openssl pkey -in "$DOCKYARD_AGENT_SERVER_KEY_FILE" -pubout 2>/dev/null) || fail "invalid agent server private key"
   server_certificate_public=$(openssl x509 -in "$DOCKYARD_AGENT_SERVER_CERT_FILE" -pubkey -noout 2>/dev/null) || fail "invalid agent server certificate"
   [ "$server_public" = "$server_certificate_public" ] || fail "agent server certificate and private key do not match"
+	[ "$ca_public" != "$server_public" ] || fail "agent server certificate must use a key distinct from the agent CA"
   unset ca_public ca_certificate_public server_public server_certificate_public
   if [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
     validate_secret_file DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE "$DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE"
