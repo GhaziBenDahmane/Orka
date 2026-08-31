@@ -380,6 +380,25 @@ func NamedVolumes(source string) ([]string, error) {
 	return composevolume.Names(source)
 }
 
+// ComposeServiceImage returns the configured image for a service. It is used
+// by service-scoped integrations that must verify their target against the
+// same immutable Compose revision before persisting configuration.
+func ComposeServiceImage(source, serviceName string) (string, error) {
+	var document struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(source), &document); err != nil {
+		return "", fmt.Errorf("parse compose yaml: %w", err)
+	}
+	service, found := document.Services[serviceName]
+	if !found {
+		return "", fmt.Errorf("service %q is not declared", serviceName)
+	}
+	return strings.TrimSpace(service.Image), nil
+}
+
 func StackVolumeName(stackName, volumeName string) (string, error) {
 	if !safeName.MatchString(stackName) || !safeVolumeSource.MatchString(volumeName) {
 		return "", errors.New("invalid stack or volume name")

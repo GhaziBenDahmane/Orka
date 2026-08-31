@@ -916,7 +916,20 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 	}
 	for _, item := range preparedComposeDatabases {
-		config, _ := json.Marshal(map[string]any{"source": "dokploy", "sourceBackupId": item.source.id})
+		var credentialMetadata composeBackupMetadata
+		_ = json.Unmarshal(item.source.metadata, &credentialMetadata)
+		username := ""
+		switch item.source.databaseType {
+		case "postgres":
+			username = credentialMetadata.Postgres.DatabaseUser
+		case "mysql":
+			username = "root"
+		case "mariadb":
+			username = credentialMetadata.MariaDB.DatabaseUser
+		case "mongo":
+			username = credentialMetadata.Mongo.DatabaseUser
+		}
+		config, _ := json.Marshal(map[string]any{"source": "dokploy", "sourceBackupId": item.source.id, "database": item.source.database, "username": username, "port": 0})
 		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,management_kind,connection_service_name,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'compose',$9,$10,$11,$12,'pending')
 			ON CONFLICT(id) DO UPDATE SET name=excluded.name,engine=excluded.engine,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,management_kind='compose',connection_service_name=excluded.connection_service_name,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,updated_at=now()`, item.id, item.environmentID, item.name, item.slug, item.source.databaseType, item.version, item.driverSource, item.driverArtifactDigest, item.source.serviceName, item.serviceID, item.encryptedCredentials, config)
 		if err != nil {

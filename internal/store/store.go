@@ -3747,6 +3747,7 @@ var (
 	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
 	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
 	ErrLinkedDatabaseDeletion         = errors.New("a Compose-linked database must be removed with its owning Compose service")
+	ErrLinkedDatabaseRequired         = errors.New("database is not linked to a Compose service")
 	ErrBackupNotRestorable            = errors.New("backup is not restorable")
 	ErrStorageNodeMismatch            = errors.New("storage node does not match the persisted assignment")
 	ErrOfflineRestoreRequiresStopped  = errors.New("offline volume restore requires a successfully stopped service")
