@@ -711,12 +711,17 @@ jobs:
           DIGEST: ${{ needs.candidate.outputs.digest }}
         run: |
           set -euo pipefail
-          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
-            echo "release image tag $IMAGE:$VERSION already exists and cannot be overwritten" >&2
-            exit 1
+          if docker buildx imagetools inspect --raw "$IMAGE:$VERSION" > version-image-index.json 2>/dev/null; then
+            existing_digest="sha256:$(sha256sum version-image-index.json | cut -d ' ' -f1)"
+            if [ "$existing_digest" != "$DIGEST" ]; then
+              echo "existing release image tag $IMAGE:$VERSION points to $existing_digest instead of verified digest $DIGEST" >&2
+              exit 1
+            fi
+            echo "release image tag $IMAGE:$VERSION already points to the verified digest; resuming promotion"
+          else
+            docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+            docker buildx imagetools inspect --raw "$IMAGE:$VERSION" > version-image-index.json
           fi
-          docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
-          docker buildx imagetools inspect --raw "$IMAGE:$VERSION" > version-image-index.json
           resolved_digest="sha256:$(sha256sum version-image-index.json | cut -d ' ' -f1)"
           if [ "$resolved_digest" != "$DIGEST" ]; then
             echo "release tag resolved to $resolved_digest instead of verified digest $DIGEST" >&2

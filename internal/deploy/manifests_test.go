@@ -396,7 +396,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		t.Fatal("release workflow accepts prerelease versions as stable releases")
 	}
 	promotionBlock := workflow[promote:publish]
-	if !strings.Contains(promotionBlock, `imagetools inspect "$IMAGE:$VERSION"`) || !strings.Contains(promotionBlock, "already exists and cannot be overwritten") {
-		t.Fatal("release workflow does not reject an existing version tag before promotion")
+	if !strings.Contains(promotionBlock, `imagetools inspect --raw "$IMAGE:$VERSION"`) || !strings.Contains(promotionBlock, `existing_digest`) || !strings.Contains(promotionBlock, "instead of verified digest") || !strings.Contains(promotionBlock, "already points to the verified digest; resuming promotion") {
+		t.Fatal("release workflow does not safely resume an exact existing version tag or reject a mismatched tag")
 	}
 }

@@ -24,7 +24,9 @@ locates the newest successful certification for the same commit, verifies its
 Sigstore identity, validates it against the candidate digest and current time,
 and re-verifies all automated evidence. If promotion ran before certification
 was available, create the certification and rerun only the failed promotion
-job; the candidate is not rebuilt or retagged.
+job; the candidate is not rebuilt. A retry after stable image tagging accepts
+the existing version tag only when its manifest digest is exactly the verified
+candidate digest; a conflicting tag remains a hard failure.
 
 Submit a JSON object using schema version 1. The workflow overwrites
 `sourceCommit`, `candidateImage`, `createdAt`, and `expiresAt` with its selected
