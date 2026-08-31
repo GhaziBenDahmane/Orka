@@ -52,6 +52,7 @@ export type VolumeBackupPolicy = { id: string; composeServiceId: string; volumeN
 export type VolumeBackup = { id: string; composeServiceId: string; volumeName: string; storageNodeId: string; destinationId: string; quiesce: boolean; status: string; sizeBytes?: number; sha256?: string; plaintextSha256?: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type VolumeRestore = { id: string; volumeBackupId: string; targetStorageNodeId?: string; offline: boolean; status: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type ResourcePolicy = { organizationId: string; scopeType: "organization" | "project" | "environment"; scopeId: string; maintenance: boolean; maintenanceReason: string; maxProjects: number | null; maxEnvironments: number | null; maxServices: number | null; maxDatabases: number | null; updatedAt: string };
+export type ResourceGrant = { scopeType: "project" | "environment"; scopeId: string; userId: string; email: string; role: Exclude<Role, "owner">; createdAt: string; updatedAt: string };
 export type AuthSettings = { organizationId: string; requireSso: boolean; updatedAt: string };
 export type AuditEvent = { id: number; actorUserId?: string; actorServiceAccountId?: string; action: string; resourceType: string; resourceId: string; remoteAddr: string; metadata: Record<string, unknown> | null; createdAt: string };
 export type AuditRetention = { organizationId: string; retentionDays: number; updatedAt: string };
@@ -272,6 +273,9 @@ export const api = {
   acceptInvitation: (token: string, displayName: string, password: string) => request<{ userId: string; organizationId: string; organization: string; email: string; role: Role; requireSso: boolean }>("/v1/invitations/accept", { method: "POST", body: JSON.stringify({ token, displayName, password }) }),
   policy: (scope: "organization" | "project" | "environment", id = "") => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`),
   putPolicy: (scope: "organization" | "project" | "environment", id: string, body: Pick<ResourcePolicy, "maintenance" | "maintenanceReason" | "maxProjects" | "maxEnvironments" | "maxServices" | "maxDatabases">) => request<ResourcePolicy>(scope === "organization" ? "/v1/policy" : `/v1/${scope === "project" ? "projects" : "environments"}/${id}/policy`, { method: "PUT", body: JSON.stringify(body) }),
+  resourceGrants: (scope: "project" | "environment", scopeId: string) => request<Envelope<ResourceGrant>>(`/v1/${scope === "project" ? "projects" : "environments"}/${scopeId}/grants`),
+  putResourceGrant: (scope: "project" | "environment", scopeId: string, userId: string, role: ResourceGrant["role"]) => request<ResourceGrant>(`/v1/${scope === "project" ? "projects" : "environments"}/${scopeId}/grants/${userId}`, { method: "PUT", body: JSON.stringify({ role }) }),
+  deleteResourceGrant: (scope: "project" | "environment", scopeId: string, userId: string) => request<void>(`/v1/${scope === "project" ? "projects" : "environments"}/${scopeId}/grants/${userId}`, { method: "DELETE" }),
   auditEvents: (beforeId = 0, limit = 100) => request<Envelope<AuditEvent>>(`/v1/audit-events?limit=${limit}${beforeId ? `&beforeId=${beforeId}` : ""}`),
   auditRetention: () => request<AuditRetention>("/v1/audit-retention"),
   putAuditRetention: (retentionDays: number) => request<AuditRetention>("/v1/audit-retention", { method: "PUT", body: JSON.stringify({ retentionDays }) }),

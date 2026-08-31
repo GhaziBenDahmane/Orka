@@ -60,9 +60,9 @@ func upsertResourceGrantTx(ctx context.Context, tx pgx.Tx, organizationID uuid.U
 	if table == "" {
 		return ResourceGrant{}, errors.New("invalid grant scope")
 	}
-	query := `INSERT INTO ` + table + `(` + idColumn + `,user_id,role) SELECT $1,u.id,$3 FROM users u,` + parent + ` r WHERE u.id=$2 AND r.id=$1 AND r.organization_id=$4 AND EXISTS(SELECT 1 FROM memberships m WHERE m.organization_id=$4 AND m.user_id=u.id) ON CONFLICT(` + idColumn + `,user_id) DO UPDATE SET role=excluded.role,updated_at=now() RETURNING created_at,updated_at`
+	query := `INSERT INTO ` + table + `(` + idColumn + `,user_id,role) SELECT $1,u.id,$3 FROM users u,` + parent + ` r WHERE u.id=$2 AND r.id=$1 AND r.organization_id=$4 AND r.deletion_requested_at IS NULL AND EXISTS(SELECT 1 FROM memberships m WHERE m.organization_id=$4 AND m.user_id=u.id) ON CONFLICT(` + idColumn + `,user_id) DO UPDATE SET role=excluded.role,updated_at=now() RETURNING created_at,updated_at`
 	if scopeType == "environment" {
-		query = `INSERT INTO environment_grants(environment_id,user_id,role) SELECT $1,u.id,$3 FROM users u,environments e JOIN projects p ON p.id=e.project_id WHERE u.id=$2 AND e.id=$1 AND p.organization_id=$4 AND EXISTS(SELECT 1 FROM memberships m WHERE m.organization_id=$4 AND m.user_id=u.id) ON CONFLICT(environment_id,user_id) DO UPDATE SET role=excluded.role,updated_at=now() RETURNING created_at,updated_at`
+		query = `INSERT INTO environment_grants(environment_id,user_id,role) SELECT $1,u.id,$3 FROM users u,environments e JOIN projects p ON p.id=e.project_id WHERE u.id=$2 AND e.id=$1 AND p.organization_id=$4 AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND EXISTS(SELECT 1 FROM memberships m WHERE m.organization_id=$4 AND m.user_id=u.id) ON CONFLICT(environment_id,user_id) DO UPDATE SET role=excluded.role,updated_at=now() RETURNING created_at,updated_at`
 	}
 	item := ResourceGrant{ScopeType: scopeType, ScopeID: scopeID, UserID: userID, Role: role}
 	err := tx.QueryRow(ctx, query, scopeID, userID, role, organizationID).Scan(&item.CreatedAt, &item.UpdatedAt)
@@ -90,9 +90,9 @@ func (s *Store) ListResourceGrants(ctx context.Context, organizationID uuid.UUID
 	if table == "" {
 		return nil, errors.New("invalid grant scope")
 	}
-	ownership := `EXISTS(SELECT 1 FROM projects p WHERE p.id=$1 AND p.organization_id=$2)`
+	ownership := `EXISTS(SELECT 1 FROM projects p WHERE p.id=$1 AND p.organization_id=$2 AND p.deletion_requested_at IS NULL)`
 	if scopeType == "environment" {
-		ownership = `EXISTS(SELECT 1 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2)`
+		ownership = `EXISTS(SELECT 1 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2 AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL)`
 	}
 	rows, err := s.Pool.Query(ctx, `SELECT g.user_id,u.email,g.role,g.created_at,g.updated_at FROM `+table+` g JOIN users u ON u.id=g.user_id WHERE g.`+idColumn+`=$1 AND `+ownership+` ORDER BY u.email`, scopeID, organizationID)
 	if err != nil {

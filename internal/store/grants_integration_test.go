@@ -76,4 +76,22 @@ func TestScopedGrantInheritanceAndTenantIsolation(t *testing.T) {
 	if role, err := db.EffectiveResourceRole(ctx, p, "environment", environmentID); err != nil || role != "developer" {
 		t.Fatalf("role after delete = %q, err = %v", role, err)
 	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE environments SET deletion_requested_at=now() WHERE id=$1`, environmentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.UpsertResourceGrant(ctx, orgID, "environment", environmentID, userID, "admin"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("grant on deleting environment error = %v, want ErrNotFound", err)
+	}
+	if items, listErr := db.ListResourceGrants(ctx, orgID, "environment", environmentID); listErr != nil || len(items) != 0 {
+		t.Fatalf("grants on deleting environment = %#v, err = %v", items, listErr)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE projects SET deletion_requested_at=now() WHERE id=$1`, projectID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.UpsertResourceGrant(ctx, orgID, "project", projectID, userID, "admin"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("grant on deleting project error = %v, want ErrNotFound", err)
+	}
+	if items, listErr := db.ListResourceGrants(ctx, orgID, "project", projectID); listErr != nil || len(items) != 0 {
+		t.Fatalf("grants on deleting project = %#v, err = %v", items, listErr)
+	}
 }
