@@ -94,3 +94,14 @@ func TestNormalizeResourceNameTrimsSafeWhitespace(t *testing.T) {
 		t.Fatalf("name=%q err=%v", name, err)
 	}
 }
+
+func TestDisplayLabelRejectsControlsAndInvalidUTF8(t *testing.T) {
+	if !validDisplayLabel("Production API", 120) {
+		t.Fatal("safe display label was rejected")
+	}
+	for _, value := range []string{"", "line\nbreak", "hidden\u0085break", string([]byte{'x', 0xff}), strings.Repeat("x", 121)} {
+		if validDisplayLabel(value, 120) {
+			t.Errorf("invalid display label %q was accepted", value)
+		}
+	}
+}

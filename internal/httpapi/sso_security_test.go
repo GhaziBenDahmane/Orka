@@ -89,6 +89,7 @@ func TestOIDCProviderFieldsAreBounded(t *testing.T) {
 	for _, input := range []struct{ name, clientID, secret string }{
 		{"", "client", "secret"},
 		{strings.Repeat("n", maxSSOProviderName+1), "client", "secret"},
+		{"provider\u0085name", "client", "secret"},
 		{"workforce", strings.Repeat("c", maxOIDCClientIDBytes+1), "secret"},
 		{"workforce", "client", strings.Repeat("s", maxOIDCSecretBytes+1)},
 	} {
@@ -104,6 +105,7 @@ func TestSAMLProviderFieldsAreBounded(t *testing.T) {
 	}
 	for _, input := range []struct{ name, metadata, emailAttribute, nameAttribute string }{
 		{strings.Repeat("n", maxSSOProviderName+1), "<metadata/>", "email", "name"},
+		{"provider\u0085name", "<metadata/>", "email", "name"},
 		{"workforce", strings.Repeat("x", maxSAMLMetadataBytes+1), "email", "name"},
 		{"workforce", "<metadata/>", strings.Repeat("e", maxSAMLAttributeBytes+1), "name"},
 		{"workforce", "<metadata/>", " email", "name"},

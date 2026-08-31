@@ -75,7 +75,7 @@ func (s *Server) createAIAuditRun(w http.ResponseWriter, r *http.Request) {
 	if len(in.Scope) == 0 {
 		in.Scope = json.RawMessage(`{}`)
 	}
-	if in.AgentName == "" || len(in.AgentName) > 120 || len(in.AgentVersion) > 200 || len(in.Model) > 300 || !validAuditObject(in.Scope, 64<<10) {
+	if !validDisplayLabel(in.AgentName, 120) || len(in.AgentVersion) > 200 || len(in.Model) > 300 || !validAuditObject(in.Scope, 64<<10) {
 		writeError(w, 400, "invalid_audit_run", "audit run metadata is invalid or exceeds safety limits")
 		return
 	}

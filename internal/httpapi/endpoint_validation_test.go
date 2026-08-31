@@ -33,6 +33,7 @@ func TestSourceCredentialIdentityIsBoundedAndSingleLine(t *testing.T) {
 		{"unknown", "GitHub", "automation"},
 		{"git", "", "automation"},
 		{"git", "line\nbreak", "automation"},
+		{"git", "hidden\u0085break", "automation"},
 		{"git", strings.Repeat("n", maxSourceCredentialNameBytes+1), "automation"},
 		{"git", "GitHub", ""},
 		{"git", "GitHub", "user\nheader"},

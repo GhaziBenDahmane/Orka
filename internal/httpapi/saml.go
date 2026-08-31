@@ -181,7 +181,7 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func validSAMLProviderFields(name, metadataXML, emailAttribute, nameAttribute string) bool {
-	return name != "" && len(name) <= maxSSOProviderName && len(metadataXML) > 0 && len(metadataXML) <= maxSAMLMetadataBytes &&
+	return validDisplayLabel(name, maxSSOProviderName) && len(metadataXML) > 0 && len(metadataXML) <= maxSAMLMetadataBytes &&
 		validSAMLAttributeName(emailAttribute) && validSAMLAttributeName(nameAttribute)
 }
 

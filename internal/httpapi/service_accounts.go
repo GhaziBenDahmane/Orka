@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
@@ -19,7 +18,11 @@ func (s *Server) createServiceAccount(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	in.Name = strings.TrimSpace(in.Name)
+	var err error
+	if in.Name, err = normalizeResourceName(in.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_service_account", "name, admin/developer/viewer/auditor role, and expiry from 1 to 365 days are required")
+		return
+	}
 	if in.ExpiresInDays == 0 {
 		in.ExpiresInDays = 90
 	}

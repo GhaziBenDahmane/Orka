@@ -70,8 +70,8 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 	if in.Name == "" {
 		in.Name = "default"
 	}
-	if len(in.Name) > 120 {
-		writeError(w, 400, "invalid_name", "name must not exceed 120 bytes")
+	if !validDisplayLabel(in.Name, 120) {
+		writeError(w, 400, "invalid_name", "name must contain 1 to 120 bytes without control characters")
 		return
 	}
 	if in.DefaultRole == "" {

@@ -38,10 +38,11 @@ func (s *Server) createWebhookIntegration(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &in) {
 		return
 	}
-	in.Name = strings.TrimSpace(in.Name)
+	name, nameErr := normalizeResourceName(in.Name)
+	in.Name = name
 	in.Provider = strings.ToLower(strings.TrimSpace(in.Provider))
 	in.Branch = strings.TrimPrefix(strings.TrimSpace(in.Branch), "refs/heads/")
-	if in.Name == "" || !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.Provider) || !webhookBranchPattern.MatchString(in.Branch) || strings.Contains(in.Branch, "..") {
+	if nameErr != nil || !contains([]string{"github", "gitlab", "gitea", "bitbucket"}, in.Provider) || !webhookBranchPattern.MatchString(in.Branch) || strings.Contains(in.Branch, "..") {
 		writeError(w, 400, "invalid_webhook", "name, supported provider, and branch are required")
 		return
 	}

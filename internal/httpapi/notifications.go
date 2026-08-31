@@ -46,9 +46,10 @@ func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 	if !decode(w, r, &input) {
 		return
 	}
-	input.Name = strings.TrimSpace(input.Name)
+	name, nameErr := normalizeResourceName(input.Name)
+	input.Name = name
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
-	if !validNotificationEndpointName(input.Name) || !contains([]string{"webhook", "slack", "smtp", "pagerduty", "opsgenie"}, input.Kind) {
+	if nameErr != nil || !validNotificationEndpointName(input.Name) || !contains([]string{"webhook", "slack", "smtp", "pagerduty", "opsgenie"}, input.Kind) {
 		writeError(w, 400, "invalid_notification_endpoint", "name and a supported notification kind are required")
 		return
 	}
@@ -93,7 +94,7 @@ func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 }
 
 func validNotificationEndpointName(name string) bool {
-	return name != "" && len(name) <= maxNotificationNameBytes && !strings.ContainsAny(name, "\x00\r\n")
+	return validDisplayLabel(name, maxNotificationNameBytes)
 }
 
 func notificationEndpointMaterial(kind, rawURL, pagerDutyKey, opsgenieKey, opsgenieRegion, smtpHost string, smtpPort int, smtpMode, smtpUsername, smtpPassword, from string, to []string) (string, string, bool, error) {

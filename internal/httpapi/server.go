@@ -1566,8 +1566,8 @@ type backupDestinationInput struct {
 const maxBackupDestinationNameBytes = 120
 
 func normalizedBackupDestinationName(raw string) (string, bool) {
-	name := strings.TrimSpace(raw)
-	return name, name != "" && len(name) <= maxBackupDestinationNameBytes && !strings.ContainsAny(name, "\x00\r\n")
+	name, err := normalizeResourceName(raw)
+	return name, err == nil
 }
 
 func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request) {
@@ -3081,8 +3081,8 @@ func (s *Server) createDeployToken(w http.ResponseWriter, r *http.Request) {
 	if in.ExpiresInDays == 0 {
 		in.ExpiresInDays = 90
 	}
-	if len(in.Name) > 100 {
-		writeError(w, http.StatusBadRequest, "invalid_deploy_token", "name must not exceed 100 characters")
+	if !validDisplayLabel(in.Name, 100) {
+		writeError(w, http.StatusBadRequest, "invalid_deploy_token", "name must contain 1 to 100 bytes without control characters")
 		return
 	}
 	if in.ExpiresInDays < 1 || in.ExpiresInDays > 365 {
@@ -3409,10 +3409,14 @@ func slugify(value string) string {
 
 func normalizeResourceName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
-	if name == "" || len(name) > 120 || !utf8.ValidString(raw) || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
+	if !validDisplayLabel(name, 120) || !utf8.ValidString(raw) || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
 		return "", errors.New("resource name must contain 1 to 120 bytes without control characters")
 	}
 	return name, nil
+}
+
+func validDisplayLabel(value string, maxBytes int) bool {
+	return value != "" && len(value) <= maxBytes && utf8.ValidString(value) && strings.IndexFunc(value, unicode.IsControl) < 0
 }
 
 func validPlacementLabel(key, value string) bool {

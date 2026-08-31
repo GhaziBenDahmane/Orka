@@ -60,7 +60,7 @@ func normalizeCredentialServer(raw string) (string, error) {
 }
 
 func validSourceCredentialIdentity(kind, name, username string) bool {
-	return contains([]string{"git", "git-ssh", "registry"}, kind) && name != "" && len(name) <= maxSourceCredentialNameBytes && !strings.ContainsAny(name, "\x00\r\n") && username != "" && len(username) <= maxSourceCredentialUsernameBytes && !strings.ContainsAny(username, "\x00\r\n")
+	return contains([]string{"git", "git-ssh", "registry"}, kind) && validDisplayLabel(name, maxSourceCredentialNameBytes) && username != "" && len(username) <= maxSourceCredentialUsernameBytes && !strings.ContainsAny(username, "\x00\r\n")
 }
 
 func credentialServerHostname(server string) string {

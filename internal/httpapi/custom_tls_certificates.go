@@ -88,8 +88,8 @@ func (s *Server) deleteCustomTLSCertificate(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) customTLSCertificateFromInput(w http.ResponseWriter, r *http.Request, id uuid.UUID, revision int64, input customTLSCertificateInput) (store.CustomTLSCertificate, bool) {
 	name := strings.TrimSpace(input.Name)
-	if name == "" || len(name) > 100 || name != input.Name {
-		writeError(w, http.StatusBadRequest, "invalid_certificate", "certificate name must contain 1 to 100 trimmed characters")
+	if !validDisplayLabel(name, 100) || name != input.Name {
+		writeError(w, http.StatusBadRequest, "invalid_certificate", "certificate name must contain 1 to 100 trimmed bytes without control characters")
 		return store.CustomTLSCertificate{}, false
 	}
 	certificatePEM, privateKeyPEM := []byte(input.CertificatePEM), []byte(input.PrivateKeyPEM)

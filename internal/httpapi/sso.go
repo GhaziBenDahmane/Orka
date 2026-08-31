@@ -417,7 +417,7 @@ func normalizeOIDCScopes(scopes []string) ([]string, error) {
 }
 
 func validOIDCProviderFields(name, clientID, clientSecret string) bool {
-	return name != "" && len(name) <= maxSSOProviderName && clientID != "" && len(clientID) <= maxOIDCClientIDBytes && len(clientSecret) <= maxOIDCSecretBytes
+	return validDisplayLabel(name, maxSSOProviderName) && clientID != "" && len(clientID) <= maxOIDCClientIDBytes && len(clientSecret) <= maxOIDCSecretBytes
 }
 
 func validateOIDCProviderEndpoints(provider *oidc.Provider) error {
