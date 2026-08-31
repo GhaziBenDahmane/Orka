@@ -68,6 +68,12 @@ limits before creating files or invoking Docker. Backup and restore plans are
 accepted only when `backup-restore` was declared, and their extension must
 match `backupExtension`.
 
+`dockyard_database_utility_provenance_issues` reports successful backup,
+restore, drill-readiness, and migration records whose stored image identity is
+missing or mutable. `DockyardDatabaseUtilityProvenanceMissing` alerts on any
+such record, and the deterministic AI auditor raises the corresponding
+supply-chain finding without exposing credentials or command arguments.
+
 Driver stderr and protocol error text are deliberately not copied into API,
 job, or audit errors: requests may contain plaintext database credentials and a
 faulty driver could echo them. Failures identify only the trusted driver and

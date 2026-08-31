@@ -189,6 +189,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 			t.Errorf("missing metric family %s", metric)
 		}
 	}
+	if !strings.Contains(recorder.Body.String(), "# HELP dockyard_database_utility_provenance_issues") {
+		t.Error("missing database utility provenance metric family")
+	}
 	metrics := recorder.Body.String()
 	for _, metric := range []string{"dockyard_deploy_token_expiry_seconds", "dockyard_source_credential_rotation_age_seconds", "dockyard_backup_destination_credential_rotation_age_seconds", "dockyard_resource_finalizers", "dockyard_resource_finalizer_oldest_age_seconds", "dockyard_custom_tls_certificate_expiry_seconds", "dockyard_edge_tls_reconciliation", "dockyard_edge_tls_reconciliation_age_seconds"} {
 		if !strings.Contains(metrics, "# HELP "+metric) {
@@ -278,6 +281,8 @@ func TestPrometheusAlertsCoverDatabaseDriverIdentity(t *testing.T) {
 		"dockyard_database_driver_inventory_info",
 		"alert: DockyardDatabaseDriverBindingIssue",
 		"expr: dockyard_database_driver_binding_issues > 0",
+		"alert: DockyardDatabaseUtilityProvenanceMissing",
+		"expr: dockyard_database_utility_provenance_issues > 0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

@@ -107,6 +107,15 @@ groups:
           summary: A managed database driver identity cannot be honored
           description: Controller database bindings for {{ $labels.engine }} have issue {{ $labels.reason }}; install the expected artifact on every controller or perform an audited driver rebind.
 
+      - alert: DockyardDatabaseUtilityProvenanceMissing
+        expr: dockyard_database_utility_provenance_issues > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Database recovery evidence uses an unverified utility image
+          description: Successful {{ $labels.operation }} evidence is missing a digest-pinned image for role {{ $labels.role }}; complete a fresh verified operation before relying on that recovery evidence.
+
       - alert: DockyardAIAuditFailed
         expr: dockyard_ai_audit_last_failure_age_seconds < 900
         labels:

@@ -98,3 +98,20 @@ tests:
             exp_annotations:
               summary: Dockyard controllers loaded different database drivers
               description: Scraped controller replicas report different database-driver inventories; stop database recovery and migration work until every replica runs the reviewed artifacts.
+
+  - name: database utility provenance missing
+    interval: 1m
+    input_series:
+      - series: 'dockyard_database_utility_provenance_issues{operation="backup",role="utility"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockyardDatabaseUtilityProvenanceMissing
+        exp_alerts:
+          - exp_labels:
+              operation: backup
+              role: utility
+              severity: critical
+            exp_annotations:
+              summary: Database recovery evidence uses an unverified utility image
+              description: Successful backup evidence is missing a digest-pinned image for role utility; complete a fresh verified operation before relying on that recovery evidence.

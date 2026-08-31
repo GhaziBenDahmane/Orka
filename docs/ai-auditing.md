@@ -203,7 +203,8 @@ keys make it a privileged service.
   stale running-job lease heartbeats, unclaimed remote commands, expired remote
   command leases that are not recovering,
   notification coverage gaps, unavailable, unbound, mismatched, or
-  recovery-incapable database drivers, unhealthy reconciliation, unsigned,
+  recovery-incapable database drivers, successful database recovery evidence
+  without digest-pinned utility images, unhealthy reconciliation, unsigned,
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
   incomplete Dokploy migrations. Failed offline named-volume recovery and
   recovery that remains queued or running for more than thirty minutes are

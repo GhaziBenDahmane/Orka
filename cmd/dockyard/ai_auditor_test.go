@@ -901,6 +901,7 @@ func TestDeterministicAuditDetectsStalledTemplateRepositorySync(t *testing.T) {
 
 func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
 	now := time.Now().UTC()
+	pinnedUtility := "postgres@sha256:" + strings.Repeat("a", 64)
 	staleBackup, staleRestore := now.Add(-3*time.Hour), now.Add(-25*time.Hour)
 	freshBackup, freshRestore := now.Add(-time.Hour), now.Add(-23*time.Hour)
 	for _, test := range []struct {
@@ -919,8 +920,8 @@ func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
 				NotificationPosture: fullyCoveredNotifications(),
 				BackupPosture: []store.AIAuditBackupPosture{{
 					DatabaseID: uuid.New(), PolicyConfigured: true, PolicyEnabled: true, IntervalSeconds: 3600,
-					VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt,
-					LastRestoreDrillStatus: "succeeded", LastRestoreDrillAt: test.restoreAt,
+					VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt, LastBackupUtilityImage: pinnedUtility,
+					LastRestoreDrillStatus: "succeeded", LastRestoreDrillAt: test.restoreAt, LastRestoreUtilityImage: pinnedUtility, LastRestoreReadinessImage: pinnedUtility,
 				}},
 				VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{
 					ServiceID: uuid.New(), VolumeName: "uploads", StorageNodeID: "nodeabc123", PolicyEnabled: true,
@@ -937,6 +938,30 @@ func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
 				t.Fatalf("finding titles=%v, want %v", gotTitles, test.wantTitles)
 			}
 		})
+	}
+}
+
+func TestDeterministicAuditDetectsMutableDatabaseRecoveryUtilities(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		BackupPosture: []store.AIAuditBackupPosture{{
+			DatabaseID: uuid.New(), Engine: "postgres", PolicyConfigured: true, PolicyEnabled: true, IntervalSeconds: 3600,
+			VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: &now, LastBackupUtilityImage: "postgres:17",
+			LastRestoreDrillStatus: "succeeded", LastRestoreDrillAt: &now, LastRestoreUtilityImage: "postgres:17",
+		}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]bool{}
+	for _, finding := range findings {
+		titles[finding.Title] = true
+	}
+	for _, title := range []string{"Database backup utility provenance is missing", "Database restore drill utility provenance is missing"} {
+		if !titles[title] {
+			t.Fatalf("missing finding %q in %#v", title, findings)
+		}
 	}
 }
 

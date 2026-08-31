@@ -247,20 +247,23 @@ type AIAuditSignal struct {
 }
 
 type AIAuditBackupPosture struct {
-	DatabaseID             uuid.UUID  `json:"databaseId"`
-	Name                   string     `json:"name"`
-	Engine                 string     `json:"engine"`
-	Status                 string     `json:"status"`
-	PolicyConfigured       bool       `json:"policyConfigured"`
-	PolicyEnabled          bool       `json:"policyEnabled"`
-	IntervalSeconds        int        `json:"intervalSeconds"`
-	RetentionCount         int        `json:"retentionCount"`
-	VerifyRestore          bool       `json:"verifyRestore"`
-	RemoteDestination      bool       `json:"remoteDestination"`
-	LastBackupStatus       string     `json:"lastBackupStatus,omitempty"`
-	LastBackupAt           *time.Time `json:"lastBackupAt,omitempty"`
-	LastRestoreDrillStatus string     `json:"lastRestoreDrillStatus,omitempty"`
-	LastRestoreDrillAt     *time.Time `json:"lastRestoreDrillAt,omitempty"`
+	DatabaseID                uuid.UUID  `json:"databaseId"`
+	Name                      string     `json:"name"`
+	Engine                    string     `json:"engine"`
+	Status                    string     `json:"status"`
+	PolicyConfigured          bool       `json:"policyConfigured"`
+	PolicyEnabled             bool       `json:"policyEnabled"`
+	IntervalSeconds           int        `json:"intervalSeconds"`
+	RetentionCount            int        `json:"retentionCount"`
+	VerifyRestore             bool       `json:"verifyRestore"`
+	RemoteDestination         bool       `json:"remoteDestination"`
+	LastBackupStatus          string     `json:"lastBackupStatus,omitempty"`
+	LastBackupAt              *time.Time `json:"lastBackupAt,omitempty"`
+	LastBackupUtilityImage    string     `json:"lastBackupUtilityImage,omitempty"`
+	LastRestoreDrillStatus    string     `json:"lastRestoreDrillStatus,omitempty"`
+	LastRestoreDrillAt        *time.Time `json:"lastRestoreDrillAt,omitempty"`
+	LastRestoreUtilityImage   string     `json:"lastRestoreUtilityImage,omitempty"`
+	LastRestoreReadinessImage string     `json:"lastRestoreReadinessImage,omitempty"`
 }
 
 type AIAuditVolumeBackupPosture struct {
@@ -1129,20 +1132,21 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	rows, err = s.Pool.Query(ctx, `
 		SELECT d.id,d.name,d.engine,d.status,
 			bp.id IS NOT NULL,COALESCE(bp.enabled,false),COALESCE(bp.interval_seconds,0),COALESCE(bp.retention_count,0),COALESCE(bp.verify_restore,false),bp.destination_id IS NOT NULL,
-			COALESCE(last_backup.status,''),last_backup.finished_at,COALESCE(last_drill.status,''),last_drill.finished_at
+			COALESCE(last_backup.status,''),last_backup.finished_at,COALESCE(last_backup.utility_image,''),
+			COALESCE(last_drill.status,''),last_drill.finished_at,COALESCE(last_drill.utility_image,''),COALESCE(last_drill.readiness_image,'')
 		FROM database_instances d
 		JOIN environments e ON e.id=d.environment_id
 		JOIN projects p ON p.id=e.project_id
 		LEFT JOIN backup_policies bp ON bp.database_instance_id=d.id
-		LEFT JOIN LATERAL (SELECT b.status,b.finished_at,b.created_at FROM database_backups b WHERE b.database_instance_id=d.id ORDER BY b.created_at DESC LIMIT 1) last_backup ON true
-		LEFT JOIN LATERAL (SELECT r.status,r.finished_at,r.created_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id WHERE b.database_instance_id=d.id AND r.kind='drill' ORDER BY r.created_at DESC LIMIT 1) last_drill ON true
+		LEFT JOIN LATERAL (SELECT b.status,b.finished_at,b.created_at,b.utility_image FROM database_backups b WHERE b.database_instance_id=d.id ORDER BY b.created_at DESC LIMIT 1) last_backup ON true
+		LEFT JOIN LATERAL (SELECT r.status,r.finished_at,r.created_at,r.utility_image,r.readiness_image FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id WHERE b.database_instance_id=d.id AND r.kind='drill' ORDER BY r.created_at DESC LIMIT 1) last_drill ON true
 		WHERE p.organization_id=$1 ORDER BY d.name,d.id`, organizationID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var item AIAuditBackupPosture
-		if err = rows.Scan(&item.DatabaseID, &item.Name, &item.Engine, &item.Status, &item.PolicyConfigured, &item.PolicyEnabled, &item.IntervalSeconds, &item.RetentionCount, &item.VerifyRestore, &item.RemoteDestination, &item.LastBackupStatus, &item.LastBackupAt, &item.LastRestoreDrillStatus, &item.LastRestoreDrillAt); err != nil {
+		if err = rows.Scan(&item.DatabaseID, &item.Name, &item.Engine, &item.Status, &item.PolicyConfigured, &item.PolicyEnabled, &item.IntervalSeconds, &item.RetentionCount, &item.VerifyRestore, &item.RemoteDestination, &item.LastBackupStatus, &item.LastBackupAt, &item.LastBackupUtilityImage, &item.LastRestoreDrillStatus, &item.LastRestoreDrillAt, &item.LastRestoreUtilityImage, &item.LastRestoreReadinessImage); err != nil {
 			rows.Close()
 			return err
 		}

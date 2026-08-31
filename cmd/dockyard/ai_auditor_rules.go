@@ -359,12 +359,18 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		} else if recoveryEvidenceOverdue(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute) {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database backup is overdue", Description: "The latest successful database backup is older than twice the configured interval.", ResourceType: "database", ResourceID: resourceID, Evidence: recoveryAgeEvidence(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute), Remediation: "Inspect the backup scheduler and destination, then complete a fresh verified backup."})
 		}
+		if backup.LastBackupStatus == "succeeded" && !ociref.IsDigestPinned(backup.LastBackupUtilityImage) {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Database backup utility provenance is missing", Description: "The latest successful database backup is not bound to an immutable utility image.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "utilityImage": backup.LastBackupUtilityImage}, Remediation: "Complete a new backup with digest-resolved utility images before relying on this recovery point."})
+		}
 		if !backup.VerifyRestore {
 			add(modelFinding{Severity: "medium", Category: "backup", Title: "Automated restore verification is disabled", Description: "Backups are not automatically exercised through isolated restore drills.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine}, Remediation: "Enable restore verification and investigate any failed drill before relying on the backup."})
 		} else if backup.LastRestoreDrillStatus != "succeeded" {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database lacks a successful restore drill", Description: "Restore verification is enabled, but no latest successful drill is visible.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "lastRestoreDrillStatus": backup.LastRestoreDrillStatus}, Remediation: "Run an isolated restore drill and validate application-level data."})
 		} else if backup.PolicyEnabled && recoveryEvidenceOverdue(now, backup.LastRestoreDrillAt, backup.IntervalSeconds, 24*time.Hour) {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database restore drill is overdue", Description: "The latest successful isolated restore drill is older than twice the configured backup interval, with a minimum one-day window.", ResourceType: "database", ResourceID: resourceID, Evidence: recoveryAgeEvidence(now, backup.LastRestoreDrillAt, backup.IntervalSeconds, 24*time.Hour), Remediation: "Run an isolated restore drill and validate application-level data before relying on recent backups."})
+		}
+		if backup.LastRestoreDrillStatus == "succeeded" && (!ociref.IsDigestPinned(backup.LastRestoreUtilityImage) || !ociref.IsDigestPinned(backup.LastRestoreReadinessImage)) {
+			add(modelFinding{Severity: "high", Category: "supply_chain", Title: "Database restore drill utility provenance is missing", Description: "The latest successful restore drill is not bound to immutable readiness and restore utility images.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "utilityImage": backup.LastRestoreUtilityImage, "readinessImage": backup.LastRestoreReadinessImage}, Remediation: "Complete a new restore drill with digest-resolved utility images before relying on its recovery evidence."})
 		}
 	}
 	protectedVolumes := make(map[string]bool, len(snapshot.VolumeBackupPosture))
