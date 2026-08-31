@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,7 @@ import (
 
 const manifestName = "catalog.manifest.json"
 const signatureName = "catalog.manifest.sig"
+const maxCatalogKeyBytes int64 = 64 << 10
 
 type ManifestEntry struct {
 	Path   string `json:"path"`
@@ -62,15 +64,61 @@ func BuildCatalogManifest(root string) ([]byte, error) {
 }
 
 func SignCatalog(root string, privateKey ed25519.PrivateKey) error {
+	if len(privateKey) != ed25519.PrivateKeySize || !privateKey.Equal(ed25519.NewKeyFromSeed(privateKey.Seed())) {
+		return errors.New("catalog private key is invalid")
+	}
 	manifest, err := BuildCatalogManifest(root)
 	if err != nil {
 		return err
 	}
 	signature := ed25519.Sign(privateKey, manifest)
-	if err := os.WriteFile(filepath.Join(root, manifestName), append(manifest, '\n'), 0644); err != nil {
+	manifestStaged, err := stageCatalogArtifact(root, manifestName, append(manifest, '\n'))
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(root, signatureName), []byte(base64.StdEncoding.EncodeToString(signature)+"\n"), 0644)
+	defer os.Remove(manifestStaged)
+	signatureStaged, err := stageCatalogArtifact(root, signatureName, []byte(base64.StdEncoding.EncodeToString(signature)+"\n"))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(signatureStaged)
+	if err = os.Rename(signatureStaged, filepath.Join(root, signatureName)); err != nil {
+		return fmt.Errorf("publish catalog signature: %w", err)
+	}
+	if err = os.Rename(manifestStaged, filepath.Join(root, manifestName)); err != nil {
+		return fmt.Errorf("publish catalog manifest: %w", err)
+	}
+	directory, err := os.Open(root)
+	if err != nil {
+		return err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	return errors.Join(syncErr, closeErr)
+}
+
+func stageCatalogArtifact(root, name string, contents []byte) (path string, err error) {
+	file, err := os.CreateTemp(root, "."+name+".")
+	if err != nil {
+		return "", err
+	}
+	path = file.Name()
+	defer func() {
+		if err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if err = file.Chmod(0644); err == nil {
+		_, err = file.Write(contents)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	return path, err
 }
 
 func VerifyCatalog(root string, publicKey ed25519.PublicKey) error {
@@ -102,7 +150,7 @@ func VerifyCatalog(root string, publicKey ed25519.PublicKey) error {
 }
 
 func LoadPublicKey(path string) (ed25519.PublicKey, error) {
-	data, err := os.ReadFile(path)
+	data, err := readCatalogKeyFile(path, false)
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +188,15 @@ func PublicKeyFingerprint(key ed25519.PublicKey) string {
 }
 
 func LoadPrivateKey(path string) (ed25519.PrivateKey, error) {
-	data, err := os.ReadFile(path)
+	data, err := readCatalogKeyFile(path, true)
 	if err != nil {
 		return nil, err
 	}
-	if block, _ := pem.Decode(data); block != nil {
+	data = bytesTrimSpace(data)
+	if block, rest := pem.Decode(data); block != nil {
+		if block.Type != "PRIVATE KEY" || len(bytesTrimSpace(rest)) != 0 {
+			return nil, errors.New("catalog private key PEM contains an invalid type or trailing data")
+		}
 		key, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if parseErr != nil {
 			return nil, parseErr
@@ -153,13 +205,53 @@ func LoadPrivateKey(path string) (ed25519.PrivateKey, error) {
 		if !ok {
 			return nil, errors.New("catalog private key is not Ed25519")
 		}
+		if !privateKey.Equal(ed25519.NewKeyFromSeed(privateKey.Seed())) {
+			return nil, errors.New("catalog private key is inconsistent")
+		}
 		return privateKey, nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(string(bytesTrimSpace(data)))
+	decoded, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil || len(decoded) != ed25519.PrivateKeySize {
 		return nil, errors.New("catalog private key must be Ed25519 PKCS#8 PEM or base64 raw key")
 	}
-	return ed25519.PrivateKey(decoded), nil
+	privateKey := ed25519.PrivateKey(decoded)
+	if !privateKey.Equal(ed25519.NewKeyFromSeed(privateKey.Seed())) {
+		return nil, errors.New("catalog private key is inconsistent")
+	}
+	return privateKey, nil
+}
+
+func readCatalogKeyFile(path string, private bool) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, errors.New("catalog key must be a regular file, not a symbolic link")
+	}
+	if private && before.Mode().Perm()&0077 != 0 {
+		return nil, errors.New("catalog private key must not be accessible by group or other users")
+	}
+	if before.Size() < 1 || before.Size() > maxCatalogKeyBytes {
+		return nil, errors.New("catalog key size is outside the allowed range")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		return nil, errors.New("catalog key changed while it was opened")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxCatalogKeyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxCatalogKeyBytes {
+		return nil, errors.New("catalog key size is outside the allowed range")
+	}
+	return data, nil
 }
 
 func GenerateCatalogKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {

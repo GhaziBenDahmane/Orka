@@ -126,11 +126,15 @@ webhook refresh without removing the repository or its scheduled sync policy.
 Create signed catalog artifacts with:
 
 ```sh
+chmod 0600 /secure/catalog-signing-key.pem
 go run ./cmd/dockyard sign-template-catalog \
   --private-key-file /secure/catalog-signing-key.pem /path/to/catalog
 ```
 
-Keep the private key offline. Register only its public key with Dockyard.
+Keep the private key offline. The signing command requires a bounded,
+mode-0600 regular file and refuses symlinks or trailing PEM data. Manifest and
+signature publication uses atomic replacement so catalog-controlled symlinks
+cannot redirect writes. Register only the public key with Dockyard.
 
 API flow:
 
