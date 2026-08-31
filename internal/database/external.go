@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
 )
@@ -90,7 +92,9 @@ func validateExternalStringMap(values map[string]string, namePattern *regexp.Reg
 }
 
 func validateExternalInternalURL(raw string) error {
-	if raw == "" || len(raw) > maxExternalInternalURLBytes || strings.IndexFunc(raw, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+	if raw == "" || len(raw) > maxExternalInternalURLBytes || !utf8.ValidString(raw) || strings.IndexFunc(raw, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+	}) >= 0 {
 		return errors.New("invalid URL bytes")
 	}
 	parsed, err := url.Parse(raw)

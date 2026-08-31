@@ -331,6 +331,8 @@ func TestExternalDriverRejectsInvalidRenderBoundaries(t *testing.T) {
 		"environment name": `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{"BAD-NAME":"secret"},"credentials":{},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
 		"credential name":  `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{"bad name":"secret"},"internalUrl":"postgres://data:5432/db","version":"1"}}`,
 		"relative URL":     `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"data:5432/db","version":"1"}}`,
+		"unicode control":  `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data\u0085:5432/db","version":"1"}}`,
+		"unicode format":   `{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"postgres://data\u202e:5432/db","version":"1"}}`,
 	}
 	for name, response := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -339,6 +341,12 @@ func TestExternalDriverRejectsInvalidRenderBoundaries(t *testing.T) {
 				t.Fatal("invalid external render result was accepted")
 			}
 		})
+	}
+}
+
+func TestExternalDriverRejectsInvalidUTF8InternalURL(t *testing.T) {
+	if err := validateExternalInternalURL("postgres://data:5432/db\xff"); err == nil {
+		t.Fatal("invalid UTF-8 internal URL was accepted")
 	}
 }
 
