@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/ociref"
 )
 
@@ -81,7 +82,7 @@ func ReadRegularFile(path string, maximum int64) ([]byte, error) {
 	return data, nil
 }
 
-func Verify(manifestData, signature, publicKeyData, masterKey []byte, expected Expected, now time.Time) (Manifest, error) {
+func Verify(manifestData, signature, publicKeyData, masterKey, agentCACertificate, agentCAKey []byte, expected Expected, now time.Time) (Manifest, error) {
 	var manifest Manifest
 	if len(manifestData) == 0 || len(manifestData) > MaxManifestBytes || len(signature) != ed25519.SignatureSize {
 		return manifest, errors.New("recovery bundle metadata has an invalid size")
@@ -143,6 +144,23 @@ func Verify(manifestData, signature, publicKeyData, masterKey []byte, expected E
 	publicKeyHash := sha256.Sum256(encodedPublicKey)
 	if hex.EncodeToString(publicKeyHash[:]) != manifest.RecoverySigningKeySHA256 {
 		return Manifest{}, errors.New("recovery verification key does not match the signed bundle")
+	}
+	if manifest.AgentCASHA256 == "" {
+		if len(agentCACertificate) != 0 || len(agentCAKey) != 0 {
+			return Manifest{}, errors.New("recovery bundle does not declare an agent CA")
+		}
+	} else {
+		if len(agentCACertificate) == 0 || len(agentCAKey) == 0 {
+			return Manifest{}, errors.New("recovery bundle requires the matching agent CA certificate and private key")
+		}
+		authority, validationErr := agentpki.ValidateAuthority(agentCACertificate, agentCAKey, now)
+		if validationErr != nil {
+			return Manifest{}, fmt.Errorf("validate recovery agent CA keypair: %w", validationErr)
+		}
+		authorityHash := sha256.Sum256(authority.Raw)
+		if hex.EncodeToString(authorityHash[:]) != manifest.AgentCASHA256 {
+			return Manifest{}, errors.New("agent CA certificate does not match the recovery bundle")
+		}
 	}
 	return manifest, nil
 }

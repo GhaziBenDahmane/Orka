@@ -421,8 +421,9 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		"control-plane-recovery-conformance.json control-plane-recovery-conformance.log",
 		`controlPlaneRecoveryEvidence:"control-plane-recovery-conformance.json"`,
 		`.signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound`,
+		`.agentCAKeypairVerified and .mismatchedAgentCAKeyRejected`,
 		`.privateDumpSnapshotVerified and .stagedCutoverVerified and .rollbackDatabaseRetained`,
-		`.candidateVerifierImage == $candidateVerifierImage and .candidateManifestVerifierVerified and .candidateTamperedManifestRejected`,
+		`.candidateVerifierImage == $candidateVerifierImage and .candidateManifestVerifierVerified and .candidateTamperedManifestRejected and .candidateAgentCAKeypairVerified`,
 		`.auditChainContinuity == "production-required"`,
 	} {
 		if !strings.Contains(workflow, controlPlaneRecoveryContract) {

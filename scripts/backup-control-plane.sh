@@ -36,7 +36,7 @@ if [ ! -d "$parent" ]; then
   echo "output parent directory does not exist: $parent" >&2
   exit 1
 fi
-for command in awk base64 date docker find grep jq mktemp mv openssl sha256sum tr wc; do
+for command in awk base64 cp date docker find grep jq mktemp mv openssl sha256sum tr wc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -135,15 +135,78 @@ master_key_sha256=$(sha256sum "$temporary/master-key.bin" | awk '{print $1}')
 rm -f -- "$temporary/master-key.bin"
 
 agent_ca_sha256=""
-if [ -n "${DOCKYARD_AGENT_CA_CERT_FILE:-}" ]; then
-  openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -outform DER >"$temporary/agent-ca.der"
-  agent_ca_sha256=$(sha256sum "$temporary/agent-ca.der" | awk '{print $1}')
-  rm -f -- "$temporary/agent-ca.der"
-elif [ -n "${DOCKYARD_AGENT_CA_CERT:-}" ]; then
-  printf '%s' "$DOCKYARD_AGENT_CA_CERT" | openssl x509 -outform DER >"$temporary/agent-ca.der"
-  agent_ca_sha256=$(sha256sum "$temporary/agent-ca.der" | awk '{print $1}')
-  rm -f -- "$temporary/agent-ca.der"
+agent_ca_certificate_file=${DOCKYARD_AGENT_CA_CERT_FILE:-}
+agent_ca_certificate_value=${DOCKYARD_AGENT_CA_CERT:-}
+agent_ca_key_file=${DOCKYARD_AGENT_CA_KEY_FILE:-}
+agent_ca_key_value=${DOCKYARD_AGENT_CA_KEY:-}
+if { [ -n "$agent_ca_certificate_file" ] && [ -n "$agent_ca_certificate_value" ]; } || { [ -n "$agent_ca_key_file" ] && [ -n "$agent_ca_key_value" ]; }; then
+  echo "agent CA certificate and key cannot each be configured through both value and file variables" >&2
+  exit 1
 fi
+if [ -n "$agent_ca_certificate_file" ]; then
+  [ -f "$agent_ca_certificate_file" ] && [ ! -L "$agent_ca_certificate_file" ] && [ -r "$agent_ca_certificate_file" ] || {
+    echo "DOCKYARD_AGENT_CA_CERT_FILE must name a readable regular file, not a symbolic link" >&2
+    exit 1
+  }
+  cp -P -- "$agent_ca_certificate_file" "$temporary/agent-ca.crt"
+elif [ -n "$agent_ca_certificate_value" ]; then
+  printf '%s' "$agent_ca_certificate_value" >"$temporary/agent-ca.crt"
+fi
+if [ -n "$agent_ca_key_file" ]; then
+  [ -f "$agent_ca_key_file" ] && [ ! -L "$agent_ca_key_file" ] && [ -r "$agent_ca_key_file" ] || {
+    echo "DOCKYARD_AGENT_CA_KEY_FILE must name a readable regular file, not a symbolic link" >&2
+    exit 1
+  }
+  [ -z "$(find "$agent_ca_key_file" -prune -perm /077 -print)" ] || {
+    echo "DOCKYARD_AGENT_CA_KEY_FILE must not be accessible by group or other users" >&2
+    exit 1
+  }
+  cp -P -- "$agent_ca_key_file" "$temporary/agent-ca.key"
+elif [ -n "$agent_ca_key_value" ]; then
+  printf '%s' "$agent_ca_key_value" >"$temporary/agent-ca.key"
+fi
+if { [ -e "$temporary/agent-ca.crt" ] && [ ! -e "$temporary/agent-ca.key" ]; } || { [ ! -e "$temporary/agent-ca.crt" ] && [ -e "$temporary/agent-ca.key" ]; }; then
+  echo "agent CA certificate and private key must be configured together" >&2
+  exit 1
+fi
+if [ -e "$temporary/agent-ca.crt" ]; then
+  if [ ! -f "$temporary/agent-ca.crt" ] || [ -L "$temporary/agent-ca.crt" ] || [ ! -f "$temporary/agent-ca.key" ] || [ -L "$temporary/agent-ca.key" ]; then
+    echo "could not create private agent CA backup snapshots" >&2
+    exit 1
+  fi
+  chmod 0600 "$temporary/agent-ca.crt" "$temporary/agent-ca.key"
+  openssl x509 -in "$temporary/agent-ca.crt" -noout >/dev/null 2>&1 || {
+    echo "agent CA certificate is invalid" >&2
+    exit 1
+  }
+  openssl pkey -in "$temporary/agent-ca.key" -check -noout >/dev/null 2>&1 || {
+    echo "agent CA private key is invalid" >&2
+    exit 1
+  }
+  openssl x509 -in "$temporary/agent-ca.crt" -pubkey -noout >"$temporary/agent-ca-public.pem" 2>/dev/null && \
+    openssl pkey -pubin -in "$temporary/agent-ca-public.pem" -outform DER >"$temporary/agent-ca-certificate-public.der" 2>/dev/null || {
+      echo "could not extract the agent CA certificate public key" >&2
+      exit 1
+    }
+  openssl pkey -in "$temporary/agent-ca.key" -pubout -outform DER >"$temporary/agent-ca-private-public.der" 2>/dev/null || {
+    echo "could not extract the agent CA private key public key" >&2
+    exit 1
+  }
+  certificate_public_sha256=$(sha256sum "$temporary/agent-ca-certificate-public.der" | awk '{print $1}')
+  private_public_sha256=$(sha256sum "$temporary/agent-ca-private-public.der" | awk '{print $1}')
+  [ "$certificate_public_sha256" = "$private_public_sha256" ] || {
+    echo "agent CA certificate and private key do not match" >&2
+    exit 1
+  }
+  openssl verify -CAfile "$temporary/agent-ca.crt" "$temporary/agent-ca.crt" >/dev/null 2>&1 || {
+    echo "agent CA certificate is not a valid self-signed authority" >&2
+    exit 1
+  }
+  openssl x509 -in "$temporary/agent-ca.crt" -outform DER >"$temporary/agent-ca.der"
+  agent_ca_sha256=$(sha256sum "$temporary/agent-ca.der" | awk '{print $1}')
+  rm -f -- "$temporary/agent-ca.der" "$temporary/agent-ca.crt" "$temporary/agent-ca.key"
+fi
+unset agent_ca_certificate_value agent_ca_key_value DOCKYARD_AGENT_CA_CERT DOCKYARD_AGENT_CA_KEY
 
 schema_version=$(docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname "$database" --tuples-only --no-align --command "SELECT COALESCE(max(version),'') FROM schema_migrations")
 schema_version=$(printf '%s' "$schema_version" | tr -d '\r\n')

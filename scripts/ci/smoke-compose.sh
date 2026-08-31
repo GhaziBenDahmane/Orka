@@ -14,9 +14,16 @@ recovery_root="$(mktemp -d)"
 evidence_file="${DOCKYARD_CONTROL_PLANE_RECOVERY_EVIDENCE:-$recovery_root/control-plane-recovery-conformance.json}"
 openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
 openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
+openssl genrsa -traditional -out "$recovery_root/agent-ca.key" 3072 >/dev/null 2>&1
+openssl req -x509 -new -key "$recovery_root/agent-ca.key" -days 2 -subj '/CN=Dockyard Recovery Test Agent CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign,digitalSignature' \
+  -out "$recovery_root/agent-ca.crt" >/dev/null 2>&1
 chmod 0600 "$recovery_root/signing-key.pem"
+chmod 0600 "$recovery_root/agent-ca.key"
 export DOCKYARD_RECOVERY_SIGNING_KEY_FILE="$recovery_root/signing-key.pem"
 export DOCKYARD_RECOVERY_VERIFY_KEY_FILE="$recovery_root/verify-key.pem"
+export DOCKYARD_AGENT_CA_CERT_FILE="$recovery_root/agent-ca.crt"
+export DOCKYARD_AGENT_CA_KEY_FILE="$recovery_root/agent-ca.key"
 cleanup() {
   if [[ -n "$stack_name" ]]; then
     docker stack rm "$stack_name" >/dev/null 2>&1 || true
@@ -222,6 +229,19 @@ if DOCKYARD_STACK_NAME="$project" \
   echo "restore unexpectedly accepted a bundle for another stack" >&2
   exit 1
 fi
+openssl genrsa -traditional -out "$recovery_root/wrong-agent-ca.key" 3072 >/dev/null 2>&1
+chmod 0600 "$recovery_root/wrong-agent-ca.key"
+if DOCKYARD_STACK_NAME="$project" \
+  DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
+  DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
+  DOCKYARD_RESTORE_CONFIRM="restore:$project" \
+  DOCKYARD_MASTER_KEY='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' \
+  DOCKYARD_AGENT_CA_KEY_FILE="$recovery_root/wrong-agent-ca.key" \
+  DOCKYARD_IMAGE="$project-dockyard@$controller_image_id" \
+  scripts/restore-control-plane.sh "$recovery_root/control-plane" >/dev/null 2>&1; then
+  echo "restore unexpectedly accepted a mismatched agent CA private key" >&2
+  exit 1
+fi
 if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
   DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \
@@ -283,18 +303,19 @@ jq -n \
   --arg controllerImage "$project-dockyard@$controller_image_id" \
   --arg schemaVersion "$(jq -er '.schemaVersion' "$recovery_root/control-plane/manifest.json")" \
   --argjson databaseBytes "$(jq -er '.databaseBytes' "$recovery_root/control-plane/manifest.json")" \
-  '{status:"passed",sourceCommit:$sourceCommit,createdAt:$createdAt,controllerImage:$controllerImage,schemaVersion:$schemaVersion,databaseBytes:$databaseBytes,signedManifestVerified:true,singleSnapshotMetadataVerified:true,deploymentIdentityBound:true,runningControllerRejected:true,tamperedManifestRejected:true,tamperedDumpRejected:true,wrongMasterKeyRejected:true,schemaMismatchRejected:true,privateDumpSnapshotVerified:true,stagedCutoverVerified:true,rollbackDatabaseRetained:true,authenticatedStateRecovered:true,candidateVerifierImage:"",candidateManifestVerifierVerified:false,candidateTamperedManifestRejected:false,auditChainContinuity:"production-required"}' \
+  '{status:"passed",sourceCommit:$sourceCommit,createdAt:$createdAt,controllerImage:$controllerImage,schemaVersion:$schemaVersion,databaseBytes:$databaseBytes,signedManifestVerified:true,singleSnapshotMetadataVerified:true,deploymentIdentityBound:true,agentCAKeypairVerified:true,mismatchedAgentCAKeyRejected:true,runningControllerRejected:true,tamperedManifestRejected:true,tamperedDumpRejected:true,wrongMasterKeyRejected:true,schemaMismatchRejected:true,privateDumpSnapshotVerified:true,stagedCutoverVerified:true,rollbackDatabaseRetained:true,authenticatedStateRecovered:true,candidateVerifierImage:"",candidateManifestVerifierVerified:false,candidateTamperedManifestRejected:false,candidateAgentCAKeypairVerified:false,auditChainContinuity:"production-required"}' \
   >"$evidence_file"
 jq -e '
   .status == "passed" and (.sourceCommit | test("^[a-f0-9]{40}$")) and
   (.controllerImage | test("@sha256:[a-f0-9]{64}$")) and
   (.schemaVersion | test("^[A-Za-z0-9._-]+$")) and .databaseBytes > 0 and
   .signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound and
+  .agentCAKeypairVerified and .mismatchedAgentCAKeyRejected and
   .runningControllerRejected and .tamperedManifestRejected and .tamperedDumpRejected and
   .wrongMasterKeyRejected and .schemaMismatchRejected and .privateDumpSnapshotVerified and
   .stagedCutoverVerified and .rollbackDatabaseRetained and .authenticatedStateRecovered and
   .candidateVerifierImage == "" and (.candidateManifestVerifierVerified | not) and
-  (.candidateTamperedManifestRejected | not) and
+  (.candidateTamperedManifestRejected | not) and (.candidateAgentCAKeypairVerified | not) and
   .auditChainContinuity == "production-required"
 ' "$evidence_file" >/dev/null
 cat "$evidence_file"

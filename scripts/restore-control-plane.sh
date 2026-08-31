@@ -78,6 +78,53 @@ if ! printf '%s' "$master_key" | base64 -d >"$temporary/master-key.bin" 2>/dev/n
   exit 1
 fi
 unset master_key DOCKYARD_MASTER_KEY
+
+agent_ca_certificate_file=${DOCKYARD_AGENT_CA_CERT_FILE:-}
+agent_ca_certificate_value=${DOCKYARD_AGENT_CA_CERT:-}
+agent_ca_key_file=${DOCKYARD_AGENT_CA_KEY_FILE:-}
+agent_ca_key_value=${DOCKYARD_AGENT_CA_KEY:-}
+if { [ -n "$agent_ca_certificate_file" ] && [ -n "$agent_ca_certificate_value" ]; } || { [ -n "$agent_ca_key_file" ] && [ -n "$agent_ca_key_value" ]; }; then
+  echo "agent CA certificate and key cannot each be configured through both value and file variables" >&2
+  exit 1
+fi
+agent_ca_certificate_snapshot=""
+agent_ca_key_snapshot=""
+if [ -n "$agent_ca_certificate_file" ]; then
+  [ -f "$agent_ca_certificate_file" ] && [ ! -L "$agent_ca_certificate_file" ] && [ -r "$agent_ca_certificate_file" ] || {
+    echo "DOCKYARD_AGENT_CA_CERT_FILE must name a readable regular file, not a symbolic link" >&2
+    exit 1
+  }
+  cp -P -- "$agent_ca_certificate_file" "$temporary/agent-ca.crt"
+elif [ -n "$agent_ca_certificate_value" ]; then
+  printf '%s' "$agent_ca_certificate_value" >"$temporary/agent-ca.crt"
+fi
+if [ -n "$agent_ca_key_file" ]; then
+  [ -f "$agent_ca_key_file" ] && [ ! -L "$agent_ca_key_file" ] && [ -r "$agent_ca_key_file" ] || {
+    echo "DOCKYARD_AGENT_CA_KEY_FILE must name a readable regular file, not a symbolic link" >&2
+    exit 1
+  }
+  [ -z "$(find "$agent_ca_key_file" -prune -perm /077 -print)" ] || {
+    echo "DOCKYARD_AGENT_CA_KEY_FILE must not be accessible by group or other users" >&2
+    exit 1
+  }
+  cp -P -- "$agent_ca_key_file" "$temporary/agent-ca.key"
+elif [ -n "$agent_ca_key_value" ]; then
+  printf '%s' "$agent_ca_key_value" >"$temporary/agent-ca.key"
+fi
+if { [ -e "$temporary/agent-ca.crt" ] && [ ! -e "$temporary/agent-ca.key" ]; } || { [ ! -e "$temporary/agent-ca.crt" ] && [ -e "$temporary/agent-ca.key" ]; }; then
+  echo "agent CA certificate and private key must be configured together" >&2
+  exit 1
+fi
+if [ -e "$temporary/agent-ca.crt" ]; then
+  if [ ! -f "$temporary/agent-ca.crt" ] || [ -L "$temporary/agent-ca.crt" ] || [ ! -f "$temporary/agent-ca.key" ] || [ -L "$temporary/agent-ca.key" ]; then
+    echo "could not create private agent CA recovery snapshots" >&2
+    exit 1
+  fi
+  chmod 0600 "$temporary/agent-ca.crt" "$temporary/agent-ca.key"
+  agent_ca_certificate_snapshot="$temporary/agent-ca.crt"
+  agent_ca_key_snapshot="$temporary/agent-ca.key"
+fi
+unset agent_ca_certificate_value agent_ca_key_value DOCKYARD_AGENT_CA_CERT DOCKYARD_AGENT_CA_KEY
 if [ ! -f "$bundle/manifest.json" ] || [ ! -f "$bundle/manifest.sig" ] || [ ! -f "$bundle/database.dump" ] || [ -L "$bundle/manifest.json" ] || [ -L "$bundle/manifest.sig" ] || [ -L "$bundle/database.dump" ]; then
   echo "recovery bundle must contain regular manifest.json, manifest.sig, and database.dump files" >&2
   exit 1
@@ -155,6 +202,11 @@ master_key_snapshot=$(canonical_file "$temporary/master-key.bin")
 for recovery_path in "$manifest_file" "$signature_file" "$verify_key" "$master_key_snapshot"; do
   case "$recovery_path" in *,*) echo "recovery input paths must not contain commas" >&2; exit 1 ;; esac
 done
+if [ -n "$agent_ca_certificate_snapshot" ]; then
+  for recovery_path in "$agent_ca_certificate_snapshot" "$agent_ca_key_snapshot"; do
+    case "$recovery_path" in *,*) echo "recovery input paths must not contain commas" >&2; exit 1 ;; esac
+  done
+fi
 verifier_image=${DOCKYARD_RECOVERY_VERIFIER_IMAGE:-$image}
 if [ "$verifier_image" != "$image" ]; then
   verifier_image_id=$(docker image inspect "$verifier_image" --format '{{.Id}}' 2>/dev/null) || {
@@ -166,15 +218,27 @@ if [ "$verifier_image" != "$image" ]; then
     exit 1
   }
 fi
-verified_manifest=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+set -- docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
   --mount "type=bind,src=$manifest_file,dst=/input/manifest.json,readonly" \
   --mount "type=bind,src=$signature_file,dst=/input/manifest.sig,readonly" \
   --mount "type=bind,src=$verify_key,dst=/input/verify-key.pem,readonly" \
-  --mount "type=bind,src=$master_key_snapshot,dst=/input/master-key.bin,readonly" \
+  --mount "type=bind,src=$master_key_snapshot,dst=/input/master-key.bin,readonly"
+if [ -n "$agent_ca_certificate_snapshot" ]; then
+  agent_ca_certificate_snapshot=$(canonical_file "$agent_ca_certificate_snapshot")
+  agent_ca_key_snapshot=$(canonical_file "$agent_ca_key_snapshot")
+  set -- "$@" \
+    --mount "type=bind,src=$agent_ca_certificate_snapshot,dst=/input/agent-ca.crt,readonly" \
+    --mount "type=bind,src=$agent_ca_key_snapshot,dst=/input/agent-ca.key,readonly"
+fi
+set -- "$@" \
   --entrypoint /usr/local/bin/dockyard "$verifier_image" verify-control-plane-recovery-manifest \
   --manifest /input/manifest.json --signature /input/manifest.sig \
   --public-key-file /input/verify-key.pem --master-key-file /input/master-key.bin \
-  --stack "$stack" --database "$database" --controller-image "$image") || {
+  --stack "$stack" --database "$database" --controller-image "$image"
+if [ -n "$agent_ca_certificate_snapshot" ]; then
+  set -- "$@" --agent-ca-certificate-file /input/agent-ca.crt --agent-ca-key-file /input/agent-ca.key
+fi
+verified_manifest=$("$@") || {
     echo "recovery bundle manifest verification failed" >&2
     exit 1
   }
@@ -220,14 +284,7 @@ if [ "$actual_master_sha256" != "$expected_master_sha256" ]; then
 fi
 
 if [ -n "$expected_agent_ca_sha256" ]; then
-  if [ -n "${DOCKYARD_AGENT_CA_CERT_FILE:-}" ]; then
-    openssl x509 -in "$DOCKYARD_AGENT_CA_CERT_FILE" -outform DER >"$temporary/agent-ca.der"
-  elif [ -n "${DOCKYARD_AGENT_CA_CERT:-}" ]; then
-    printf '%s' "$DOCKYARD_AGENT_CA_CERT" | openssl x509 -outform DER >"$temporary/agent-ca.der"
-  else
-    echo "the recovery bundle requires the matching agent CA certificate" >&2
-    exit 1
-  fi
+  openssl x509 -in "$agent_ca_certificate_snapshot" -outform DER >"$temporary/agent-ca.der"
   actual_agent_ca_sha256=$(sha256sum "$temporary/agent-ca.der" | awk '{print $1}')
   rm -f -- "$temporary/agent-ca.der"
   if [ "$actual_agent_ca_sha256" != "$expected_agent_ca_sha256" ]; then

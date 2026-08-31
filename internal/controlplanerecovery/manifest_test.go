@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 )
 
 func signedManifest(t *testing.T, mutate func(*Manifest), extra map[string]any) ([]byte, []byte, []byte, []byte, Expected) {
@@ -35,7 +37,7 @@ func signedManifest(t *testing.T, mutate func(*Manifest), extra map[string]any) 
 		FormatVersion: 2, CreatedAt: "2026-08-31T10:00:00Z", Stack: expected.Stack,
 		Database: expected.Database, SchemaVersion: "20260831100000", ControllerImage: expected.ControllerImage,
 		DatabaseSHA256: strings.Repeat("b", 64), DatabaseBytes: 4096,
-		MasterKeySHA256: hex.EncodeToString(masterHash[:]), AgentCASHA256: strings.Repeat("c", 64),
+		MasterKeySHA256: hex.EncodeToString(masterHash[:]), AgentCASHA256: "",
 		RecoverySigningKeySHA256: hex.EncodeToString(publicHash[:]),
 	}
 	if mutate != nil {
@@ -63,7 +65,7 @@ func signedManifest(t *testing.T, mutate func(*Manifest), extra map[string]any) 
 
 func TestVerifySignedManifest(t *testing.T) {
 	manifest, signature, publicKey, masterKey, expected := signedManifest(t, nil, nil)
-	got, err := Verify(manifest, signature, publicKey, masterKey, expected, time.Date(2026, 8, 31, 10, 1, 0, 0, time.UTC))
+	got, err := Verify(manifest, signature, publicKey, masterKey, nil, nil, expected, time.Date(2026, 8, 31, 10, 1, 0, 0, time.UTC))
 	if err != nil || got.DatabaseBytes != 4096 || got.SchemaVersion != "20260831100000" {
 		t.Fatalf("manifest=%+v err=%v", got, err)
 	}
@@ -95,10 +97,36 @@ func TestVerifySignedManifestRejectsInvalidInput(t *testing.T) {
 			if test.change != nil {
 				test.change(&expected, &masterKey, &signature)
 			}
-			if _, err := Verify(manifest, signature, publicKey, masterKey, expected, now); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := Verify(manifest, signature, publicKey, masterKey, nil, nil, expected, now); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error=%v want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestVerifyRequiresMatchingAgentCAKeypair(t *testing.T) {
+	now := time.Date(2026, 8, 31, 10, 1, 0, 0, time.UTC)
+	certificate, key, err := agentpki.NewCA(now, 365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(certificate)
+	certificateHash := sha256.Sum256(block.Bytes)
+	manifest, signature, publicKey, masterKey, expected := signedManifest(t, func(manifest *Manifest) {
+		manifest.AgentCASHA256 = hex.EncodeToString(certificateHash[:])
+	}, nil)
+	if _, err = Verify(manifest, signature, publicKey, masterKey, certificate, key, expected, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Verify(manifest, signature, publicKey, masterKey, nil, nil, expected, now); err == nil || !strings.Contains(err.Error(), "certificate and private key") {
+		t.Fatalf("missing keypair error=%v", err)
+	}
+	_, otherKey, err := agentpki.NewCA(now, 365*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Verify(manifest, signature, publicKey, masterKey, certificate, otherKey, expected, now); err == nil || !strings.Contains(err.Error(), "do not match") {
+		t.Fatalf("mismatched keypair error=%v", err)
 	}
 }
 

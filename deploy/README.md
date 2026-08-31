@@ -502,7 +502,9 @@ Before dumping PostgreSQL, the script verifies that `DOCKYARD_IMAGE` exactly
 matches the deployed Swarm controller and refuses an in-progress, paused, or
 rolled-back controller update. For a Compose deployment, explicitly set
 `DOCKYARD_CONTROLLER_CONTAINER`; the requested digest must match its immutable
-image ID.
+image ID. When agent mTLS is configured, provide both
+`DOCKYARD_AGENT_CA_CERT_FILE` and `DOCKYARD_AGENT_CA_KEY_FILE`; backup refuses
+a missing or mismatched escrow key before recording the CA fingerprint.
 Copy the bundle, master key, agent CA keypair, artifact storage, stack
 configuration, image digest, and recovery verification key to independently
 protected storage.
@@ -522,6 +524,8 @@ export DOCKYARD_RESTORE_CONFIRM='restore:dockyard'
 export DOCKYARD_IMAGE='ghcr.io/example/dockyard@sha256:...'
 export DOCKYARD_MASTER_KEY_FILE=/secure/escrow/dockyard-master-key
 export DOCKYARD_RECOVERY_VERIFY_KEY_FILE=/secure/escrow/dockyard-recovery-verify-key.pem
+export DOCKYARD_AGENT_CA_CERT_FILE=/secure/escrow/agent-ca.crt
+export DOCKYARD_AGENT_CA_KEY_FILE=/secure/escrow/agent-ca.key
 export DOCKYARD_RECOVERY_WORK_DIR=/var/lib/dockyard-recovery
 scripts/restore-control-plane.sh /secure/backups/dockyard-2026-08-28
 docker service scale dockyard_dockyard=1
@@ -530,7 +534,10 @@ docker service scale dockyard_dockyard=1
 The restore rejects unsigned manifests and uses the exact recorded controller
 image, isolated without network access, to strictly decode and verify one
 signed in-memory metadata snapshot with the independently supplied Ed25519
-public key and master-key fingerprint. The current authenticated bundle format
+public key and master-key fingerprint. When the bundle records an agent CA,
+the same verifier requires its escrowed private key, validates the self-signed
+authority and key match, and checks the signed certificate fingerprint before
+database cutover. The current authenticated bundle format
 is version 2; create a fresh bundle before upgrading from a version that
 produced unsigned format-1 bundles. It copies the dump to a private temporary
 file, verifies that snapshot against the signed size and checksum, then creates
