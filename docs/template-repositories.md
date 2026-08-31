@@ -180,8 +180,13 @@ settings update in place.
 Deleting a repository also removes its catalog entries. Existing services keep
 their immutable Compose revision and template provenance snapshot.
 
-The controller seeds PostgreSQL, Redis, 9Router, and BarkTrace
-SQLite/PostgreSQL templates at startup. To suggest another built-in product,
+The controller seeds PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, Redis,
+Valkey, ClickHouse, Qdrant, Meilisearch, 9Router, and BarkTrace
+SQLite/PostgreSQL templates at startup. These database products remain ordinary
+Compose templates and can be registered as Compose-linked backup targets.
+libSQL remains available as a managed database; a built-in Compose template is
+deferred until the template resolver can safely derive its basic-auth value
+from generated credentials. To suggest another built-in product,
 use the public [Template request](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml)
 form; to contribute it directly, follow `CONTRIBUTING.md` and add a validated blueprint under
 `internal/templates/builtin/blueprints`.

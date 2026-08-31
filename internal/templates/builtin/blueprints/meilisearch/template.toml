@@ -1,0 +1,9 @@
+[variables]
+meilisearch_version = "v1.20"
+meilisearch_master_key = "${password:32}"
+
+[config.env]
+MEILISEARCH_VERSION = "${meilisearch_version}"
+MEILI_MASTER_KEY = "${meilisearch_master_key}"
+MEILI_ENV = "production"
+MEILI_NO_ANALYTICS = "true"

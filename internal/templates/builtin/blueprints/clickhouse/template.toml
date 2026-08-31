@@ -1,0 +1,11 @@
+[variables]
+clickhouse_version = "25.8-alpine"
+clickhouse_user = "app"
+clickhouse_password = "${password:32}"
+clickhouse_database = "app"
+
+[config.env]
+CLICKHOUSE_VERSION = "${clickhouse_version}"
+CLICKHOUSE_USER = "${clickhouse_user}"
+CLICKHOUSE_PASSWORD = "${clickhouse_password}"
+CLICKHOUSE_DB = "${clickhouse_database}"

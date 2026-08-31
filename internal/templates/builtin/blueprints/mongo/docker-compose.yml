@@ -1,0 +1,19 @@
+services:
+  mongo:
+    image: mongo:${MONGO_VERSION}
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${MONGO_INITDB_DATABASE}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --nodb --eval 'const u=encodeURIComponent(process.env.MONGO_INITDB_ROOT_USERNAME),p=encodeURIComponent(process.env.MONGO_INITDB_ROOT_PASSWORD); const c=new Mongo("mongodb://"+u+":"+p+"@127.0.0.1:27017/admin"); quit(c.getDB("admin").runCommand({ping:1}).ok ? 0 : 1)'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  mongo-data: {}

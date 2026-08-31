@@ -1,0 +1,13 @@
+[variables]
+mariadb_version = "11.8"
+mariadb_user = "app"
+mariadb_password = "${password:32}"
+mariadb_root_password = "${password:32}"
+mariadb_database = "app"
+
+[config.env]
+MARIADB_VERSION = "${mariadb_version}"
+MARIADB_USER = "${mariadb_user}"
+MARIADB_PASSWORD = "${mariadb_password}"
+MARIADB_ROOT_PASSWORD = "${mariadb_root_password}"
+MARIADB_DATABASE = "${mariadb_database}"

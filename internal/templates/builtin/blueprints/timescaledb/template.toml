@@ -1,0 +1,11 @@
+[variables]
+timescaledb_version = "2.29.2-pg17"
+postgres_user = "app"
+postgres_password = "${password:32}"
+postgres_database = "app"
+
+[config.env]
+TIMESCALEDB_VERSION = "${timescaledb_version}"
+POSTGRES_USER = "${postgres_user}"
+POSTGRES_PASSWORD = "${postgres_password}"
+POSTGRES_DB = "${postgres_database}"

@@ -1,13 +1,16 @@
 package templates
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/deploy"
+	"gopkg.in/yaml.v3"
 )
 
 func TestBuiltinCatalogIsSwarmSafe(t *testing.T) {
@@ -18,6 +21,94 @@ func TestBuiltinCatalogIsSwarmSafe(t *testing.T) {
 	if report.Imported < 4 || len(report.Failed) > 0 {
 		t.Fatalf("report=%#v", report)
 	}
+}
+
+func TestBuiltinDatabaseTemplateCatalog(t *testing.T) {
+	expectedVersions := map[string]string{
+		"clickhouse":  "25.8-alpine",
+		"mariadb":     "11.8",
+		"meilisearch": "v1.20",
+		"mongo":       "8",
+		"mysql":       "8.4",
+		"postgres":    "17-alpine",
+		"qdrant":      "v1.15",
+		"redis":       "8-alpine",
+		"timescaledb": "2.29.2-pg17",
+		"valkey":      "8-alpine",
+	}
+	entries, err := fs.ReadDir(builtinCatalog, "builtin/blueprints")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			ids = append(ids, entry.Name())
+		}
+	}
+	sort.Strings(ids)
+	expectedIDs := []string{"9router", "barktrace-postgres", "barktrace-sqlite", "clickhouse", "mariadb", "meilisearch", "mongo", "mysql", "postgres", "qdrant", "redis", "timescaledb", "valkey"}
+	if strings.Join(ids, ",") != strings.Join(expectedIDs, ",") {
+		t.Fatalf("built-in template IDs = %v, want %v", ids, expectedIDs)
+	}
+
+	for id, version := range expectedVersions {
+		t.Run(id, func(t *testing.T) {
+			root := "builtin/blueprints/" + id
+			metaBytes, err := fs.ReadFile(builtinCatalog, root+"/meta.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var meta struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(metaBytes, &meta); err != nil || meta.ID != id {
+				t.Fatalf("invalid metadata ID: id=%q err=%v", meta.ID, err)
+			}
+			tomlBytes, err := fs.ReadFile(builtinCatalog, root+"/template.toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			definition, err := ParseDokploy(tomlBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !variableHasDefault(definition, version) {
+				t.Fatalf("template does not pin expected engine version %q", version)
+			}
+			for _, descriptor := range DescribeVariables(definition) {
+				if strings.Contains(definition.Variables[descriptor.Name], "${password:") && (!descriptor.Generated || !descriptor.Sensitive) {
+					t.Fatalf("generated secret %q must be classified generated and sensitive", descriptor.Name)
+				}
+			}
+
+			composeBytes, err := fs.ReadFile(builtinCatalog, root+"/docker-compose.yml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(strings.ToLower(string(composeBytes)), ":latest") {
+				t.Fatal("database image must not use latest tag")
+			}
+			var compose struct {
+				Volumes map[string]any `yaml:"volumes"`
+			}
+			if err := yaml.Unmarshal(composeBytes, &compose); err != nil {
+				t.Fatal(err)
+			}
+			if len(compose.Volumes) == 0 {
+				t.Fatal("database template must declare a named persistent volume")
+			}
+		})
+	}
+}
+
+func variableHasDefault(template DokployTemplate, expected string) bool {
+	for _, value := range template.Variables {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {

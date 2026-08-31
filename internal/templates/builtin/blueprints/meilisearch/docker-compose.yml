@@ -1,0 +1,16 @@
+services:
+  meilisearch:
+    image: getmeili/meilisearch:${MEILISEARCH_VERSION}
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_ENV: ${MEILI_ENV}
+      MEILI_NO_ANALYTICS: ${MEILI_NO_ANALYTICS}
+    volumes:
+      - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:7700/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  meilisearch-data: {}

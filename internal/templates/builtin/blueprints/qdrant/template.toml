@@ -1,0 +1,7 @@
+[variables]
+qdrant_version = "v1.15"
+qdrant_api_key = "${password:32}"
+
+[config.env]
+QDRANT_VERSION = "${qdrant_version}"
+QDRANT_API_KEY = "${qdrant_api_key}"

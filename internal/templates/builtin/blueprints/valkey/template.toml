@@ -1,0 +1,7 @@
+[variables]
+valkey_version = "8-alpine"
+valkey_password = "${password:32}"
+
+[config.env]
+VALKEY_VERSION = "${valkey_version}"
+VALKEY_PASSWORD = "${valkey_password}"

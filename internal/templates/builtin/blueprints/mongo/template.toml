@@ -1,0 +1,11 @@
+[variables]
+mongo_version = "8"
+mongo_user = "app"
+mongo_password = "${password:32}"
+mongo_database = "app"
+
+[config.env]
+MONGO_VERSION = "${mongo_version}"
+MONGO_INITDB_ROOT_USERNAME = "${mongo_user}"
+MONGO_INITDB_ROOT_PASSWORD = "${mongo_password}"
+MONGO_INITDB_DATABASE = "${mongo_database}"

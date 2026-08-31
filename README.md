@@ -15,8 +15,9 @@ The initial implementation includes:
   certificates reconciled through versioned Swarm secrets locally or by agent;
 - a versioned template catalog with Dokploy template import support;
 - multiple GitHub template repositories with namespaced Dokploy-compatible Compose catalogs;
-- startup-seeded PostgreSQL, Redis, 9Router, and BarkTrace SQLite/PostgreSQL
-  templates, plus a public [template request form](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml);
+- startup-seeded PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, Redis,
+  Valkey, ClickHouse, Qdrant, Meilisearch, 9Router, and BarkTrace
+  SQLite/PostgreSQL templates, plus a public [template request form](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml);
 - eleven built-in managed databases, including TimescaleDB, plus a versioned external driver protocol and Go SDK;
 - OIDC/PKCE and signed SAML 2.0 login, mandatory SSO, session controls, service accounts, SCIM users/groups, and group-to-role mapping;
 - public or authenticated HTTPS/SSH Git builds and encrypted, hardened ZIP uploads, pushed to authenticated OCI registries;

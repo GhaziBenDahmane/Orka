@@ -1,0 +1,17 @@
+services:
+  mariadb:
+    image: mariadb:${MARIADB_VERSION}
+    environment:
+      MARIADB_USER: ${MARIADB_USER}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MARIADB_PWD=\"$${MARIADB_ROOT_PASSWORD}\" mariadb-admin ping --host=127.0.0.1 --user=root --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+volumes:
+  mariadb-data: {}
