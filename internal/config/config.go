@@ -114,6 +114,12 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("parse DOCKYARD_REQUIRE_REMOTE_BACKUPS: %w", err)
 	}
+	if expectedControllerReplicas > 1 && !requireDatabaseTLS {
+		return Config{}, errors.New("DOCKYARD_REQUIRE_DATABASE_TLS must be true when DOCKYARD_EXPECTED_CONTROLLER_REPLICAS is greater than one")
+	}
+	if expectedControllerReplicas > 1 && !requireRemoteBackups {
+		return Config{}, errors.New("DOCKYARD_REQUIRE_REMOTE_BACKUPS must be true when DOCKYARD_EXPECTED_CONTROLLER_REPLICAS is greater than one")
+	}
 	driverDirectory := strings.TrimSpace(os.Getenv("DOCKYARD_DATABASE_DRIVER_DIRECTORY"))
 	if driverDirectory != "" && !filepath.IsAbs(driverDirectory) {
 		return Config{}, errors.New("DOCKYARD_DATABASE_DRIVER_DIRECTORY must be absolute")

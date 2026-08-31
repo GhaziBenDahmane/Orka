@@ -191,8 +191,9 @@ host and TCP port and without a path, query, fragment, or embedded credentials;
 plain HTTP is accepted only for loopback development.
 `DOCKYARD_TRAEFIK_NETWORK` must be a lowercase Docker network
 name of at most 63 characters, and `DOCKYARD_SESSION_TTL` must be between five
-minutes and 30 days. These checks run before database migrations or Docker
-operations.
+minutes and 30 days. Configuring more than one expected controller replica also
+fails closed unless verified PostgreSQL TLS and remote backup destinations are
+both mandatory. These checks run before database migrations or Docker operations.
 
 The equivalent manual commands are:
 

@@ -163,6 +163,9 @@ func TestLoadValidatesSwarmServiceName(t *testing.T) {
 func TestLoadValidatesExpectedControllerReplicas(t *testing.T) {
 	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_EXPECTED_CONTROLLER_REPLICAS", "3")
+	t.Setenv("DOCKYARD_REQUIRE_DATABASE_TLS", "true")
+	t.Setenv("DOCKYARD_REQUIRE_REMOTE_BACKUPS", "true")
+	t.Setenv("DOCKYARD_DATABASE_URL", "postgresql://dockyard@example.test/dockyard?sslmode=verify-full")
 	if cfg, err := Load(); err != nil || cfg.ExpectedControllerReplicas != 3 {
 		t.Fatalf("replicas=%d error=%v", cfg.ExpectedControllerReplicas, err)
 	}
@@ -174,6 +177,29 @@ func TestLoadValidatesExpectedControllerReplicas(t *testing.T) {
 				t.Fatalf("error=%v", err)
 			}
 		})
+	}
+}
+
+func TestLoadRequiresDurableEncryptedStateForMultipleControllers(t *testing.T) {
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_EXPECTED_CONTROLLER_REPLICAS", "3")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_REQUIRE_DATABASE_TLS") {
+		t.Fatalf("database TLS error=%v", err)
+	}
+
+	t.Setenv("DOCKYARD_REQUIRE_DATABASE_TLS", "true")
+	t.Setenv("DOCKYARD_DATABASE_URL", "postgresql://dockyard@example.test/dockyard?sslmode=verify-full")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_REQUIRE_REMOTE_BACKUPS") {
+		t.Fatalf("remote backup error=%v", err)
+	}
+
+	t.Setenv("DOCKYARD_REQUIRE_REMOTE_BACKUPS", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExpectedControllerReplicas != 3 || !cfg.RequireDatabaseTLS || !cfg.RequireRemoteBackups {
+		t.Fatalf("HA safety configuration was not preserved: %#v", cfg)
 	}
 }
 
