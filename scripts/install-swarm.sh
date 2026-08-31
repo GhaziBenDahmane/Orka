@@ -120,14 +120,48 @@ temporary=$(mktemp -d)
 created_secrets=""
 created_network=false
 deployment_started=false
+stack_existed=false
+
+remove_created_resources() {
+  cleanup_deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    remaining_secrets=""
+    for created_secret in $created_secrets; do
+      if ! docker secret rm "$created_secret" >/dev/null 2>&1; then
+        remaining_secrets="$remaining_secrets $created_secret"
+      fi
+    done
+    created_secrets=$remaining_secrets
+
+    if [ "$created_network" = true ]; then
+      if docker network rm "$network" >/dev/null 2>&1; then
+        created_network=false
+      fi
+    fi
+
+    [ -z "$created_secrets" ] && [ "$created_network" = false ] && return 0
+    if [ "$(date +%s)" -ge "$cleanup_deadline" ]; then
+      remaining_network=""
+      [ "$created_network" = false ] || remaining_network=" network $network"
+      echo "install-swarm: cleanup timed out; remove remaining resources manually:${created_secrets}${remaining_network}" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 cleanup() {
   status=$?
-  if [ "$status" -ne 0 ] && [ "$deployment_started" = false ]; then
-    for created_secret in $created_secrets; do
-      docker secret rm "$created_secret" >/dev/null 2>&1 || true
-    done
-    if [ "$created_network" = true ]; then
-      docker network rm "$network" >/dev/null 2>&1 || true
+  if [ "$status" -ne 0 ]; then
+    if [ "$deployment_started" = true ] && [ "$stack_existed" = false ]; then
+      echo "install-swarm: first installation failed; removing stack $stack and newly created resources" >&2
+      if docker stack rm "$stack" >/dev/null 2>&1; then
+        remove_created_resources || true
+      else
+        echo "install-swarm: could not remove failed stack $stack; newly created resources were retained" >&2
+      fi
+    elif [ "$deployment_started" = false ]; then
+      remove_created_resources || true
     fi
   fi
   rm -rf -- "$temporary"
@@ -285,6 +319,11 @@ if [ "$external_database_drivers" = true ]; then
   set -- "$@" -c "$root/deploy/swarm-database-drivers.yml"
 fi
 docker stack config "$@" >/dev/null
+stack_inventory=$(docker stack ls --format '{{.Name}}') || fail "could not inspect existing Swarm stacks"
+if printf '%s\n' "$stack_inventory" | grep -Fxq "$stack"; then
+  stack_existed=true
+fi
+unset stack_inventory
 network_exists=false
 if docker network inspect "$network" >/dev/null 2>&1; then
   network_exists=true

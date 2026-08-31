@@ -95,6 +95,11 @@ explicitly disabled, and then
 waits for every service to hold its desired replica count continuously for 90
 seconds. It also requires every control-plane service to run the exact requested
 image digest and rejects any updating, paused, or rolled-back service state.
+If a first installation is submitted but cannot converge, the installer removes
+that failed stack and retries removal of only the secrets and public overlay it
+created. Named volumes are deliberately retained for recovery. A failed upgrade
+never removes the pre-existing stack or its resources; Swarm's service rollback
+policy remains authoritative and the installer exits nonzero for operator review.
 The supplied Swarm manifests set CPU and memory reservations plus hard limits
 for every long-running platform, agent, and AI service. Override the documented
 `*_CPU_LIMIT`, `*_MEMORY_LIMIT`, `*_CPU_RESERVATION`, and

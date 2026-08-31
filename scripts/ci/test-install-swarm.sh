@@ -52,8 +52,13 @@ case "$1 $2" in
       exit 0
     fi
     exit 1 ;;
+  "stack ls")
+    if [ "${DOCKYARD_INSTALL_TEST_STACK_EXISTS:-false}" = true ]; then
+      printf '%s\n' 'dockyard'
+    fi ;;
   "stack deploy")
     [ "${DOCKYARD_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
+  "stack rm") ;;
   "stack config") printf 'edge-control-network=%s\n' "$DOCKYARD_EDGE_CONTROL_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
   "service inspect")
     service=$5
@@ -497,6 +502,26 @@ if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_c
   exit 1
 fi
 grep -q 'dockyard_dockyard update state is rollback_completed' "$temporary/err"
+grep -q '^stack rm dockyard$' "$DOCKYARD_INSTALL_TEST_LOG"
+for secret in dockyard_db_password dockyard_database_url dockyard_master_key dockyard_metrics_token; do
+  grep -q "^secret rm $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
+done
+grep -q '^network rm dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_STACK_EXISTS=true \
+  DOCKYARD_INSTALL_TEST_EXISTING_SECRETS='dockyard_db_password dockyard_database_url dockyard_master_key dockyard_metrics_token' \
+  DOCKYARD_REUSE_EXISTING_SECRETS=true DOCKYARD_INSTALL_WAIT_TIMEOUT=1 \
+  DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_completed \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted a failed existing-stack upgrade' >&2
+  exit 1
+fi
+grep -q 'dockyard_dockyard update state is rollback_completed' "$temporary/err"
+if grep -Eq '^(stack rm|secret rm|network rm)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'failed upgrade removed an existing stack resource' >&2
+  exit 1
+fi
 
 for unsafe_host in 'dockyard.example.test`)||Host(`attacker.example.test' 'bad_label.example.test' '-leading.example.test' 'single-label'; do
   : >"$DOCKYARD_INSTALL_TEST_LOG"
