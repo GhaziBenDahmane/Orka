@@ -591,8 +591,36 @@ func (s *Store) CreateServiceAccount(ctx context.Context, organizationID, creato
 		return ServiceAccount{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := createServiceAccountTx(ctx, tx, organizationID, &creatorID, name, role, tokenHash, expiresAt)
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateServiceAccountWithAudit(ctx context.Context, principal Principal, name, role string, tokenHash []byte, expiresAt time.Time, remoteAddr string) (ServiceAccount, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	defer tx.Rollback(ctx)
+	var creatorID *uuid.UUID
+	if principal.UserID != uuid.Nil {
+		creatorID = &principal.UserID
+	}
+	item, err := createServiceAccountTx(ctx, tx, principal.OrganizationID, creatorID, name, role, tokenHash, expiresAt)
+	if err != nil {
+		return ServiceAccount{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_account.create", "service_account", item.ID.String(), remoteAddr, map[string]any{"role": item.Role, "expiresAt": expiresAt}); err != nil {
+		return ServiceAccount{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createServiceAccountTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, creatorID *uuid.UUID, name, role string, tokenHash []byte, expiresAt time.Time) (ServiceAccount, error) {
 	item := ServiceAccount{ID: uuid.New(), OrganizationID: organizationID, Name: name, Role: role, Enabled: true, TokenExpiresAt: &expiresAt}
-	err = tx.QueryRow(ctx, `INSERT INTO service_accounts(id,organization_id,name,role,created_by) SELECT $1,o.id,$3,$4,$5 FROM organizations o WHERE o.id=$2 RETURNING created_at,updated_at`, item.ID, organizationID, name, role, creatorID).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO service_accounts(id,organization_id,name,role,created_by) SELECT $1,o.id,$3,$4,$5 FROM organizations o WHERE o.id=$2 RETURNING created_at,updated_at`, item.ID, organizationID, name, role, creatorID).Scan(&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ServiceAccount{}, ErrNotFound
 	}
@@ -602,7 +630,7 @@ func (s *Store) CreateServiceAccount(ctx context.Context, organizationID, creato
 	if _, err = tx.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,$4)`, uuid.New(), item.ID, tokenHash, expiresAt); err != nil {
 		return ServiceAccount{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListServiceAccounts(ctx context.Context, organizationID uuid.UUID) ([]ServiceAccount, error) {
@@ -628,20 +656,41 @@ func (s *Store) RotateServiceAccountToken(ctx context.Context, organizationID, i
 		return err
 	}
 	defer tx.Rollback(ctx)
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled)`, id, organizationID).Scan(&exists); err != nil {
-		return err
-	}
-	if !exists {
-		return ErrNotFound
-	}
-	if _, err = tx.Exec(ctx, `UPDATE service_account_tokens SET revoked_at=now() WHERE service_account_id=$1 AND revoked_at IS NULL`, id); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,$4)`, uuid.New(), id, tokenHash, expiresAt); err != nil {
+	if err = rotateServiceAccountTokenTx(ctx, tx, organizationID, id, tokenHash, expiresAt); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *Store) RotateServiceAccountTokenWithAudit(ctx context.Context, principal Principal, id uuid.UUID, tokenHash []byte, expiresAt time.Time, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = rotateServiceAccountTokenTx(ctx, tx, principal.OrganizationID, id, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_account.rotate", "service_account", id.String(), remoteAddr, map[string]any{"expiresAt": expiresAt}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func rotateServiceAccountTokenTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, tokenHash []byte, expiresAt time.Time) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT true FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled FOR UPDATE`, id, organizationID).Scan(&exists); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE service_account_tokens SET revoked_at=now() WHERE service_account_id=$1 AND revoked_at IS NULL`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,$4)`, uuid.New(), id, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) DisableServiceAccount(ctx context.Context, organizationID, id uuid.UUID) error {
@@ -650,6 +699,28 @@ func (s *Store) DisableServiceAccount(ctx context.Context, organizationID, id uu
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = disableServiceAccountTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DisableServiceAccountWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = disableServiceAccountTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_account.disable", "service_account", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func disableServiceAccountTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	tag, err := tx.Exec(ctx, `UPDATE service_accounts SET enabled=false,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
@@ -660,7 +731,7 @@ func (s *Store) DisableServiceAccount(ctx context.Context, organizationID, id uu
 	if _, err = tx.Exec(ctx, `UPDATE service_account_tokens SET revoked_at=now() WHERE service_account_id=$1 AND revoked_at IS NULL`, id); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID, organizationID *uuid.UUID) ([]Session, error) {

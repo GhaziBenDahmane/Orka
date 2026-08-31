@@ -35,12 +35,11 @@ func (s *Server) createServiceAccount(w http.ResponseWriter, r *http.Request) {
 	token = "dky_" + token
 	p := principal(r)
 	expiresAt := time.Now().Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour)
-	item, err := s.Store.CreateServiceAccount(r.Context(), p.OrganizationID, p.UserID, in.Name, in.Role, cryptox.Digest(token), expiresAt)
+	item, err := s.Store.CreateServiceAccountWithAudit(r.Context(), p, in.Name, in.Role, cryptox.Digest(token), expiresAt, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_account.create", "service_account", item.ID.String(), r.RemoteAddr, map[string]any{"role": item.Role, "expiresAt": expiresAt})
 	writeJSON(w, http.StatusCreated, map[string]any{"serviceAccount": item, "token": token})
 }
 
@@ -80,11 +79,10 @@ func (s *Server) rotateServiceAccountToken(w http.ResponseWriter, r *http.Reques
 	token = "dky_" + token
 	p := principal(r)
 	expiresAt := time.Now().Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour)
-	if err = s.Store.RotateServiceAccountToken(r.Context(), p.OrganizationID, id, cryptox.Digest(token), expiresAt); err != nil {
+	if err = s.Store.RotateServiceAccountTokenWithAudit(r.Context(), p, id, cryptox.Digest(token), expiresAt, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_account.rotate", "service_account", id.String(), r.RemoteAddr, map[string]any{"expiresAt": expiresAt})
 	writeJSON(w, 200, map[string]any{"token": token, "expiresAt": expiresAt})
 }
 
@@ -95,10 +93,9 @@ func (s *Server) deleteServiceAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DisableServiceAccount(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DisableServiceAccountWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_account.disable", "service_account", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

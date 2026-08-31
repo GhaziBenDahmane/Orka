@@ -149,6 +149,10 @@ enrollment details.
 | POST | `/v1/agent/commands/{id}/complete` | Store a fenced command result |
 | POST | `/v1/agent/rotate` | Issue a pending short-lived certificate; first successful authentication promotes it and revokes the old serial |
 
+Service-account creation, token rotation, and disablement commit atomically
+with their operator audit records. An audit failure cannot retain a newly
+issued bearer token, revoke the prior token, or disable the identity.
+
 Mandatory-SSO policy changes, OIDC/SAML provider creation and configuration
 updates, and provider enable or disable transitions commit atomically with
 their operator audit records. Provider updates invalidate outstanding login
