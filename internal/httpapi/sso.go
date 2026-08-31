@@ -245,7 +245,7 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		s.writeInternalError(w, r, 500, "nonce_failed", "OIDC nonce could not be generated", err)
 		return
 	}
-	if err = s.Store.CreateOIDCState(r.Context(), cryptox.Digest(state), provider.ID, verifier, nonce); err != nil {
+	if err = s.Store.CreateOIDCState(r.Context(), cryptox.Digest(state), provider.ID, provider.Revision, verifier, nonce); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -270,7 +270,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_state", "state is not bound to this browser")
 		return
 	}
-	providerID, verifierValue, nonce, err := s.Store.ConsumeOIDCState(r.Context(), cryptox.Digest(stateValue))
+	providerID, providerRevision, verifierValue, nonce, err := s.Store.ConsumeOIDCState(r.Context(), cryptox.Digest(stateValue))
 	if err != nil {
 		writeError(w, 400, "invalid_state", "state is invalid or expired")
 		return
@@ -278,6 +278,10 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	provider, err := s.Store.GetOIDCProvider(r.Context(), providerID)
 	if err != nil {
 		writeStoreError(w, err)
+		return
+	}
+	if provider.Revision != providerRevision {
+		writeError(w, 400, "invalid_state", "identity provider configuration changed during login")
 		return
 	}
 	secret, err := s.Box.Decrypt(provider.EncryptedClientSecret, "oidc-client-secret:"+provider.ID.String())
@@ -346,7 +350,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, "oidc", "", map[string]any{"providerId": provider.ID})
+	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, providerRevision, "oidc", "", map[string]any{"providerId": provider.ID})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return

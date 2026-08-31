@@ -108,7 +108,7 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 			kind:       "oidc",
 			providerID: oidcProvider.ID,
 			create: func(state []byte) error {
-				return db.CreateOIDCState(ctx, state, oidcProvider.ID, "verifier", "nonce")
+				return db.CreateOIDCState(ctx, state, oidcProvider.ID, oidcProvider.Revision, "verifier", "nonce")
 			},
 			count: func(state []byte) int {
 				var count int
@@ -134,7 +134,7 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 			kind:       "saml",
 			providerID: samlProvider.ID,
 			create: func(state []byte) error {
-				return db.CreateSAMLState(ctx, state, samlProvider.ID, "request-id")
+				return db.CreateSAMLState(ctx, state, samlProvider.ID, samlProvider.Revision, "request-id")
 			},
 			count: func(state []byte) int {
 				var count int
@@ -237,7 +237,7 @@ func TestOIDCProviderMutationCommitsWithAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateHash := []byte("pending-oidc-state")
-	if err = db.CreateOIDCState(ctx, stateHash, provider.ID, "verifier", "nonce"); err != nil {
+	if err = db.CreateOIDCState(ctx, stateHash, provider.ID, provider.Revision, "verifier", "nonce"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.CreateSessionWithMetadata(ctx, userID, &organizationID, &provider.ID, []byte("pending-oidc-session"), time.Now().Add(time.Hour), "oidc", "browser", "127.0.0.1"); err != nil {
@@ -307,7 +307,7 @@ func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	stateHash := []byte("pending-saml-state")
-	if err = db.CreateSAMLState(ctx, stateHash, provider.ID, "request-id"); err != nil {
+	if err = db.CreateSAMLState(ctx, stateHash, provider.ID, provider.Revision, "request-id"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.CreateSessionWithMetadata(ctx, userID, &organizationID, &provider.ID, []byte("pending-saml-session"), time.Now().Add(time.Hour), "saml", "browser", "127.0.0.1"); err != nil {
@@ -368,7 +368,7 @@ func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	promotionStateHash := []byte("pending-saml-promotion-state")
-	if err = db.CreateSAMLState(ctx, promotionStateHash, provider.ID, "promotion-request-id"); err != nil {
+	if err = db.CreateSAMLState(ctx, promotionStateHash, provider.ID, provider.Revision, "promotion-request-id"); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.PromoteSAMLCertificateRotationWithAudit(ctx, invalidPrincipal, provider.ID, "127.0.0.1:1234"); err == nil {

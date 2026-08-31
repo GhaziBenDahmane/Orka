@@ -72,7 +72,7 @@ func TestSAMLProviderStateReplayAndJITIsolation(t *testing.T) {
 	if err = db.CancelSAMLCertificateRotation(ctx, otherOrgID, provider.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant rotation cancellation error=%v, want not found", err)
 	}
-	if err = db.CreateSAMLState(ctx, []byte("rotation-state"), provider.ID, "rotation-request"); err != nil {
+	if err = db.CreateSAMLState(ctx, []byte("rotation-state"), provider.ID, provider.Revision, "rotation-request"); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.PromoteSAMLCertificateRotation(ctx, orgID, provider.ID); err != nil {
@@ -92,17 +92,20 @@ func TestSAMLProviderStateReplayAndJITIsolation(t *testing.T) {
 	}
 
 	state := []byte("opaque-state-hash")
-	if err = db.CreateSAMLState(ctx, state, provider.ID, "request-1"); err != nil {
+	if err = db.CreateSAMLState(ctx, state, provider.ID, provider.Revision, "request-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.ConsumeSAMLState(ctx, state, otherProvider.ID); !errors.Is(err, ErrNotFound) {
+	if _, _, err = db.ConsumeSAMLState(ctx, state, otherProvider.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-provider state consume error = %v, want not found", err)
 	}
-	requestID, err := db.ConsumeSAMLState(ctx, state, provider.ID)
+	requestID, revision, err := db.ConsumeSAMLState(ctx, state, provider.ID)
 	if err != nil || requestID != "request-1" {
 		t.Fatalf("consumed request = %q, err = %v", requestID, err)
 	}
-	if _, err = db.ConsumeSAMLState(ctx, state, provider.ID); !errors.Is(err, ErrNotFound) {
+	if revision != provider.Revision {
+		t.Fatalf("expected revision %d, got %d", provider.Revision, revision)
+	}
+	if _, _, err = db.ConsumeSAMLState(ctx, state, provider.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("replayed state error = %v, want not found", err)
 	}
 

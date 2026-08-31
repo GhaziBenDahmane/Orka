@@ -74,7 +74,7 @@ func setSSOProviderEnabledTx(ctx context.Context, tx pgx.Tx, organizationID, pro
 			return ErrSSOProviderRequired
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE `+table+` SET enabled=$3 WHERE id=$1 AND organization_id=$2`, providerID, organizationID, enabled); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE `+table+` SET enabled=$3,revision=CASE WHEN enabled<>$3 THEN revision+1 ELSE revision END WHERE id=$1 AND organization_id=$2`, providerID, organizationID, enabled); err != nil {
 		return err
 	}
 	if enabled != currentlyEnabled {

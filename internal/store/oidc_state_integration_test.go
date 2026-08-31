@@ -34,14 +34,17 @@ func TestOIDCStateCarriesNonceAndIsConsumedOnce(t *testing.T) {
 	}
 
 	hash := []byte("state digest")
-	if err = db.CreateOIDCState(ctx, hash, providerID, "pkce-verifier", "login-nonce"); err != nil {
+	if err = db.CreateOIDCState(ctx, hash, providerID, 1, "pkce-verifier", "login-nonce"); err != nil {
 		t.Fatal(err)
 	}
-	gotProviderID, verifier, nonce, err := db.ConsumeOIDCState(ctx, hash)
+	gotProviderID, revision, verifier, nonce, err := db.ConsumeOIDCState(ctx, hash)
 	if err != nil || gotProviderID != providerID || verifier != "pkce-verifier" || nonce != "login-nonce" {
 		t.Fatalf("consumed state provider=%s verifier=%q nonce=%q err=%v", gotProviderID, verifier, nonce, err)
 	}
-	if _, _, _, err = db.ConsumeOIDCState(ctx, hash); err != ErrNotFound {
+	if revision != 1 {
+		t.Fatalf("expected revision 1, got %d", revision)
+	}
+	if _, _, _, _, err = db.ConsumeOIDCState(ctx, hash); err != ErrNotFound {
 		t.Fatalf("second consumption error=%v, want ErrNotFound", err)
 	}
 }

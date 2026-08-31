@@ -319,6 +319,7 @@ type OIDCProvider struct {
 	Scopes                []string  `json:"scopes"`
 	DefaultRole           string    `json:"defaultRole"`
 	Enabled               bool      `json:"enabled"`
+	Revision              int64     `json:"revision"`
 }
 
 type SAMLProvider struct {
@@ -336,6 +337,7 @@ type SAMLProvider struct {
 	DefaultRole                 string     `json:"defaultRole"`
 	AllowIDPInitiated           bool       `json:"allowIdpInitiated"`
 	Enabled                     bool       `json:"enabled"`
+	Revision                    int64      `json:"revision"`
 	SPCertificateNotAfter       *time.Time `json:"spCertificateNotAfter,omitempty"`
 	IDPCertificateNotAfter      *time.Time `json:"idpCertificateNotAfter,omitempty"`
 	CertificateConfigurationOK  bool       `json:"certificateConfigurationOk"`
@@ -4188,7 +4190,7 @@ func createOIDCProvider(ctx context.Context, db interface {
 		p.DefaultRole = "developer"
 	}
 	p.Enabled = true
-	err := db.QueryRow(ctx, `INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.Enabled)
+	err := db.QueryRow(ctx, `INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING enabled,revision`, p.ID, p.OrganizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.Enabled, &p.Revision)
 	return p, err
 }
 
@@ -4228,7 +4230,7 @@ func (s *Store) UpdateOIDCProviderWithAudit(ctx context.Context, principal Princ
 }
 
 func updateOIDCProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, p OIDCProvider) (OIDCProvider, error) {
-	err := tx.QueryRow(ctx, `UPDATE oidc_providers SET name=$3,issuer=$4,client_id=$5,encrypted_client_secret=CASE WHEN $6='' THEN encrypted_client_secret ELSE $6 END,domains=$7,scopes=$8,default_role=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled`, p.ID, organizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled)
+	err := tx.QueryRow(ctx, `UPDATE oidc_providers SET name=$3,issuer=$4,client_id=$5,encrypted_client_secret=CASE WHEN $6='' THEN encrypted_client_secret ELSE $6 END,domains=$7,scopes=$8,default_role=$9,revision=revision+1 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled,revision`, p.ID, organizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled, &p.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OIDCProvider{}, ErrNotFound
 	}
@@ -4246,7 +4248,7 @@ func updateOIDCProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UU
 
 func (s *Store) GetOIDCProvider(ctx context.Context, id uuid.UUID) (OIDCProvider, error) {
 	var p OIDCProvider
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role,enabled FROM oidc_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.EncryptedClientSecret, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role,enabled,revision FROM oidc_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.EncryptedClientSecret, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled, &p.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OIDCProvider{}, ErrNotFound
 	}
@@ -4254,7 +4256,7 @@ func (s *Store) GetOIDCProvider(ctx context.Context, id uuid.UUID) (OIDCProvider
 }
 
 func (s *Store) ListOIDCProviders(ctx context.Context, organizationID uuid.UUID) ([]OIDCProvider, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled FROM oidc_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled,revision FROM oidc_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -4262,7 +4264,7 @@ func (s *Store) ListOIDCProviders(ctx context.Context, organizationID uuid.UUID)
 	items := []OIDCProvider{}
 	for rows.Next() {
 		var p OIDCProvider
-		if err := rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled); err != nil {
+		if err := rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled, &p.Revision); err != nil {
 			return nil, err
 		}
 		items = append(items, p)
@@ -4278,7 +4280,7 @@ func (s *Store) SetOIDCProviderEnabled(ctx context.Context, organizationID, id u
 }
 
 func (s *Store) DiscoverOIDC(ctx context.Context, domain string) ([]OIDCProvider, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled FROM oidc_providers WHERE enabled AND $1=ANY(domains) ORDER BY name`, strings.ToLower(domain))
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled,revision FROM oidc_providers WHERE enabled AND $1=ANY(domains) ORDER BY name`, strings.ToLower(domain))
 	if err != nil {
 		return nil, err
 	}
@@ -4286,7 +4288,7 @@ func (s *Store) DiscoverOIDC(ctx context.Context, domain string) ([]OIDCProvider
 	items := []OIDCProvider{}
 	for rows.Next() {
 		var p OIDCProvider
-		if err := rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled); err != nil {
+		if err := rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled, &p.Revision); err != nil {
 			return nil, err
 		}
 		items = append(items, p)
@@ -4294,27 +4296,28 @@ func (s *Store) DiscoverOIDC(ctx context.Context, domain string) ([]OIDCProvider
 	return items, rows.Err()
 }
 
-func (s *Store) CreateOIDCState(ctx context.Context, hash []byte, providerID uuid.UUID, verifier, nonce string) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO oidc_states(token_hash,provider_id,code_verifier,nonce,expires_at) VALUES($1,$2,$3,$4,now()+interval '10 minutes')`, hash, providerID, verifier, nonce)
+func (s *Store) CreateOIDCState(ctx context.Context, hash []byte, providerID uuid.UUID, providerRevision int64, verifier, nonce string) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO oidc_states(token_hash,provider_id,provider_revision,code_verifier,nonce,expires_at) VALUES($1,$2,$3,$4,$5,now()+interval '10 minutes')`, hash, providerID, providerRevision, verifier, nonce)
 	return err
 }
 
-func (s *Store) ConsumeOIDCState(ctx context.Context, hash []byte) (uuid.UUID, string, string, error) {
+func (s *Store) ConsumeOIDCState(ctx context.Context, hash []byte) (uuid.UUID, int64, string, string, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
-		return uuid.Nil, "", "", err
+		return uuid.Nil, 0, "", "", err
 	}
 	defer tx.Rollback(ctx)
 	var providerID uuid.UUID
+	var providerRevision int64
 	var verifier, nonce string
-	err = tx.QueryRow(ctx, `DELETE FROM oidc_states WHERE token_hash=$1 AND expires_at>now() RETURNING provider_id,code_verifier,nonce`, hash).Scan(&providerID, &verifier, &nonce)
+	err = tx.QueryRow(ctx, `DELETE FROM oidc_states WHERE token_hash=$1 AND expires_at>now() RETURNING provider_id,provider_revision,code_verifier,nonce`, hash).Scan(&providerID, &providerRevision, &verifier, &nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, "", "", ErrNotFound
+		return uuid.Nil, 0, "", "", ErrNotFound
 	}
 	if err != nil {
-		return uuid.Nil, "", "", err
+		return uuid.Nil, 0, "", "", err
 	}
-	return providerID, verifier, nonce, tx.Commit(ctx)
+	return providerID, providerRevision, verifier, nonce, tx.Commit(ctx)
 }
 
 func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email, name string) (uuid.UUID, error) {
@@ -4389,7 +4392,7 @@ func createSAMLProvider(ctx context.Context, db interface {
 		p.ID = uuid.New()
 	}
 	p.Enabled = true
-	err := db.QueryRow(ctx, `INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.IDPMetadata, p.CertificatePEM, p.EncryptedPrivateKey, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.Enabled)
+	err := db.QueryRow(ctx, `INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING enabled,revision`, p.ID, p.OrganizationID, p.Name, p.IDPMetadata, p.CertificatePEM, p.EncryptedPrivateKey, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.Enabled, &p.Revision)
 	return p, err
 }
 
@@ -4429,7 +4432,7 @@ func (s *Store) UpdateSAMLProviderWithAudit(ctx context.Context, principal Princ
 }
 
 func updateSAMLProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, p SAMLProvider) (SAMLProvider, error) {
-	err := tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err := tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9,revision=revision+1 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled,revision`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled, &p.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -4447,7 +4450,7 @@ func updateSAMLProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UU
 
 func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider, error) {
 	var p SAMLProvider
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,COALESCE(pending_certificate_pem,''),COALESCE(pending_encrypted_private_key,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.PendingCertificatePEM, &p.PendingEncryptedPrivateKey, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,COALESCE(pending_certificate_pem,''),COALESCE(pending_encrypted_private_key,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled,revision FROM saml_providers WHERE id=$1 AND enabled`, id).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.PendingCertificatePEM, &p.PendingEncryptedPrivateKey, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled, &p.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -4456,7 +4459,7 @@ func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider
 
 func (s *Store) GetOrganizationSAMLProvider(ctx context.Context, organizationID, id uuid.UUID) (SAMLProvider, error) {
 	var p SAMLProvider
-	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,COALESCE(pending_certificate_pem,''),COALESCE(pending_encrypted_private_key,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.PendingCertificatePEM, &p.PendingEncryptedPrivateKey, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,COALESCE(pending_certificate_pem,''),COALESCE(pending_encrypted_private_key,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled,revision FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.EncryptedPrivateKey, &p.PendingCertificatePEM, &p.PendingEncryptedPrivateKey, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled, &p.Revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -4464,7 +4467,7 @@ func (s *Store) GetOrganizationSAMLProvider(ctx context.Context, organizationID,
 }
 
 func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID) ([]SAMLProvider, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled,revision FROM saml_providers WHERE organization_id=$1 ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -4472,7 +4475,7 @@ func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID)
 	items := []SAMLProvider{}
 	for rows.Next() {
 		var p SAMLProvider
-		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
+		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled, &p.Revision); err != nil {
 			return nil, err
 		}
 		items = append(items, p)
@@ -4602,7 +4605,7 @@ func cancelSAMLCertificateRotationTx(ctx context.Context, tx pgx.Tx, organizatio
 }
 
 func (s *Store) DiscoverSAML(ctx context.Context, domain string) ([]SAMLProvider, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled FROM saml_providers WHERE enabled AND $1=ANY(domains) ORDER BY name`, strings.ToLower(domain))
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled,revision FROM saml_providers WHERE enabled AND $1=ANY(domains) ORDER BY name`, strings.ToLower(domain))
 	if err != nil {
 		return nil, err
 	}
@@ -4610,7 +4613,7 @@ func (s *Store) DiscoverSAML(ctx context.Context, domain string) ([]SAMLProvider
 	items := []SAMLProvider{}
 	for rows.Next() {
 		var p SAMLProvider
-		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled); err != nil {
+		if err = rows.Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled, &p.Revision); err != nil {
 			return nil, err
 		}
 		items = append(items, p)
@@ -4626,18 +4629,19 @@ func (s *Store) SetSAMLProviderEnabled(ctx context.Context, organizationID, id u
 	return s.setSSOProviderEnabled(ctx, organizationID, id, "saml", enabled)
 }
 
-func (s *Store) CreateSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID, requestID string) error {
-	_, err := s.Pool.Exec(ctx, `INSERT INTO saml_states(token_hash,provider_id,request_id,expires_at) VALUES($1,$2,$3,now()+interval '10 minutes')`, hash, providerID, requestID)
+func (s *Store) CreateSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID, providerRevision int64, requestID string) error {
+	_, err := s.Pool.Exec(ctx, `INSERT INTO saml_states(token_hash,provider_id,provider_revision,request_id,expires_at) VALUES($1,$2,$3,$4,now()+interval '10 minutes')`, hash, providerID, providerRevision, requestID)
 	return err
 }
 
-func (s *Store) ConsumeSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID) (string, error) {
+func (s *Store) ConsumeSAMLState(ctx context.Context, hash []byte, providerID uuid.UUID) (string, int64, error) {
 	var requestID string
-	err := s.Pool.QueryRow(ctx, `DELETE FROM saml_states WHERE token_hash=$1 AND provider_id=$2 AND expires_at>now() RETURNING request_id`, hash, providerID).Scan(&requestID)
+	var providerRevision int64
+	err := s.Pool.QueryRow(ctx, `DELETE FROM saml_states WHERE token_hash=$1 AND provider_id=$2 AND expires_at>now() RETURNING request_id,provider_revision`, hash, providerID).Scan(&requestID, &providerRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotFound
+		return "", 0, ErrNotFound
 	}
-	return requestID, err
+	return requestID, providerRevision, err
 }
 
 func (s *Store) RecordSAMLAssertion(ctx context.Context, providerID uuid.UUID, assertionID string, expiresAt time.Time) error {

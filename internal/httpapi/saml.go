@@ -414,7 +414,7 @@ func (s *Server) startSAML(w http.ResponseWriter, r *http.Request) {
 		s.writeInternalError(w, r, 500, "state_failed", "SAML login state could not be generated", err)
 		return
 	}
-	if err = s.Store.CreateSAMLState(r.Context(), cryptox.Digest(relayState), provider.ID, request.ID); err != nil {
+	if err = s.Store.CreateSAMLState(r.Context(), cryptox.Digest(relayState), provider.ID, provider.Revision, request.ID); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -460,16 +460,22 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestIDs := []string(nil)
+	providerRevision := provider.Revision
 	if relayState != "" {
 		if !s.consumeLoginStateCookie(w, r, "saml", relayState, http.SameSiteNoneMode) {
 			writeError(w, 400, "invalid_state", "RelayState is not bound to this browser")
 			return
 		}
-		requestID, stateErr := s.Store.ConsumeSAMLState(r.Context(), cryptox.Digest(relayState), providerID)
+		requestID, stateRevision, stateErr := s.Store.ConsumeSAMLState(r.Context(), cryptox.Digest(relayState), providerID)
 		if stateErr != nil {
 			writeError(w, 400, "invalid_state", "state is invalid or expired")
 			return
 		}
+		if provider.Revision != stateRevision {
+			writeError(w, 400, "invalid_state", "identity provider configuration changed during login")
+			return
+		}
+		providerRevision = stateRevision
 		requestIDs = []string{requestID}
 	} else if !provider.AllowIDPInitiated {
 		writeError(w, 400, "invalid_state", "RelayState is required")
@@ -527,7 +533,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, "saml", "", map[string]any{"providerId": provider.ID})
+	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, providerRevision, "saml", "", map[string]any{"providerId": provider.ID})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return

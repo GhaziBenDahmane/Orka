@@ -14,14 +14,14 @@ import (
 // durable transition. Unscoped local sessions are visible in every tenant the
 // identity can enter, so their login event is appended to each membership's
 // audit chain. Federated sessions and events remain bound to their IdP tenant.
-func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, organizationID, providerID *uuid.UUID, tokenHash []byte, expires time.Time, authMethod, expectedPasswordHash, userAgent, ipAddress, remoteAddr string, metadata any) (uuid.UUID, error) {
+func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, organizationID, providerID *uuid.UUID, providerRevision int64, tokenHash []byte, expires time.Time, authMethod, expectedPasswordHash, userAgent, ipAddress, remoteAddr string, metadata any) (uuid.UUID, error) {
 	switch authMethod {
 	case "local":
-		if expectedPasswordHash == "" || organizationID != nil || providerID != nil {
+		if expectedPasswordHash == "" || organizationID != nil || providerID != nil || providerRevision != 0 {
 			return uuid.Nil, ErrAuthenticationStateChanged
 		}
 	case "oidc", "saml":
-		if expectedPasswordHash != "" || organizationID == nil || providerID == nil {
+		if expectedPasswordHash != "" || organizationID == nil || providerID == nil || providerRevision < 1 {
 			return uuid.Nil, errors.New("federated session requires organization and provider binding")
 		}
 	default:
@@ -39,16 +39,16 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 	var oidcProviderID, samlProviderID *uuid.UUID
 	if authMethod == "oidc" {
 		oidcProviderID = providerID
-		var enabled bool
-		if err = tx.QueryRow(ctx, `SELECT enabled FROM oidc_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, *providerID, *organizationID).Scan(&enabled); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
+		var current bool
+		if err = tx.QueryRow(ctx, `SELECT true FROM oidc_providers WHERE id=$1 AND organization_id=$2 AND enabled AND revision=$3 FOR KEY SHARE`, *providerID, *organizationID, providerRevision).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrNotFound
 		} else if err != nil {
 			return uuid.Nil, err
 		}
 	} else if authMethod == "saml" {
 		samlProviderID = providerID
-		var enabled bool
-		if err = tx.QueryRow(ctx, `SELECT enabled FROM saml_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, *providerID, *organizationID).Scan(&enabled); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
+		var current bool
+		if err = tx.QueryRow(ctx, `SELECT true FROM saml_providers WHERE id=$1 AND organization_id=$2 AND enabled AND revision=$3 FOR KEY SHARE`, *providerID, *organizationID, providerRevision).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, ErrNotFound
 		} else if err != nil {
 			return uuid.Nil, err
