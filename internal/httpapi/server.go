@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	backupstore "github.com/bendahma/dokploy-go/internal/backup"
@@ -1122,11 +1123,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	name, err := normalizeResourceName(in.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_name", err.Error())
+		return
+	}
+	in.Name = name
 	if in.Slug == "" {
 		in.Slug = slugify(in.Name)
 	}
-	if !slugPattern.MatchString(in.Slug) || strings.TrimSpace(in.Name) == "" {
-		writeError(w, 400, "invalid_project", "valid name and slug required")
+	if !slugPattern.MatchString(in.Slug) {
+		writeError(w, 400, "invalid_project", "valid slug required")
 		return
 	}
 	p := principal(r)
@@ -1153,6 +1160,10 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		MinimumMemoryBytes int64             `json:"minimumMemoryBytes"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if in.Name, err = normalizeResourceName(in.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_name", err.Error())
 		return
 	}
 	if in.Slug == "" {
@@ -1251,6 +1262,10 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
+	if in.Name, err = normalizeResourceName(in.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_name", err.Error())
+		return
+	}
 	if err = validateServiceVariables(in.Environment); err != nil {
 		writeError(w, 400, "invalid_variables", err.Error())
 		return
@@ -1327,10 +1342,8 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	rawName := in.Name
-	in.Name = strings.TrimSpace(rawName)
-	if in.Name == "" || len(in.Name) > 120 || strings.IndexFunc(rawName, unicode.IsControl) >= 0 {
-		writeError(w, http.StatusBadRequest, "invalid_name", "database name must contain 1 to 120 bytes without control characters")
+	if in.Name, err = normalizeResourceName(in.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_name", err.Error())
 		return
 	}
 	if in.Slug == "" {
@@ -3392,6 +3405,14 @@ func slugify(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(value, "-")
 	return strings.Trim(value, "-")
+}
+
+func normalizeResourceName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" || len(name) > 120 || !utf8.ValidString(raw) || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
+		return "", errors.New("resource name must contain 1 to 120 bytes without control characters")
+	}
+	return name, nil
 }
 
 func canonicalEmail(raw string) (string, string, bool) {

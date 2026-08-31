@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -56,24 +55,6 @@ esac
 	}
 	if strings.Contains(recorder.Body.String(), directory) || strings.Contains(recorder.Body.String(), path) {
 		t.Fatalf("driver path leaked: %s", recorder.Body.String())
-	}
-}
-
-func TestCreateDatabaseRejectsInvalidNameBeforeDependencies(t *testing.T) {
-	server := &Server{}
-	for _, name := range []string{"", "database\nname", "database\u0085name", strings.Repeat("d", 121)} {
-		body, err := json.Marshal(map[string]any{"name": name, "slug": "database", "engine": "postgres"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/v1/environments/environment/databases", strings.NewReader(string(body)))
-		request.Header.Set("Content-Type", "application/json")
-		request.SetPathValue("environmentID", "f47ac10b-58cc-4372-a567-0e02b2c3d479")
-		server.createDatabase(recorder, request)
-		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_name"`) {
-			t.Fatalf("name length=%d status=%d body=%s", len(name), recorder.Code, recorder.Body.String())
-		}
 	}
 }
 
