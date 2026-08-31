@@ -79,20 +79,38 @@ quiesced=false
 helper_created=false
 secret_created=false
 remove_helper_resources() {
+  cleanup_failed=false
   if [ "$helper_created" = true ]; then
-    docker service rm "$helper_service" >/dev/null 2>&1 || true
-    helper_created=false
+    attempts=0
+    while ! docker service rm "$helper_service" >/dev/null 2>&1; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 3 ]; then
+        cleanup_failed=true
+        break
+      fi
+      sleep 1
+    done
+    [ "$cleanup_failed" = true ] || helper_created=false
   fi
   if [ "$secret_created" = true ]; then
     attempts=0
     while docker secret inspect "$job_secret" >/dev/null 2>&1; do
-      docker secret rm "$job_secret" >/dev/null 2>&1 && break
+      if docker secret rm "$job_secret" >/dev/null 2>&1; then
+        secret_created=false
+        break
+      fi
       attempts=$((attempts + 1))
-      [ "$attempts" -lt 30 ] || return 1
+      if [ "$attempts" -ge 30 ]; then
+        cleanup_failed=true
+        break
+      fi
       sleep 1
     done
-    secret_created=false
+    if ! docker secret inspect "$job_secret" >/dev/null 2>&1; then
+      secret_created=false
+    fi
   fi
+  [ "$cleanup_failed" = false ]
 }
 cleanup() {
   status=$?

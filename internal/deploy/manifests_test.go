@@ -406,6 +406,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		"ai-gateway-recovery-conformance.json ai-gateway-recovery-conformance.log",
 		`aiGatewayRecoveryConformanceEvidence:"ai-gateway-recovery-conformance.json"`,
 		`.candidateEncryptedRoundTripVerified and .candidateRestoredConfigurationVerified`,
+		`.helperCleanupRetried and .restoreHelperCleanupRetried and .permanentCleanupFailureRejected`,
 		`.postRestoreDualAuditorVerification == "production-required"`,
 	} {
 		if !strings.Contains(workflow, recoveryEvidenceContract) {

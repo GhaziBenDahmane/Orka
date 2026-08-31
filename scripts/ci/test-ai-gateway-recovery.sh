@@ -42,13 +42,25 @@ case "$1 $2" in
   "service ps")
     if [ "${ORKA_AI_RECOVERY_TEST_FAIL_TASK:-false}" = true ]; then printf '%s\n' 'Failed 1 second ago|sensitive failure'; else printf '%s\n' 'Complete 1 second ago|'; fi ;;
   "service logs") printf '%s\n' '{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","plaintextSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sizeBytes":123}' ;;
-  "service rm") ;;
+  "service rm")
+    if [ "${ORKA_AI_RECOVERY_TEST_SERVICE_RM_FAIL_ALWAYS:-false}" = true ]; then
+      exit 1
+    fi
+    if [ "${ORKA_AI_RECOVERY_TEST_SERVICE_RM_FAIL_ONCE:-false}" = true ] && [ ! -e "$ORKA_AI_RECOVERY_TEST_SERVICE_RM_STATE" ]; then
+      : >"$ORKA_AI_RECOVERY_TEST_SERVICE_RM_STATE"
+      exit 1
+    fi ;;
   "secret inspect") exit 0 ;;
   "secret rm") ;;
   *) exit 1 ;;
 esac
 MOCK
 chmod +x "$temporary/bin/docker"
+cat >"$temporary/bin/sleep" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+chmod +x "$temporary/bin/sleep"
 
 digest_a='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 digest_b='sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -121,6 +133,14 @@ if DOCKYARD_AI_RESTORE_CONFIRM='restore:dockyard-ai:9router' ORKA_AI_RECOVERY_TE
 fi
 grep -q 'scale dockyard-ai_9router to zero' "$temporary/err"
 
+: >"$ORKA_AI_RECOVERY_TEST_LOG"
+DOCKYARD_AI_RESTORE_CONFIRM='restore:dockyard-ai:9router' \
+  ORKA_AI_RECOVERY_TEST_REPLICAS=0 \
+  ORKA_AI_RECOVERY_TEST_SERVICE_RM_STATE="$temporary/restore-service-rm-state" \
+  ORKA_AI_RECOVERY_TEST_SERVICE_RM_FAIL_ONCE=true \
+  "$root/scripts/restore-ai-gateway.sh" "$bundle" >/dev/null
+test "$(grep -c '^service rm ' "$ORKA_AI_RECOVERY_TEST_LOG")" -eq 2
+
 printf '%s' 'different-encryption-key-material' >"$temporary/wrong-key"
 chmod 0600 "$temporary/wrong-key"
 if DOCKYARD_AI_RESTORE_CONFIRM='restore:dockyard-ai:9router' ORKA_AI_RECOVERY_TEST_REPLICAS=0 DOCKYARD_AI_BACKUP_KEY_FILE="$temporary/wrong-key" "$root/scripts/restore-ai-gateway.sh" "$bundle" >"$temporary/out" 2>"$temporary/err"; then
@@ -137,6 +157,22 @@ if DOCKYARD_AI_RESTORE_CONFIRM='restore:dockyard-ai:9router' ORKA_AI_RECOVERY_TE
   exit 1
 fi
 grep -q 'metadata signature is invalid' "$temporary/err"
+
+: >"$ORKA_AI_RECOVERY_TEST_LOG"
+export ORKA_AI_RECOVERY_TEST_SERVICE_RM_STATE="$temporary/service-rm-state"
+ORKA_AI_RECOVERY_TEST_SERVICE_RM_FAIL_ONCE=true "$root/scripts/backup-ai-gateway.sh" "$temporary/output/retry-cleanup" >/dev/null
+test -f "$temporary/output/retry-cleanup/manifest.json"
+test "$(grep -c '^service rm ' "$ORKA_AI_RECOVERY_TEST_LOG")" -eq 2
+
+: >"$ORKA_AI_RECOVERY_TEST_LOG"
+if ORKA_AI_RECOVERY_TEST_SERVICE_RM_FAIL_ALWAYS=true "$root/scripts/backup-ai-gateway.sh" "$temporary/output/failed-cleanup" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'AI gateway backup ignored permanent helper cleanup failure' >&2
+  exit 1
+fi
+test ! -e "$temporary/output/failed-cleanup"
+grep -q 'temporary Swarm resources could not be removed' "$temporary/err"
+test "$(grep -c '^service rm ' "$ORKA_AI_RECOVERY_TEST_LOG")" -eq 6
+grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
 
 (cd "$root" && go test -run '^(TestEncryptedBackupAndRestoreRoundTrip|TestLocalEncryptedBackupAndRestoreRoundTrip|TestRestoreRejectsTamperedCiphertextWithoutChangingVolume)$' -count=1 ./internal/volumeartifact) >"$temporary/volumeartifact.log"
 
@@ -161,6 +197,9 @@ jq -n \
     backupQuiesced:true,
     backupFailureResumedService:true,
     failedHelperTaskRejected:true,
+    helperCleanupRetried:true,
+    restoreHelperCleanupRetried:true,
+    permanentCleanupFailureRejected:true,
     restoreConfirmationRequired:true,
     runningServiceRestoreRejected:true,
     wrongEncryptionKeyRejected:true,
@@ -179,6 +218,7 @@ jq -e '
   .signedMetadataVerified and .tamperedMetadataRejected and
   .credentialsExcludedFromMetadata and .credentialsExcludedFromDockerArguments and
   .backupQuiesced and .backupFailureResumedService and .failedHelperTaskRejected and
+  .helperCleanupRetried and .restoreHelperCleanupRetried and .permanentCleanupFailureRejected and
   .restoreConfirmationRequired and .runningServiceRestoreRejected and
   .wrongEncryptionKeyRejected and .restoreLeftOffline and
   .backupMountReadOnly and .nodePinned and

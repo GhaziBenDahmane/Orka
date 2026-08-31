@@ -93,18 +93,43 @@ helper_service="orka-ai-restore-$$_$(date +%s)"
 job_secret="orka-ai-restore-job-$$_$(date +%s)"
 helper_created=false
 secret_created=false
-cleanup() {
-  status=$?
-  if [ "$helper_created" = true ]; then docker service rm "$helper_service" >/dev/null 2>&1 || true; fi
+remove_helper_resources() {
+  cleanup_failed=false
+  if [ "$helper_created" = true ]; then
+    attempts=0
+    while ! docker service rm "$helper_service" >/dev/null 2>&1; do
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge 3 ]; then
+        cleanup_failed=true
+        break
+      fi
+      sleep 1
+    done
+    [ "$cleanup_failed" = true ] || helper_created=false
+  fi
   if [ "$secret_created" = true ]; then
     attempts=0
     while docker secret inspect "$job_secret" >/dev/null 2>&1; do
-      docker secret rm "$job_secret" >/dev/null 2>&1 && break
+      if docker secret rm "$job_secret" >/dev/null 2>&1; then
+        secret_created=false
+        break
+      fi
       attempts=$((attempts + 1))
-      [ "$attempts" -lt 30 ] || { status=1; break; }
+      if [ "$attempts" -ge 30 ]; then
+        cleanup_failed=true
+        break
+      fi
       sleep 1
     done
+    if ! docker secret inspect "$job_secret" >/dev/null 2>&1; then
+      secret_created=false
+    fi
   fi
+  [ "$cleanup_failed" = false ]
+}
+cleanup() {
+  status=$?
+  remove_helper_resources || status=1
   rm -rf -- "$temporary"
   trap - EXIT HUP INT TERM
   exit "$status"
@@ -132,4 +157,5 @@ done
 result=$(docker service logs --raw "$helper_service" 2>/dev/null | jq -Rrc 'fromjson? | select((.sha256|type) == "string" and (.plaintextSha256|type) == "string" and (.sizeBytes|type) == "number")' | tail -n 1)
 printf '%s' "$result" | jq -e --arg sha256 "$artifact_sha256" --arg plaintext "$plaintext_sha256" --argjson size "$artifact_bytes" '.sha256 == $sha256 and .plaintextSha256 == $plaintext and .sizeBytes == $size' >/dev/null || fail "volume restore task returned no matching result"
 
+remove_helper_resources || fail "restore succeeded but temporary Swarm resources could not be removed"
 echo "9Router data restored and left offline; rerun scripts/install-ai-auditors.sh with the signed image set to resume and verify both auditors."

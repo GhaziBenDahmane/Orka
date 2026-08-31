@@ -323,8 +323,10 @@ scripts/backup-ai-gateway.sh /secure/backups/9router-2026-08-31
 The backup command verifies the deployed image and volume binding, stops the
 gateway, uploads the encrypted archive from its owning Swarm node, resumes the
 original replica count even after a failure, and writes only signed metadata
-locally. The presigned URL and encryption key exist only in a temporary Docker
-secret and are not included in the retained metadata.
+locally. Temporary helper-service removal is retried and a cleanup failure
+makes the operation fail rather than silently leaving privileged recovery
+resources behind. The presigned URL and encryption key exist only in a
+temporary Docker secret and are not included in the retained metadata.
 
 For a restore, generate a short-lived GET URL for the signed `objectRef`, scale
 the gateway to zero, and use the exact images and storage node recorded by the
