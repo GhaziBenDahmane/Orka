@@ -20,6 +20,7 @@ import (
 const manifestName = "catalog.manifest.json"
 const signatureName = "catalog.manifest.sig"
 const maxCatalogKeyBytes int64 = 64 << 10
+const maxCatalogSignatureBytes int64 = 1024
 
 type ManifestEntry struct {
 	Path   string `json:"path"`
@@ -44,16 +45,9 @@ func BuildCatalogManifest(root string) ([]byte, error) {
 		for _, name := range []string{"docker-compose.yml", "meta.json", "template.toml"} {
 			relative := filepath.ToSlash(filepath.Join("blueprints", entry.Name(), name))
 			path := filepath.Join(root, filepath.FromSlash(relative))
-			info, statErr := os.Lstat(path)
-			if statErr != nil {
-				return nil, fmt.Errorf("catalog file %s: %w", relative, statErr)
-			}
-			if !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("catalog file %s is not a regular file", relative)
-			}
-			contents, readErr := os.ReadFile(path)
+			contents, readErr := readRegularCatalogFile(path, maxCatalogFileBytes)
 			if readErr != nil {
-				return nil, readErr
+				return nil, fmt.Errorf("catalog file %s: %w", relative, readErr)
 			}
 			digest := sha256.Sum256(contents)
 			manifest.Files = append(manifest.Files, ManifestEntry{Path: relative, SHA256: hex.EncodeToString(digest[:])})
@@ -122,7 +116,7 @@ func stageCatalogArtifact(root, name string, contents []byte) (path string, err 
 }
 
 func VerifyCatalog(root string, publicKey ed25519.PublicKey) error {
-	recorded, err := os.ReadFile(filepath.Join(root, manifestName))
+	recorded, err := readRegularCatalogFile(filepath.Join(root, manifestName), maxCatalogFileBytes)
 	if err != nil {
 		return fmt.Errorf("read catalog manifest: %w", err)
 	}
@@ -138,7 +132,7 @@ func VerifyCatalog(root string, publicKey ed25519.PublicKey) error {
 	if string(expectedBytes) != string(canonical) {
 		return errors.New("catalog contents do not match manifest")
 	}
-	encoded, err := os.ReadFile(filepath.Join(root, signatureName))
+	encoded, err := readRegularCatalogFile(filepath.Join(root, signatureName), maxCatalogSignatureBytes)
 	if err != nil {
 		return fmt.Errorf("read catalog signature: %w", err)
 	}
@@ -250,6 +244,36 @@ func readCatalogKeyFile(path string, private bool) ([]byte, error) {
 	}
 	if int64(len(data)) > maxCatalogKeyBytes {
 		return nil, errors.New("catalog key size is outside the allowed range")
+	}
+	return data, nil
+}
+
+func readRegularCatalogFile(path string, maximum int64) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, errors.New("must be a regular file, not a symbolic link")
+	}
+	if before.Size() < 0 || before.Size() > maximum {
+		return nil, fmt.Errorf("size exceeds %d bytes", maximum)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		return nil, errors.New("file changed while it was opened")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maximum {
+		return nil, fmt.Errorf("size exceeds %d bytes", maximum)
 	}
 	return data, nil
 }

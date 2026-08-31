@@ -134,7 +134,9 @@ go run ./cmd/dockyard sign-template-catalog \
 Keep the private key offline. The signing command requires a bounded,
 mode-0600 regular file and refuses symlinks or trailing PEM data. Manifest and
 signature publication uses atomic replacement so catalog-controlled symlinks
-cannot redirect writes. Register only the public key with Dockyard.
+cannot redirect writes. Signing and verification also use bounded same-file
+reads for every catalog source, manifest, and signature. Register only the
+public key with Dockyard.
 
 API flow:
 

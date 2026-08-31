@@ -118,3 +118,56 @@ func TestSignCatalogAtomicallyReplacesOutputSymlinks(t *testing.T) {
 		t.Fatal("accepted inconsistent private key")
 	}
 }
+
+func TestCatalogSigningRejectsUnsafeInputFiles(t *testing.T) {
+	root := t.TempDir()
+	blueprint := filepath.Join(root, "blueprints", "demo")
+	if err := os.MkdirAll(blueprint, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"docker-compose.yml": "services:\n  app:\n    image: example:1\n",
+		"meta.json":          `{"id":"demo","name":"Demo","version":"1"}`,
+		"template.toml":      "[variables]\n",
+	} {
+		if err := os.WriteFile(filepath.Join(blueprint, name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publicKey, privateKey, err := GenerateCatalogKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = SignCatalog(root, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	manifestCopy := filepath.Join(t.TempDir(), "manifest.json")
+	manifest, err := os.ReadFile(filepath.Join(root, manifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(manifestCopy, manifest, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(root, manifestName)); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(manifestCopy, filepath.Join(root, manifestName)); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyCatalog(root, publicKey); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("manifest symlink error=%v", err)
+	}
+	if err = os.Remove(filepath.Join(root, manifestName)); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, manifestName), manifest, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Truncate(filepath.Join(blueprint, "docker-compose.yml"), maxCatalogFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = BuildCatalogManifest(root); err == nil || !strings.Contains(err.Error(), "size exceeds") {
+		t.Fatalf("oversized catalog source error=%v", err)
+	}
+}
