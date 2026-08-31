@@ -142,7 +142,8 @@ links for every item below.
   durable jobs through signed webhook and Slack-compatible delivery,
   PagerDuty, Opsgenie, and authenticated implicit-TLS SMTP. It proves retry
   recovery, delivery/job completion, tenant isolation, event deduplication,
-  and encrypted-at-rest provider material. The release attaches
+  encrypted-at-rest provider material, and offline recovery notifications with
+  service, volume, mode, and target-node context. The release attaches
   `notification-conformance.json`; real provider credentials remain a staging
   requirement.
 - `make test-migration-conformance` imports a representative Dokploy fixture

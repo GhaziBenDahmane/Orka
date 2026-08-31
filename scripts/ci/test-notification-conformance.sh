@@ -60,7 +60,7 @@ jq -e '
   .slackCompatible and .pagerDuty and .opsgenie and
   .authenticatedImplicitTLSSMTP and .retryRecovered and
   .tenantIsolation and .deduplicated and .secretsEncrypted and
-  .deliveries == 5 and .jobAttempts == 6 and
+  .offlineRecoveryContext and .deliveries == 6 and .jobAttempts == 7 and
   (.sourceCommit | test("^[a-f0-9]{40}$"))
 ' "$evidence_file" >/dev/null
 

@@ -25,7 +25,8 @@ jobs:
             .durableWorkerPath and .signedWebhook and .slackCompatible and
             .pagerDuty and .opsgenie and .authenticatedImplicitTLSSMTP and
             .retryRecovered and .tenantIsolation and .deduplicated and
-            .secretsEncrypted and .deliveries == 5 and .jobAttempts == 6
+            .secretsEncrypted and .offlineRecoveryContext and
+            .deliveries == 6 and .jobAttempts == 7
           ' notification-conformance.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

@@ -99,6 +99,7 @@ func TestNotificationProviderConformance(t *testing.T) {
 	smtpEndpoint, smtpTLS, smtpMessages := startNotificationSMTPServer(t)
 	organizationID, otherOrganizationID := uuid.New(), uuid.New()
 	projectID, environmentID, serviceID, deploymentID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	backupDestinationID, volumeBackupID, volumeRestoreID := uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -106,8 +107,11 @@ func TestNotificationProviderConformance(t *testing.T) {
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Notifications',$2),($3,'Other',$4)`, []any{organizationID, "notifications-" + organizationID.String(), otherOrganizationID, "other-" + otherOrganizationID.String()}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
-		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'App','app',$3,'services: {}')`, []any{serviceID, environmentID, "notify-" + serviceID.String()}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml) VALUES($1,$2,'App','app',$3,'nodenew','services: {}')`, []any{serviceID, environmentID, "notify-" + serviceID.String()}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','failed','manual')`, []any{deploymentID, serviceID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'Recovery S3','https://s3.example.test','backups','encrypted')`, []any{backupDestinationID, organizationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'uploads','nodeold',$3,true,'succeeded','backup.enc',42,$4,$5,'encrypted',now())`, []any{volumeBackupID, serviceID, backupDestinationID, strings.Repeat("a", 64), strings.Repeat("b", 64)}},
+		{`INSERT INTO volume_restores(id,volume_backup_id,target_storage_node_id,offline,status,error,started_at,finished_at) VALUES($1,$2,'nodenew',true,'failed','stored restore failure',now()-interval '1 minute',now())`, []any{volumeRestoreID, volumeBackupID}},
 	} {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)
@@ -133,7 +137,11 @@ func TestNotificationProviderConformance(t *testing.T) {
 		if encryptErr != nil {
 			t.Fatal(encryptErr)
 		}
-		_, err = db.CreateNotificationEndpoint(ctx, store.NotificationEndpoint{ID: endpointID, OrganizationID: organizationID, Name: provider.name, Kind: provider.kind, EncryptedURL: encryptedURL, EncryptedSecret: encryptedSecret, Events: []string{"deployment.failed"}, Enabled: true})
+		events := []string{"deployment.failed"}
+		if provider.name == "retry" {
+			events = append(events, "restore.failed")
+		}
+		_, err = db.CreateNotificationEndpoint(ctx, store.NotificationEndpoint{ID: endpointID, OrganizationID: organizationID, Name: provider.name, Kind: provider.kind, EncryptedURL: encryptedURL, EncryptedSecret: encryptedSecret, Events: events, Enabled: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,8 +162,24 @@ func TestNotificationProviderConformance(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	volumeRestorePayload, _ := json.Marshal(map[string]string{"restoreId": volumeRestoreID.String()})
+	if err = db.QueueFailureNotifications(ctx, "restore.volume", volumeRestorePayload, fmt.Errorf("offline recovery failed with private value")); err != nil {
+		t.Fatal(err)
+	}
+	var recoveryPayload []byte
+	if err = db.Pool.QueryRow(ctx, `SELECT delivery.payload FROM notification_deliveries delivery JOIN notification_endpoints endpoint ON endpoint.id=delivery.endpoint_id WHERE endpoint.organization_id=$1 AND delivery.event_type='restore.failed'`, organizationID).Scan(&recoveryPayload); err != nil {
+		t.Fatal(err)
+	}
+	var recovery map[string]any
+	if err = json.Unmarshal(recoveryPayload, &recovery); err != nil {
+		t.Fatal(err)
+	}
+	offlineRecoveryContext := recovery["mode"] == "offline" && recovery["serviceId"] == serviceID.String() && recovery["volumeName"] == "uploads" && recovery["targetStorageNodeId"] == "nodenew"
+	if !offlineRecoveryContext {
+		t.Fatalf("offline recovery notification payload=%s", recoveryPayload)
+	}
 	worker := &Worker{Store: db, Box: box, ID: "notification-conformance", NotificationClient: httpServer.Client(), notificationTLS: smtpTLS}
-	for processed := 0; processed < 6; processed++ {
+	for processed := 0; processed < 7; processed++ {
 		claimed, claimErr := worker.claim(ctx)
 		if claimErr != nil {
 			t.Fatalf("claim notification job %d: %v", processed+1, claimErr)
@@ -188,10 +212,10 @@ func TestNotificationProviderConformance(t *testing.T) {
 	}
 	requestErrors := append([]string(nil), requests.errors...)
 	requests.Unlock()
-	if deliveries != 5 || succeeded != 5 || jobs != 5 || succeededJobs != 5 || attempts != 6 || otherDeliveries != 0 || len(requestErrors) != 0 {
+	if deliveries != 6 || succeeded != 6 || jobs != 6 || succeededJobs != 6 || attempts != 7 || otherDeliveries != 0 || len(requestErrors) != 0 {
 		t.Fatalf("deliveries=%d succeeded=%d jobs=%d succeeded_jobs=%d attempts=%d other=%d provider_errors=%v", deliveries, succeeded, jobs, succeededJobs, attempts, otherDeliveries, requestErrors)
 	}
-	if httpAttempts["retry"] != 2 || httpAttempts["slack"] != 1 || httpAttempts["pagerduty"] != 1 || httpAttempts["opsgenie"] != 1 {
+	if httpAttempts["retry"] != 3 || httpAttempts["slack"] != 1 || httpAttempts["pagerduty"] != 1 || httpAttempts["opsgenie"] != 1 {
 		t.Fatalf("unexpected HTTP attempts: %#v", httpAttempts)
 	}
 	message := <-smtpMessages
@@ -203,7 +227,8 @@ func TestNotificationProviderConformance(t *testing.T) {
 		"slackCompatible": true, "pagerDuty": true, "opsgenie": true,
 		"authenticatedImplicitTLSSMTP": true, "retryRecovered": true,
 		"tenantIsolation": true, "deduplicated": true, "secretsEncrypted": true,
-		"deliveries": deliveries, "jobAttempts": attempts,
+		"offlineRecoveryContext": offlineRecoveryContext,
+		"deliveries":             deliveries, "jobAttempts": attempts,
 	})
 	fmt.Printf("NOTIFICATION_EVIDENCE %s\n", evidence)
 }
