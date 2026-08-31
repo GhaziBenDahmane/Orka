@@ -186,6 +186,21 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req, _ = http.NewRequest(http.MethodDelete, server.URL+"/v1/source-credentials/"+gitCredentialID.String(), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"resource_busy"`)) {
+		t.Fatalf("active-template-sync deletion status=%d body=%s", response.StatusCode, data)
+	}
+	if _, err = db.GetSourceCredential(ctx, orgID, gitCredentialID); err != nil {
+		t.Fatalf("blocked deletion removed source credential: %v", err)
+	}
 	gitRotateBody := []byte(`{"secret":"new-git-token"}`)
 	req, _ = http.NewRequest(http.MethodPut, server.URL+"/v1/source-credentials/"+gitCredentialID.String(), bytes.NewReader(gitRotateBody))
 	req.Header.Set("Authorization", "Bearer "+token)

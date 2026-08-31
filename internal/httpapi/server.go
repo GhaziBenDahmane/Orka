@@ -2761,6 +2761,10 @@ func (s *Server) deleteSourceCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	p := principal(r)
 	if err = s.Store.DeleteSourceCredential(r.Context(), p.OrganizationID, id); err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "resource_busy", "wait for template synchronization to finish before deleting this credential")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
