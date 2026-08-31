@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -236,13 +237,14 @@ echo '{"protocolVersion":1,"description":{"name":"environment-test","defaultVers
 func TestExternalDriverBoundsInheritedOutputDescriptors(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "forking-driver")
-	script := `#!/bin/sh
+	pidFile := filepath.Join(directory, "child.pid")
+	script := strings.Replace(`#!/bin/sh
 request=$(cat)
 case "$request" in
   *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"forking-test","defaultVersion":"1","capabilities":[]}}' ;;
-  *) sleep 5 & echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
+  *) sleep 30 & child=$!; printf '%s' "$child" >'__PID_FILE__'; echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
 esac
-`
+`, "__PID_FILE__", pidFile, 1)
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -258,6 +260,30 @@ esac
 	if err == nil || !strings.Contains(err.Error(), "failed during render") {
 		t.Fatalf("forking driver error=%v", err)
 	}
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(pidData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for externalDriverProcessRunning(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if externalDriverProcessRunning(pid) {
+		t.Fatalf("driver descendant %d survived process-group cleanup", pid)
+	}
+}
+
+func externalDriverProcessRunning(pid int) bool {
+	status, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if os.IsNotExist(err) {
+		return false
+	}
+	fields := strings.Fields(string(status))
+	return err == nil && len(fields) > 2 && fields[2] != "Z" && fields[2] != "X"
 }
 
 func TestExternalDriverRejectsBackupExtensionWithoutCapability(t *testing.T) {

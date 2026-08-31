@@ -208,6 +208,7 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 	defer cancel()
 	command := exec.CommandContext(ctx, "/proc/self/fd/3")
 	command.ExtraFiles = []*os.File{executable}
+	configureExternalDriverCommand(command)
 	// A faulty driver may fork a child that inherits stdout or stderr. Bound
 	// the post-exit pipe drain so that such a child cannot hold a controller
 	// worker indefinitely after the driver exits or its context is cancelled.
@@ -220,10 +221,12 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = 4<<20, 64<<10
 	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
+	runErr := command.Run()
+	cleanupErr := terminateExternalDriverProcessGroup(command)
+	if runErr != nil || cleanupErr != nil {
 		// Requests can contain plaintext credentials and render inputs. Never
 		// propagate extension-controlled stderr into API, job, or audit errors.
-		return databaseplugin.Response{}, fmt.Errorf("database driver %s failed during %s: %w", driverLabel(d), operation, err)
+		return databaseplugin.Response{}, fmt.Errorf("database driver %s failed during %s: %w", driverLabel(d), operation, errors.Join(runErr, cleanupErr))
 	}
 	var response databaseplugin.Response
 	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
