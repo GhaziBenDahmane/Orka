@@ -32,6 +32,8 @@ initialized_swarm=false
 created_network=false
 stacks=()
 products='[]'
+state_marker='dockyard-template-smoke-v1'
+barktrace_sqlite_file_id=''
 
 wait_for_deployment() {
   local deployment_id="$1"
@@ -70,8 +72,42 @@ service_container() {
   docker ps --filter "label=com.docker.swarm.service.name=$service_name" --filter status=running --format '{{.ID}}' | head -1
 }
 
-probe_product() {
-  local template_key="$1" service_name="$2" stack="$3" container_id postgres_id migration_count
+seed_product_state() {
+  local template_key="$1" service_name="$2" stack="$3" container_id postgres_id
+  container_id="$(service_container "$service_name")"
+  test -n "$container_id"
+  case "$template_key" in
+    9router)
+      ;;
+    postgres)
+      docker exec --env PGPASSWORD=template-smoke-postgres "$container_id" \
+        psql --username smoke --dbname smoke --set ON_ERROR_STOP=1 \
+        --command 'CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id integer PRIMARY KEY, value text NOT NULL)' \
+        --command "INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'$state_marker') ON CONFLICT(id) DO UPDATE SET value=excluded.value" >/dev/null
+      ;;
+    redis)
+      docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis SET dockyard:template:smoke "$state_marker" >/dev/null
+      ;;
+    barktrace-sqlite)
+      docker exec "$container_id" /app/barktrace healthcheck
+      docker run --rm --env STATE_MARKER="$state_marker" --volume "${stack}_barktrace-data:/data" alpine:3.22 \
+        sh -eu -c 'printf "%s\n" "$STATE_MARKER" > /data/.dockyard-template-smoke'
+      barktrace_sqlite_file_id="$(docker run --rm --volume "${stack}_barktrace-data:/data:ro" alpine:3.22 stat -c '%d:%i' /data/barktrace.db)"
+      test -n "$barktrace_sqlite_file_id"
+      ;;
+    barktrace-postgres)
+      postgres_id="$(service_container "${stack}_postgres")"
+      test -n "$postgres_id"
+      docker exec --env PGPASSWORD=template-smoke-barktrace "$postgres_id" \
+        psql --username barktrace --dbname barktrace --set ON_ERROR_STOP=1 \
+        --command 'CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id integer PRIMARY KEY, value text NOT NULL)' \
+        --command "INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'$state_marker') ON CONFLICT(id) DO UPDATE SET value=excluded.value" >/dev/null
+      ;;
+  esac
+}
+
+verify_product_state() {
+  local template_key="$1" service_name="$2" stack="$3" container_id postgres_id migration_count value
   container_id="$(service_container "$service_name")"
   test -n "$container_id"
   case "$template_key" in
@@ -80,26 +116,26 @@ probe_product() {
       # setup is intentionally out of scope for this deployment smoke test.
       ;;
     postgres)
-      docker exec --env PGPASSWORD=template-smoke-postgres "$container_id" \
-        psql --username smoke --dbname smoke --set ON_ERROR_STOP=1 \
-        --command 'CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id integer PRIMARY KEY, value text NOT NULL)' \
-        --command "INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'persisted') ON CONFLICT(id) DO UPDATE SET value=excluded.value" >/dev/null
-      test "$(docker exec --env PGPASSWORD=template-smoke-postgres "$container_id" psql --username smoke --dbname smoke --tuples-only --no-align --command 'SELECT value FROM dockyard_template_smoke WHERE id=1')" = persisted
+      value="$(docker exec --env PGPASSWORD=template-smoke-postgres "$container_id" psql --username smoke --dbname smoke --tuples-only --no-align --set ON_ERROR_STOP=1 --command 'SELECT value FROM dockyard_template_smoke WHERE id=1')"
+      test "$value" = "$state_marker"
       ;;
     redis)
-      docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis SET dockyard:template:smoke persisted >/dev/null
-      test "$(docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis GET dockyard:template:smoke)" = persisted
+      test "$(docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis GET dockyard:template:smoke)" = "$state_marker"
       ;;
     barktrace-sqlite)
       docker exec "$container_id" /app/barktrace healthcheck
-      docker run --rm --volume "${stack}_barktrace-data:/data:ro" alpine:3.22 test -s /data/barktrace.db
+      docker run --rm --env STATE_MARKER="$state_marker" --volume "${stack}_barktrace-data:/data:ro" alpine:3.22 \
+        sh -eu -c 'test -s /data/barktrace.db && test "$(cat /data/.dockyard-template-smoke)" = "$STATE_MARKER"'
+      test "$(docker run --rm --volume "${stack}_barktrace-data:/data:ro" alpine:3.22 stat -c '%d:%i' /data/barktrace.db)" = "$barktrace_sqlite_file_id"
       ;;
     barktrace-postgres)
       docker exec "$container_id" /app/barktrace healthcheck
       postgres_id="$(service_container "${stack}_postgres")"
       test -n "$postgres_id"
-      migration_count="$(docker exec --env PGPASSWORD=template-smoke-barktrace "$postgres_id" psql --username barktrace --dbname barktrace --tuples-only --no-align --command 'SELECT count(*) FROM schema_migrations')"
+      migration_count="$(docker exec --env PGPASSWORD=template-smoke-barktrace "$postgres_id" psql --username barktrace --dbname barktrace --tuples-only --no-align --set ON_ERROR_STOP=1 --command 'SELECT count(*) FROM schema_migrations')"
       test "$migration_count" -gt 0
+      value="$(docker exec --env PGPASSWORD=template-smoke-barktrace "$postgres_id" psql --username barktrace --dbname barktrace --tuples-only --no-align --set ON_ERROR_STOP=1 --command 'SELECT value FROM dockyard_template_smoke WHERE id=1')"
+      test "$value" = "$state_marker"
       ;;
   esac
 }
@@ -170,11 +206,17 @@ for template_key in "${template_keys[@]}"; do
     service_name="${stack}_barktrace"
   fi
   wait_for_service "$service_name"
-  probe_product "$template_key" "$service_name" "$stack"
+  seed_product_state "$template_key" "$service_name" "$stack"
+  verify_product_state "$template_key" "$service_name" "$stack"
 
   docker service update --force --detach=false "$service_name" >/dev/null
   wait_for_service "$service_name"
-  probe_product "$template_key" "$service_name" "$stack"
+  verify_product_state "$template_key" "$service_name" "$stack"
+  if [[ "$template_key" == barktrace-postgres ]]; then
+    docker service update --force --detach=false "${stack}_postgres" >/dev/null
+    wait_for_service "${stack}_postgres"
+    verify_product_state "$template_key" "$service_name" "$stack"
+  fi
   resolved_image="$(docker service inspect "$service_name" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
   "$root_dir/scripts/ci/validate-image-reference.sh" "$resolved_image"
   if [[ "$template_key" == barktrace-* ]]; then
@@ -183,19 +225,31 @@ for template_key in "${template_keys[@]}"; do
   dependency_images='[]'
   data_verified=true
   data_verification_applicable=true
+  state_seeded_before_restart=true
+  post_restart_read_only=true
+  dependency_restart_verified=false
+  sqlite_file_identity_verified=false
   if [[ "$template_key" == 9router ]]; then
     headroom_image="$(docker service inspect "${stack}_headroom" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
     "$root_dir/scripts/ci/validate-image-reference.sh" "$headroom_image"
     dependency_images="$(jq -cn --arg image "$headroom_image" '[{service:"headroom",image:$image}]')"
     data_verified=false
     data_verification_applicable=false
+    state_seeded_before_restart=false
+    post_restart_read_only=false
+  elif [[ "$template_key" == barktrace-postgres ]]; then
+    dependency_restart_verified=true
+  elif [[ "$template_key" == barktrace-sqlite ]]; then
+    sqlite_file_identity_verified=true
   fi
   products="$(jq -c \
     --arg template "$template_key" --arg templateVersion "$template_version" \
     --arg deploymentId "$deployment_id" --arg service "$service_name" --arg image "$resolved_image" \
     --argjson dependencyImages "$dependency_images" --argjson dataVerified "$data_verified" \
     --argjson dataVerificationApplicable "$data_verification_applicable" \
-    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dependencyImages:$dependencyImages,deploymentVerified:true,dataVerified:$dataVerified,dataVerificationApplicable:$dataVerificationApplicable,restartVerified:true}]' \
+    --argjson stateSeededBeforeRestart "$state_seeded_before_restart" --argjson postRestartReadOnly "$post_restart_read_only" \
+    --argjson dependencyRestartVerified "$dependency_restart_verified" --argjson sqliteFileIdentityVerified "$sqlite_file_identity_verified" \
+    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dependencyImages:$dependencyImages,deploymentVerified:true,dataVerified:$dataVerified,dataVerificationApplicable:$dataVerificationApplicable,stateSeededBeforeRestart:$stateSeededBeforeRestart,postRestartReadOnly:$postRestartReadOnly,restartVerified:true,dependencyRestartVerified:$dependencyRestartVerified,sqliteFileIdentityVerified:$sqliteFileIdentityVerified}]' \
     <<<"$products")"
 done
 
@@ -209,6 +263,9 @@ jq -e '
   ([.products[].template] | sort == ($expected | sort)) and
   all(.products[]; .deploymentVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and
   all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and
+  all(.products[]; if .dataVerificationApplicable then .stateSeededBeforeRestart and .postRestartReadOnly else true end) and
+  (.products[] | select(.template == "barktrace-postgres") | .dependencyRestartVerified) and
+  (.products[] | select(.template == "barktrace-sqlite") | .sqliteFileIdentityVerified) and
   all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
   all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
 ' --arg version "$barktrace_version" --argjson expected "$(printf '%s\n' "${template_keys[@]}" | jq -R . | jq -s .)" "$evidence_file" >/dev/null

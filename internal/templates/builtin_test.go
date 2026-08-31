@@ -2,6 +2,7 @@ package templates
 
 import (
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,62 @@ func TestBuiltinCatalogIsSwarmSafe(t *testing.T) {
 	}
 	if report.Imported < 4 || len(report.Failed) > 0 {
 		t.Fatalf("report=%#v", report)
+	}
+}
+
+func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "ci", "smoke-templates.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(raw)
+	verifyStart := strings.Index(script, "verify_product_state() {")
+	if verifyStart < 0 {
+		t.Fatal("template smoke state verifier function is missing")
+	}
+	verifyEnd := strings.Index(script[verifyStart:], "\n}\n\ncleanup()")
+	if verifyEnd < 0 {
+		t.Fatal("template smoke state verifier function is missing")
+	}
+	verifyBody := script[verifyStart : verifyStart+verifyEnd]
+	for _, mutation := range []string{"INSERT INTO dockyard_template_smoke", " SET dockyard:template:smoke ", "> /data/.dockyard-template-smoke"} {
+		if strings.Contains(verifyBody, mutation) {
+			t.Fatalf("post-restart verifier mutates persisted state with %q", mutation)
+		}
+	}
+	loopStart := strings.Index(script, `for template_key in "${template_keys[@]}"; do`)
+	if loopStart < 0 {
+		t.Fatal("template smoke deployment loop is missing")
+	}
+	loop := script[loopStart:]
+	seed := strings.Index(loop, `seed_product_state "$template_key"`)
+	force := strings.Index(loop, `docker service update --force`)
+	verifyAfterForce := -1
+	if force >= 0 {
+		verifyAfterForce = strings.Index(loop[force:], `verify_product_state "$template_key"`)
+	}
+	if seed < 0 || force < 0 || seed > force || verifyAfterForce < 0 {
+		t.Fatal("template smoke must seed before and verify without mutation after forced replacement")
+	}
+	if !strings.Contains(loop, `docker service update --force --detach=false "${stack}_postgres"`) {
+		t.Fatal("BarkTrace PostgreSQL smoke must replace its stateful database service")
+	}
+	if !strings.Contains(verifyBody, `stat -c '%d:%i' /data/barktrace.db`) {
+		t.Fatal("BarkTrace SQLite smoke must verify the original database file survives replacement")
+	}
+	for _, evidence := range []string{"stateSeededBeforeRestart", "postRestartReadOnly", "dependencyRestartVerified", "sqliteFileIdentityVerified"} {
+		if !strings.Contains(loop, evidence) {
+			t.Fatalf("template conformance evidence is missing %s", evidence)
+		}
+	}
+	releaseWorkflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []string{"stateSeededBeforeRestart", "postRestartReadOnly", "dependencyRestartVerified", "sqliteFileIdentityVerified"} {
+		if !strings.Contains(string(releaseWorkflow), evidence) {
+			t.Fatalf("release promotion does not require template evidence field %s", evidence)
+		}
 	}
 }
 

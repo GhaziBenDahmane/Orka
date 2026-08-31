@@ -52,7 +52,10 @@ links for every item below.
   replica convergence without requiring provider configuration or testing its
   product behavior. The data services also accept authenticated
   application-level writes and reads; the BarkTrace checks verify its SQLite
-  file or PostgreSQL migration state survives replacement. CI publishes
+  file identity or PostgreSQL migration and marker state survives replacement.
+  Post-replacement assertions are read-only and cannot recreate missing test
+  data; the BarkTrace PostgreSQL variant replaces both its application and
+  database services. CI publishes
   `template-conformance.json` with template versions and Swarm-resolved image
   digests; both BarkTrace variants must resolve from the released
   `ghcr.io/barktrace/bark:0.31.0` tag.
