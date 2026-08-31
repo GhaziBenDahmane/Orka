@@ -4450,26 +4450,36 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 	} else if revision != p.Revision {
 		return uuid.Nil, ErrAuthenticationStateChanged
 	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "oidc:"+p.ID.String()+":"+subject); err != nil {
+		return uuid.Nil, err
+	}
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
 		return uuid.Nil, err
 	}
 	var userID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT user_id FROM external_identities WHERE provider_id=$1 AND subject=$2`, p.ID, subject).Scan(&userID)
+	var userEnabled bool
+	err = tx.QueryRow(ctx, `SELECT identity.user_id,u.disabled_at IS NULL FROM external_identities identity JOIN users u ON u.id=identity.user_id WHERE identity.provider_id=$1 AND identity.subject=$2`, p.ID, subject).Scan(&userID, &userEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, email).Scan(&userID)
+		err = tx.QueryRow(ctx, `SELECT id,disabled_at IS NULL FROM users WHERE email=$1`, email).Scan(&userID, &userEnabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			userID = uuid.New()
 			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!oidc:"+uuid.NewString(), name)
+			userEnabled = true
 		}
 		if err != nil {
 			return uuid.Nil, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO external_identities(provider_id,subject,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.ID, subject, userID)
+		if !userEnabled {
+			return uuid.Nil, ErrNotFound
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO external_identities(provider_id,subject,user_id) VALUES($1,$2,$3)`, p.ID, subject, userID)
 		if err != nil {
 			return uuid.Nil, err
 		}
 	} else if err != nil {
 		return uuid.Nil, err
+	} else if !userEnabled {
+		return uuid.Nil, ErrNotFound
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.OrganizationID, userID, p.DefaultRole)
 	if err != nil {
@@ -4798,26 +4808,36 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 	} else if revision != p.Revision {
 		return uuid.Nil, ErrAuthenticationStateChanged
 	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "saml:"+p.ID.String()+":"+subject); err != nil {
+		return uuid.Nil, err
+	}
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
 		return uuid.Nil, err
 	}
 	var userID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT user_id FROM saml_external_identities WHERE provider_id=$1 AND subject=$2`, p.ID, subject).Scan(&userID)
+	var userEnabled bool
+	err = tx.QueryRow(ctx, `SELECT identity.user_id,u.disabled_at IS NULL FROM saml_external_identities identity JOIN users u ON u.id=identity.user_id WHERE identity.provider_id=$1 AND identity.subject=$2`, p.ID, subject).Scan(&userID, &userEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id FROM users WHERE email=$1`, email).Scan(&userID)
+		err = tx.QueryRow(ctx, `SELECT id,disabled_at IS NULL FROM users WHERE email=$1`, email).Scan(&userID, &userEnabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			userID = uuid.New()
 			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!saml:"+uuid.NewString(), name)
+			userEnabled = true
 		}
 		if err != nil {
 			return uuid.Nil, err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO saml_external_identities(provider_id,subject,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.ID, subject, userID)
+		if !userEnabled {
+			return uuid.Nil, ErrNotFound
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO saml_external_identities(provider_id,subject,user_id) VALUES($1,$2,$3)`, p.ID, subject, userID)
 		if err != nil {
 			return uuid.Nil, err
 		}
 	} else if err != nil {
 		return uuid.Nil, err
+	} else if !userEnabled {
+		return uuid.Nil, ErrNotFound
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.OrganizationID, userID, p.DefaultRole)
 	if err != nil {

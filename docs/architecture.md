@@ -247,6 +247,11 @@ request must also retain the exact digest. The resolved reference is validated
 again at the container execution boundary and recorded with backup, restore,
 and migration results.
 
+OIDC and SAML just-in-time provisioning serializes both the provider subject
+and canonical email before linking a global user. A concurrent claim cannot
+create a second membership for an identity already being linked, and disabled
+users or disabled identity mappings fail before membership or session creation.
+
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a
 partial unique index permits only one running operation per database, including

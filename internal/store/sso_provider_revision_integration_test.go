@@ -106,6 +106,74 @@ func TestSSOProviderRevisionsFenceStaleProvisioningAndSessions(t *testing.T) {
 	}, 2)
 }
 
+func TestFederatedJITProvisioningSerializesSubjectsAndRejectsDisabledUsers(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'JIT fencing',$2)`, organizationID, "jit-fencing-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE email LIKE $1`, "%-"+organizationID.String()+"@example.test")
+	})
+	oidc, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: organizationID, Name: "OIDC", Issuer: "https://oidc.example.test", ClientID: "client", EncryptedClientSecret: "encrypted", Domains: []string{"example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saml, err := db.CreateSAMLProvider(ctx, SAMLProvider{OrganizationID: organizationID, Name: "SAML", IDPMetadata: "<metadata/>", CertificatePEM: "certificate", EncryptedPrivateKey: "encrypted", Domains: []string{"example.test"}, EmailAttribute: "mail", NameAttribute: "displayName", DefaultRole: "viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, test := range map[string]struct {
+		lockKey string
+		login   func(context.Context, string, string) (uuid.UUID, error)
+	}{
+		"oidc": {lockKey: "oidc:" + oidc.ID.String() + ":shared-subject", login: func(callCtx context.Context, subject, email string) (uuid.UUID, error) {
+			return db.JITOIDCUser(callCtx, oidc, subject, email, "Federated User")
+		}},
+		"saml": {lockKey: "saml:" + saml.ID.String() + ":shared-subject", login: func(callCtx context.Context, subject, email string) (uuid.UUID, error) {
+			return db.JITSAMLUser(callCtx, saml, subject, email, "Federated User")
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lock, lockErr := pool.Begin(ctx)
+			if lockErr != nil {
+				t.Fatal(lockErr)
+			}
+			defer lock.Rollback(ctx)
+			if _, lockErr = lock.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, test.lockKey); lockErr != nil {
+				t.Fatal(lockErr)
+			}
+			blockedCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer cancel()
+			if _, loginErr := test.login(blockedCtx, "shared-subject", name+"-first@example.test"); !errors.Is(loginErr, context.DeadlineExceeded) {
+				t.Fatalf("JIT provisioning bypassed subject fence: %v", loginErr)
+			}
+			if lockErr = lock.Rollback(ctx); lockErr != nil {
+				t.Fatal(lockErr)
+			}
+
+			disabledID := uuid.New()
+			disabledEmail := name + "-disabled-" + organizationID.String() + "@example.test"
+			if _, err = pool.Exec(ctx, `INSERT INTO users(id,email,password_hash,disabled_at) VALUES($1,$2,'!disabled',now())`, disabledID, disabledEmail); err != nil {
+				t.Fatal(err)
+			}
+			if _, loginErr := test.login(ctx, name+"-disabled-subject", disabledEmail); !errors.Is(loginErr, ErrNotFound) {
+				t.Fatalf("disabled user provisioning error=%v, want ErrNotFound", loginErr)
+			}
+			var memberships int
+			if err = pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, disabledID).Scan(&memberships); err != nil || memberships != 0 {
+				t.Fatalf("disabled user gained memberships=%d err=%v", memberships, err)
+			}
+		})
+	}
+}
+
 func assertNoUserWithEmail(t *testing.T, db interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, ctx context.Context, email string) {
