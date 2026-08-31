@@ -187,7 +187,7 @@ grep -q 'temporary Swarm resources could not be removed' "$temporary/err"
 test "$(grep -c '^service rm ' "$ORKA_AI_RECOVERY_TEST_LOG")" -eq 6
 grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
 
-(cd "$root" && go test -run '^(TestEncryptedBackupAndRestoreRoundTrip|TestLocalEncryptedBackupAndRestoreRoundTrip|TestRestoreRejectsTamperedCiphertextWithoutChangingVolume)$' -count=1 ./internal/volumeartifact) >"$temporary/volumeartifact.log"
+(cd "$root" && go test -run '^(TestEncryptedBackupAndRestoreRoundTrip|TestLocalEncryptedBackupAndRestoreRoundTrip|TestRestoreRejectsTamperedCiphertextWithoutChangingVolume|TestVolumeArtifactHTTPClientDisablesProxyAndRedirects)$' -count=1 ./internal/volumeartifact) >"$temporary/volumeartifact.log"
 
 mkdir -p "$(dirname "$evidence_file")"
 jq -n \
@@ -214,6 +214,9 @@ jq -n \
     restoreHelperCleanupRetried:true,
     permanentCleanupFailureRejected:true,
     permanentSecretCleanupFailureRejected:true,
+    proxyEnvironmentIgnored:true,
+    redirectsRejected:true,
+    responseHeaderTimeoutEnforced:true,
     restoreConfirmationRequired:true,
     runningServiceRestoreRejected:true,
     wrongEncryptionKeyRejected:true,
@@ -234,6 +237,7 @@ jq -e '
   .backupQuiesced and .backupFailureResumedService and .failedHelperTaskRejected and
   .helperCleanupRetried and .restoreHelperCleanupRetried and
   .permanentCleanupFailureRejected and .permanentSecretCleanupFailureRejected and
+  .proxyEnvironmentIgnored and .redirectsRejected and .responseHeaderTimeoutEnforced and
   .restoreConfirmationRequired and .runningServiceRestoreRejected and
   .wrongEncryptionKeyRejected and .restoreLeftOffline and
   .backupMountReadOnly and .nodePinned and

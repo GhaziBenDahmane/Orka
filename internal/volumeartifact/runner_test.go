@@ -192,6 +192,24 @@ func TestTransferSendsVerifiedUploadLength(t *testing.T) {
 	}
 }
 
+func TestVolumeArtifactHTTPClientDisablesProxyAndRedirects(t *testing.T) {
+	client := volumeArtifactHTTPClient()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy != nil {
+		t.Fatalf("recovery transport must ignore proxy environment: %#v", client.Transport)
+	}
+	if transport.ResponseHeaderTimeout != transferHeaderTimeout {
+		t.Fatalf("response header timeout=%s want=%s", transport.ResponseHeaderTimeout, transferHeaderTimeout)
+	}
+	request, err := http.NewRequest(http.MethodGet, "https://objects.example.test/redirect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.CheckRedirect(request, nil); err == nil || !strings.Contains(err.Error(), "redirects are disabled") {
+		t.Fatalf("redirect policy error=%v", err)
+	}
+}
+
 func TestValidateRestoreRequiresHexChecksums(t *testing.T) {
 	job := Job{
 		Mode:            "restore",

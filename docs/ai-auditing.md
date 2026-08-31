@@ -327,6 +327,9 @@ locally. Temporary helper-service removal is retried and a cleanup failure
 makes the operation fail rather than silently leaving privileged recovery
 resources behind. The presigned URL and encryption key exist only in a
 temporary Docker secret and are not included in the retained metadata.
+Artifact transfers ignore proxy environment variables, reject redirects, and
+bound the wait for response headers so capability URLs cannot be silently
+forwarded or leave recovery helpers hung before an object-store response.
 
 For a restore, generate a short-lived GET URL for the signed `objectRef`, scale
 the gateway to zero, and use the exact images and storage node recorded by the

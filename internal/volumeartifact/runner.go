@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/netpolicy"
@@ -21,6 +22,7 @@ import (
 const (
 	maxTransferURLBytes   = 32 << 10
 	maxEncryptionAADBytes = 1024
+	transferHeaderTimeout = 30 * time.Second
 )
 
 type Job struct {
@@ -272,9 +274,7 @@ func transfer(ctx context.Context, method, rawURL, filename string, expectedSize
 		request.ContentLength = expectedSize
 		defer body.Close()
 	}
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("volume artifact redirects are disabled")
-	}}
+	client := volumeArtifactHTTPClient()
 	response, err := client.Do(request)
 	if err != nil {
 		return err
@@ -313,6 +313,17 @@ func transfer(ctx context.Context, method, rawURL, filename string, expectedSize
 	}
 	keep = true
 	return nil
+}
+
+func volumeArtifactHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Recovery URLs are capabilities. Never disclose them to a proxy inherited
+	// from the helper image or its runtime environment.
+	transport.Proxy = nil
+	transport.ResponseHeaderTimeout = transferHeaderTimeout
+	return &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("volume artifact redirects are disabled")
+	}}
 }
 
 func hashFile(filename string) (string, int64, error) {
