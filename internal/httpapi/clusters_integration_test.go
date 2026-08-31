@@ -308,6 +308,15 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 	for _, payload := range []string{
 		`{"agentImage":"valid.example/agent:latest\nbad","agentUpdateState":"completed","capacity":{}}`,
 		`{"agentImage":"valid.example/agent:latest","agentUpdateState":"unknown","capacity":{}}`,
+		`{"agentVersion":"1.0\u0000bad","capacity":{}}`,
+		`{"dockerVersion":"29.0\nbad","capacity":{}}`,
+		`{"capacity":{"unknown":1}}`,
+		`{"capacity":{"nodes":1.5}}`,
+		`{"capacity":{"nodes":-1}}`,
+		`{"capacity":{"nodes":1,"readyNodes":1,"activeNodes":1,"schedulableNodes":2}}`,
+		`{"capacity":{"nodes":10001}}`,
+		`{"capacity":{"nanoCpus":1}}`,
+		`{"capacity":{},"capabilities":{"edgeProxy":{"provider":"traefik"}}}`,
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", strings.NewReader(payload))

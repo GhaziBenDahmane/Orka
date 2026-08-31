@@ -273,7 +273,10 @@ func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUI
 	return nil
 }
 
-func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity map[string]any, capabilities clustercontract.Capabilities) error {
+func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity clustercontract.Capacity, capabilities clustercontract.Capabilities) error {
+	if err := clustercontract.ValidateCapacity(capacity); err != nil {
+		return err
+	}
 	encoded, err := json.Marshal(capacity)
 	if err != nil {
 		return err

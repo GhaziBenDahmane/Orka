@@ -524,21 +524,21 @@ func (c *Client) heartbeat(ctx context.Context) error {
 			return err
 		}
 	}
-	capacity := map[string]any{"nodes": len(nodes), "readyNodes": 0, "activeNodes": 0, "schedulableNodes": 0, "managers": 0, "nanoCpus": int64(0), "memoryBytes": int64(0)}
+	capacity := clustercontract.Capacity{Nodes: int64(len(nodes))}
 	for _, node := range nodes {
 		if strings.EqualFold(node.Status, "ready") {
-			capacity["readyNodes"] = capacity["readyNodes"].(int) + 1
+			capacity.ReadyNodes++
 		}
 		if strings.EqualFold(node.Availability, "active") {
-			capacity["activeNodes"] = capacity["activeNodes"].(int) + 1
+			capacity.ActiveNodes++
 		}
 		if strings.EqualFold(node.Status, "ready") && strings.EqualFold(node.Availability, "active") {
-			capacity["schedulableNodes"] = capacity["schedulableNodes"].(int) + 1
-			capacity["nanoCpus"] = capacity["nanoCpus"].(int64) + node.NanoCPUs
-			capacity["memoryBytes"] = capacity["memoryBytes"].(int64) + node.MemoryBytes
+			capacity.SchedulableNodes++
+			capacity.NanoCPUs += node.NanoCPUs
+			capacity.MemoryBytes += node.MemoryBytes
 		}
 		if node.ManagerStatus != "" {
-			capacity["managers"] = capacity["managers"].(int) + 1
+			capacity.Managers++
 		}
 	}
 	capabilities := c.capabilities(ctx)

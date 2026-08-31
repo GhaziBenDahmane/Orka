@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/auth"
@@ -187,17 +188,20 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		AgentImage       string                       `json:"agentImage"`
 		AgentUpdateState string                       `json:"agentUpdateState"`
 		DockerVersion    string                       `json:"dockerVersion"`
-		Capacity         map[string]any               `json:"capacity"`
+		Capacity         clustercontract.Capacity     `json:"capacity"`
 		Capabilities     clustercontract.Capabilities `json:"capabilities"`
 	}
 	if !decode(w, r, &input) {
 		return
 	}
-	input.AgentImage = strings.TrimSpace(input.AgentImage)
-	input.AgentUpdateState = strings.TrimSpace(input.AgentUpdateState)
+	rawAgentImage, rawUpdateState := input.AgentImage, input.AgentUpdateState
+	input.AgentImage = strings.TrimSpace(rawAgentImage)
+	input.AgentUpdateState = strings.TrimSpace(rawUpdateState)
 	validUpdateState := contains([]string{"", "updating", "paused", "completed", "rollback_started", "rollback_paused", "rollback_completed"}, input.AgentUpdateState)
-	capabilitiesInvalid := input.Capabilities.ProtocolVersion != 0 && clustercontract.Validate(input.Capabilities) != nil
-	if len(input.AgentVersion) > 100 || len(input.AgentImage) > 500 || strings.ContainsAny(input.AgentImage, "\r\n") || !validUpdateState || len(input.DockerVersion) > 100 || len(input.Capacity) > 64 || capabilitiesInvalid {
+	capabilitiesPresent := input.Capabilities.ProtocolVersion != 0 || input.Capabilities.DockerSwarm || input.Capabilities.DockerCompose || input.Capabilities.EdgeProxy != nil
+	capabilitiesInvalid := capabilitiesPresent && clustercontract.Validate(input.Capabilities) != nil
+	invalidMetadata := !validAgentMetadata(input.AgentVersion, 100) || !validAgentMetadata(rawAgentImage, 500) || !validAgentMetadata(rawUpdateState, 32) || !validAgentMetadata(input.DockerVersion, 100)
+	if invalidMetadata || !validUpdateState || clustercontract.ValidateCapacity(input.Capacity) != nil || capabilitiesInvalid {
 		writeError(w, 400, "invalid_heartbeat", "heartbeat metadata exceeds limits")
 		return
 	}
@@ -208,6 +212,10 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	caFingerprint, _ := agentpki.CertificateFingerprint(s.AgentCACertificate)
 	writeJSON(w, http.StatusOK, map[string]any{"caCertificate": string(s.agentTrustBundle()), "signingCaCertificate": string(s.AgentCACertificate), "signingCaFingerprint": caFingerprint})
+}
+
+func validAgentMetadata(value string, limit int) bool {
+	return len(value) <= limit && strings.IndexFunc(value, unicode.IsControl) < 0
 }
 
 func AgentTLSConfig(caCertificate []byte) (*x509.CertPool, error) {
