@@ -209,6 +209,9 @@ serialized per organization and cannot remove its last active owner. Members
 owned by SCIM are read-only through the membership API so the identity provider
 remains authoritative. Removing a member also removes their project and
 environment grants and revokes federated sessions for that organization.
+Membership role changes, member removal, and project/environment grant changes
+commit atomically with their administrator audit evidence; an evidence failure
+rolls back the complete RBAC transition, including grant and session cleanup.
 Invitation tokens are returned only at creation and stored as SHA-256 digests.
 Creating another invitation for the same organization and email revokes the
 previous token. Creation, revocation, and one-time acceptance commit atomically

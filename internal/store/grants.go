@@ -24,6 +24,35 @@ func ValidScopedRole(role string) bool {
 }
 
 func (s *Store) UpsertResourceGrant(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID, userID uuid.UUID, role string) (ResourceGrant, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ResourceGrant{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := upsertResourceGrantTx(ctx, tx, organizationID, scopeType, scopeID, userID, role)
+	if err != nil {
+		return ResourceGrant{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) UpsertResourceGrantWithAudit(ctx context.Context, principal Principal, scopeType string, scopeID, userID uuid.UUID, role, remoteAddr string) (ResourceGrant, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ResourceGrant{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := upsertResourceGrantTx(ctx, tx, principal.OrganizationID, scopeType, scopeID, userID, role)
+	if err != nil {
+		return ResourceGrant{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "grant.update", scopeType, scopeID.String(), remoteAddr, map[string]any{"userId": userID, "role": role}); err != nil {
+		return ResourceGrant{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func upsertResourceGrantTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, scopeType string, scopeID, userID uuid.UUID, role string) (ResourceGrant, error) {
 	if !ValidScopedRole(role) {
 		return ResourceGrant{}, errors.New("invalid scoped role")
 	}
@@ -36,12 +65,12 @@ func (s *Store) UpsertResourceGrant(ctx context.Context, organizationID uuid.UUI
 		query = `INSERT INTO environment_grants(environment_id,user_id,role) SELECT $1,u.id,$3 FROM users u,environments e JOIN projects p ON p.id=e.project_id WHERE u.id=$2 AND e.id=$1 AND p.organization_id=$4 AND EXISTS(SELECT 1 FROM memberships m WHERE m.organization_id=$4 AND m.user_id=u.id) ON CONFLICT(environment_id,user_id) DO UPDATE SET role=excluded.role,updated_at=now() RETURNING created_at,updated_at`
 	}
 	item := ResourceGrant{ScopeType: scopeType, ScopeID: scopeID, UserID: userID, Role: role}
-	err := s.Pool.QueryRow(ctx, query, scopeID, userID, role, organizationID).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, query, scopeID, userID, role, organizationID).Scan(&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ResourceGrant{}, ErrNotFound
 	}
 	if err == nil {
-		err = s.Pool.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, userID).Scan(&item.Email)
+		err = tx.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, userID).Scan(&item.Email)
 	}
 	return item, err
 }
@@ -82,6 +111,33 @@ func (s *Store) ListResourceGrants(ctx context.Context, organizationID uuid.UUID
 }
 
 func (s *Store) DeleteResourceGrant(ctx context.Context, organizationID uuid.UUID, scopeType string, scopeID, userID uuid.UUID) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteResourceGrantTx(ctx, tx, organizationID, scopeType, scopeID, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteResourceGrantWithAudit(ctx context.Context, principal Principal, scopeType string, scopeID, userID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteResourceGrantTx(ctx, tx, principal.OrganizationID, scopeType, scopeID, userID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "grant.delete", scopeType, scopeID.String(), remoteAddr, map[string]any{"userId": userID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteResourceGrantTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, scopeType string, scopeID, userID uuid.UUID) error {
 	table, idColumn, _ := grantScope(scopeType)
 	if table == "" {
 		return errors.New("invalid grant scope")
@@ -90,7 +146,7 @@ func (s *Store) DeleteResourceGrant(ctx context.Context, organizationID uuid.UUI
 	if scopeType == "environment" {
 		ownership = `EXISTS(SELECT 1 FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$3)`
 	}
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM `+table+` WHERE `+idColumn+`=$1 AND user_id=$2 AND `+ownership, scopeID, userID, organizationID)
+	tag, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE `+idColumn+`=$1 AND user_id=$2 AND `+ownership, scopeID, userID, organizationID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}

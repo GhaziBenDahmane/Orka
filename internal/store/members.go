@@ -44,6 +44,14 @@ func (s *Store) ListOrganizationMembers(ctx context.Context, organizationID uuid
 }
 
 func (s *Store) UpdateOrganizationMemberRole(ctx context.Context, organizationID, userID uuid.UUID, role, actorRole string) (OrganizationMember, error) {
+	return s.updateOrganizationMemberRole(ctx, Principal{}, organizationID, userID, role, actorRole, "", false)
+}
+
+func (s *Store) UpdateOrganizationMemberRoleWithAudit(ctx context.Context, principal Principal, userID uuid.UUID, role, remoteAddr string) (OrganizationMember, error) {
+	return s.updateOrganizationMemberRole(ctx, principal, principal.OrganizationID, userID, role, principal.Role, remoteAddr, true)
+}
+
+func (s *Store) updateOrganizationMemberRole(ctx context.Context, principal Principal, organizationID, userID uuid.UUID, role, actorRole, remoteAddr string, audit bool) (OrganizationMember, error) {
 	if !ValidOrganizationRole(role) {
 		return OrganizationMember{}, errors.New("invalid organization role")
 	}
@@ -52,8 +60,21 @@ func (s *Store) UpdateOrganizationMemberRole(ctx context.Context, organizationID
 		return OrganizationMember{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := updateOrganizationMemberRoleTx(ctx, tx, organizationID, userID, role, actorRole)
+	if err != nil {
+		return OrganizationMember{}, err
+	}
+	if audit {
+		if err = appendPrincipalAudit(ctx, tx, principal, "membership.role.update", "user", userID.String(), remoteAddr, map[string]string{"role": item.Role}); err != nil {
+			return OrganizationMember{}, err
+		}
+	}
+	return item, tx.Commit(ctx)
+}
+
+func updateOrganizationMemberRoleTx(ctx context.Context, tx pgx.Tx, organizationID, userID uuid.UUID, role, actorRole string) (OrganizationMember, error) {
 	var lockedOrganizationID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
 		return OrganizationMember{}, ErrNotFound
 	} else if err != nil {
 		return OrganizationMember{}, err
@@ -81,17 +102,37 @@ func (s *Store) UpdateOrganizationMemberRole(ctx context.Context, organizationID
 		return OrganizationMember{}, err
 	}
 	item.Role = role
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) DeleteOrganizationMember(ctx context.Context, organizationID, userID uuid.UUID, actorRole string) error {
+	return s.deleteOrganizationMember(ctx, Principal{}, organizationID, userID, actorRole, "", false)
+}
+
+func (s *Store) DeleteOrganizationMemberWithAudit(ctx context.Context, principal Principal, userID uuid.UUID, remoteAddr string) error {
+	return s.deleteOrganizationMember(ctx, principal, principal.OrganizationID, userID, principal.Role, remoteAddr, true)
+}
+
+func (s *Store) deleteOrganizationMember(ctx context.Context, principal Principal, organizationID, userID uuid.UUID, actorRole, remoteAddr string, audit bool) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteOrganizationMemberTx(ctx, tx, organizationID, userID, actorRole); err != nil {
+		return err
+	}
+	if audit {
+		if err = appendPrincipalAudit(ctx, tx, principal, "membership.remove", "user", userID.String(), remoteAddr, nil); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteOrganizationMemberTx(ctx context.Context, tx pgx.Tx, organizationID, userID uuid.UUID, actorRole string) error {
 	var lockedOrganizationID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
@@ -127,7 +168,7 @@ func (s *Store) DeleteOrganizationMember(ctx context.Context, organizationID, us
 	if _, err = tx.Exec(ctx, `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, userID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func organizationMemberForUpdate(ctx context.Context, tx pgx.Tx, organizationID, userID uuid.UUID) (OrganizationMember, error) {

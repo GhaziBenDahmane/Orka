@@ -58,12 +58,11 @@ func (s *Server) putResourceGrant(w http.ResponseWriter, r *http.Request, scopeT
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertResourceGrant(r.Context(), p.OrganizationID, scopeType, scopeID, userID, in.Role)
+	item, err := s.Store.UpsertResourceGrantWithAudit(r.Context(), p, scopeType, scopeID, userID, in.Role, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "grant.update", scopeType, scopeID.String(), r.RemoteAddr, map[string]any{"userId": userID, "role": in.Role})
 	writeJSON(w, 200, item)
 }
 
@@ -75,10 +74,9 @@ func (s *Server) deleteResourceGrant(w http.ResponseWriter, r *http.Request, sco
 		return
 	}
 	p := principal(r)
-	if err := s.Store.DeleteResourceGrant(r.Context(), p.OrganizationID, scopeType, scopeID, userID); err != nil {
+	if err := s.Store.DeleteResourceGrantWithAudit(r.Context(), p, scopeType, scopeID, userID, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "grant.delete", scopeType, scopeID.String(), r.RemoteAddr, map[string]any{"userId": userID})
 	w.WriteHeader(http.StatusNoContent)
 }

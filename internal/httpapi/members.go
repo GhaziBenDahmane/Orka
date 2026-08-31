@@ -34,12 +34,11 @@ func (s *Server) updateOrganizationMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpdateOrganizationMemberRole(r.Context(), p.OrganizationID, userID, input.Role, p.Role)
+	item, err := s.Store.UpdateOrganizationMemberRoleWithAudit(r.Context(), p, userID, input.Role, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "membership.role.update", "user", userID.String(), r.RemoteAddr, map[string]string{"role": item.Role})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -50,10 +49,9 @@ func (s *Server) deleteOrganizationMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteOrganizationMember(r.Context(), p.OrganizationID, userID, p.Role); err != nil {
+	if err = s.Store.DeleteOrganizationMemberWithAudit(r.Context(), p, userID, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "membership.remove", "user", userID.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
