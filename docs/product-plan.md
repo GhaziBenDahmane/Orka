@@ -325,7 +325,7 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
   encrypted notification endpoints, audit retention and immutable archives,
   and organization authentication policy.
   The console provides credential,
-  backup-destination, OIDC, SAML, hierarchical policy,
+  backup-destination, Compose-linked database lifecycle, OIDC, SAML, hierarchical policy,
   mandatory-SSO, audit retention/archive, and notification administration.
   Remote clusters can be registered, enrolled, drained, reactivated, removed,
   and upgraded to a digest-pinned agent image from the console; HTTPS tokens

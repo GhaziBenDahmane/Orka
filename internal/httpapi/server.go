@@ -246,6 +246,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/databases/{databaseID}", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.getDatabase)))
 	mux.Handle("POST /v1/databases/{databaseID}/driver-rebind", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.rebindDatabaseDriver)))
 	mux.Handle("PUT /v1/databases/{databaseID}/credentials", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.rotateLinkedDatabaseCredentials)))
+	mux.Handle("DELETE /v1/databases/{databaseID}/link", s.requireResourceRole("admin", "database", "databaseID", http.HandlerFunc(s.unlinkDatabase)))
 	mux.Handle("GET /v1/databases/{databaseID}/backups", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseBackups)))
 	mux.Handle("GET /v1/databases/{databaseID}/migrations", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseMigrations)))
 	mux.Handle("GET /v1/databases/{databaseID}/restores", s.requireResourceRole("viewer", "database", "databaseID", http.HandlerFunc(s.listDatabaseRestores)))

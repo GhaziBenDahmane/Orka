@@ -92,6 +92,22 @@ func TestLinkedDatabaseCreateRotateAndDeletionSafetyAPI(t *testing.T) {
 	if status, response = scopedAPIRequest(t, server.URL+"/v1/databases/"+linked.ID.String(), token, organizationID, http.MethodDelete, nil); status != http.StatusConflict || !bytes.Contains(response, []byte(`"code":"compose_database_owned"`)) {
 		t.Fatalf("linked database delete status=%d body=%s", status, response)
 	}
+	if status, response = scopedAPIRequest(t, server.URL+"/v1/databases/"+linked.ID.String()+"/link", token, organizationID, http.MethodDelete, nil); status != http.StatusConflict || !bytes.Contains(response, []byte(`"code":"database_busy"`)) {
+		t.Fatalf("linked database unlink during backup status=%d body=%s", status, response)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE jobs SET status='cancelled',finished_at=now() WHERE resource_key=$1`, "database:"+linked.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE database_backups SET status='cancelled',finished_at=now() WHERE database_instance_id=$1 AND status='queued'`, linked.ID); err != nil {
+		t.Fatal(err)
+	}
+	if status, response = scopedAPIRequest(t, server.URL+"/v1/databases/"+linked.ID.String()+"/link", token, organizationID, http.MethodDelete, nil); status != http.StatusAccepted || !bytes.Contains(response, []byte(`"status":"unlink_queued"`)) {
+		t.Fatalf("linked database unlink status=%d body=%s", status, response)
+	}
+	var unlinkQueued, unlinkMarked bool
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.database-link' AND payload->>'databaseId'=$1 AND status='pending'),EXISTS(SELECT 1 FROM database_instances WHERE id=$2 AND deletion_requested_at IS NOT NULL)`, linked.ID.String(), linked.ID).Scan(&unlinkQueued, &unlinkMarked); err != nil || !unlinkQueued || !unlinkMarked {
+		t.Fatalf("linked database unlink not durable: queued=%v marked=%v err=%v", unlinkQueued, unlinkMarked, err)
+	}
 	var serviceExists bool
 	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services WHERE id=$1)`, serviceID).Scan(&serviceExists); err != nil || !serviceExists {
 		t.Fatalf("linked database deletion affected service: exists=%v err=%v", serviceExists, err)

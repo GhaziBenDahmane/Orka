@@ -553,6 +553,11 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		}
 		input, err := parseJSONArgument(args[2], stdin)
 		return http.MethodPut, "/v1/databases/" + args[1] + "/credentials", input, err
+	case "unlink-database":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/databases/" + args[1] + "/link", nil, nil
 	case "backup-policy":
 		if err := require(2); err != nil {
 			return "", "", nil, err

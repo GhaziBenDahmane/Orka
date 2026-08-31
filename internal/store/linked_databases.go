@@ -69,7 +69,8 @@ func (s *Store) RotateLinkedDatabaseCredentialsWithAudit(ctx context.Context, pr
 	defer tx.Rollback(ctx)
 	var serviceID uuid.UUID
 	var managementKind string
-	err = tx.QueryRow(ctx, `SELECT database.compose_service_id,database.management_kind FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2`, databaseID, principal.OrganizationID).Scan(&serviceID, &managementKind)
+	var deleting bool
+	err = tx.QueryRow(ctx, `SELECT database.compose_service_id,database.management_kind,database.deletion_requested_at IS NOT NULL FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2 FOR UPDATE OF database`, databaseID, principal.OrganizationID).Scan(&serviceID, &managementKind, &deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
@@ -78,6 +79,9 @@ func (s *Store) RotateLinkedDatabaseCredentialsWithAudit(ctx context.Context, pr
 	}
 	if managementKind != "compose" {
 		return DatabaseInstance{}, ErrLinkedDatabaseRequired
+	}
+	if deleting {
+		return DatabaseInstance{}, ErrDeleting
 	}
 	if _, _, err = lockActiveServiceForMutation(ctx, tx, principal.OrganizationID, serviceID); err != nil {
 		return DatabaseInstance{}, err

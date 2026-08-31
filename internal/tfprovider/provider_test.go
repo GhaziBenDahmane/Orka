@@ -25,7 +25,7 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 	if schemaResponse.Diagnostics.HasError() || len(schemaResponse.Schema.GetAttributes()) != 3 {
 		t.Fatalf("provider schema diagnostics = %v", schemaResponse.Diagnostics)
 	}
-	if len(instance.Resources(context.Background())) != 29 {
+	if len(instance.Resources(context.Background())) != 30 {
 		t.Fatal("provider must expose the core hierarchy, credentials, backup policies, template repositories, and SSO resources")
 	}
 	resourceTypes := make([]string, 0, len(instance.Resources(context.Background())))
@@ -40,6 +40,9 @@ func TestProviderMetadataSchemaAndResources(t *testing.T) {
 		}
 	}
 	if !slices.Contains(resourceTypes, "dockyard_template_repository") {
+		t.Fatalf("provider resource types = %v", resourceTypes)
+	}
+	if !slices.Contains(resourceTypes, "dockyard_linked_database") {
 		t.Fatalf("provider resource types = %v", resourceTypes)
 	}
 	if !slices.Contains(resourceTypes, "dockyard_oidc_provider") {
@@ -144,6 +147,30 @@ func TestOIDCProviderClientSecretIsSensitive(t *testing.T) {
 	secret, ok := response.Schema.Attributes["client_secret"].(resourceschema.StringAttribute)
 	if !ok || !secret.Sensitive || !secret.Required {
 		t.Fatalf("client_secret schema = %#v", response.Schema.Attributes["client_secret"])
+	}
+}
+
+func TestLinkedDatabaseInputAndSecretRetention(t *testing.T) {
+	model := linkedDatabaseModel{
+		ComposeServiceID: types.StringValue("service-id"), Name: types.StringValue("Application DB"), Engine: types.StringValue("postgres"), Version: types.StringValue("17"),
+		ConnectionServiceName: types.StringValue("db"), Database: types.StringValue("app"), Username: types.StringValue("app"), Password: types.StringValue("state-secret"), Port: types.Int64Value(5432),
+	}
+	input := linkedDatabaseInput(model)
+	if input["connectionServiceName"] != "db" || input["password"] != "state-secret" || input["port"] != int64(5432) {
+		t.Fatalf("linked database input = %#v", input)
+	}
+	setLinkedDatabase(&model, linkedDatabaseResponse{ID: "database-id", ComposeServiceID: "service-id", Name: "Application DB", Slug: "application-db", Engine: "postgres", Version: "17", ManagementKind: "compose", ConnectionServiceName: "db", Config: map[string]any{"database": "renamed", "username": "operator", "port": float64(5433)}, Status: "running"})
+	if model.Password.ValueString() != "state-secret" || model.Database.ValueString() != "renamed" || model.Username.ValueString() != "operator" || model.Port.ValueInt64() != 5433 {
+		t.Fatalf("linked database state did not retain its write-only password: %#v", model)
+	}
+}
+
+func TestLinkedDatabasePasswordIsSensitive(t *testing.T) {
+	var response resource.SchemaResponse
+	newLinkedDatabaseResource().Schema(context.Background(), resource.SchemaRequest{}, &response)
+	password, ok := response.Schema.Attributes["password"].(resourceschema.StringAttribute)
+	if !ok || !password.Sensitive || !password.Required {
+		t.Fatalf("password schema = %#v", response.Schema.Attributes["password"])
 	}
 }
 

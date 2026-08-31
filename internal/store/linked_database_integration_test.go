@@ -47,8 +47,18 @@ func TestComposeLinkedDatabaseIdentityAndDeletionSafety(t *testing.T) {
 	if err = db.QueueDatabaseDeletionWithAudit(ctx, principal, databaseID, "127.0.0.1"); !errors.Is(err, ErrLinkedDatabaseDeletion) {
 		t.Fatalf("linked database deletion error=%v", err)
 	}
+	if err = db.QueueLinkedDatabaseUnlinkWithAudit(ctx, principal, databaseID, "127.0.0.1"); err != nil {
+		t.Fatalf("queue linked database unlink: %v", err)
+	}
+	if err = db.QueueLinkedDatabaseUnlinkWithAudit(ctx, principal, databaseID, "127.0.0.1"); err != nil {
+		t.Fatalf("repeat linked database unlink: %v", err)
+	}
 	var serviceExists, databaseExists bool
 	if err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services WHERE id=$1),EXISTS(SELECT 1 FROM database_instances WHERE id=$2)`, serviceID, databaseID).Scan(&serviceExists, &databaseExists); err != nil || !serviceExists || !databaseExists {
 		t.Fatalf("linked deletion mutated resources: service=%v database=%v err=%v", serviceExists, databaseExists, err)
+	}
+	var jobs, audits int
+	if err = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM jobs WHERE kind='delete.database-link' AND resource_key=$1),(SELECT count(*) FROM audit_events WHERE action='database.unlink' AND resource_id=$2)`, "database:"+databaseID.String(), databaseID.String()).Scan(&jobs, &audits); err != nil || jobs != 1 || audits != 1 {
+		t.Fatalf("unlink finalizer jobs=%d audits=%d err=%v", jobs, audits, err)
 	}
 }

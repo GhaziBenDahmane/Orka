@@ -2521,6 +2521,48 @@ func (s *Store) QueueDatabaseDeletionWithAudit(ctx context.Context, principal Pr
 	return tx.Commit(ctx)
 }
 
+func (s *Store) QueueLinkedDatabaseUnlinkWithAudit(ctx context.Context, principal Principal, databaseID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var serviceID uuid.UUID
+	var managementKind string
+	var deleting bool
+	err = tx.QueryRow(ctx, `SELECT database.compose_service_id,database.management_kind,database.deletion_requested_at IS NOT NULL FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2 FOR UPDATE OF database`, databaseID, principal.OrganizationID).Scan(&serviceID, &managementKind, &deleting)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if managementKind != "compose" {
+		return ErrLinkedDatabaseRequired
+	}
+	resourceKey := "database:" + databaseID.String()
+	var busy bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE resource_key=$1 AND status IN ('pending','running') AND kind<>'delete.database-link')`, resourceKey).Scan(&busy); err != nil {
+		return err
+	}
+	if busy {
+		return ErrBusy
+	}
+	payload, _ := json.Marshal(map[string]string{"databaseId": databaseID.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) SELECT $1,'delete.database-link',$2,$3,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.database-link' AND payload->>'databaseId'=$4 AND status IN ('pending','running'))`, uuid.New(), payload, resourceKey, databaseID.String()); err != nil {
+		return err
+	}
+	if !deleting {
+		if _, err = tx.Exec(ctx, `UPDATE database_instances SET deletion_requested_at=now(),status='deleting',updated_at=now() WHERE id=$1`, databaseID); err != nil {
+			return err
+		}
+		if err = appendPrincipalAudit(ctx, tx, principal, "database.unlink", "database", databaseID.String(), remoteAddr, map[string]any{"composeServiceId": serviceID}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) queueServiceDeletionTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, deleteVolumes bool) error {
 	var stackName string
 	var deleting bool
@@ -3483,7 +3525,7 @@ func lockDatabaseServiceForOperation(ctx context.Context, tx pgx.Tx, databaseID 
 		}
 	}
 	var parentsActive bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL)`, databaseID).Scan(&parentsActive); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND database.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL)`, databaseID).Scan(&parentsActive); err != nil {
 		return err
 	}
 	if !parentsActive {

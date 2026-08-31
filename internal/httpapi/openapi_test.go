@@ -149,6 +149,27 @@ func TestOpenAPIDocumentsDatabaseRecoveryProvenance(t *testing.T) {
 	}
 }
 
+func TestOpenAPIDocumentsComposeLinkedDatabaseContract(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{
+		"/v1/services/{serviceID}/databases:",
+		"/v1/databases/{databaseID}/credentials:",
+		"/v1/databases/{databaseID}/link:",
+		"#/components/schemas/LinkedDatabaseCreateInput",
+		"#/components/schemas/LinkedDatabaseCredentialsInput",
+		"#/components/schemas/DatabaseInstance",
+		"password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing linked database contract %q", expected)
+		}
+	}
+}
+
 func TestOpenAPIDocumentsVolumeRecoveryContract(t *testing.T) {
 	specification, err := os.ReadFile("../../api/openapi.yaml")
 	if err != nil {

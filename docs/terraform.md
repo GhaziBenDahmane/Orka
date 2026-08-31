@@ -13,6 +13,7 @@ bypassing Dockyard policy, audit, or lifecycle checks. It currently provides:
 - `dockyard_network`
 - `dockyard_service_networks`
 - `dockyard_database`
+- `dockyard_linked_database`
 - `dockyard_source_credential`
 - `dockyard_custom_tls_certificate`
 - `dockyard_backup_destination`
@@ -112,6 +113,13 @@ Managed databases are replacement-oriented because changing an engine,
 version, or credential-bearing driver configuration in place is unsafe.
 `config_json` is sensitive: credentials are submitted once, remain encrypted
 in Dockyard, and are retained only in Terraform's sensitive state on refresh.
+
+`dockyard_linked_database` registers a database already declared inside a
+`dockyard_service` Compose document. It owns only the management binding, not
+the service or database container. Connection details and the utility version
+rotate in place; the password is write-only and retained only in sensitive
+Terraform state. Destroy queues an artifact-cleaning unlink finalizer and never
+stops or deletes the owning Compose stack.
 
 `dockyard_template_repository` manages a namespaced, Dokploy-compatible GitHub
 catalog. Repository identity and location fields are replacement-oriented;

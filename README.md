@@ -158,6 +158,9 @@ dockyardctl move-service SERVICE_ID TARGET_ENVIRONMENT_ID
 dockyardctl rebind-service-storage-node SERVICE_ID TARGET_NODE_ID SERVICE_SLUG
 # Or restore each retained backup onto the rebound node before starting:
 dockyardctl restore-volume-offline BACKUP_ID SERVICE_SLUG
+# Keep database passwords out of shell history:
+printf '%s' "$LINKED_DATABASE_JSON" | dockyardctl link-database SERVICE_ID -
+dockyardctl unlink-database DATABASE_ID
 ```
 
 Core project, environment, service, database, template, deployment, log, and

@@ -2032,15 +2032,18 @@ paths:
             type: string
             format: uuid
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/LinkedDatabaseCredentialsInput'
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseInstance'
         default:
           description: Structured API error
           content:
@@ -2065,6 +2068,26 @@ paths:
             schema:
               type: object
               additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/databases/{databaseID}/link:
+    delete:
+      operationId: delete_v1_databases_databaseID_link
+      tags: [databases]
+      parameters:
+        - name: databaseID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         '2XX':
           description: Successful response
@@ -3620,15 +3643,18 @@ paths:
             type: string
             format: uuid
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/LinkedDatabaseCreateInput'
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseInstance'
         default:
           description: Structured API error
           content:
@@ -5597,6 +5623,49 @@ components:
     mutualTLS:
       type: mutualTLS
   schemas:
+    LinkedDatabaseCreateInput:
+      type: object
+      additionalProperties: false
+      required: [name, engine, connectionServiceName, database, username, password]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        engine: {type: string, minLength: 1, maxLength: 64}
+        version: {type: string, maxLength: 128}
+        connectionServiceName: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$'}
+        database: {type: string, minLength: 1, maxLength: 8192}
+        username: {type: string, minLength: 1, maxLength: 8192}
+        password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}
+        port: {type: integer, minimum: 0, maximum: 65535}
+    LinkedDatabaseCredentialsInput:
+      type: object
+      additionalProperties: false
+      required: [connectionServiceName, database, username, password]
+      properties:
+        version: {type: string, maxLength: 128}
+        connectionServiceName: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$'}
+        database: {type: string, minLength: 1, maxLength: 8192}
+        username: {type: string, minLength: 1, maxLength: 8192}
+        password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}
+        port: {type: integer, minimum: 0, maximum: 65535}
+    DatabaseInstance:
+      type: object
+      required: [id, environmentId, composeServiceId, name, slug, engine, version, driverSource, managementKind, config, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        environmentId: {type: string, format: uuid}
+        composeServiceId: {type: string, format: uuid}
+        name: {type: string}
+        slug: {type: string}
+        engine: {type: string}
+        version: {type: string}
+        driverSource: {type: string, enum: [built-in, external, unbound]}
+        driverArtifactDigest: {type: string}
+        managementKind: {type: string, enum: [managed, compose]}
+        connectionServiceName: {type: string}
+        storageNodeId: {type: string}
+        config: {type: object, additionalProperties: true, description: Non-secret driver metadata.}
+        status: {type: string}
+        createdAt: {type: string, format: date-time}
     DatabaseBackup:
       type: object
       required: [id, databaseInstanceId, status, artifactValid, format, encrypted, createdAt]

@@ -223,6 +223,7 @@ export const api = {
   createDatabase: (environmentId: string, body: { name: string; engine: string; version: string; config: Record<string, unknown> }) => request<{ database: { id: string; name: string }; credentials: Record<string, string>; internalUrl: string }>(`/v1/environments/${environmentId}/databases`, { method: "POST", body: JSON.stringify(body) }),
   linkDatabase: (serviceId: string, body: LinkedDatabaseInput) => request<Database>(`/v1/services/${serviceId}/databases`, { method: "POST", body: JSON.stringify(body) }),
   rotateLinkedDatabaseCredentials: (databaseId: string, body: LinkedDatabaseInput) => request<Database>(`/v1/databases/${databaseId}/credentials`, { method: "PUT", body: JSON.stringify(body) }),
+  unlinkDatabase: (databaseId: string) => request<{ status: "unlink_queued" }>(`/v1/databases/${databaseId}/link`, { method: "DELETE" }),
   databases: (environmentId: string) => request<Envelope<Database>>(`/v1/environments/${environmentId}/databases`),
   rebindDatabaseDriver: (databaseId: string, confirm: string) => request<Database>(`/v1/databases/${databaseId}/driver-rebind`, { method: "POST", body: JSON.stringify({ confirm }) }),
   databaseBackups: (databaseId: string) => request<Envelope<DatabaseBackup>>(`/v1/databases/${databaseId}/backups`),

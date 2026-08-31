@@ -3,7 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -12,6 +14,8 @@ import (
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
+
+var linkedDatabaseServiceName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 
 type linkedDatabaseInput struct {
 	Name                  string `json:"name"`
@@ -118,6 +122,27 @@ func (s *Server) rotateLinkedDatabaseCredentials(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) unlinkDatabase(w http.ResponseWriter, r *http.Request) {
+	databaseID, err := uuid.Parse(r.PathValue("databaseID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid database id")
+		return
+	}
+	if err = s.Store.QueueLinkedDatabaseUnlinkWithAudit(r.Context(), principal(r), databaseID, r.RemoteAddr); err != nil {
+		if errors.Is(err, store.ErrLinkedDatabaseRequired) {
+			writeError(w, http.StatusConflict, "compose_database_required", err.Error())
+			return
+		}
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "database_busy", "cancel or wait for active database operations before unlinking")
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "unlink_queued"})
+}
+
 func (s *Server) prepareLinkedDatabase(service store.ComposeService, databaseID uuid.UUID, in linkedDatabaseInput) (store.DatabaseInstance, map[string]string, error) {
 	if s.Databases == nil {
 		return store.DatabaseInstance{}, nil, errors.New("database registry is not configured")
@@ -128,6 +153,9 @@ func (s *Server) prepareLinkedDatabase(service store.ComposeService, databaseID 
 		return store.DatabaseInstance{}, nil, errors.New("database engine does not support backup and restore")
 	}
 	in.ConnectionServiceName = strings.TrimSpace(in.ConnectionServiceName)
+	if !linkedDatabaseServiceName.MatchString(in.ConnectionServiceName) {
+		return store.DatabaseInstance{}, nil, errors.New("connection service name must use 1-63 lowercase letters, digits, underscores, or hyphens")
+	}
 	if _, err := deploy.ComposeServiceImage(service.ComposeYAML, in.ConnectionServiceName); err != nil {
 		return store.DatabaseInstance{}, nil, err
 	}
@@ -138,6 +166,11 @@ func (s *Server) prepareLinkedDatabase(service store.ComposeService, databaseID 
 		"database": strings.TrimSpace(in.Database),
 		"username": strings.TrimSpace(in.Username),
 		"password": in.Password,
+	}
+	for key, value := range credentials {
+		if len(value) > 8192 {
+			return store.DatabaseInstance{}, nil, fmt.Errorf("database credential %q exceeds 8192 bytes", key)
+		}
 	}
 	if in.Port != 0 {
 		credentials["port"] = strconv.Itoa(in.Port)

@@ -424,7 +424,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 		JOIN database_instances database ON database.id=policy.database_instance_id
 		JOIN environments environment ON environment.id=database.environment_id
 		JOIN projects project ON project.id=environment.project_id
-		WHERE policy.enabled AND policy.next_run_at<=now() AND (NOT $1 OR policy.destination_id IS NOT NULL)
+		WHERE policy.enabled AND policy.next_run_at<=now() AND database.deletion_requested_at IS NULL AND (NOT $1 OR policy.destination_id IS NOT NULL)
 			AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL
 			AND (database.compose_service_id IS NULL OR EXISTS(SELECT 1 FROM compose_services service WHERE service.id=database.compose_service_id AND service.deletion_requested_at IS NULL AND service.desired_state='running'))
 			AND NOT EXISTS(SELECT 1 FROM database_backups backup WHERE backup.database_instance_id=database.id AND backup.status IN ('queued','running'))
@@ -445,7 +445,7 @@ func (w *Worker) enqueueDueBackup(ctx context.Context) error {
 		}
 	}
 	var parentsActive bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL)`, databaseID).Scan(&parentsActive); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND database.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL)`, databaseID).Scan(&parentsActive); err != nil {
 		return err
 	}
 	if !parentsActive {
@@ -730,6 +730,9 @@ func (w *Worker) execute(ctx context.Context, j job) error {
 	}
 	if j.Kind == "delete.compose" {
 		return w.deleteComposeService(ctx, j)
+	}
+	if j.Kind == "delete.database-link" {
+		return w.deleteLinkedDatabase(ctx, j)
 	}
 	if j.Kind == "delete.environment" {
 		return w.deleteEnvironment(ctx, j)
@@ -1231,6 +1234,90 @@ func (w *Worker) deleteComposeService(ctx context.Context, j job) error {
 		}
 		if pathErr = os.RemoveAll(directory); pathErr != nil {
 			w.Logger.Error("delete service local backup", "service", serviceID, "backup", artifact.id, "error", pathErr)
+		}
+	}
+	return nil
+}
+
+func (w *Worker) deleteLinkedDatabase(ctx context.Context, j job) error {
+	var payload struct {
+		DatabaseID string `json:"databaseId"`
+	}
+	if err := json.Unmarshal(j.Payload, &payload); err != nil {
+		return err
+	}
+	databaseID, err := uuid.Parse(payload.DatabaseID)
+	if err != nil {
+		return err
+	}
+	rows, err := w.Store.Pool.Query(ctx, `SELECT id,path,destination_id,object_key FROM database_backups WHERE database_instance_id=$1`, databaseID)
+	if err != nil {
+		return err
+	}
+	type databaseArtifact struct {
+		id, cleanupID   uuid.UUID
+		path, objectKey string
+		destinationID   *uuid.UUID
+	}
+	artifacts := []databaseArtifact{}
+	for rows.Next() {
+		var artifact databaseArtifact
+		if err = rows.Scan(&artifact.id, &artifact.path, &artifact.destinationID, &artifact.objectKey); err != nil {
+			rows.Close()
+			return err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	tx, err := w.Store.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for index := range artifacts {
+		artifact := &artifacts[index]
+		if artifact.destinationID == nil || artifact.objectKey == "" {
+			continue
+		}
+		artifact.cleanupID = uuid.New()
+		if err = tx.QueryRow(ctx, `INSERT INTO backup_artifact_deletions(id,destination_id,object_key,source_kind,source_id) VALUES($1,$2,$3,'database',$4) ON CONFLICT(destination_id,object_key) DO UPDATE SET updated_at=now() RETURNING id`, artifact.cleanupID, *artifact.destinationID, artifact.objectKey, artifact.id).Scan(&artifact.cleanupID); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM database_instances WHERE id=$1 AND management_kind='compose' AND deletion_requested_at IS NOT NULL`, databaseID); err != nil {
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		if artifact.destinationID != nil && artifact.objectKey != "" {
+			queued := backupArtifactDeletion{id: artifact.cleanupID, destinationID: *artifact.destinationID, objectKey: artifact.objectKey}
+			remote, cleanupErr := w.s3(ctx, queued.destinationID)
+			if cleanupErr != nil {
+				cleanupErr = w.deferBackupArtifactDeletion(ctx, queued, cleanupErr)
+			} else {
+				cleanupErr = w.deleteQueuedBackupArtifact(ctx, queued, remote)
+			}
+			if cleanupErr != nil {
+				w.Logger.Error("delete linked database backup artifact", "database", databaseID, "backup", artifact.id, "error", cleanupErr)
+			}
+			continue
+		}
+		if artifact.path == "" {
+			continue
+		}
+		directory, pathErr := validatedLocalBackupDirectory(w.BackupDirectory, artifact.id, artifact.path)
+		if pathErr != nil {
+			w.Logger.Error("refuse unsafe linked database backup cleanup", "database", databaseID, "backup", artifact.id, "error", pathErr)
+			continue
+		}
+		if pathErr = os.RemoveAll(directory); pathErr != nil {
+			w.Logger.Error("delete linked database local backup", "database", databaseID, "backup", artifact.id, "error", pathErr)
 		}
 	}
 	return nil

@@ -92,6 +92,10 @@ paths:
 			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {
 				if strings.HasSuffix(op.path, "/artifact-source") {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          multipart/form-data:\n            schema:\n              type: object\n              required: [file]\n              properties:\n                file:\n                  type: string\n                  format: binary\n")
+				} else if op.method == "post" && op.path == "/v1/services/{serviceID}/databases" {
+					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/LinkedDatabaseCreateInput'\n")
+				} else if op.method == "put" && op.path == "/v1/databases/{databaseID}/credentials" {
+					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/LinkedDatabaseCredentialsInput'\n")
 				} else if op.method == "put" && op.path == "/v1/services/{serviceID}/volume-backup-policies/{volumeName}" {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/VolumeBackupPolicyInput'\n")
 				} else if op.method == "post" && op.path == "/v1/volume-backups/{backupID}/restore" {
@@ -112,7 +116,9 @@ paths:
 			} else {
 				output.WriteString("          description: Successful response\n")
 			}
-			if op.method == "get" && op.path == "/v1/database-engines" {
+			if (op.method == "post" && op.path == "/v1/services/{serviceID}/databases") || (op.method == "put" && op.path == "/v1/databases/{databaseID}/credentials") {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseInstance'\n")
+			} else if op.method == "get" && op.path == "/v1/database-engines" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseEngineList'\n")
 			} else if op.method == "get" && op.path == "/v1/database-backups/{backupID}" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseBackup'\n")
@@ -178,6 +184,49 @@ paths:
     mutualTLS:
       type: mutualTLS
   schemas:
+    LinkedDatabaseCreateInput:
+      type: object
+      additionalProperties: false
+      required: [name, engine, connectionServiceName, database, username, password]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        engine: {type: string, minLength: 1, maxLength: 64}
+        version: {type: string, maxLength: 128}
+        connectionServiceName: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$'}
+        database: {type: string, minLength: 1, maxLength: 8192}
+        username: {type: string, minLength: 1, maxLength: 8192}
+        password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}
+        port: {type: integer, minimum: 0, maximum: 65535}
+    LinkedDatabaseCredentialsInput:
+      type: object
+      additionalProperties: false
+      required: [connectionServiceName, database, username, password]
+      properties:
+        version: {type: string, maxLength: 128}
+        connectionServiceName: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$'}
+        database: {type: string, minLength: 1, maxLength: 8192}
+        username: {type: string, minLength: 1, maxLength: 8192}
+        password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}
+        port: {type: integer, minimum: 0, maximum: 65535}
+    DatabaseInstance:
+      type: object
+      required: [id, environmentId, composeServiceId, name, slug, engine, version, driverSource, managementKind, config, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        environmentId: {type: string, format: uuid}
+        composeServiceId: {type: string, format: uuid}
+        name: {type: string}
+        slug: {type: string}
+        engine: {type: string}
+        version: {type: string}
+        driverSource: {type: string, enum: [built-in, external, unbound]}
+        driverArtifactDigest: {type: string}
+        managementKind: {type: string, enum: [managed, compose]}
+        connectionServiceName: {type: string}
+        storageNodeId: {type: string}
+        config: {type: object, additionalProperties: true, description: Non-secret driver metadata.}
+        status: {type: string}
+        createdAt: {type: string, format: date-time}
     DatabaseBackup:
       type: object
       required: [id, databaseInstanceId, status, artifactValid, format, encrypted, createdAt]

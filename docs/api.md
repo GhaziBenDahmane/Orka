@@ -532,6 +532,7 @@ rolls back the policy, destination, batch, and job changes.
 | POST | `/v1/services/{id}/rollback` | Redeploy the latest successful digest-resolved snapshot; returns `409 rollback_unavailable` when no immutable snapshot exists |
 | GET | `/v1/services/{id}/logs` | Read the latest 500 lines per Swarm service, with the aggregate response capped at 1 MiB and explicitly marked when truncated |
 | POST | `/v1/services/{id}/databases` | Register an existing database container in this Compose stack for managed backup and restore |
+| DELETE | `/v1/databases/{id}/link` | Asynchronously remove a Compose database binding and its backup artifacts without deleting or stopping the owning stack |
 | GET | `/v1/services/{id}/volumes` | List mounted declared named volumes and their resolved Swarm names |
 | GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume; deletion returns `409 volume_backup_policy_busy` while a backup or restore is active and preserves completed history |
 | GET/POST | `/v1/services/{id}/volume-backups…` | List or queue named-volume backups; duplicate active requests return `409 backup_in_progress` |
@@ -813,7 +814,9 @@ password, and optional port. Dockyard validates both backup and restore plans
 against the exact service revision before encrypting the credentials. Use
 `PUT /v1/databases/{id}/credentials` to rotate the write-only connection data;
 rotation is rejected while a backup, restore, or migration is active. Removing
-the database record cannot remove its owning Compose stack.
+the database record cannot remove its owning Compose stack. Explicit unlinking
+uses `DELETE /v1/databases/{id}/link`; a durable finalizer cleans local and
+object-store backup artifacts before removing only the binding record.
 
 Storage-node rebinding never copies data. Stop the service and wait for its
 stop job to succeed, then either copy every stack volume onto the replacement

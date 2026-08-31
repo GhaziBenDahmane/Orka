@@ -72,3 +72,56 @@ func TestServiceDeletionDurablyQueuesRemoteBackupCleanup(t *testing.T) {
 		t.Fatalf("queued cleanup=%d attempted=%d err=%v", queued, attempted, err)
 	}
 }
+
+func TestLinkedDatabaseUnlinkPreservesComposeServiceAndQueuesArtifactCleanup(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	box, err := cryptox.New([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	databaseID, destinationID, backupID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Linked cleanup',$2)`, []any{organizationID, "linked-cleanup-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'App','app',$3,'services: {db: {image: postgres:17}}')`, []any{serviceID, environmentID, "linked-cleanup-" + serviceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,management_kind,connection_service_name,compose_service_id,encrypted_credentials,deletion_requested_at,status) VALUES($1,$2,'Database','database','postgres','17','compose','db',$3,'ciphertext',now(),'deleting')`, []any{databaseID, environmentID, serviceID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'archive','https://objects.example.test','backups','invalid-ciphertext')`, []any{destinationID, organizationID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,object_key,encrypted,finished_at) VALUES($1,$2,'succeeded','native',$3,'databases/linked.enc',true,now())`, []any{backupID, databaseID, destinationID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM backup_artifact_deletions WHERE source_id=$1`, backupID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	payload, _ := json.Marshal(map[string]string{"databaseId": databaseID.String()})
+	worker := &Worker{Store: db, Box: box, BackupDirectory: t.TempDir(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err = worker.deleteLinkedDatabase(ctx, job{Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	var serviceExists, databaseExists bool
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services WHERE id=$1),EXISTS(SELECT 1 FROM database_instances WHERE id=$2)`, serviceID, databaseID).Scan(&serviceExists, &databaseExists); err != nil || !serviceExists || databaseExists {
+		t.Fatalf("unlink service=%v database=%v err=%v", serviceExists, databaseExists, err)
+	}
+	var queued int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM backup_artifact_deletions WHERE source_id=$1`, backupID).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("artifact cleanup rows=%d err=%v", queued, err)
+	}
+}

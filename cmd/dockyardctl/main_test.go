@@ -116,6 +116,7 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"database", "database-id"}, http.MethodGet, "/v1/databases/database-id"},
 		{[]string{"link-database", "service-id", `{}`}, http.MethodPost, "/v1/services/service-id/databases"},
 		{[]string{"rotate-linked-database-credentials", "database-id", `{}`}, http.MethodPut, "/v1/databases/database-id/credentials"},
+		{[]string{"unlink-database", "database-id"}, http.MethodDelete, "/v1/databases/database-id/link"},
 		{[]string{"backup-policy", "database-id"}, http.MethodGet, "/v1/databases/database-id/backup-policy"},
 		{[]string{"delete-backup-policy", "database-id"}, http.MethodDelete, "/v1/databases/database-id/backup-policy"},
 		{[]string{"database-backups", "database-id"}, http.MethodGet, "/v1/databases/database-id/backups"},

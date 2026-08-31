@@ -562,6 +562,7 @@ type AIAuditFinalizerPosture struct {
 	DeletingProjects          int64      `json:"deletingProjects"`
 	DeletingEnvironments      int64      `json:"deletingEnvironments"`
 	DeletingServices          int64      `json:"deletingServices"`
+	DeletingDatabases         int64      `json:"deletingDatabases"`
 	DeletingClusters          int64      `json:"deletingClusters"`
 	DeletingNetworks          int64      `json:"deletingNetworks"`
 	PendingJobs               int64      `json:"pendingJobs"`
@@ -1212,6 +1213,12 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 			WHERE job.kind='delete.compose' AND project.organization_id=$1
 			UNION
 			SELECT job.id FROM jobs job
+			JOIN database_instances database ON database.id::text=job.payload->>'databaseId'
+			JOIN environments environment ON environment.id=database.environment_id
+			JOIN projects project ON project.id=environment.project_id
+			WHERE job.kind='delete.database-link' AND project.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
 			JOIN environments environment ON environment.id::text=job.payload->>'environmentId'
 			JOIN projects project ON project.id=environment.project_id
 			WHERE job.kind='delete.environment' AND project.organization_id=$1
@@ -1563,6 +1570,10 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 			FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id
 			WHERE project.organization_id=$1 AND service.deletion_requested_at IS NOT NULL
 			UNION ALL
+			SELECT 'database',database.id::text,database.deletion_requested_at
+			FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id
+			WHERE project.organization_id=$1 AND database.deletion_requested_at IS NOT NULL
+			UNION ALL
 			SELECT 'cluster',cluster.id::text,cluster.deletion_requested_at
 			FROM clusters cluster WHERE cluster.organization_id=$1 AND cluster.deletion_requested_at IS NOT NULL
 			UNION ALL
@@ -1573,6 +1584,7 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 					WHEN 'delete.project' THEN 'project'
 					WHEN 'delete.environment' THEN 'environment'
 					WHEN 'delete.compose' THEN 'service'
+					WHEN 'delete.database-link' THEN 'database'
 					WHEN 'delete.cluster' THEN 'cluster'
 					WHEN 'network.delete' THEN 'network'
 				END AS resource_type,
@@ -1580,12 +1592,13 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 					WHEN 'delete.project' THEN job.payload->>'projectId'
 					WHEN 'delete.environment' THEN job.payload->>'environmentId'
 					WHEN 'delete.compose' THEN job.payload->>'serviceId'
+					WHEN 'delete.database-link' THEN job.payload->>'databaseId'
 					WHEN 'delete.cluster' THEN job.payload->>'clusterId'
 					WHEN 'network.delete' THEN job.payload->>'networkId'
 				END AS resource_id,
 				job.status
 			FROM jobs job
-			WHERE job.kind IN ('delete.project','delete.environment','delete.compose','delete.cluster','network.delete')
+			WHERE job.kind IN ('delete.project','delete.environment','delete.compose','delete.database-link','delete.cluster','network.delete')
 		), scoped_jobs AS (
 			SELECT job.status FROM deletion_jobs job JOIN deleting_resources resource USING(resource_type,resource_id)
 		)
@@ -1593,6 +1606,7 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 			count(*) FILTER (WHERE resource_type='project'),
 			count(*) FILTER (WHERE resource_type='environment'),
 			count(*) FILTER (WHERE resource_type='service'),
+			count(*) FILTER (WHERE resource_type='database'),
 			count(*) FILTER (WHERE resource_type='cluster'),
 			count(*) FILTER (WHERE resource_type='network'),
 			(SELECT count(*) FROM scoped_jobs WHERE status='pending'),
@@ -1607,6 +1621,7 @@ func (s *Store) loadAIAuditFinalizerPosture(ctx context.Context, organizationID 
 		&posture.DeletingProjects,
 		&posture.DeletingEnvironments,
 		&posture.DeletingServices,
+		&posture.DeletingDatabases,
 		&posture.DeletingClusters,
 		&posture.DeletingNetworks,
 		&posture.PendingJobs,
