@@ -206,7 +206,7 @@ func (s *Server) restoreVolumeBackup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "storage_node_unassigned", err.Error())
 			return
 		}
-		if strings.Contains(err.Error(), "confirmation") || strings.Contains(err.Error(), "not restorable") {
+		if errors.Is(err, store.ErrBackupNotRestorable) || strings.Contains(err.Error(), "confirmation") {
 			writeError(w, http.StatusConflict, "restore_rejected", err.Error())
 			return
 		}

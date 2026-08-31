@@ -378,9 +378,12 @@ func (s *Store) QueueOfflineVolumeRestoreWithAudit(ctx context.Context, principa
 func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backupID, actorID uuid.UUID, confirmation string, offline bool) (VolumeRestore, error) {
 	var serviceID uuid.UUID
 	var slug, status, storageNodeID string
-	var deleting bool
+	var deleting, artifactValid bool
 	var desiredState string
-	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state,service.storage_node_id FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState, &storageNodeID)
+	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state,service.storage_node_id,
+		COALESCE(backup.size_bytes>0 AND backup.sha256~'^[a-f0-9]{64}$' AND backup.plaintext_sha256~'^[a-f0-9]{64}$'
+			AND backup.encrypted_data_key<>'' AND backup.object_key<>'' AND backup.finished_at IS NOT NULL,false)
+		FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState, &storageNodeID, &artifactValid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound
 	}
@@ -408,8 +411,8 @@ func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backup
 	if storageNodeID == "" {
 		return VolumeRestore{}, ErrStorageNodeUnassigned
 	}
-	if status != "succeeded" {
-		return VolumeRestore{}, errors.New("volume backup is not restorable")
+	if status != "succeeded" || !artifactValid {
+		return VolumeRestore{}, fmt.Errorf("volume %w", ErrBackupNotRestorable)
 	}
 	if confirmation != slug {
 		return VolumeRestore{}, errors.New("restore confirmation must match service slug")

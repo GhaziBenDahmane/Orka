@@ -50,7 +50,7 @@ func TestDatabaseOperationCancellationCommitsWithAudit(t *testing.T) {
 	assertDatabaseCancellationState(t, pool, ctx, "database_backups", "backup.database", "backupId", backup.ID, "cancelled", "cancelled", true)
 
 	restorableBackupID := uuid.New()
-	if _, err = pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, restorableBackupID, databaseID, destinationID); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,object_key,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'succeeded','native',$3,'database/object.enc',42,repeat('a',64),true,repeat('b',64),'wrapped',now())`, restorableBackupID, databaseID, destinationID); err != nil {
 		t.Fatal(err)
 	}
 	restore, err := db.QueueDatabaseRestore(ctx, organizationID, restorableBackupID, userID, "database")

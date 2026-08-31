@@ -3422,7 +3422,12 @@ func queueDatabaseRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, back
 	var slug, status string
 	var backupDatabaseID uuid.UUID
 	var composeServiceID *uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status, &composeServiceID)
+	var artifactValid bool
+	err := tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id,
+		COALESCE(b.size_bytes>0 AND b.sha256~'^[a-f0-9]{64}$' AND b.finished_at IS NOT NULL
+			AND (NOT b.encrypted OR (b.plaintext_sha256~'^[a-f0-9]{64}$' AND b.encrypted_data_key<>''))
+			AND ((b.destination_id IS NULL AND b.path<>'') OR (b.destination_id IS NOT NULL AND b.object_key<>'' AND b.encrypted)),false)
+		FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status, &composeServiceID, &artifactValid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}
@@ -3435,8 +3440,8 @@ func queueDatabaseRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, back
 	if err = requireDatabaseServiceRunning(ctx, tx, composeServiceID); err != nil {
 		return DatabaseRestore{}, err
 	}
-	if status != "succeeded" {
-		return DatabaseRestore{}, errors.New("backup is not restorable")
+	if status != "succeeded" || !artifactValid {
+		return DatabaseRestore{}, ErrBackupNotRestorable
 	}
 	if confirmation != slug {
 		return DatabaseRestore{}, errors.New("restore confirmation must match database slug")
@@ -3736,6 +3741,7 @@ func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (
 var (
 	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
 	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
+	ErrBackupNotRestorable            = errors.New("backup is not restorable")
 	ErrStorageNodeMismatch            = errors.New("storage node does not match the persisted assignment")
 	ErrOfflineRestoreRequiresStopped  = errors.New("offline volume restore requires a successfully stopped service")
 	ErrDatabaseStorageNodeMismatch    = ErrStorageNodeMismatch

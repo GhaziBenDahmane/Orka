@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -38,11 +39,19 @@ func TestVolumeRecoveryMutationsCommitWithAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	restorableBackupID := uuid.New()
-	if _, err = pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,finished_at) VALUES($1,$2,$3,'uploads','node1',$4,false,'succeeded',now())`, restorableBackupID, initialPolicy.ID, serviceID, destinationID); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,$3,'uploads','node1',$4,false,'succeeded','volumes/object.enc',42,repeat('a',64),repeat('b',64),'wrapped',now())`, restorableBackupID, initialPolicy.ID, serviceID, destinationID); err != nil {
+		t.Fatal(err)
+	}
+	malformedBackupID := uuid.New()
+	if _, err = pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,finished_at) VALUES($1,$2,$3,'uploads','node1',$4,false,'succeeded',now())`, malformedBackupID, initialPolicy.ID, serviceID, destinationID); err != nil {
 		t.Fatal(err)
 	}
 	principal := Principal{OrganizationID: organizationID, UserID: userID, Role: "owner"}
 	servicePrincipal := Principal{OrganizationID: organizationID, ServiceAccountID: &serviceAccountID, Role: "admin"}
+	if _, err = db.QueueVolumeRestoreWithAudit(ctx, servicePrincipal, malformedBackupID, "app", "127.0.0.1:1234"); !errors.Is(err, ErrBackupNotRestorable) {
+		t.Fatalf("malformed volume backup restore error=%v, want ErrBackupNotRestorable", err)
+	}
+	assertVolumeRecoveryCounts(t, pool, ctx, serviceID, malformedBackupID, 0, 0)
 	if _, err = pool.Exec(ctx, `CREATE FUNCTION reject_volume_recovery_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action IN ('volume_backup_policy.update','volume_backup_policy.delete','volume_backup.create','volume_restore.create') THEN RAISE EXCEPTION 'forced audit failure'; END IF; RETURN NEW; END $$`); err != nil {
 		t.Fatal(err)
 	}

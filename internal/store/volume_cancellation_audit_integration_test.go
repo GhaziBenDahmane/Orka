@@ -47,7 +47,7 @@ func TestVolumeOperationCancellationCommitsWithAudit(t *testing.T) {
 	assertDatabaseCancellationState(t, pool, ctx, "volume_backups", "backup.volume", "backupId", backup.ID, "cancelled", "cancelled", true)
 
 	restorableBackupID := uuid.New()
-	if _, err = pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,finished_at) VALUES($1,$2,$3,'uploads','node1',$4,true,'succeeded',now())`, restorableBackupID, policyID, serviceID, destinationID); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,$3,'uploads','node1',$4,true,'succeeded','volumes/object.enc',42,repeat('a',64),repeat('b',64),'wrapped',now())`, restorableBackupID, policyID, serviceID, destinationID); err != nil {
 		t.Fatal(err)
 	}
 	restore, err := db.QueueVolumeRestore(ctx, organizationID, restorableBackupID, userID, "app")

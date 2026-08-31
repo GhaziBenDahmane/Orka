@@ -39,8 +39,8 @@ func TestServiceDeletionFencesDataOperations(t *testing.T) {
 		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id) VALUES($1,$2,3600,7,true,now()+interval '1 hour',$3)`, []any{uuid.New(), databaseID, destinationID}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'data',$3,3600,7,true,true,now()+interval '1 hour')`, []any{uuid.New(), serviceID, destinationID}},
 		{`INSERT INTO template_instances(compose_service_id,template_key,template_version,template_checksum,applied_compose_checksum,encrypted_variables,encrypted_overrides) VALUES($1,'test/database','1','checksum','applied','encrypted','encrypted')`, []any{serviceID}},
-		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, []any{databaseBackupID, databaseID, destinationID}},
-		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded',now())`, []any{volumeBackupID, serviceID, destinationID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,object_key,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'succeeded','native',$3,'database/object.enc',42,repeat('a',64),true,repeat('b',64),'wrapped',now())`, []any{databaseBackupID, databaseID, destinationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded','volumes/object.enc',42,repeat('a',64),repeat('b',64),'wrapped',now())`, []any{volumeBackupID, serviceID, destinationID}},
 	}
 	for _, statement := range statements {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {

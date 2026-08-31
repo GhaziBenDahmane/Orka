@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -41,9 +42,17 @@ func TestDatabaseRecoveryMutationsCommitWithAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	restorableBackupID := uuid.New()
-	if _, err = pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, restorableBackupID, databaseID, destinationID); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,object_key,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'succeeded','native',$3,'database/object.enc',42,repeat('a',64),true,repeat('b',64),'wrapped',now())`, restorableBackupID, databaseID, destinationID); err != nil {
 		t.Fatal(err)
 	}
+	malformedBackupID := uuid.New()
+	if _, err = pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, malformedBackupID, databaseID, destinationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueDatabaseRestoreWithAudit(ctx, principal, malformedBackupID, "database", "127.0.0.1:1234"); !errors.Is(err, ErrBackupNotRestorable) {
+		t.Fatalf("malformed database backup restore error=%v, want ErrBackupNotRestorable", err)
+	}
+	assertRecoveryCounts(t, pool, ctx, databaseID, malformedBackupID, 0, 0)
 	if _, err = pool.Exec(ctx, `CREATE FUNCTION reject_database_recovery_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action IN ('database.backup.create','backup_policy.update','backup_policy.delete','database.restore.create') THEN RAISE EXCEPTION 'forced audit failure'; END IF; RETURN NEW; END $$`); err != nil {
 		t.Fatal(err)
 	}

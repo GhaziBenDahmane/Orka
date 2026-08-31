@@ -535,7 +535,7 @@ rolls back the policy, destination, batch, and job changes.
 | GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume; deletion returns `409 volume_backup_policy_busy` while a backup or restore is active and preserves completed history |
 | GET/POST | `/v1/services/{id}/volume-backups…` | List or queue named-volume backups; duplicate active requests return `409 backup_in_progress` |
 | GET | `/v1/services/{id}/volume-restores` | List restore history, including snapshotted target node and offline mode |
-| POST | `/v1/volume-backups/{id}/restore` | Queue a confirmed restore; `offline: true` requires a successfully stopped service and restores directly onto its assigned node without starting the workload; concurrent requests return `409 restore_in_progress` |
+| POST | `/v1/volume-backups/{id}/restore` | Queue a confirmed restore only from a successful artifact with complete size, encrypted/plaintext checksums, key, object location, and completion metadata; `offline: true` requires a successfully stopped service and restores directly onto its assigned node without starting the workload; concurrent requests return `409 restore_in_progress` |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
 | POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |
 | DELETE | `/v1/services/{id}/deploy-tokens/{tokenId}` | Revoke a CI deploy-hook credential |
@@ -746,7 +746,7 @@ authenticated context and is never returned by the API.
 | POST | `/v1/databases/{id}/driver-rebind` | Confirm and audit adoption of the currently installed driver identity |
 | GET | `/v1/environments/{id}/databases` | List managed databases in an environment |
 | GET/PUT/DELETE | `/v1/databases/{id}/backup-policy` | Manage interval scheduling and retention |
-| POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation; concurrent requests return `409 restore_in_progress` |
+| POST | `/v1/database-backups/{id}/restore` | Restore after slug confirmation only when the successful artifact has complete size, checksum, encryption, location, and completion metadata; concurrent requests return `409 restore_in_progress` |
 | POST | `/v1/database-backups/{id}/cancel` | Cancel a queued or running backup |
 | POST | `/v1/database-restores/{id}/cancel` | Cancel a queued or running restore |
 | GET | `/v1/databases/{id}/migrations` | List the latest 100 Dokploy data transfers |
@@ -773,6 +773,10 @@ is queued and the previous policy remains intact. User and service-account
 callers retain distinct audit attribution.
 Named-volume backup/restore creation and volume-policy updates/deletion provide
 the same guarantee, including rollback of storage-node binding and queued jobs.
+Restore admission validates the selected recovery point while holding its row
+lock. A malformed legacy row marked `succeeded` returns `409 restore_rejected`
+without creating a restore, job, or audit event; worker-side validation remains
+defense in depth for already queued work and database tampering.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the

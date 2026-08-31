@@ -1733,7 +1733,7 @@ func (s *Server) restoreDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "restore_in_progress", "wait for the active database restore to finish before starting another")
 			return
 		}
-		if strings.Contains(err.Error(), "confirmation") || strings.Contains(err.Error(), "not restorable") {
+		if errors.Is(err, store.ErrBackupNotRestorable) || strings.Contains(err.Error(), "confirmation") {
 			writeError(w, 409, "restore_rejected", err.Error())
 			return
 		}

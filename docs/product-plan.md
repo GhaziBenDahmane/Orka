@@ -123,6 +123,9 @@ recovery evidence remains.
   immutable audit-archive operations while queued work adopts the new secret.
 - Remote backup and restore execution through outbound agents using short-lived
   presigned transfers, per-backup encryption, and end-to-end checksum checks.
+- Database and named-volume restore admission rejects legacy successful rows
+  with incomplete artifact metadata before creating durable recovery work;
+  Prometheus and the deterministic AI auditor independently surface those rows.
 - Scheduled drill failure notifications, overdue alerts, and per-database
   recovery-duration metrics are implemented. An opt-in real-engine conformance
   suite verifies seeded application data and emits RPO/RTO evidence for all
