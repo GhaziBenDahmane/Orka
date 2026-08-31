@@ -52,6 +52,10 @@ var ErrInvalidRouteCertificate = errors.New("custom TLS certificate is unavailab
 var ErrRevisionConflict = errors.New("resource revision changed; reload and retry")
 var ErrCrossClusterMove = errors.New("service can only move between environments assigned to the same cluster")
 var ErrManagedDatabaseMove = errors.New("managed database services must be moved through a database migration")
+var ErrInvalidStorageNode = errors.New("invalid Swarm storage node ID")
+var ErrStorageNodeUnassigned = errors.New("service has no assigned storage node")
+var ErrStorageNodeConfirmation = errors.New("confirmation must match service slug")
+var ErrStorageNodeRebindRequiresStopped = errors.New("service must have a successful stop operation before rebinding its storage node")
 
 type Store struct {
 	Pool                 *pgxpool.Pool

@@ -703,6 +703,11 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodPut, "/v1/services/" + args[1] + "/environment", map[string]string{"environmentId": args[2]}, nil
+	case "rebind-service-storage-node":
+		if err := require(4); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/services/" + args[1] + "/storage-node-rebind", map[string]string{"nodeId": args[2], "confirm": args[3]}, nil
 	case "schedules":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -986,5 +991,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules)")
 }

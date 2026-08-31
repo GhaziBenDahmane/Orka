@@ -278,6 +278,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/services/{serviceID}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.deleteService)))
 	mux.Handle("PATCH /v1/services/{serviceID}", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.updateService)))
 	mux.Handle("PUT /v1/services/{serviceID}/environment", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.moveService)))
+	mux.Handle("POST /v1/services/{serviceID}/storage-node-rebind", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.rebindServiceStorageNode)))
 	mux.Handle("PUT /v1/services/{serviceID}/source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertSource)))
 	mux.Handle("PUT /v1/services/{serviceID}/artifact-source", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.upsertArtifactSource)))
 	mux.Handle("POST /v1/services/{serviceID}/routes", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.addRoute)))

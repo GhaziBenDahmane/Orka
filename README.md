@@ -152,6 +152,8 @@ dockyardctl deploy SERVICE_ID
 dockyardctl stop SERVICE_ID
 dockyardctl start SERVICE_ID
 dockyardctl move-service SERVICE_ID TARGET_ENVIRONMENT_ID
+# After a successful stop and an operator-managed volume copy/restore:
+dockyardctl rebind-service-storage-node SERVICE_ID TARGET_NODE_ID SERVICE_SLUG
 ```
 
 Core project, environment, service, database, template, deployment, log, and

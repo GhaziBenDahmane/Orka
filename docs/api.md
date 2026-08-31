@@ -492,6 +492,7 @@ rolls back the policy, destination, batch, and job changes.
 | GET/POST | `/v1/environments/{id}/services` | List or create Compose services |
 | GET/PATCH/DELETE | `/v1/services/{id}` | Read, revise, or asynchronously remove a service and stack (`?deleteVolumes=true` is explicit destructive cleanup); PATCH preserves encrypted variables when `environment` is omitted, while an explicit empty object clears them; revisions cannot race active deployments or remove a named volume while its backup policy exists, and deletion rejects active deployment, migration, backup, or restore work |
 | PUT | `/v1/services/{id}/environment` | Move a non-database service to another environment on the same Swarm; both environments require developer access, while active operations, deleting parents, target quotas, and cross-cluster moves fail closed |
+| POST | `/v1/services/{id}/storage-node-rebind` | After stopping the service and moving every named volume, confirm and audit its new Swarm node assignment |
 | GET/PUT | `/v1/services/{id}/variables` | List configured variable names without values, or atomically add/rotate encrypted values; mutations create a new revision, reject active deployments, and become operator-owned overrides that survive later template upgrades |
 | DELETE | `/v1/services/{id}/variables/{name}` | Delete one encrypted runtime variable without revealing any stored value |
 | GET/POST | `/v1/tags` | List reusable organization-scoped tags or create one as an administrator |
@@ -764,6 +765,15 @@ caller-supplied node identity constraints. This fails unavailable after node
 loss instead of silently starting against a new, empty local volume; restoring
 or deliberately relocating that volume remains an explicit operator recovery
 action.
+
+Storage-node rebinding never copies data. Stop the service and wait for its
+stop job to succeed, copy or restore every stack volume onto the replacement
+node, verify the copied data independently, then run
+`dockyardctl rebind-service-storage-node SERVICE_ID NODE_ID SERVICE_SLUG`.
+Only an administrator can perform this operation. The transaction rejects a
+running, deleting, unassigned, or busy service, updates a linked managed
+database atomically, and records the old and new node IDs in the audit log.
+Start the service only after the rebind succeeds.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
 optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.

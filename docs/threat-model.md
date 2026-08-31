@@ -208,6 +208,11 @@ every deployment. This includes managed databases and stateful templates.
 Legacy stacks are adopted only when all running tasks resolve unambiguously to
 one node. Loss of that node therefore causes visible unavailability rather
 than an apparently healthy workload with empty replacement storage.
+Relocation is a separate administrator-only operation: the service must have
+completed its stop flow, no deployment or data job may be active, the service
+slug must be confirmed, and the service plus any linked database binding move
+in the same audited transaction. The operator remains responsible for copying
+or restoring the volume contents before starting on the replacement node.
 Generic named-volume transfer helpers are scheduled only on an explicitly
 persisted node and must run the same digest-pinned image as the controller or
 cluster agent. Presigned URLs and envelope keys are delivered in an ephemeral
