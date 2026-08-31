@@ -84,6 +84,8 @@ func main() {
 		err = validateDatabaseURL(os.Args[2:], os.Stdin)
 	case "validate-bundled-database-credentials":
 		err = validateBundledDatabaseCredentials(os.Args[2:], os.Stdin)
+	case "inspect-database-drivers":
+		err = inspectDatabaseDrivers(os.Args[2:], os.Stdout)
 	case "validate-agent-endpoints":
 		err = validateAgentEndpoints(os.Args[2:])
 	case "validate-ai-auditor-config":
@@ -110,7 +112,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|validate-volume-artifact-job|volume-artifact|local-volume-artifact|verify-ai-gateway-recovery-manifest|verify-control-plane-recovery-manifest>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|inspect-database-drivers|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|validate-volume-artifact-job|volume-artifact|local-volume-artifact|verify-ai-gateway-recovery-manifest|verify-control-plane-recovery-manifest>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)

@@ -96,3 +96,43 @@ Drivers execute with controller privileges and receive plaintext generated
 database credentials when operational plans are requested. Package, sign,
 review, and deploy them as trusted control-plane artifacts. Restart controllers
 after changing the directory; hot loading is intentionally unsupported.
+
+## Production packaging
+
+Bake reviewed drivers into a derived controller image rather than distributing
+mutable host files. A minimal Dockerfile in a private build context is:
+
+```dockerfile
+ARG DOCKYARD_IMAGE
+FROM ${DOCKYARD_IMAGE}
+COPY --chown=0:0 --chmod=0555 database-drivers/ /usr/local/lib/dockyard/database-drivers/
+RUN dockyard inspect-database-drivers --directory /usr/local/lib/dockyard/database-drivers
+ENV DOCKYARD_DATABASE_DRIVER_DIRECTORY=/usr/local/lib/dockyard/database-drivers
+```
+
+Pass an already signed Dockyard digest as `DOCKYARD_IMAGE`, build with network
+access disabled when the builder supports it, scan and sign the derived image,
+then push and resolve that image to its own immutable digest. The inspection
+command executes every driver's bounded `describe` operation and emits a
+deterministic, path-free JSON inventory containing the protocol version,
+per-driver artifact hashes, and a digest over the complete external inventory.
+It fails when the directory is empty or any artifact violates the protocol or
+filesystem trust rules.
+
+Deploy the derived digest as `DOCKYARD_IMAGE` and add
+`deploy/swarm-database-drivers.yml` after the normal manifests:
+
+```sh
+docker stack deploy \
+  -c deploy/swarm.yml \
+  -c deploy/swarm-ha.yml \
+  -c deploy/swarm-database-drivers.yml \
+  dockyard
+```
+
+Embedding the drivers makes every controller task consume the same immutable
+artifact set. Do not mount a mutable shared directory into HA controllers.
+After rollout, query every task through the per-replica Prometheus discovery
+configuration and require both the controller-build and database-driver
+inventory mismatch alerts to remain clear before allowing recovery or migration
+jobs.

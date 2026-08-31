@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +13,51 @@ import (
 
 	"github.com/google/uuid"
 )
+
+func TestInspectDatabaseDriversProducesPathFreeDeterministicInventory(t *testing.T) {
+	directory := t.TempDir()
+	driverPath := filepath.Join(directory, "example-driver")
+	driver := `#!/bin/sh
+case "$(cat)" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"exampledb","defaultVersion":"1.2.3","capabilities":[]}}' ;;
+  *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(driverPath, []byte(driver), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var first, second bytes.Buffer
+	if err := inspectDatabaseDrivers([]string{"--directory", directory}, &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspectDatabaseDrivers([]string{"--directory", directory}, &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.String() != second.String() || strings.Contains(first.String(), directory) || strings.Contains(first.String(), driverPath) {
+		t.Fatalf("inventory is unstable or leaks its path: %s", first.String())
+	}
+	var inventory struct {
+		ProtocolVersion int    `json:"protocolVersion"`
+		Digest          string `json:"digest"`
+		Drivers         []struct {
+			Name           string `json:"name"`
+			Source         string `json:"source"`
+			ArtifactDigest string `json:"artifactDigest"`
+		} `json:"drivers"`
+	}
+	if err := json.Unmarshal(first.Bytes(), &inventory); err != nil {
+		t.Fatal(err)
+	}
+	if inventory.ProtocolVersion != 1 || len(inventory.Drivers) != 1 || inventory.Drivers[0].Name != "exampledb" || inventory.Drivers[0].Source != "external" || !strings.HasPrefix(inventory.Drivers[0].ArtifactDigest, "sha256:") || !strings.HasPrefix(inventory.Digest, "sha256:") {
+		t.Fatalf("unexpected inventory: %#v", inventory)
+	}
+}
+
+func TestInspectDatabaseDriversRejectsEmptyDirectory(t *testing.T) {
+	if err := inspectDatabaseDrivers([]string{"--directory", t.TempDir()}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "no trusted executable drivers") {
+		t.Fatalf("empty directory error=%v", err)
+	}
+}
 
 func TestPlatformHTTPServerUsesBoundedTransportSettings(t *testing.T) {
 	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})

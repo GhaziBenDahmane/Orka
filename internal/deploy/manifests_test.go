@@ -236,6 +236,13 @@ func TestControllerManifestExposesPrivateEgressAllowlist(t *testing.T) {
 	}
 }
 
+func TestExternalDatabaseDriverOverlayUsesImmutableImagePath(t *testing.T) {
+	service := readDeploymentManifest(t, "../../deploy/swarm-database-drivers.yml").Services["dockyard"]
+	if got := service.Environment["DOCKYARD_DATABASE_DRIVER_DIRECTORY"]; got != "/usr/local/lib/dockyard/database-drivers" {
+		t.Fatalf("external database driver directory=%q", got)
+	}
+}
+
 func TestProductionServicesHaveExplicitStopGracePeriods(t *testing.T) {
 	for path, minimums := range map[string]map[string]time.Duration{
 		"../../deploy/swarm.yml": {

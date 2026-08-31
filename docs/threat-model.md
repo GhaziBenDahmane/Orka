@@ -142,6 +142,12 @@ Ed25519 signer and are replaced transactionally only after archive and
 signature validation. Private catalog downloads refuse redirects rather than
 risk forwarding a GitHub token to a substituted host. Releases produce
 SBOM/provenance attestations and are keylessly signed.
+External database drivers are embedded as root-owned, non-writable executables
+in a derived controller image rather than distributed through a mutable HA host
+mount. Image construction runs the same bounded protocol and filesystem checks
+used at startup and emits a path-free inventory; operators deploy one signed
+derived digest to every replica and compare its per-target inventory metrics
+before permitting recovery work.
 Tenant-configured Git, OIDC, notification, SMTP, backup, and catalog clients use
 a shared egress policy. DNS answers are checked again in the dial path and any
 answer in loopback, link-local, shared, or private address space is rejected by

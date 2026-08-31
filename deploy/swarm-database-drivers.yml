@@ -1,0 +1,7 @@
+# Overlay for a controller image that embeds reviewed external database driver
+# executables at this immutable path. Apply it after swarm.yml and, for HA,
+# swarm-ha.yml.
+services:
+  dockyard:
+    environment:
+      DOCKYARD_DATABASE_DRIVER_DIRECTORY: /usr/local/lib/dockyard/database-drivers

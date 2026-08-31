@@ -391,6 +391,13 @@ mixed-artifact rolling deployment; drain database jobs until it clears.
 Validate local rule changes with `make check-alerts`; CI runs the same pinned
 Prometheus `promtool` image.
 
+To add reviewed out-of-tree database engines, build a derived controller image
+that contains the driver executables and apply
+`deploy/swarm-database-drivers.yml`. The packaging and preflight procedure is
+documented in [database-driver-protocol.md](../docs/database-driver-protocol.md).
+Use the same derived image digest on every controller; mutable host-mounted
+driver directories are not a supported HA distribution mechanism.
+
 ## Remote Swarm agent
 
 Configure the controller with a dedicated TLS 1.3 listener and a private agent
