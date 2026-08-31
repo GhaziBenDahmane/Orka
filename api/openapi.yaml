@@ -2637,9 +2637,24 @@ paths:
     get:
       operationId: get_v1_migration_resources
       tags: [migration-resources]
+      parameters:
+        - name: sourceOrganizationId
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 250}
+        - name: cursor
+          in: query
+          description: Opaque cursor returned by the previous page. It is bound to the source organization filter.
+          schema: {type: string, maxLength: 8192}
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MigrationResourcePage'
         default:
           description: Structured API error
           content:
@@ -5470,6 +5485,26 @@ components:
         items:
           type: array
           items: {type: object, additionalProperties: true}
+        nextCursor: {type: string}
+    MigrationResourcePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [targetOrganizationId, sourceOrganizationId, sourceKind, sourceId, status, metadata, updatedAt]
+            properties:
+              targetOrganizationId: {type: string, format: uuid}
+              sourceOrganizationId: {type: string}
+              sourceKind: {type: string}
+              sourceId: {type: string}
+              targetId: {type: string, format: uuid}
+              status: {type: string, enum: [imported, skipped]}
+              reason: {type: string}
+              metadata: {type: object, additionalProperties: true}
+              updatedAt: {type: string, format: date-time}
         nextCursor: {type: string}
     SCIMResource:
       type: object

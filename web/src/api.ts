@@ -269,7 +269,7 @@ export const api = {
   members: () => request<Envelope<OrganizationMember>>("/v1/members"),
   updateMemberRole: (userId: string, role: Role) => request<OrganizationMember>(`/v1/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
   deleteMember: (userId: string) => request<void>(`/v1/members/${userId}`, { method: "DELETE" }),
-  migrationResources: (sourceOrganizationId = "") => request<Envelope<MigrationResource>>(`/v1/migration-resources${sourceOrganizationId ? `?sourceOrganizationId=${encodeURIComponent(sourceOrganizationId)}` : ""}`),
+  migrationResources: (sourceOrganizationId = "", cursor = "") => { const query = new URLSearchParams({ limit: "500" }); if (sourceOrganizationId) query.set("sourceOrganizationId", sourceOrganizationId); if (cursor) query.set("cursor", cursor); return request<PaginatedEnvelope<MigrationResource>>(`/v1/migration-resources?${query}`); },
   invitations: () => request<Envelope<OrganizationInvitation>>("/v1/invitations"),
   createInvitation: (email: string, role: Role, expiresInDays: number) => request<{ invitation: OrganizationInvitation; token: string; acceptUrl: string }>("/v1/invitations", { method: "POST", body: JSON.stringify({ email, role, expiresInDays }) }),
   revokeInvitation: (id: string) => request<void>(`/v1/invitations/${id}`, { method: "DELETE" }),

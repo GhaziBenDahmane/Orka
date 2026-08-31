@@ -140,3 +140,16 @@ func TestOpenAPIDocumentsTemplatePagination(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIDocumentsMigrationResourcePagination(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{"#/components/schemas/MigrationResourcePage", "name: sourceOrganizationId", "default: 250", "maximum: 500"} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing %q", expected)
+		}
+	}
+}

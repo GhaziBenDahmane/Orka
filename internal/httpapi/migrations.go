@@ -1,8 +1,14 @@
 package httpapi
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/bendahma/dokploy-go/internal/store"
 )
 
 func (s *Server) listMigrationResources(w http.ResponseWriter, r *http.Request) {
@@ -11,10 +17,70 @@ func (s *Server) listMigrationResources(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid_source_organization", "sourceOrganizationId is too long")
 		return
 	}
-	items, err := s.Store.ListMigrationResources(r.Context(), principal(r).OrganizationID, sourceOrganizationID)
+	limit := 250
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			writeError(w, http.StatusBadRequest, "invalid_page", "limit must be between 1 and 500")
+			return
+		}
+		limit = parsed
+	}
+	var cursor *store.MigrationResourcePageCursor
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		parsed, err := decodeMigrationResourceCursor(raw, sourceOrganizationID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_cursor", "migration resource cursor is invalid")
+			return
+		}
+		cursor = parsed
+	}
+	items, hasMore, err := s.Store.ListMigrationResourcesPage(r.Context(), principal(r).OrganizationID, sourceOrganizationID, cursor, limit)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	nextCursor := ""
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		nextCursor, err = encodeMigrationResourceCursor(sourceOrganizationID, store.MigrationResourcePageCursor{SourceOrganizationID: last.SourceOrganizationID, SourceKind: last.SourceKind, SourceID: last.SourceID})
+		if err != nil {
+			s.writeInternalError(w, r, http.StatusInternalServerError, "cursor_failed", "migration resource cursor could not be created", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "nextCursor": nextCursor})
+}
+
+type migrationResourceCursorPayload struct {
+	Filter               string `json:"f"`
+	SourceOrganizationID string `json:"o"`
+	SourceKind           string `json:"k"`
+	SourceID             string `json:"i"`
+}
+
+func encodeMigrationResourceCursor(filter string, cursor store.MigrationResourcePageCursor) (string, error) {
+	payload, err := json.Marshal(migrationResourceCursorPayload{Filter: filter, SourceOrganizationID: cursor.SourceOrganizationID, SourceKind: cursor.SourceKind, SourceID: cursor.SourceID})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeMigrationResourceCursor(raw, filter string) (*store.MigrationResourcePageCursor, error) {
+	if len(raw) > 8192 {
+		return nil, errors.New("cursor is too long")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, err
+	}
+	var payload migrationResourceCursorPayload
+	if err = json.Unmarshal(decoded, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Filter != filter || payload.SourceOrganizationID == "" || payload.SourceKind == "" || payload.SourceID == "" {
+		return nil, errors.New("cursor payload is invalid")
+	}
+	return &store.MigrationResourcePageCursor{SourceOrganizationID: payload.SourceOrganizationID, SourceKind: payload.SourceKind, SourceID: payload.SourceID}, nil
 }

@@ -1,0 +1,28 @@
+package httpapi
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/bendahma/dokploy-go/internal/store"
+)
+
+func TestMigrationResourceCursorRoundTripAndFilterBinding(t *testing.T) {
+	want := store.MigrationResourcePageCursor{SourceOrganizationID: "source-org", SourceKind: "application", SourceID: "app-42"}
+	encoded, err := encodeMigrationResourceCursor("source-org", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeMigrationResourceCursor(encoded, "source-org")
+	if err != nil || *got != want {
+		t.Fatalf("cursor=%#v err=%v", got, err)
+	}
+	if _, err = decodeMigrationResourceCursor(encoded, "other-source"); err == nil {
+		t.Fatal("cursor was accepted with a different source filter")
+	}
+	for _, invalid := range []string{"not-base64!", "e30", strings.Repeat("a", 8193)} {
+		if _, err = decodeMigrationResourceCursor(invalid, "source-org"); err == nil {
+			t.Fatalf("invalid cursor %q was accepted", invalid[:min(len(invalid), 32)])
+		}
+	}
+}
