@@ -51,7 +51,10 @@ case "$1 $2" in
       exit 1
     fi ;;
   "secret inspect") exit 0 ;;
-  "secret rm") ;;
+  "secret rm")
+    if [ "${ORKA_AI_RECOVERY_TEST_SECRET_RM_FAIL_ALWAYS:-false}" = true ]; then
+      exit 1
+    fi ;;
   *) exit 1 ;;
 esac
 MOCK
@@ -90,6 +93,16 @@ if grep -Fq 'upload-secret' "$bundle/manifest.json" || grep -Fq "$(<"$DOCKYARD_A
   exit 1
 fi
 grep -q '^service scale --detach=false dockyard-ai_9router=0$' "$ORKA_AI_RECOVERY_TEST_LOG"
+grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
+
+: >"$ORKA_AI_RECOVERY_TEST_LOG"
+if ORKA_AI_RECOVERY_TEST_SECRET_RM_FAIL_ALWAYS=true "$root/scripts/backup-ai-gateway.sh" "$temporary/output/failed-secret-cleanup" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'AI gateway backup ignored permanent secret cleanup failure' >&2
+  exit 1
+fi
+test ! -e "$temporary/output/failed-secret-cleanup"
+grep -q 'temporary Swarm resources could not be removed' "$temporary/err"
+test "$(grep -c '^secret rm ' "$ORKA_AI_RECOVERY_TEST_LOG")" -eq 60
 grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q -- '--constraint node.id==nodeabc123' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q 'type=volume,source=dockyard-ai_nine-router-data,target=/volume,readonly' "$ORKA_AI_RECOVERY_TEST_LOG"
@@ -200,6 +213,7 @@ jq -n \
     helperCleanupRetried:true,
     restoreHelperCleanupRetried:true,
     permanentCleanupFailureRejected:true,
+    permanentSecretCleanupFailureRejected:true,
     restoreConfirmationRequired:true,
     runningServiceRestoreRejected:true,
     wrongEncryptionKeyRejected:true,
@@ -218,7 +232,8 @@ jq -e '
   .signedMetadataVerified and .tamperedMetadataRejected and
   .credentialsExcludedFromMetadata and .credentialsExcludedFromDockerArguments and
   .backupQuiesced and .backupFailureResumedService and .failedHelperTaskRejected and
-  .helperCleanupRetried and .restoreHelperCleanupRetried and .permanentCleanupFailureRejected and
+  .helperCleanupRetried and .restoreHelperCleanupRetried and
+  .permanentCleanupFailureRejected and .permanentSecretCleanupFailureRejected and
   .restoreConfirmationRequired and .runningServiceRestoreRejected and
   .wrongEncryptionKeyRejected and .restoreLeftOffline and
   .backupMountReadOnly and .nodePinned and
