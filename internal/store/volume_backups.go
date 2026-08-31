@@ -307,8 +307,16 @@ func (s *Store) CancelVolumeBackup(ctx context.Context, organizationID, id uuid.
 	return s.cancelVolumeJob(ctx, organizationID, id, "backup.volume", "volume_backups", "backupId", `JOIN compose_services service ON service.id=resource.compose_service_id`)
 }
 
+func (s *Store) CancelVolumeBackupWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	return s.cancelVolumeJobWithAudit(ctx, principal, id, "backup.volume", "volume_backups", "backupId", `JOIN compose_services service ON service.id=resource.compose_service_id`, "volume_backup", remoteAddr)
+}
+
 func (s *Store) CancelVolumeRestore(ctx context.Context, organizationID, id uuid.UUID) error {
 	return s.cancelVolumeJob(ctx, organizationID, id, "restore.volume", "volume_restores", "restoreId", `JOIN volume_backups backup ON backup.id=resource.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id`)
+}
+
+func (s *Store) CancelVolumeRestoreWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	return s.cancelVolumeJobWithAudit(ctx, principal, id, "restore.volume", "volume_restores", "restoreId", `JOIN volume_backups backup ON backup.id=resource.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id`, "volume_restore", remoteAddr)
 }
 
 func (s *Store) cancelVolumeJob(ctx context.Context, organizationID, id uuid.UUID, kind, table, payloadKey, resourceJoin string) error {
@@ -320,31 +328,56 @@ func (s *Store) cancelVolumeJob(ctx context.Context, organizationID, id uuid.UUI
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelVolumeJobTx(ctx, tx, organizationID, id, kind, table, payloadKey, resourceJoin); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) cancelVolumeJobWithAudit(ctx context.Context, principal Principal, id uuid.UUID, kind, table, payloadKey, resourceJoin, resourceType, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelVolumeJobTx(ctx, tx, principal.OrganizationID, id, kind, table, payloadKey, resourceJoin); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, resourceType+".cancel", resourceType, id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelVolumeJobTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, kind, table, payloadKey, resourceJoin string) error {
+	if table != "volume_backups" && table != "volume_restores" {
+		return errors.New("invalid volume job resource")
+	}
 	query := `SELECT resource.status,job.status,job.id FROM ` + table + ` resource ` + resourceJoin + ` JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id JOIN jobs job ON job.kind=$3 AND job.payload->>$4=resource.id::text WHERE resource.id=$1 AND project.organization_id=$2 FOR UPDATE OF resource,job`
 	var resourceStatus, jobStatus string
 	var jobID uuid.UUID
-	if err = tx.QueryRow(ctx, query, id, organizationID, kind, payloadKey).Scan(&resourceStatus, &jobStatus, &jobID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, query, id, organizationID, kind, payloadKey).Scan(&resourceStatus, &jobStatus, &jobID); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
 	}
 	switch jobStatus {
 	case "pending":
-		if _, err = tx.Exec(ctx, `UPDATE `+table+` SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, id); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET status='cancelled',error='cancelled by user',finished_at=now() WHERE id=$1`, id); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE jobs SET status='cancelled',cancel_requested_at=now(),finished_at=now() WHERE id=$1`, jobID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE jobs SET status='cancelled',cancel_requested_at=now(),finished_at=now() WHERE id=$1`, jobID); err != nil {
 			return err
 		}
 	case "running":
 		if resourceStatus != "running" {
 			return ErrNotCancellable
 		}
-		if _, err = tx.Exec(ctx, `UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()) WHERE id=$1`, jobID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()) WHERE id=$1`, jobID); err != nil {
 			return err
 		}
 	default:
 		return ErrNotCancellable
 	}
-	return tx.Commit(ctx)
+	return nil
 }

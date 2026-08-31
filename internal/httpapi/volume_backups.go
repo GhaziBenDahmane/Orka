@@ -173,7 +173,7 @@ func (s *Server) getVolumeBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelVolumeBackup(w http.ResponseWriter, r *http.Request) {
-	s.cancelVolumeOperation(w, r, "backupID", "volume_backup", s.Store.CancelVolumeBackup)
+	s.cancelVolumeOperation(w, r, "backupID", s.Store.CancelVolumeBackupWithAudit)
 }
 
 func (s *Server) restoreVolumeBackup(w http.ResponseWriter, r *http.Request) {
@@ -221,17 +221,17 @@ func (s *Server) getVolumeRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelVolumeRestore(w http.ResponseWriter, r *http.Request) {
-	s.cancelVolumeOperation(w, r, "restoreID", "volume_restore", s.Store.CancelVolumeRestore)
+	s.cancelVolumeOperation(w, r, "restoreID", s.Store.CancelVolumeRestoreWithAudit)
 }
 
-func (s *Server) cancelVolumeOperation(w http.ResponseWriter, r *http.Request, pathKey, resourceType string, cancel func(context.Context, uuid.UUID, uuid.UUID) error) {
+func (s *Server) cancelVolumeOperation(w http.ResponseWriter, r *http.Request, pathKey string, cancel func(context.Context, store.Principal, uuid.UUID, string) error) {
 	id, err := uuid.Parse(r.PathValue(pathKey))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_id", "invalid volume operation id")
 		return
 	}
 	p := principal(r)
-	if err = cancel(r.Context(), p.OrganizationID, id); err != nil {
+	if err = cancel(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrNotCancellable) {
 			writeError(w, http.StatusConflict, "not_cancellable", err.Error())
 			return
@@ -239,7 +239,6 @@ func (s *Server) cancelVolumeOperation(w http.ResponseWriter, r *http.Request, p
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, resourceType+".cancel", resourceType, id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancellation_requested"})
 }
 

@@ -688,7 +688,8 @@ authenticated context and is never returned by the API.
 Queued database backup, restore, and migration cancellation updates the
 operation record, worker job, cancellation timestamp, and operator audit event
 in one transaction. Failed audit evidence leaves both the operation and its job
-cancellable.
+cancellable. Named-volume backup and restore cancellation has the same atomic
+guarantee.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
