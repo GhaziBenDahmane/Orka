@@ -1840,16 +1840,43 @@ type AIAuditFinding struct {
 }
 
 func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage) (AIAuditRun, error) {
-	if len(scope) == 0 {
-		scope = json.RawMessage(`{}`)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AIAuditRun{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := createAIAuditRunTx(ctx, tx, organizationID, accountID, agentName, agentVersion, model, scope)
+	if err != nil {
+		return AIAuditRun{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateAIAuditRunWithAudit(ctx context.Context, principal Principal, agentName, agentVersion, model string, scope json.RawMessage, remoteAddr string) (AIAuditRun, error) {
+	if principal.ServiceAccountID == nil {
+		return AIAuditRun{}, ErrNotFound
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return AIAuditRun{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := createAIAuditRunTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, agentName, agentVersion, model, scope)
+	if err != nil {
+		return AIAuditRun{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "ai_audit.start", "ai_audit_run", item.ID.String(), remoteAddr, nil); err != nil {
+		return AIAuditRun{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createAIAuditRunTx(ctx context.Context, tx pgx.Tx, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage) (AIAuditRun, error) {
+	if len(scope) == 0 {
+		scope = json.RawMessage(`{}`)
+	}
 	var accountOrganizationID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT organization_id FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled AND role='auditor' FOR UPDATE`, accountID, organizationID).Scan(&accountOrganizationID)
+	err := tx.QueryRow(ctx, `SELECT organization_id FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled AND role='auditor' FOR UPDATE`, accountID, organizationID).Scan(&accountOrganizationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AIAuditRun{}, ErrNotFound
 	}
@@ -1885,7 +1912,7 @@ func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID 
 	if err != nil {
 		return AIAuditRun{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID uuid.UUID, item AIAuditFinding) (AIAuditFinding, error) {
@@ -1964,8 +1991,33 @@ func (s *Store) FinishAIAuditRun(ctx context.Context, organizationID, accountID,
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = finishAIAuditRunTx(ctx, tx, organizationID, accountID, runID, status, summary); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) FinishAIAuditRunWithAudit(ctx context.Context, principal Principal, runID uuid.UUID, status, summary, remoteAddr string) error {
+	if principal.ServiceAccountID == nil {
+		return ErrNotFound
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = finishAIAuditRunTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, runID, status, summary); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "ai_audit."+status, "ai_audit_run", runID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func finishAIAuditRunTx(ctx context.Context, tx pgx.Tx, organizationID, accountID, runID uuid.UUID, status, summary string) error {
 	var agentName string
-	err = tx.QueryRow(ctx, `UPDATE ai_audit_runs SET status=$4,summary=$5,completed_at=now() WHERE id=$1 AND organization_id=$2 AND service_account_id=$3 AND status='running' RETURNING agent_name`, runID, organizationID, accountID, status, summary).Scan(&agentName)
+	err := tx.QueryRow(ctx, `UPDATE ai_audit_runs SET status=$4,summary=$5,completed_at=now() WHERE id=$1 AND organization_id=$2 AND service_account_id=$3 AND status='running' RETURNING agent_name`, runID, organizationID, accountID, status, summary).Scan(&agentName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1977,7 +2029,7 @@ func (s *Store) FinishAIAuditRun(ctx context.Context, organizationID, accountID,
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func queueAIAuditFailureNotifications(ctx context.Context, tx pgx.Tx, organizationID, runID uuid.UUID, agentName, summary string) error {

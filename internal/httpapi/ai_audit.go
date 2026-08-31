@@ -80,12 +80,11 @@ func (s *Server) createAIAuditRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateAIAuditRun(r.Context(), p.OrganizationID, *p.ServiceAccountID, in.AgentName, in.AgentVersion, in.Model, in.Scope)
+	item, err := s.Store.CreateAIAuditRunWithAudit(r.Context(), p, in.AgentName, in.AgentVersion, in.Model, in.Scope, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "ai_audit.start", "ai_audit_run", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
 
@@ -152,11 +151,10 @@ func (s *Server) finishAIAuditRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.FinishAIAuditRun(r.Context(), p.OrganizationID, *p.ServiceAccountID, runID, in.Status, in.Summary); err != nil {
+	if err = s.Store.FinishAIAuditRunWithAudit(r.Context(), p, runID, in.Status, in.Summary, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "ai_audit."+in.Status, "ai_audit_run", runID.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -389,6 +389,11 @@ linked to its previous occurrence. Acknowledgements carry forward, while a
 resolved finding reopens when it recurs. The API reports `previousFindingId`
 and `occurrenceNumber` for this lineage. A new fingerprint after the limit
 returns `409 ai_audit_finding_limit`.
+Starting, completing, or failing a run commits atomically with audit evidence
+attributed to the auditor service account. Starting a replacement run also
+commits supersession of the previous run and any resulting failure
+notifications in that transaction; an audit-write failure rolls all of those
+changes back.
 The current-findings endpoint accepts optional `disposition` (`active` selects
 open and acknowledged findings) and `severity` filters plus a `limit` from 1
 to 200 (default 100).
