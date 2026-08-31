@@ -90,16 +90,46 @@ func TestBackupDestinationCredentialRotation(t *testing.T) {
 	if err = json.Unmarshal(data, &created); err != nil {
 		t.Fatal(err)
 	}
-	base["name"], base["prefix"], base["accessKey"], base["secretKey"] = "rotated", "current", "new-access", "new-secret"
+	base["name"], base["accessKey"], base["secretKey"] = "rotated", "new-access", "new-secret"
+	projectID, environmentID, databaseID, backupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Backup project','backup-project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'PostgreSQL','postgres','postgres','17','encrypted')`, []any{databaseID, environmentID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,started_at) VALUES($1,$2,'running','native',$3,now())`, []any{backupID, databaseID, created.ID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response, data = do(http.MethodPut, "/v1/backup-destinations/"+created.ID.String(), base)
+	if response.StatusCode != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"resource_busy"`)) {
+		t.Fatalf("active-backup update status=%d body=%s", response.StatusCode, data)
+	}
+	stored, err := db.GetBackupDestination(ctx, organizationID, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := box.DecryptResource(stored.EncryptedCredentials, "backup-destination", created.ID.String(), "backup-destination")
+	if err != nil || !bytes.Contains(plain, []byte("old-secret")) || bytes.Contains(plain, []byte("new-secret")) {
+		t.Fatalf("blocked rotation changed stored credentials: %v", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE database_backups SET status='failed',finished_at=now() WHERE id=$1`, backupID); err != nil {
+		t.Fatal(err)
+	}
+	seenNewCredential = false
 	response, data = do(http.MethodPut, "/v1/backup-destinations/"+created.ID.String(), base)
 	if response.StatusCode != http.StatusOK || !seenNewCredential || bytes.Contains(data, []byte("new-secret")) {
 		t.Fatalf("update status=%d usedNewCredential=%v body=%s", response.StatusCode, seenNewCredential, data)
 	}
-	stored, err := db.GetBackupDestination(ctx, organizationID, created.ID)
-	if err != nil || stored.Name != "rotated" || stored.Prefix != "current" {
+	stored, err = db.GetBackupDestination(ctx, organizationID, created.ID)
+	if err != nil || stored.Name != "rotated" || stored.Prefix != "initial" {
 		t.Fatalf("stored destination=%#v err=%v", stored, err)
 	}
-	plain, err := box.DecryptResource(stored.EncryptedCredentials, "backup-destination", created.ID.String(), "backup-destination")
+	plain, err = box.DecryptResource(stored.EncryptedCredentials, "backup-destination", created.ID.String(), "backup-destination")
 	if err != nil || !bytes.Contains(plain, []byte("new-access")) || !bytes.Contains(plain, []byte("new-secret")) || bytes.Contains(plain, []byte("old-secret")) {
 		t.Fatalf("rotated credentials were not persisted safely: %v", err)
 	}

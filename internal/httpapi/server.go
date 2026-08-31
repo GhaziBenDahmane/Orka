@@ -1588,6 +1588,10 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 	}
 	item, err := s.Store.UpdateBackupDestination(r.Context(), p.OrganizationID, store.BackupDestination{ID: destinationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "resource_busy", "wait for active backup, restore, or audit-archive operations before rotating this destination")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
@@ -2687,6 +2691,10 @@ func (s *Server) rotateSourceCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	item, err := s.Store.RotateSourceCredential(r.Context(), p.OrganizationID, id, encrypted)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "resource_busy", "wait for active deployments or template synchronization before rotating this credential")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
