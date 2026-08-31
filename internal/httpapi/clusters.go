@@ -31,6 +31,8 @@ type clusterContextKey string
 
 const clusterIDKey clusterContextKey = "cluster-id"
 
+const maxAgentIdentityRequestBytes = 128 << 10
+
 func (s *Server) AgentHandler() http.Handler {
 	if s.Metrics == nil {
 		s.Metrics = observability.NewMetrics()
@@ -51,7 +53,11 @@ func (s *Server) agentRotateCertificate(w http.ResponseWriter, r *http.Request) 
 	var input struct {
 		CSR string `json:"csr"`
 	}
-	if !decode(w, r, &input) {
+	if !decodeLimit(w, r, &input, maxAgentIdentityRequestBytes) {
+		return
+	}
+	if len(input.CSR) == 0 || len(input.CSR) > agentpki.MaxCSRPEMBytes {
+		writeError(w, http.StatusBadRequest, "invalid_csr", "certificate request exceeds limits")
 		return
 	}
 	ttl := s.AgentCertificateTTL
@@ -477,12 +483,16 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		Token string `json:"token"`
 		CSR   string `json:"csr"`
 	}
-	if !decode(w, r, &input) {
+	if !decodeLimit(w, r, &input, maxAgentIdentityRequestBytes) {
 		return
 	}
 	token := strings.TrimSpace(input.Token)
 	if !validPublicOpaqueValue(token, maxPublicCredentialBytes) {
 		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
+		return
+	}
+	if len(input.CSR) == 0 || len(input.CSR) > agentpki.MaxCSRPEMBytes {
+		writeError(w, http.StatusBadRequest, "invalid_csr", "certificate request exceeds limits")
 		return
 	}
 	if !s.allowAuthenticationAttempt(w, r, "agent-enroll-client", authenticationClientKey(r), 120) || !s.allowAuthenticationAttempt(w, r, "agent-enroll-token", cryptox.Digest(token), 20) {

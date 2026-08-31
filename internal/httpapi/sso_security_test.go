@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bendahma/dokploy-go/internal/agentpki"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -177,6 +178,21 @@ func TestOversizedPublicCredentialsFailBeforeStoreAccess(t *testing.T) {
 		request.Header.Set("Content-Type", "application/json")
 		server.enrollClusterAgent(recorder, request)
 		if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"code":"invalid_enrollment_token"`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("agent enrollment csr", func(t *testing.T) {
+		server := &Server{AgentCACertificate: []byte("configured"), AgentCAKey: []byte("configured")}
+		body, err := json.Marshal(map[string]string{"token": "valid-shape", "csr": strings.Repeat("x", agentpki.MaxCSRPEMBytes+1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/agent/enroll", strings.NewReader(string(body)))
+		request.Header.Set("Content-Type", "application/json")
+		server.enrollClusterAgent(recorder, request)
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_csr"`) {
 			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
 	})

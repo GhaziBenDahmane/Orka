@@ -1,6 +1,7 @@
 package agentpki
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -52,6 +53,42 @@ func TestSignAgentCSRRejectsTampering(t *testing.T) {
 	caPEM, caKey, _ := NewCA(now, 24*time.Hour)
 	if _, _, err := SignAgentCSR(caPEM, caKey, []byte("not a csr"), uuid.New(), now, time.Hour); err == nil {
 		t.Fatal("expected malformed CSR rejection")
+	}
+}
+
+func TestSignAgentCSRRejectsOversizedAndTrailingInput(t *testing.T) {
+	now := time.Now().UTC()
+	caPEM, caKey, err := NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, csr := range [][]byte{
+		bytes.Repeat([]byte("x"), MaxCSRPEMBytes+1),
+		[]byte("-----BEGIN CERTIFICATE REQUEST-----\nAA==\n-----END CERTIFICATE REQUEST-----\ntrailing"),
+	} {
+		if _, _, err = SignAgentCSR(caPEM, caKey, csr, uuid.New(), now, time.Hour); err == nil {
+			t.Fatal("invalid CSR input was accepted")
+		}
+	}
+}
+
+func TestSignAgentCSRRejectsWeakPublicKey(t *testing.T) {
+	now := time.Now().UTC()
+	caPEM, caKey, err := NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, weakKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	if _, _, err = SignAgentCSR(caPEM, caKey, csrPEM, uuid.New(), now, time.Hour); err == nil {
+		t.Fatal("weak agent public key was accepted")
 	}
 }
 

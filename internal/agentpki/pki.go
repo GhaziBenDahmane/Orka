@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -20,6 +21,8 @@ import (
 
 	"github.com/google/uuid"
 )
+
+const MaxCSRPEMBytes = 16 << 10
 
 const identityPrefix = "spiffe://dockyard/cluster/"
 
@@ -49,16 +52,25 @@ func SignAgentCSR(caCertPEM, caKeyPEM, csrPEM []byte, clusterID uuid.UUID, now t
 	if lifetime < 5*time.Minute || lifetime > 30*24*time.Hour {
 		return nil, nil, errors.New("agent certificate lifetime must be between 5 minutes and 30 days")
 	}
+	if len(csrPEM) == 0 || len(csrPEM) > MaxCSRPEMBytes {
+		return nil, nil, errors.New("certificate request exceeds limits")
+	}
 	ca, key, err := validateAuthorityAndKey(caCertPEM, caKeyPEM, now)
 	if err != nil {
 		return nil, nil, err
 	}
-	block, _ := pem.Decode(csrPEM)
-	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+	block, rest := pem.Decode(csrPEM)
+	if block == nil || block.Type != "CERTIFICATE REQUEST" || len(bytes.TrimSpace(rest)) != 0 {
 		return nil, nil, errors.New("invalid PEM certificate request")
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil || csr.CheckSignature() != nil {
+	if err != nil {
+		return nil, nil, errors.New("invalid certificate request")
+	}
+	if err = validateAgentPublicKey(csr.PublicKey); err != nil {
+		return nil, nil, err
+	}
+	if csr.CheckSignature() != nil {
 		return nil, nil, errors.New("invalid certificate request signature")
 	}
 	serial, err := randomSerial()
@@ -80,6 +92,26 @@ func SignAgentCSR(caCertPEM, caKeyPEM, csrPEM []byte, clusterID uuid.UUID, now t
 	}
 	cert, err := x509.ParseCertificate(der)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), cert, err
+}
+
+func validateAgentPublicKey(publicKey any) error {
+	switch key := publicKey.(type) {
+	case *rsa.PublicKey:
+		if key.N == nil || key.N.BitLen() < 2048 || key.N.BitLen() > 8192 || key.E < 65537 {
+			return errors.New("agent RSA public key is outside supported strength limits")
+		}
+	case *ecdsa.PublicKey:
+		if key.Curve != elliptic.P256() && key.Curve != elliptic.P384() && key.Curve != elliptic.P521() {
+			return errors.New("agent ECDSA public key uses an unsupported curve")
+		}
+	case ed25519.PublicKey:
+		if len(key) != ed25519.PublicKeySize {
+			return errors.New("agent Ed25519 public key is invalid")
+		}
+	default:
+		return errors.New("agent public key type is unsupported")
+	}
+	return nil
 }
 
 func ClusterIdentity(cert *x509.Certificate) (uuid.UUID, error) {
