@@ -57,6 +57,7 @@ export type AuthSettings = { organizationId: string; requireSso: boolean; update
 export type AuditEvent = { id: number; actorUserId?: string; actorServiceAccountId?: string; action: string; resourceType: string; resourceId: string; remoteAddr: string; metadata: Record<string, unknown> | null; createdAt: string };
 export type AuditRetention = { organizationId: string; retentionDays: number; updatedAt: string };
 export type AuditArchive = { id: string; backupDestinationId: string; name: string; objectPrefix: string; retentionDays: number; enabled: boolean; lastArchivedId: number; lastChainHash?: string; updatedAt: string };
+export type AuditArchiveBatch = { id: string; destinationId: string; firstEventId: number; lastEventId: number; previousSha256: string; sha256?: string; objectKey: string; sizeBytes?: number; status: string; lastError?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type NotificationEndpoint = { id: string; name: string; kind: "webhook" | "slack" | "smtp" | "pagerduty" | "opsgenie"; events: string[]; enabled: boolean; updatedAt: string };
 export type ServiceAccount = { id: string; name: string; role: string; enabled: boolean; tokenExpiresAt?: string; lastUsedAt?: string; createdAt: string; updatedAt: string };
 export type SCIMToken = { id: string; organizationId: string; name: string; defaultRole: "admin" | "developer" | "viewer"; createdAt: string; expiresAt: string; revokedAt?: string };
@@ -282,7 +283,8 @@ export const api = {
   exportAudit: () => download("/v1/audit-events/export?limit=10000"),
   auditArchives: () => request<Envelope<AuditArchive>>("/v1/audit-archives"),
   createAuditArchive: (body: { name: string; backupDestinationId: string; objectPrefix: string; retentionDays: number }) => request<AuditArchive>("/v1/audit-archives", { method: "POST", body: JSON.stringify(body) }),
-  runAuditArchive: (id: string) => request<unknown>(`/v1/audit-archives/${id}/run`, { method: "POST", body: "{}" }),
+  runAuditArchive: (id: string) => request<AuditArchiveBatch>(`/v1/audit-archives/${id}/run`, { method: "POST", body: "{}" }),
+  auditArchiveBatches: (id: string) => request<Envelope<AuditArchiveBatch>>(`/v1/audit-archives/${id}/batches`),
   disableAuditArchive: (id: string) => request<void>(`/v1/audit-archives/${id}`, { method: "DELETE" }),
   notificationEndpoints: () => request<Envelope<NotificationEndpoint>>("/v1/notification-endpoints"),
   createNotificationEndpoint: (body: Record<string, unknown>) => request<{ endpoint: NotificationEndpoint; signingSecret?: string }>("/v1/notification-endpoints", { method: "POST", body: JSON.stringify(body) }),
