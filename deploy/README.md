@@ -195,6 +195,9 @@ minutes and 30 days. Configuring more than one expected controller replica also
 fails closed unless verified PostgreSQL TLS and remote backup destinations are
 both mandatory. In that mode, plaintext HTTP object-storage destinations are
 rejected at creation, policy admission, manual backup admission, and startup.
+Startup also rejects queued or running node-local database backups left by a
+previous single-controller configuration, and workers independently refuse to
+execute such jobs if the persisted state changes after startup.
 These checks run before database migrations or Docker operations.
 
 The equivalent manual commands are:

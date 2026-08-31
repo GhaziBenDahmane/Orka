@@ -179,6 +179,16 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	if _, err = db.UpsertBackupPolicy(ctx, orgID, databaseID, 3600, 7, true, false, nil); !errors.Is(err, ErrRemoteBackupRequired) {
 		t.Fatalf("local backup policy error = %v, want remote backup required", err)
 	}
+	legacyLocalBackupID := uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format) VALUES($1,$2,'queued','native')`, legacyLocalBackupID, databaseID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ValidateBackupConfiguration(ctx); !errors.Is(err, ErrRemoteBackupRequired) {
+		t.Fatalf("active local backup error=%v, want remote backup required", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `DELETE FROM database_backups WHERE id=$1`, legacyLocalBackupID); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.ValidateBackupConfiguration(ctx); err != nil {
 		t.Fatalf("valid remote backup configuration: %v", err)
 	}

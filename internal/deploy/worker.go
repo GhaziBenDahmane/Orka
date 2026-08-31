@@ -1758,6 +1758,9 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return err
 	}
+	if w.Store.RequireRemoteBackups && destinationID == nil {
+		return w.failBackup(ctx, j, backupID, store.ErrRemoteBackupRequired)
+	}
 	if err = w.ensureDatabaseDriver(ctx, databaseID, engine, driverSource, driverDigest); err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}

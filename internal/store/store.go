@@ -3005,6 +3005,12 @@ func (s *Store) ValidateBackupConfiguration(ctx context.Context) error {
 	if count > 0 {
 		return fmt.Errorf("%w: %d enabled backup policies use node-local storage", ErrRemoteBackupRequired, count)
 	}
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM database_backups WHERE destination_id IS NULL AND status IN ('queued','running')`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("%w: %d active database backups use node-local storage", ErrRemoteBackupRequired, count)
+	}
 	if err := s.Pool.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM backup_policies policy JOIN backup_destinations destination ON destination.id=policy.destination_id WHERE policy.enabled AND NOT destination.use_tls)
 		+(SELECT count(*) FROM volume_backup_policies policy JOIN backup_destinations destination ON destination.id=policy.destination_id WHERE policy.enabled AND NOT destination.use_tls)
