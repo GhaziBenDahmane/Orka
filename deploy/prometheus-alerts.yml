@@ -159,6 +159,23 @@ groups:
           summary: A named-volume restore rehearsal is overdue
           description: Service {{ $labels.service }} volume {{ $labels.volume }} has no successful restore rehearsal within twice its configured interval (minimum 24 hours).
 
+      - alert: DockyardOfflineVolumeRestoreFailed
+        expr: dockyard_volume_restore_last_failure_age_seconds{mode="offline"} < 900
+        labels:
+          severity: critical
+        annotations:
+          summary: An offline named-volume recovery failed
+          description: Keep the affected service stopped, inspect its restore record and storage-node assignment, and retry recovery before starting the workload.
+
+      - alert: DockyardOfflineVolumeRestoreStalled
+        expr: dockyard_volume_restore_active_age_seconds{mode="offline"} > 1800
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: An offline named-volume recovery is stalled
+          description: Service {{ $labels.service }} volume {{ $labels.volume }} has remained in {{ $labels.status }} for more than thirty minutes; keep the workload stopped while checking its worker, target node, and object store.
+
       - alert: DockyardRestoreDrillOverdue
         expr: dockyard_restore_drill_overdue == 1
         for: 15m

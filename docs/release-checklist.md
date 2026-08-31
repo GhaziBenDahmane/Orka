@@ -216,6 +216,8 @@ links for every item below.
   workload, restore its retained artifact onto the new node without starting
   application services, then start it and verify the pre-failure data. Evidence
   must identify the old backup node and the snapshotted restore target.
+  Confirm the critical recent-failure and stalled-restore alerts fire for
+  offline recovery and preserve their `mode`, service, and volume context.
   Repeat the measurement on every production storage driver because the CI
   RTO is not a production SLO.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass

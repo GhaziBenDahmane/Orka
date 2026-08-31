@@ -41,7 +41,11 @@ is preserved; otherwise the server generates a UUID. `GET /metrics` is a
 Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,
 deployments, backups, restores, restore drills, durable artifact-cleanup backlog,
 and operation durations. Named-volume restore counts carry a bounded `mode`
-label (`online` or `offline`) in addition to status. Send
+label (`online` or `offline`) in addition to status. Active restore age is
+reported per service, volume, mode, and state; the latest failure age is
+reported per mode. The supplied rules page immediately on a recent offline
+restore failure and page when an offline restore remains active for 30 minutes.
+Send
 `Authorization: Bearer <metrics-token>` and omit
 `X-Organization-ID`.
 
