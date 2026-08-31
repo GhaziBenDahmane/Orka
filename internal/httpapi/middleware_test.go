@@ -193,6 +193,7 @@ func TestBearerTokenParsingRejectsAmbiguousCredentials(t *testing.T) {
 		"scheme_only":       {"Bearer"},
 		"extra_fields":      {"Bearer token trailing"},
 		"duplicate_headers": {"Bearer first", "Bearer second"},
+		"oversized":         {"Bearer " + strings.Repeat("x", maxPublicCredentialBytes+1)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/", nil)

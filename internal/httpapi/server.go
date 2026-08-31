@@ -526,7 +526,7 @@ func bearerToken(r *http.Request) (string, bool) {
 		return "", false
 	}
 	parts := strings.Fields(values[0])
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || !validPublicOpaqueValue(parts[1], maxPublicCredentialBytes) {
 		return "", false
 	}
 	return parts[1], true
