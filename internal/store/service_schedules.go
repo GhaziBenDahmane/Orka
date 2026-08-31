@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	jobschedule "github.com/bendahma/dokploy-go/internal/schedule"
 	"github.com/google/uuid"
@@ -66,7 +68,10 @@ func normalizeServiceSchedule(item ServiceSchedule, now time.Time) (ServiceSched
 	if item.TimeoutSeconds == 0 {
 		item.TimeoutSeconds = 900
 	}
-	if item.Name == "" || len(item.Name) > 120 || len(item.Description) > 1000 || item.TargetService == "" || len(item.TargetService) > 128 || (item.Shell != "sh" && item.Shell != "bash") || item.Command == "" || len(item.Command) > 16384 || strings.ContainsRune(item.Command, 0) || item.TimeoutSeconds < 1 || item.TimeoutSeconds > 86400 {
+	if item.Name == "" || len(item.Name) > 120 || !utf8.ValidString(item.Name) || strings.IndexFunc(item.Name, unicode.IsControl) >= 0 ||
+		len(item.Description) > 1000 || !utf8.ValidString(item.Description) || strings.ContainsRune(item.Description, 0) ||
+		item.TargetService == "" || len(item.TargetService) > 128 || (item.Shell != "sh" && item.Shell != "bash") ||
+		item.Command == "" || len(item.Command) > 16384 || strings.ContainsRune(item.Command, 0) || item.TimeoutSeconds < 1 || item.TimeoutSeconds > 86400 {
 		return ServiceSchedule{}, ErrInvalidSchedule
 	}
 	for index, r := range item.TargetService {
