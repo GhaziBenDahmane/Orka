@@ -30,7 +30,10 @@ func TestS3RoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	key := client.ObjectKey("round-trip.txt")
+	key, err := client.ObjectKey("round-trip.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = client.Delete(context.Background(), key) })
 	source := filepath.Join(t.TempDir(), "source")
 	if err = os.WriteFile(source, []byte("verified backup"), 0600); err != nil {

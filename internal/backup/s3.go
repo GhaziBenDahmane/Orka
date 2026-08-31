@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -46,6 +48,7 @@ const (
 	maxS3AccessKeyBytes    = 1024
 	maxS3SecretKeyBytes    = 16 << 10
 	maxS3SessionTokenBytes = 16 << 10
+	maxS3ObjectKeyBytes    = 1024
 )
 
 func NewS3(config S3Config) (*S3, error) {
@@ -59,14 +62,20 @@ func NewS3(config S3Config) (*S3, error) {
 	if config.UseTLS && parsed.Scheme != "https" || !config.UseTLS && parsed.Scheme != "http" {
 		return nil, errors.New("S3 endpoint scheme does not match useTls")
 	}
-	if len(config.Region) > maxS3RegionBytes || !s3RegionPattern.MatchString(config.Region) || len(config.Bucket) == 0 || len(config.Bucket) > maxS3BucketBytes || config.Bucket != strings.TrimSpace(config.Bucket) || len(config.Prefix) > maxS3PrefixBytes || strings.Contains(config.Prefix, "..") || strings.ContainsAny(config.Prefix, "\\\x00\r\n") || len(config.AccessKey) == 0 || len(config.AccessKey) > maxS3AccessKeyBytes || len(config.SecretKey) == 0 || len(config.SecretKey) > maxS3SecretKeyBytes || len(config.SessionToken) > maxS3SessionTokenBytes || strings.ContainsAny(config.AccessKey+config.SecretKey+config.SessionToken, "\x00\r\n") {
+	if len(config.Region) > maxS3RegionBytes || !s3RegionPattern.MatchString(config.Region) || len(config.Bucket) == 0 || len(config.Bucket) > maxS3BucketBytes || config.Bucket != strings.TrimSpace(config.Bucket) || len(config.Prefix) > maxS3PrefixBytes || unsafeS3Text(config.Prefix) || strings.Contains(config.Prefix, "..") || strings.Contains(config.Prefix, "\\") || len(config.AccessKey) == 0 || len(config.AccessKey) > maxS3AccessKeyBytes || len(config.SecretKey) == 0 || len(config.SecretKey) > maxS3SecretKeyBytes || len(config.SessionToken) > maxS3SessionTokenBytes || strings.ContainsAny(config.AccessKey+config.SecretKey+config.SessionToken, "\x00\r\n") {
 		return nil, errors.New("invalid or oversized S3 destination configuration")
+	}
+	prefix := strings.Trim(strings.TrimSpace(config.Prefix), "/")
+	if prefix != "" {
+		if err = validateS3Key(prefix); err != nil {
+			return nil, errors.New("invalid or oversized S3 destination configuration")
+		}
 	}
 	client, err := minio.New(parsed.Host, &minio.Options{Creds: credentials.NewStaticV4(config.AccessKey, config.SecretKey, config.SessionToken), Secure: config.UseTLS, Region: config.Region, Transport: config.Transport})
 	if err != nil {
 		return nil, err
 	}
-	return &S3{client: client, bucket: config.Bucket, prefix: strings.Trim(strings.TrimSpace(config.Prefix), "/")}, nil
+	return &S3{client: client, bucket: config.Bucket, prefix: prefix}, nil
 }
 
 func validS3EndpointHost(endpoint *url.URL) bool {
@@ -118,22 +127,36 @@ func (s *S3) CheckObjectLock(ctx context.Context) error {
 	return nil
 }
 
-func (s *S3) ObjectKey(name string) string {
-	if s.prefix == "" {
-		return name
+func (s *S3) ObjectKey(name string) (string, error) {
+	if err := validateS3Key(name); err != nil {
+		return "", err
 	}
-	return path.Join(s.prefix, name)
+	key := name
+	if s.prefix != "" {
+		key = path.Join(s.prefix, name)
+	}
+	if err := s.validateObjectKey(key); err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
 func (s *S3) Put(ctx context.Context, key, filename string) error {
+	if err := s.validateObjectKey(key); err != nil {
+		return err
+	}
 	_, err := s.client.FPutObject(ctx, s.bucket, key, filename, minio.PutObjectOptions{ContentType: "application/octet-stream"})
 	return err
 }
 
 func (s *S3) PutImmutable(ctx context.Context, key string, contents []byte, digest string, retainUntil time.Time) error {
+	objectKey, err := s.ObjectKey(key)
+	if err != nil {
+		return err
+	}
 	options := minio.PutObjectOptions{ContentType: "application/x-ndjson", Mode: minio.Compliance, RetainUntilDate: retainUntil.UTC(), UserMetadata: map[string]string{"dockyard-sha256": digest}}
 	options.SetMatchETagExcept("*")
-	_, err := s.client.PutObject(ctx, s.bucket, s.ObjectKey(key), bytes.NewReader(contents), int64(len(contents)), options)
+	_, err = s.client.PutObject(ctx, s.bucket, objectKey, bytes.NewReader(contents), int64(len(contents)), options)
 	if err == nil {
 		return nil
 	}
@@ -141,7 +164,7 @@ func (s *S3) PutImmutable(ctx context.Context, key string, contents []byte, dige
 	if response.Code != "PreconditionFailed" && response.Code != "ConditionalRequestConflict" {
 		return err
 	}
-	object, statErr := s.client.GetObject(ctx, s.bucket, s.ObjectKey(key), minio.GetObjectOptions{})
+	object, statErr := s.client.GetObject(ctx, s.bucket, objectKey, minio.GetObjectOptions{})
 	if statErr != nil {
 		return statErr
 	}
@@ -179,6 +202,9 @@ func sha256sumReader(reader io.Reader, expectedSize int64) (string, int64, error
 }
 
 func (s *S3) Get(ctx context.Context, key, filename string, expectedSize int64) error {
+	if err := s.validateObjectKey(key); err != nil {
+		return err
+	}
 	if expectedSize <= 0 {
 		return errors.New("S3 download requires a positive expected size")
 	}
@@ -227,10 +253,16 @@ func copyExactFile(filename string, source io.Reader, expectedSize int64) error 
 }
 
 func (s *S3) Delete(ctx context.Context, key string) error {
+	if err := s.validateObjectKey(key); err != nil {
+		return err
+	}
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
 func (s *S3) PresignedPut(ctx context.Context, key string, expiry time.Duration) (string, error) {
+	if err := s.validateObjectKey(key); err != nil {
+		return "", err
+	}
 	u, err := s.client.PresignedPutObject(ctx, s.bucket, key, expiry)
 	if err != nil {
 		return "", err
@@ -239,9 +271,40 @@ func (s *S3) PresignedPut(ctx context.Context, key string, expiry time.Duration)
 }
 
 func (s *S3) PresignedGet(ctx context.Context, key string, expiry time.Duration) (string, error) {
+	if err := s.validateObjectKey(key); err != nil {
+		return "", err
+	}
 	u, err := s.client.PresignedGetObject(ctx, s.bucket, key, expiry, nil)
 	if err != nil {
 		return "", err
 	}
 	return u.String(), nil
+}
+
+func (s *S3) validateObjectKey(key string) error {
+	if err := validateS3Key(key); err != nil {
+		return err
+	}
+	if s.prefix != "" && key != s.prefix && !strings.HasPrefix(key, s.prefix+"/") {
+		return errors.New("S3 object key is outside the configured prefix")
+	}
+	return nil
+}
+
+func validateS3Key(key string) error {
+	if key == "" || len(key) > maxS3ObjectKeyBytes || key != strings.TrimSpace(key) || unsafeS3Text(key) || strings.Contains(key, "\\") || strings.HasPrefix(key, "/") {
+		return errors.New("invalid or oversized S3 object key")
+	}
+	for _, segment := range strings.Split(key, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return errors.New("invalid or oversized S3 object key")
+		}
+	}
+	return nil
+}
+
+func unsafeS3Text(value string) bool {
+	return !utf8.ValidString(value) || strings.IndexFunc(value, func(character rune) bool {
+		return unicode.IsControl(character) || unicode.Is(unicode.Cf, character) || unicode.In(character, unicode.Zl, unicode.Zp)
+	}) >= 0
 }

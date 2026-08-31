@@ -1487,7 +1487,10 @@ func (w *Worker) backupVolume(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failVolumeBackup(ctx, j, backupID, err)
 	}
-	objectKey := storage.ObjectKey("volumes/" + serviceID.String() + "/" + volumeName + "/" + backupID.String() + ".tar.gz.enc")
+	objectKey, err := storage.ObjectKey("volumes/" + serviceID.String() + "/" + volumeName + "/" + backupID.String() + ".tar.gz.enc")
+	if err != nil {
+		return w.failVolumeBackup(ctx, j, backupID, err)
+	}
 	putURL, err := storage.PresignedPut(ctx, objectKey, time.Hour)
 	if err != nil {
 		return w.failVolumeBackup(ctx, j, backupID, err)
@@ -1850,7 +1853,10 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		if remoteErr != nil {
 			return w.failBackup(ctx, j, backupID, remoteErr)
 		}
-		objectKey = remote.ObjectKey(serviceName + "/" + filename + ".enc")
+		objectKey, remoteErr = remote.ObjectKey(serviceName + "/" + filename + ".enc")
+		if remoteErr != nil {
+			return w.failBackup(ctx, j, backupID, remoteErr)
+		}
 		if remoteErr = remote.Put(ctx, objectKey, encryptedPath); remoteErr != nil {
 			return w.failBackup(ctx, j, backupID, remoteErr)
 		}
@@ -1892,7 +1898,10 @@ func (w *Worker) backupDatabaseRemote(ctx context.Context, j job, backupID uuid.
 	if err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}
-	objectKey := storage.ObjectKey(serviceName + "/" + filename + ".enc")
+	objectKey, err := storage.ObjectKey(serviceName + "/" + filename + ".enc")
+	if err != nil {
+		return w.failBackup(ctx, j, backupID, err)
+	}
 	putURL, err := storage.PresignedPut(ctx, objectKey, time.Hour)
 	if err != nil {
 		return w.failBackup(ctx, j, backupID, err)

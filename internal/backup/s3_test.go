@@ -20,7 +20,7 @@ func TestS3ConfigurationAndObjectKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := client.ObjectKey("backup.dump"); got != "tenant/database/backup.dump" {
+	if got, keyErr := client.ObjectKey("backup.dump"); keyErr != nil || got != "tenant/database/backup.dump" {
 		t.Fatalf("object key = %q", got)
 	}
 	for _, config := range []S3Config{
@@ -32,6 +32,9 @@ func TestS3ConfigurationAndObjectKey(t *testing.T) {
 		{Endpoint: "https://objects.example.test", Region: "bad region", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "s"},
 		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: strings.Repeat("p", maxS3PrefixBytes+1), UseTLS: true, AccessKey: "a", SecretKey: "s"},
 		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: "tenant\\escape", UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: "tenant//escape", UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: "tenant\u202Eescape", UseTLS: true, AccessKey: "a", SecretKey: "s"},
+		{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: string([]byte{'t', 0xff}), UseTLS: true, AccessKey: "a", SecretKey: "s"},
 		{Endpoint: "https://objects.example.test", Bucket: "backups", UseTLS: true, AccessKey: strings.Repeat("a", maxS3AccessKeyBytes+1), SecretKey: "s"},
 		{Endpoint: "https://objects.example.test", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "secret\nvalue"},
 		{Endpoint: "https://objects.example.test", Bucket: "backups", UseTLS: true, AccessKey: "a", SecretKey: "s", SessionToken: strings.Repeat("t", maxS3SessionTokenBytes+1)},
@@ -52,6 +55,26 @@ func TestS3ConfigurationAndObjectKey(t *testing.T) {
 	for _, endpoint := range []string{"https://objects.example.test:9443", "https://127.0.0.1", "https://[2001:db8::1]:9443"} {
 		if _, err = NewS3(S3Config{Endpoint: endpoint, Bucket: "backups", UseTLS: true, AccessKey: "access", SecretKey: "secret"}); err != nil {
 			t.Errorf("valid endpoint %q was rejected: %v", endpoint, err)
+		}
+	}
+}
+
+func TestS3ObjectKeysStayInsideConfiguredPrefix(t *testing.T) {
+	client, err := NewS3(S3Config{Endpoint: "https://objects.example.test", Bucket: "backups", Prefix: "organization-1", UseTLS: true, AccessKey: "access", SecretKey: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, keyErr := client.ObjectKey("database/backup.enc"); keyErr != nil || key != "organization-1/database/backup.enc" {
+		t.Fatalf("key=%q error=%v", key, keyErr)
+	}
+	for _, key := range []string{"../organization-2/backup.enc", "/organization-2/backup.enc", "database//backup.enc", "database/./backup.enc", "database\\backup.enc", "database/\u202Ebackup.enc", string([]byte{'b', 0xff})} {
+		if _, keyErr := client.ObjectKey(key); keyErr == nil {
+			t.Errorf("unsafe relative key %q was accepted", key)
+		}
+	}
+	for _, key := range []string{"organization-2/backup.enc", "organization-1-other/backup.enc"} {
+		if err = client.Delete(context.Background(), key); err == nil {
+			t.Errorf("out-of-prefix stored key %q was accepted", key)
 		}
 	}
 }
