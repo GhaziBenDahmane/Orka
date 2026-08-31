@@ -49,7 +49,7 @@ func SignAgentCSR(caCertPEM, caKeyPEM, csrPEM []byte, clusterID uuid.UUID, now t
 	if lifetime < 5*time.Minute || lifetime > 30*24*time.Hour {
 		return nil, nil, errors.New("agent certificate lifetime must be between 5 minutes and 30 days")
 	}
-	ca, key, err := parseCA(caCertPEM, caKeyPEM)
+	ca, key, err := validateAuthorityAndKey(caCertPEM, caKeyPEM, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -174,17 +174,22 @@ func ValidateTrustBundle(bundle []byte, now time.Time) (*x509.CertPool, []*x509.
 }
 
 func ValidateAuthority(caCertPEM, caKeyPEM []byte, now time.Time) (*x509.Certificate, error) {
-	ca, _, err := parseCA(caCertPEM, caKeyPEM)
+	ca, _, err := validateAuthorityAndKey(caCertPEM, caKeyPEM, now)
+	return ca, err
+}
+
+func validateAuthorityAndKey(caCertPEM, caKeyPEM []byte, now time.Time) (*x509.Certificate, crypto.Signer, error) {
+	ca, key, err := parseCA(caCertPEM, caKeyPEM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) || ca.KeyUsage&x509.KeyUsageCertSign == 0 {
-		return nil, errors.New("agent CA certificate is not currently valid for signing")
+		return nil, nil, errors.New("agent CA certificate is not currently valid for signing")
 	}
 	if err = ca.CheckSignatureFrom(ca); err != nil {
-		return nil, errors.New("agent CA certificate is not self-signed")
+		return nil, nil, errors.New("agent CA certificate is not self-signed")
 	}
-	return ca, nil
+	return ca, key, nil
 }
 
 func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, error) {

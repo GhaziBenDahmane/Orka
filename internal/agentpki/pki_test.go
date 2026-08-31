@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,25 @@ func TestSignAgentCSRRejectsCAWithoutMinimumRemainingLifetime(t *testing.T) {
 	nearCAExpiry := now.Add(24*time.Hour - 4*time.Minute)
 	if _, _, err = SignAgentCSR(caPEM, caKey, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), uuid.New(), nearCAExpiry, time.Hour); err == nil {
 		t.Fatal("expected certificate issuance to fail near CA expiry")
+	}
+}
+
+func TestSignAgentCSRRejectsNotYetValidCA(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	caPEM, caKey, err := NewCA(now.Add(time.Hour), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, agentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = SignAgentCSR(caPEM, caKey, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), uuid.New(), now, time.Hour); err == nil || !strings.Contains(err.Error(), "not currently valid") {
+		t.Fatalf("not-yet-valid CA error=%v", err)
 	}
 }
 
