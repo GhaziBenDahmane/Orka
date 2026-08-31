@@ -297,9 +297,11 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
   BuildKit secrets, same-origin Git submodules, and packaging of prebuilt static
   sites into a digest-pinned runtime, Nixpacks, and the production Railpack
   BuildKit frontend, Paketo and Heroku 24 Cloud Native Buildpacks, and custom
-  digest-pinned CNB builders are supported. PostgreSQL, MySQL, MariaDB,
-  MongoDB, Redis, and libSQL Dokploy data can be moved through confirmed,
-  durable native transfer jobs. Compatible Dokploy named-volume backup
+  digest-pinned CNB builders are supported. PostgreSQL, TimescaleDB, MySQL,
+  MariaDB, MongoDB, Redis, Valkey, and libSQL Dokploy data can be moved through
+  confirmed, durable native transfer jobs. Official TimescaleDB and Valkey
+  images stored in Dokploy's PostgreSQL and Redis tables are detected without
+  changing their stable import IDs. Compatible Dokploy named-volume backup
   policies are imported with their fixed interval, retention, destination,
   quiescence, and storage-node binding; unsupported calendar schedules remain
   explicit manual-conversion records. The Terraform/OpenTofu provider covers

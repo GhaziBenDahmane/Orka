@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/google/uuid"
 )
 
 func TestParseDokployDatabaseTransferManifest(t *testing.T) {
@@ -29,15 +30,40 @@ func TestParseDokployDatabaseTransferManifestAllowsPasswordOnlyStores(t *testing
 }
 
 func TestDokployDatabaseTransferSupportsEveryImportedRecoverableEngine(t *testing.T) {
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "libsql"} {
+	for _, engine := range []string{"postgres", "timescaledb", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql"} {
 		if !dokployTransferCapableEngine(engine) {
 			t.Fatalf("%s should support native Dokploy data transfer", engine)
 		}
 	}
-	for _, engine := range []string{"valkey", "clickhouse", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"clickhouse", "qdrant", "meilisearch"} {
 		if dokployTransferCapableEngine(engine) {
 			t.Fatalf("%s is not an imported Dokploy managed-database type", engine)
 		}
+	}
+}
+
+func TestClassifyDokployDatabaseCompatibilityImages(t *testing.T) {
+	tests := []struct{ source, image, want string }{
+		{"postgres", "timescale/timescaledb:2.29.2-pg17", "timescaledb"},
+		{"postgres", "docker.io/timescale/timescaledb@sha256:" + strings.Repeat("a", 64), "timescaledb"},
+		{"redis", "valkey/valkey:8", "valkey"},
+		{"redis", "registry-1.docker.io/valkey/valkey:8", "valkey"},
+		{"postgres", "registry.example.test/timescale/timescaledb:2.29.2-pg17", "postgres"},
+		{"redis", "redis:8", "redis"},
+	}
+	for _, test := range tests {
+		if got := classifyDokployDatabaseEngine(test.source, test.image); got != test.want {
+			t.Errorf("classify %s image %q = %q, want %q", test.source, test.image, got, test.want)
+		}
+	}
+}
+
+func TestDetectedDatabaseEnginePreservesDokployIdentity(t *testing.T) {
+	options := DokployOptions{SourceOrganizationID: "source", TargetOrganizationID: uuid.MustParse("3b7dcb53-c4a5-42cb-998e-1b18a827cb52")}
+	legacy := sourceDatabase{id: "database-1", sourceEngine: "postgres", engine: "postgres"}
+	detected := sourceDatabase{id: "database-1", sourceEngine: "postgres", engine: "timescaledb"}
+	if mappedDokployDatabaseID(options, "database", legacy) != mappedDokployDatabaseID(options, "database", detected) || detected.identity() != "postgres:database-1" {
+		t.Fatal("compatible engine detection changed stable Dokploy resource identity")
 	}
 }
 

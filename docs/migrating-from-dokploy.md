@@ -79,7 +79,10 @@ Imported automatically:
   enabled application domains; Docker target stages, build arguments,
   re-encrypted BuildKit secrets, and recursive Git submodules are preserved;
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, and libSQL managed-database
-  definitions, including their image, credentials, and custom environment;
+  definitions, including their image, credentials, and custom environment.
+  PostgreSQL records using the official `timescale/timescaledb` image and Redis
+  records using the official `valkey/valkey` image are promoted to their native
+  TimescaleDB and Valkey drivers without changing their stable import identity;
 - S3-compatible backup destinations, with credentials decrypted only in memory
   and re-encrypted under the Dockyard master key;
 - registry credentials plus GitLab, Gitea, and Bitbucket token credentials;
@@ -146,9 +149,9 @@ and reconciles the certificate before permitting the next deployment.
 
 Managed-database import creates the destination Compose service and database
 record, but the control-plane import does not copy persistent volume contents.
-Use the native transfer command below for PostgreSQL, MySQL, MariaDB, MongoDB,
-Redis, and libSQL. Other engines still require an operator-managed backup and
-restore.
+Use the native transfer command below for PostgreSQL, TimescaleDB, MySQL,
+MariaDB, MongoDB, Redis, Valkey, and libSQL. Other engines still require an
+operator-managed backup and restore.
 
 ## Transfer managed database data
 
@@ -228,9 +231,9 @@ database, backup destination/policy, volume-backup policy, source credential, an
 mapping. With the default `--require-operational=true`, each imported service
 and managed-database stack must have a successful deployment of its current
 revision plus a healthy Swarm reconciliation observation from the previous
-five minutes. Each database must also be running, and each PostgreSQL, MySQL,
-MariaDB, MongoDB, Redis, or libSQL database must have a successful Dokploy
-data-transfer record. Every enabled named-volume policy must be bound to its
+five minutes. Each database must also be running, and each PostgreSQL,
+TimescaleDB, MySQL, MariaDB, MongoDB, Redis, Valkey, or libSQL database must
+have a successful Dokploy data-transfer record. Every enabled named-volume policy must be bound to its
 service's Swarm storage node and have a successful encrypted backup created
 after the final import. Every enabled imported database-backup policy likewise
 needs a successful encrypted remote backup created after that import. Trigger

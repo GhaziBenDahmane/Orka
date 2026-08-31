@@ -162,7 +162,7 @@ links for every item below.
   requirement.
 - `make test-migration-conformance` imports a representative Dokploy fixture
   into real PostgreSQL twice and proves dry-run secrecy, idempotent Compose and
-  application conversion, routes, six managed-database mappings, backup and
+  application conversion, routes, eight managed-database mappings, backup and
   notification conversion, credential re-encryption, native transfer queueing,
   tenant ownership, explicit manual acknowledgements, and fail-closed
   operational verification. The release attaches `migration-conformance.json`;

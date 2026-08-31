@@ -111,7 +111,7 @@ func QueueDokployDatabaseTransfers(ctx context.Context, destination *store.Store
 		if !dokployTransferCapableEngine(sourceDatabase.engine) {
 			return report, fmt.Errorf("database %s uses unsupported transfer engine %q", connection.SourceID, sourceDatabase.engine)
 		}
-		targetID := mappedID(options, "database:"+sourceDatabase.engine, sourceDatabase.id)
+		targetID := mappedDokployDatabaseID(options, "database", sourceDatabase)
 		target, targetErr := destination.GetDatabase(ctx, options.TargetOrganizationID, targetID)
 		if targetErr != nil {
 			return report, fmt.Errorf("target database for %s: %w; run the control-plane import first", connection.SourceID, targetErr)

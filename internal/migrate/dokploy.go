@@ -78,10 +78,23 @@ type sourceNetwork struct {
 	ipam                                         []store.NetworkIPAMConfig
 }
 type sourceDatabase struct {
-	id, environmentID, name, appName, engine                   string
+	id, environmentID, name, appName, sourceEngine, engine     string
 	databaseName, databaseUser, databasePassword, rootPassword string
 	dockerImage, env, serverID                                 string
 	networkIDs                                                 []string
+}
+
+func (d sourceDatabase) identityEngine() string {
+	if d.sourceEngine != "" {
+		return d.sourceEngine
+	}
+	return d.engine
+}
+
+func (d sourceDatabase) identity() string { return d.identityEngine() + ":" + d.id }
+
+func mappedDokployDatabaseID(options DokployOptions, prefix string, item sourceDatabase) uuid.UUID {
+	return mappedID(options, prefix+":"+item.identityEngine(), item.id)
 }
 
 type targetNetworkAssignment struct {
@@ -441,19 +454,22 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 	registry := database.NewRegistry()
 	validDatabases := map[string]bool{}
 	for _, item := range databases {
-		targetID := mappedID(options, "database:"+item.engine, item.id)
+		targetID := mappedDokployDatabaseID(options, "database", item)
 		metadata := map[string]any{"name": item.name, "engine": item.engine, "environmentId": item.environmentID, "serverId": item.serverID}
-		_, renderErr := registry.Render(item.engine, database.Request{Name: migratedSlug(item.appName, mappedID(options, "database:"+item.engine, item.id)), Version: imageVersion(item.dockerImage, "latest"), Config: databaseConfig(item)})
+		if item.sourceEngine != item.engine {
+			metadata["sourceEngine"] = item.sourceEngine
+		}
+		_, renderErr := registry.Render(item.engine, database.Request{Name: migratedSlug(item.appName, targetID), Version: imageVersion(item.dockerImage, "latest"), Config: databaseConfig(item)})
 		if renderErr != nil {
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s is incompatible: %v", item.engine, item.id, renderErr))
-			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.engine + ":" + item.id, Status: "skipped", Reason: renderErr.Error(), Metadata: metadata})
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.identity(), Status: "skipped", Reason: renderErr.Error(), Metadata: metadata})
 			continue
 		}
-		validDatabases[item.engine+":"+item.id] = true
-		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.engine + ":" + item.id, TargetID: &targetID, Status: "imported", Metadata: metadata})
+		validDatabases[item.identity()] = true
+		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "database", SourceID: item.identity(), TargetID: &targetID, Status: "imported", Metadata: metadata})
 		for _, networkID := range item.networkIDs {
-			addNetworkAssignment("database", item.engine+":"+item.id, item.environmentID, mappedID(options, "database-service:"+item.engine, item.id), networkID, nil)
+			addNetworkAssignment("database", item.identity(), item.environmentID, mappedDokployDatabaseID(options, "database-service", item), networkID, nil)
 		}
 		if strings.HasPrefix(item.env, "enc:v1:") && len(options.EncryptionKeys) == 0 {
 			report.Warnings = append(report.Warnings, fmt.Sprintf("%s database %s has encrypted environment values; supply --encryption-key-file before import", item.engine, item.id))
@@ -787,11 +803,11 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		}
 	}
 	for _, item := range databases {
-		if !validDatabases[item.engine+":"+item.id] {
+		if !validDatabases[item.identity()] {
 			continue
 		}
-		databaseID := mappedID(options, "database:"+item.engine, item.id)
-		serviceID := mappedID(options, "database-service:"+item.engine, item.id)
+		databaseID := mappedDokployDatabaseID(options, "database", item)
+		serviceID := mappedDokployDatabaseID(options, "database-service", item)
 		slug := migratedSlug(item.appName, databaseID)
 		config := databaseConfig(item)
 		version := imageVersion(item.dockerImage, "latest")
@@ -829,7 +845,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if err != nil {
 			return report, fmt.Errorf("import %s service %s: %w", item.engine, item.id, err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, driver.Source, driver.ArtifactDigest, serviceID, encryptedCredentials, configJSON)
+		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,engine=excluded.engine,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, driver.Source, driver.ArtifactDigest, serviceID, encryptedCredentials, configJSON)
 		if err != nil {
 			return report, fmt.Errorf("import %s database %s: %w", item.engine, item.id, err)
 		}
@@ -924,7 +940,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 
 func dokployTransferCapableEngine(engine string) bool {
 	switch engine {
-	case "postgres", "mysql", "mariadb", "mongo", "redis", "libsql":
+	case "postgres", "timescaledb", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql":
 		return true
 	default:
 		return false
@@ -1044,7 +1060,7 @@ func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceD
 			return nil, fmt.Errorf("read Dokploy %s databases: %w", engine, err)
 		}
 		for rows.Next() {
-			item := sourceDatabase{engine: engine}
+			item := sourceDatabase{sourceEngine: engine, engine: engine}
 			var networkIDs []byte
 			if err = rows.Scan(&item.id, &item.environmentID, &item.name, &item.appName, &item.databaseName, &item.databaseUser, &item.databasePassword, &item.rootPassword, &item.dockerImage, &item.env, &networkIDs, &item.serverID); err != nil {
 				rows.Close()
@@ -1054,6 +1070,7 @@ func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceD
 				rows.Close()
 				return nil, fmt.Errorf("decode Dokploy %s network ids: %w", engine, err)
 			}
+			item.engine = classifyDokployDatabaseEngine(item.sourceEngine, item.dockerImage)
 			items = append(items, item)
 		}
 		if err = rows.Err(); err != nil {
@@ -1063,6 +1080,27 @@ func readDatabases(ctx context.Context, db *pgxpool.Pool, org string) ([]sourceD
 		rows.Close()
 	}
 	return items, nil
+}
+
+func classifyDokployDatabaseEngine(sourceEngine, image string) string {
+	repository := strings.ToLower(strings.TrimSpace(image))
+	if index := strings.IndexByte(repository, '@'); index >= 0 {
+		repository = repository[:index]
+	}
+	if colon, slash := strings.LastIndex(repository, ":"), strings.LastIndex(repository, "/"); colon > slash {
+		repository = repository[:colon]
+	}
+	for _, prefix := range []string{"docker.io/", "index.docker.io/", "registry-1.docker.io/"} {
+		repository = strings.TrimPrefix(repository, prefix)
+	}
+	switch {
+	case sourceEngine == "postgres" && repository == "timescale/timescaledb":
+		return "timescaledb"
+	case sourceEngine == "redis" && repository == "valkey/valkey":
+		return "valkey"
+	default:
+		return sourceEngine
+	}
 }
 
 func imageVersion(image, fallback string) string {
