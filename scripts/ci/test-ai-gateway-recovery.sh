@@ -35,7 +35,11 @@ case "$1 $2" in
       *) exit 1 ;;
     esac ;;
   "run --rm")
-    case "$*" in *' validate-volume-artifact-job '*) ;; *) exit 1 ;; esac ;;
+    case "$*" in
+      *' verify-ai-gateway-recovery-manifest '*) cat "$ORKA_AI_RECOVERY_TEST_VERIFIED_MANIFEST" ;;
+      *' validate-volume-artifact-job '*) ;;
+      *) exit 1 ;;
+    esac ;;
   "service scale") ;;
   "secret create") ;;
   "service create") ;;
@@ -83,6 +87,7 @@ export DOCKYARD_RECOVERY_VERIFY_KEY_FILE="$temporary/verify-key.pem"
 : >"$ORKA_AI_RECOVERY_TEST_LOG"
 bundle="$temporary/output/backup"
 "$root/scripts/backup-ai-gateway.sh" "$bundle" >/dev/null
+export ORKA_AI_RECOVERY_TEST_VERIFIED_MANIFEST="$bundle/manifest.json"
 test -f "$bundle/manifest.json"
 test -f "$bundle/manifest.sig"
 test ! -e "$bundle/job.json"
@@ -130,6 +135,7 @@ test ! -s "$ORKA_AI_RECOVERY_TEST_LOG"
 
 : >"$ORKA_AI_RECOVERY_TEST_LOG"
 DOCKYARD_AI_RESTORE_CONFIRM='restore:dockyard-ai:9router' ORKA_AI_RECOVERY_TEST_REPLICAS=0 "$root/scripts/restore-ai-gateway.sh" "$bundle" | grep -q 'restored and left offline'
+grep -q 'verify-ai-gateway-recovery-manifest' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q 'type=volume,source=dockyard-ai_nine-router-data,target=/volume ' "$ORKA_AI_RECOVERY_TEST_LOG"
 if grep -q '^service scale ' "$ORKA_AI_RECOVERY_TEST_LOG"; then
   echo 'restore restarted 9Router before post-restore verification' >&2
@@ -217,6 +223,7 @@ jq -n \
     proxyEnvironmentIgnored:true,
     redirectsRejected:true,
     responseHeaderTimeoutEnforced:true,
+    singleSnapshotMetadataVerified:true,
     restoreConfirmationRequired:true,
     runningServiceRestoreRejected:true,
     wrongEncryptionKeyRejected:true,
@@ -238,6 +245,7 @@ jq -e '
   .helperCleanupRetried and .restoreHelperCleanupRetried and
   .permanentCleanupFailureRejected and .permanentSecretCleanupFailureRejected and
   .proxyEnvironmentIgnored and .redirectsRejected and .responseHeaderTimeoutEnforced and
+  .singleSnapshotMetadataVerified and
   .restoreConfirmationRequired and .runningServiceRestoreRejected and
   .wrongEncryptionKeyRejected and .restoreLeftOffline and
   .backupMountReadOnly and .nodePinned and

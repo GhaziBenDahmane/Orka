@@ -95,6 +95,8 @@ func main() {
 		err = validateVolumeArtifactJob(os.Args[2:])
 	case "local-volume-artifact":
 		err = runLocalVolumeArtifact(os.Args[2:], os.Stdin)
+	case "verify-ai-gateway-recovery-manifest":
+		err = verifyAIGatewayRecoveryManifest(os.Args[2:])
 	default:
 		fmt.Fprintln(os.Stderr, dockyardUsage)
 		os.Exit(2)
@@ -105,7 +107,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|validate-volume-artifact-job|volume-artifact|local-volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|validate-volume-artifact-job|volume-artifact|local-volume-artifact|verify-ai-gateway-recovery-manifest>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)

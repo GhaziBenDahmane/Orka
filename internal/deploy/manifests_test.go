@@ -409,6 +409,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		`.helperCleanupRetried and .restoreHelperCleanupRetried`,
 		`.permanentCleanupFailureRejected and .permanentSecretCleanupFailureRejected`,
 		`.proxyEnvironmentIgnored and .redirectsRejected and .responseHeaderTimeoutEnforced`,
+		`.singleSnapshotMetadataVerified`,
 		`.postRestoreDualAuditorVerification == "production-required"`,
 	} {
 		if !strings.Contains(workflow, recoveryEvidenceContract) {

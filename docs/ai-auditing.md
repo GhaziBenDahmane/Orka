@@ -348,7 +348,10 @@ scripts/install-ai-auditors.sh
 
 Restore verifies the Ed25519 signature, encryption-key fingerprint, images,
 node and volume identity, encrypted and plaintext checksums, and full archive
-safety before atomically replacing top-level volume contents. Keep signed
+safety before atomically replacing top-level volume contents. The exact
+helper image strictly decodes and verifies one in-memory snapshot of the signed
+manifest before any field is used, rejecting unknown fields and file swaps.
+Keep signed
 metadata and the encrypted object off-host, and escrow the encryption and
 verification keys separately.
 

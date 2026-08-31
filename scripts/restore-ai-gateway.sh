@@ -53,20 +53,42 @@ openssl pkey -pubin -in "$verify_key" -text_pub -noout 2>/dev/null | grep -q '^E
 [ "$(wc -c <"$bundle/manifest.json" | tr -d ' ')" -le 65536 ] && [ "$(wc -c <"$bundle/manifest.sig" | tr -d ' ')" -eq 64 ] || fail "recovery metadata has an invalid size"
 openssl pkeyutl -verify -rawin -pubin -inkey "$verify_key" -in "$bundle/manifest.json" -sigfile "$bundle/manifest.sig" >/dev/null 2>&1 || fail "recovery metadata signature is invalid"
 
-format_version=$(jq -er '.formatVersion' "$bundle/manifest.json")
-expected_stack=$(jq -er '.stack' "$bundle/manifest.json")
-expected_service=$(jq -er '.service' "$bundle/manifest.json")
-expected_volume=$(jq -er '.volume' "$bundle/manifest.json")
-expected_node=$(jq -er '.storageNodeId' "$bundle/manifest.json")
-expected_router_image=$(jq -er '.routerImage' "$bundle/manifest.json")
-expected_helper_image=$(jq -er '.helperImage' "$bundle/manifest.json")
-expected_object_ref=$(jq -er '.objectRef' "$bundle/manifest.json")
-aad=$(jq -er '.encryptionAad' "$bundle/manifest.json")
-expected_key_sha256=$(jq -er '.encryptionKeySha256 | select(test("^[a-f0-9]{64}$"))' "$bundle/manifest.json")
-artifact_sha256=$(jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))' "$bundle/manifest.json")
-plaintext_sha256=$(jq -er '.plaintextSha256 | select(test("^[a-f0-9]{64}$"))' "$bundle/manifest.json")
-artifact_bytes=$(jq -er '.sizeBytes | select(type == "number" and . > 0 and floor == .)' "$bundle/manifest.json")
-expected_signing_key_sha256=$(jq -er '.recoverySigningKeySha256 | select(test("^[a-f0-9]{64}$"))' "$bundle/manifest.json")
+canonical_file() {
+  directory=$(CDPATH= cd -- "$(dirname "$1")" && pwd -P) || fail "cannot resolve recovery input path"
+  printf '%s/%s' "$directory" "$(basename "$1")"
+}
+manifest_file=$(canonical_file "$bundle/manifest.json")
+signature_file=$(canonical_file "$bundle/manifest.sig")
+verify_key=$(canonical_file "$verify_key")
+key_file=$(canonical_file "$key_file")
+for recovery_path in "$manifest_file" "$signature_file" "$verify_key" "$key_file"; do
+  case "$recovery_path" in *,*) fail "recovery input paths must not contain commas" ;; esac
+done
+verified_manifest=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --mount "type=bind,src=$manifest_file,dst=/input/manifest.json,readonly" \
+  --mount "type=bind,src=$signature_file,dst=/input/manifest.sig,readonly" \
+  --mount "type=bind,src=$verify_key,dst=/input/verify-key.pem,readonly" \
+  --mount "type=bind,src=$key_file,dst=/input/encryption-key,readonly" \
+  --entrypoint /usr/local/bin/dockyard "$helper_image" verify-ai-gateway-recovery-manifest \
+  --manifest /input/manifest.json --signature /input/manifest.sig \
+  --public-key-file /input/verify-key.pem --encryption-key-file /input/encryption-key \
+  --stack "$stack" --service "$service" --volume "$volume" --storage-node "$node" \
+  --router-image "$router_image" --helper-image "$helper_image" --object-ref "$object_ref") || fail "recovery metadata verification failed"
+
+format_version=$(printf '%s' "$verified_manifest" | jq -er '.formatVersion')
+expected_stack=$(printf '%s' "$verified_manifest" | jq -er '.stack')
+expected_service=$(printf '%s' "$verified_manifest" | jq -er '.service')
+expected_volume=$(printf '%s' "$verified_manifest" | jq -er '.volume')
+expected_node=$(printf '%s' "$verified_manifest" | jq -er '.storageNodeId')
+expected_router_image=$(printf '%s' "$verified_manifest" | jq -er '.routerImage')
+expected_helper_image=$(printf '%s' "$verified_manifest" | jq -er '.helperImage')
+expected_object_ref=$(printf '%s' "$verified_manifest" | jq -er '.objectRef')
+aad=$(printf '%s' "$verified_manifest" | jq -er '.encryptionAad')
+expected_key_sha256=$(printf '%s' "$verified_manifest" | jq -er '.encryptionKeySha256 | select(test("^[a-f0-9]{64}$"))')
+artifact_sha256=$(printf '%s' "$verified_manifest" | jq -er '.sha256 | select(test("^[a-f0-9]{64}$"))')
+plaintext_sha256=$(printf '%s' "$verified_manifest" | jq -er '.plaintextSha256 | select(test("^[a-f0-9]{64}$"))')
+artifact_bytes=$(printf '%s' "$verified_manifest" | jq -er '.sizeBytes | select(type == "number" and . > 0 and floor == .)')
+expected_signing_key_sha256=$(printf '%s' "$verified_manifest" | jq -er '.recoverySigningKeySha256 | select(test("^[a-f0-9]{64}$"))')
 [ "$format_version" = 1 ] && [ "$expected_stack" = "$stack" ] && [ "$expected_service" = "$service" ] && [ "$expected_volume" = "$volume" ] && [ "$expected_node" = "$node" ] || fail "recovery metadata does not match the requested stack, service, volume, or node"
 [ "$expected_router_image" = "$router_image" ] && [ "$expected_helper_image" = "$helper_image" ] || fail "recovery metadata image identities do not match"
 [ "$expected_object_ref" = "$object_ref" ] || fail "DOCKYARD_AI_RESTORE_OBJECT_REF does not match the signed metadata"
