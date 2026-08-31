@@ -1951,7 +1951,7 @@ func (w *Worker) queueRestoreDrill(ctx context.Context, backupID uuid.UUID) erro
 	}
 	defer tx.Rollback(ctx)
 	var databaseID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT database_instance_id FROM database_backups WHERE id=$1 AND status='succeeded' FOR UPDATE`, backupID).Scan(&databaseID); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT database_instance_id FROM database_backups WHERE id=$1 AND artifact_valid FOR UPDATE`, backupID).Scan(&databaseID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO database_restores(id,database_backup_id,status,kind) VALUES($1,$2,'queued','drill') ON CONFLICT(database_backup_id) WHERE kind='drill' DO NOTHING`, restoreID, backupID)

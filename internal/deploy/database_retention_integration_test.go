@@ -148,6 +148,13 @@ func TestDatabaseRetentionDoesNotCountMalformedSuccessfulBackups(t *testing.T) {
 	})
 
 	worker := &Worker{Store: db, BackupDirectory: backupRoot}
+	if err = worker.queueRestoreDrill(ctx, malformedID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("malformed backup restore drill error=%v, want pgx.ErrNoRows", err)
+	}
+	var invalidDrills int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM database_restores WHERE database_backup_id=$1`, malformedID).Scan(&invalidDrills); err != nil || invalidDrills != 0 {
+		t.Fatalf("malformed backup queued restore drills=%d err=%v", invalidDrills, err)
+	}
 	worker.pruneBackups(ctx, newestID, 2)
 	var count int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM database_backups WHERE id=ANY($1)`, []uuid.UUID{oldID, malformedID, newestID}).Scan(&count); err != nil || count != 3 {

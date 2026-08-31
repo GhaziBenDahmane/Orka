@@ -234,9 +234,10 @@ revision plus a healthy Swarm reconciliation observation from the previous
 five minutes. Each database must also be running, and each PostgreSQL,
 TimescaleDB, MySQL, MariaDB, MongoDB, Redis, Valkey, or libSQL database must
 have a successful Dokploy data-transfer record. Every enabled named-volume policy must be bound to its
-service's Swarm storage node and have a successful encrypted backup created
-after the final import. Every enabled imported database-backup policy likewise
-needs a successful encrypted remote backup created after that import. Trigger
+service's Swarm storage node and have a successful encrypted backup with
+database-validated restore metadata created after the final import. Every
+enabled imported database-backup policy likewise needs a valid encrypted
+remote recovery point created after that import. Trigger
 those backups explicitly if their next scheduled run falls outside the cutover
 window with `dockyardctl backup-database DATABASE_ID` and `dockyardctl
 backup-volume SERVICE_ID VOLUME_NAME`, then inspect the returned job IDs with

@@ -235,14 +235,8 @@ func verifyDokployDatabaseBackup(ctx context.Context, destination *store.Store, 
 		SELECT 1 FROM database_backups backup
 		WHERE backup.database_instance_id=$1
 		  AND backup.destination_id=$2
-		  AND backup.status='succeeded'
+		  AND backup.artifact_valid
 		  AND backup.finished_at >= $3
-		  AND backup.encrypted
-		  AND backup.object_key<>''
-		  AND backup.size_bytes>0
-		  AND backup.sha256<>''
-		  AND backup.plaintext_sha256<>''
-		  AND backup.encrypted_data_key<>''
 	)`, databaseID, *destinationID, importedAt).Scan(&backedUp)
 	if err != nil {
 		return "", err
@@ -279,13 +273,8 @@ func verifyDokployVolumeBackup(ctx context.Context, destination *store.Store, or
 		SELECT 1 FROM volume_backups backup
 		WHERE backup.volume_backup_policy_id=$1
 		  AND backup.storage_node_id=$2
-		  AND backup.status='succeeded'
+		  AND backup.artifact_valid
 		  AND backup.finished_at >= $3
-		  AND backup.object_key<>''
-		  AND backup.size_bytes>0
-		  AND backup.sha256<>''
-		  AND backup.plaintext_sha256<>''
-		  AND backup.encrypted_data_key<>''
 	)`, policyID, storageNodeID, importedAt).Scan(&backedUp)
 	if err != nil {
 		return "", err
