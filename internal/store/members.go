@@ -162,13 +162,27 @@ func deleteOrganizationMemberTx(ctx context.Context, tx pgx.Tx, organizationID, 
 	if _, err = tx.Exec(ctx, `DELETE FROM environment_grants AS environment_grant USING environments AS environment,projects AS project WHERE environment_grant.user_id=$1 AND environment_grant.environment_id=environment.id AND environment.project_id=project.id AND project.organization_id=$2`, userID, organizationID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND organization_id=$2`, userID, organizationID); err != nil {
+	if _, err = RevokeOrganizationMembershipSessionsTx(ctx, tx, organizationID, userID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, userID); err != nil {
 		return err
 	}
 	return nil
+}
+
+// RevokeOrganizationMembershipSessionsTx removes every session that could
+// authorize the user in organizationID. Federated sessions are tenant-bound,
+// while local sessions are deliberately unscoped so one login can enter any
+// organization the user belongs to. The latter must also be revoked when a
+// membership is removed; otherwise an old local token would regain access if
+// the identity were later reprovisioned before that token expired.
+func RevokeOrganizationMembershipSessionsTx(ctx context.Context, tx pgx.Tx, organizationID, userID uuid.UUID) (int64, error) {
+	tag, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND (organization_id=$2 OR organization_id IS NULL)`, userID, organizationID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func organizationMemberForUpdate(ctx context.Context, tx pgx.Tx, organizationID, userID uuid.UUID) (OrganizationMember, error) {

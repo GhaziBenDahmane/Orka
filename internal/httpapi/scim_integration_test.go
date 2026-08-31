@@ -137,8 +137,22 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'viewer')`, orgID, manualUserID); err != nil {
 		t.Fatal(err)
 	}
+	manualProviderID, manualLocalSessionID, manualFederatedSessionID := uuid.New(), uuid.New(), uuid.New()
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains) VALUES($1,$2,'Manual user OIDC','https://identity.example.test','manual','ciphertext','{example.test}')`, manualProviderID, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local'),($4,$2,$5,now()+interval '1 hour','local')`, manualLocalSessionID, manualUserID, cryptox.Digest("manual-local-session"), uuid.New(), cryptox.Digest("manual-local-session-two")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour','oidc')`, manualFederatedSessionID, manualUserID, orgID, manualProviderID, cryptox.Digest("manual-federated-session")); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, manualUserID) })
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+manualUserID.String(), token, http.MethodPatch, map[string]any{"Operations": []map[string]any{{"op": "replace", "path": "active", "value": false}}}, http.StatusNoContent)
+	var remainingSessions int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE user_id=$1`, manualUserID).Scan(&remainingSessions); err != nil || remainingSessions != 0 {
+		t.Fatalf("SCIM deprovision retained %d interactive sessions: %v", remainingSessions, err)
+	}
 	manualUser := doSCIMRequest(t, server.URL+"/scim/v2/Users/"+manualUserID.String(), token, http.MethodGet, nil, http.StatusOK)
 	if manualUser["active"] != false || manualUser["meta"].(map[string]any)["version"] != `W/"2"` {
 		t.Fatalf("deactivated manual member did not retain versioned SCIM ownership: %#v", manualUser)
@@ -241,12 +255,25 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)`, orgID, inactiveID).Scan(&attached); err != nil || !attached {
 		t.Fatalf("inactive user reactivated = %v, err = %v", attached, err)
 	}
+	inactiveUUID := uuid.MustParse(inactiveID)
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local')`, uuid.New(), inactiveUUID, cryptox.Digest("inactive-put-session")); err != nil {
+		t.Fatal(err)
+	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodPut, map[string]any{"userName": inactiveUserName, "displayName": "Inactive", "active": false}, http.StatusOK)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE user_id=$1`, inactiveUUID).Scan(&remainingSessions); err != nil || remainingSessions != 0 {
+		t.Fatalf("SCIM replacement deprovision retained %d interactive sessions: %v", remainingSessions, err)
+	}
 	loaded = doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusOK)
 	if active, _ := loaded["active"].(bool); active {
 		t.Fatal("deprovisioned SCIM user is active")
 	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local')`, uuid.New(), inactiveUUID, cryptox.Digest("inactive-delete-session")); err != nil {
+		t.Fatal(err)
+	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodDelete, nil, http.StatusNoContent)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE user_id=$1`, inactiveUUID).Scan(&remainingSessions); err != nil || remainingSessions != 0 {
+		t.Fatalf("SCIM delete retained %d interactive sessions: %v", remainingSessions, err)
+	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusNotFound)
 	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)`, orgID, inactiveID).Scan(&attached); err != nil || attached {
 		t.Fatalf("deleted inactive user retained SCIM binding = %v, err = %v", attached, err)

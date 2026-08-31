@@ -493,6 +493,9 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			_, err = tx.Exec(r.Context(), `DELETE FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
 		}
 		if err == nil {
+			_, err = store.RevokeOrganizationMembershipSessionsTx(r.Context(), tx, orgID, userID)
+		}
+		if err == nil {
 			_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
 		}
 		if err != nil {
@@ -620,7 +623,9 @@ func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, 
 			SELECT organization_id,user_id,default_role FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2
 			ON CONFLICT(organization_id,user_id) DO UPDATE SET role=CASE WHEN memberships.role='owner' THEN 'owner' ELSE excluded.role END`, orgID, userID)
 	} else if _, err = tx.Exec(r.Context(), `DELETE FROM scim_group_members gm USING scim_groups g WHERE gm.group_id=g.id AND g.organization_id=$1 AND gm.user_id=$2`, orgID, userID); err == nil {
-		_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+		if _, err = store.RevokeOrganizationMembershipSessionsTx(r.Context(), tx, orgID, userID); err == nil {
+			_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+		}
 	}
 	if err != nil {
 		scimError(w, http.StatusInternalServerError, "membership cannot be replaced")
@@ -700,7 +705,9 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 					return
 				}
 				if _, err = tx.Exec(r.Context(), `DELETE FROM scim_group_members gm USING scim_groups g WHERE gm.group_id=g.id AND g.organization_id=$1 AND gm.user_id=$2`, orgID, userID); err == nil {
-					_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+					if _, err = store.RevokeOrganizationMembershipSessionsTx(r.Context(), tx, orgID, userID); err == nil {
+						_, err = tx.Exec(r.Context(), `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+					}
 				}
 			} else {
 				_, err = tx.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO NOTHING`, orgID, userID, role)

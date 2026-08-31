@@ -16,7 +16,7 @@ func TestRBACMutationsCommitWithAudit(t *testing.T) {
 	}
 	db := &Store{Pool: pool}
 	organizationID, ownerID, memberID := uuid.New(), uuid.New(), uuid.New()
-	projectID, environmentID, sessionID, providerID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, sessionID, localSessionID, providerID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -26,6 +26,7 @@ func TestRBACMutationsCommitWithAudit(t *testing.T) {
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'viewer')`, []any{organizationID, ownerID, memberID}},
 		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains) VALUES($1,$2,'RBAC OIDC','https://identity.example.test','client','ciphertext','{example.test}')`, []any{providerID, organizationID}},
 		{`INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,$6,'oidc')`, []any{sessionID, memberID, organizationID, providerID, []byte("member-session"), time.Now().Add(time.Hour)}},
+		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,'local')`, []any{localSessionID, memberID, []byte("member-local-session"), time.Now().Add(time.Hour)}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 	} {
@@ -85,6 +86,9 @@ func TestRBACMutationsCommitWithAudit(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id=$1`, sessionID).Scan(&sessionCount); err != nil || sessionCount != 1 {
 		t.Fatalf("failed evidence removed member session: count=%d err=%v", sessionCount, err)
 	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id=$1`, localSessionID).Scan(&sessionCount); err != nil || sessionCount != 1 {
+		t.Fatalf("failed evidence removed member local session: count=%d err=%v", sessionCount, err)
+	}
 	if err := db.DeleteOrganizationMemberWithAudit(ctx, principal, memberID, "127.0.0.1:1234"); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +97,7 @@ func TestRBACMutationsCommitWithAudit(t *testing.T) {
 		t.Fatalf("member removal count=%d err=%v", membershipCount, err)
 	}
 	assertGrantCount(t, pool, ctx, "project_grants", "project_id", projectID, memberID, 0)
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id=$1`, sessionID).Scan(&sessionCount); err != nil || sessionCount != 0 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE id=ANY($1)`, []uuid.UUID{sessionID, localSessionID}).Scan(&sessionCount); err != nil || sessionCount != 0 {
 		t.Fatalf("member session removal count=%d err=%v", sessionCount, err)
 	}
 
