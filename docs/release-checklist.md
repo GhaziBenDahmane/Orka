@@ -57,7 +57,8 @@ links for every item below.
   data; the BarkTrace PostgreSQL variant replaces both its application and
   database services. CI publishes
   `template-conformance.json` with template versions and Swarm-resolved image
-  digests; both BarkTrace variants must resolve from the released
+  digests, including BarkTrace PostgreSQL's database dependency; both
+  BarkTrace variants must resolve from the released
   `ghcr.io/barktrace/bark:0.31.0` tag.
 - Every release after the first boots the previous published image digest,
   creates authenticated and encrypted tenant state, deploys a live stack, and

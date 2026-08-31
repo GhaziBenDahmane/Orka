@@ -57,6 +57,9 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 	if !strings.Contains(loop, `docker service update --force --detach=false "${stack}_postgres"`) {
 		t.Fatal("BarkTrace PostgreSQL smoke must replace its stateful database service")
 	}
+	if !strings.Contains(loop, `dependency_images="$(jq -cn --arg image "$postgres_image" '[{service:"postgres",image:$image}]')"`) {
+		t.Fatal("BarkTrace PostgreSQL smoke must record its resolved database image")
+	}
 	if !strings.Contains(verifyBody, `stat -c '%d:%i' /data/barktrace.db`) {
 		t.Fatal("BarkTrace SQLite smoke must verify the original database file survives replacement")
 	}
@@ -73,6 +76,9 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 		if !strings.Contains(string(releaseWorkflow), evidence) {
 			t.Fatalf("release promotion does not require template evidence field %s", evidence)
 		}
+	}
+	if !strings.Contains(string(releaseWorkflow), `.dependencyImages | length == 1 and .[0].service == "postgres"`) {
+		t.Fatal("release promotion does not require the BarkTrace PostgreSQL dependency image")
 	}
 }
 

@@ -238,6 +238,9 @@ for template_key in "${template_keys[@]}"; do
     state_seeded_before_restart=false
     post_restart_read_only=false
   elif [[ "$template_key" == barktrace-postgres ]]; then
+    postgres_image="$(docker service inspect "${stack}_postgres" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
+    "$root_dir/scripts/ci/validate-image-reference.sh" "$postgres_image"
+    dependency_images="$(jq -cn --arg image "$postgres_image" '[{service:"postgres",image:$image}]')"
     dependency_restart_verified=true
   elif [[ "$template_key" == barktrace-sqlite ]]; then
     sqlite_file_identity_verified=true
@@ -265,6 +268,7 @@ jq -e '
   all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and
   all(.products[]; if .dataVerificationApplicable then .stateSeededBeforeRestart and .postRestartReadOnly else true end) and
   (.products[] | select(.template == "barktrace-postgres") | .dependencyRestartVerified) and
+  (.products[] | select(.template == "barktrace-postgres") | (.dependencyImages | length == 1 and .[0].service == "postgres" and (.[0].image | test("@sha256:[a-f0-9]{64}$")))) and
   (.products[] | select(.template == "barktrace-sqlite") | .sqliteFileIdentityVerified) and
   all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
   all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
