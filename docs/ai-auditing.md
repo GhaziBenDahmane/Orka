@@ -205,7 +205,10 @@ keys make it a privileged service.
   notification coverage gaps, unavailable, unbound, mismatched, or
   recovery-incapable database drivers, unhealthy reconciliation, unsigned,
   failed, never-synchronized, or stale catalogs, undeployed desired revisions, and
-  incomplete Dokploy migrations. It also reports a missing immutable audit
+  incomplete Dokploy migrations. Failed offline named-volume recovery and
+  recovery that remains queued or running for more than thirty minutes are
+  critical deterministic findings even when the backup policy was later removed.
+  It also reports a missing immutable audit
   archive, a failed latest archive delivery, or tenant events left unarchived
   for more than five minutes, backup destinations that permit plaintext
   object-store traffic, public routes that permit plaintext HTTP, custom TLS

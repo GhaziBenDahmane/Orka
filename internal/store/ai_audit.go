@@ -43,6 +43,7 @@ type AIAuditSnapshot struct {
 	AgentCommandPosture  []AIAuditAgentCommandPosture     `json:"agentCommandPosture"`
 	BackupPosture        []AIAuditBackupPosture           `json:"backupPosture"`
 	VolumeBackupPosture  []AIAuditVolumeBackupPosture     `json:"volumeBackupPosture"`
+	VolumeRestorePosture []AIAuditVolumeRestorePosture    `json:"volumeRestorePosture"`
 	ResourcePolicies     []AIAuditResourcePolicyPosture   `json:"resourcePolicies"`
 	WorkloadPosture      []AIAuditWorkloadPosture         `json:"workloadPosture"`
 	SourceBuildPosture   []AIAuditSourceBuildPosture      `json:"sourceBuildPosture"`
@@ -277,6 +278,19 @@ type AIAuditVolumeBackupPosture struct {
 	LastRestoreAt      *time.Time `json:"lastRestoreAt,omitempty"`
 	LastRestoreOffline bool       `json:"lastRestoreOffline"`
 	LastRestoreNodeID  string     `json:"lastRestoreNodeId,omitempty"`
+}
+
+type AIAuditVolumeRestorePosture struct {
+	ID                  uuid.UUID  `json:"id"`
+	ServiceID           uuid.UUID  `json:"serviceId"`
+	ServiceName         string     `json:"serviceName"`
+	VolumeName          string     `json:"volumeName"`
+	StorageNodeID       string     `json:"storageNodeId,omitempty"`
+	TargetStorageNodeID string     `json:"targetStorageNodeId"`
+	Status              string     `json:"status"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	StartedAt           *time.Time `json:"startedAt,omitempty"`
+	FinishedAt          *time.Time `json:"finishedAt,omitempty"`
 }
 
 type AIAuditResourcePolicyPosture struct {
@@ -556,7 +570,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, SourceCredentials: []AIAuditSourceCredentialPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, VolumeRestorePosture: []AIAuditVolumeRestorePosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, SourceCredentials: []AIAuditSourceCredentialPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -1077,6 +1091,34 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 			return err
 		}
 		snapshot.VolumeBackupPosture = append(snapshot.VolumeBackupPosture, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	rows, err = s.Pool.Query(ctx, `
+		SELECT DISTINCT ON (service.id,backup.volume_name)
+			restore.id,service.id,service.name,backup.volume_name,COALESCE(service.storage_node_id,''),restore.target_storage_node_id,
+			restore.status,restore.created_at,restore.started_at,restore.finished_at
+		FROM volume_restores restore
+		JOIN volume_backups backup ON backup.id=restore.volume_backup_id
+		JOIN compose_services service ON service.id=backup.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL AND restore.offline
+		ORDER BY service.id,backup.volume_name,restore.created_at DESC,restore.id DESC`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var item AIAuditVolumeRestorePosture
+		if err = rows.Scan(&item.ID, &item.ServiceID, &item.ServiceName, &item.VolumeName, &item.StorageNodeID, &item.TargetStorageNodeID, &item.Status, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.VolumeRestorePosture = append(snapshot.VolumeRestorePosture, item)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()

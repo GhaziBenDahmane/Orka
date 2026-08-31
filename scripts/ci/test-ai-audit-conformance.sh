@@ -69,6 +69,7 @@ jq -e '
   .staleDeployCredentialAudited and
   .staleServiceAccountAudited and
   .customTLSValidityAudited and .edgeTLSConvergenceAudited and
+  .offlineVolumeRecoveryAudited and
   .modelFindingsPersisted and .durableRunCompleted and
   .lifecycleAudited and .auditorLeastPrivilege and
   .findingTriageAudited and .findingTriageAtomic and .criticalFindingNotified and .auditorTriageDenied and

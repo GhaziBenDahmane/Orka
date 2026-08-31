@@ -715,6 +715,34 @@ func TestDeterministicAuditDetectsNamedVolumesWithoutPolicies(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsFailedAndStalledOfflineVolumeRecovery(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	serviceID := uuid.New()
+	failedID, stalledID := uuid.New(), uuid.New()
+	failedAt, startedAt := now.Add(-time.Hour), now.Add(-40*time.Minute)
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		VolumeRestorePosture: []store.AIAuditVolumeRestorePosture{
+			{ID: failedID, ServiceID: serviceID, ServiceName: "App", VolumeName: "uploads", StorageNodeID: "node-new", TargetStorageNodeID: "node-new", Status: "failed", CreatedAt: now.Add(-70 * time.Minute), FinishedAt: &failedAt},
+			{ID: stalledID, ServiceID: serviceID, ServiceName: "App", VolumeName: "cache", StorageNodeID: "node-new", TargetStorageNodeID: "node-new", Status: "running", CreatedAt: now.Add(-41 * time.Minute), StartedAt: &startedAt},
+			{ID: uuid.New(), ServiceID: serviceID, ServiceName: "App", VolumeName: "fresh", StorageNodeID: "node-new", TargetStorageNodeID: "node-new", Status: "queued", CreatedAt: now.Add(-5 * time.Minute)},
+			{ID: uuid.New(), ServiceID: serviceID, ServiceName: "App", VolumeName: "recovered", StorageNodeID: "node-new", TargetStorageNodeID: "node-new", Status: "succeeded", CreatedAt: now.Add(-time.Hour), FinishedAt: &failedAt},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 2 {
+		t.Fatalf("offline recovery findings=%#v", findings)
+	}
+	if findings[0].Title != "Offline volume recovery failed" || findings[0].Severity != "critical" || findings[0].ResourceID != failedID.String() || findings[0].Evidence["volumeName"] != "uploads" || findings[0].Evidence["targetStorageNodeId"] != "node-new" {
+		t.Fatalf("failed recovery finding=%#v", findings[0])
+	}
+	if findings[1].Title != "Offline volume recovery is stalled" || findings[1].Severity != "critical" || findings[1].ResourceID != stalledID.String() || findings[1].Evidence["ageSeconds"] != int64(41*60) || findings[1].Evidence["maximumAgeSeconds"] != int64(30*60) {
+		t.Fatalf("stalled recovery finding=%#v", findings[1])
+	}
+}
+
 func TestDeterministicAuditDetectsMutableRemoteAgentImages(t *testing.T) {
 	now := time.Now().UTC()
 	missingID, mutableID := uuid.New(), uuid.New()

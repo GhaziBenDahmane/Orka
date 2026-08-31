@@ -32,6 +32,7 @@ jobs:
             .staleDeployCredentialAudited and
             .staleServiceAccountAudited and
             .customTLSValidityAudited and .edgeTLSConvergenceAudited and
+            .offlineVolumeRecoveryAudited and
             .durableRunCompleted and .lifecycleAudited and .auditorLeastPrivilege and
             .findingTriageAudited and .findingTriageAtomic and
             .criticalFindingNotified and .auditorTriageDenied and

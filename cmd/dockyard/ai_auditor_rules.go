@@ -20,6 +20,7 @@ const agentCommandStallThreshold = 2 * time.Minute
 const edgeTLSReconciliationStallThreshold = 5 * time.Minute
 const managedNetworkProvisioningStallThreshold = 15 * time.Minute
 const credentialRotationThreshold = 180 * 24 * time.Hour
+const offlineVolumeRestoreStallThreshold = 30 * time.Minute
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -401,6 +402,31 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			evidence := recoveryAgeEvidence(now, backup.LastRestoreAt, backup.IntervalSeconds, 24*time.Hour)
 			evidence["volumeName"] = backup.VolumeName
 			add(modelFinding{Severity: "medium", Category: "backup", Title: "Volume restore validation is overdue", Description: "The latest successful named-volume restore validation is older than twice the configured backup interval, with a minimum one-day window.", ResourceType: "service", ResourceID: resourceID, Evidence: evidence, Remediation: "Perform a controlled restore rehearsal and validate application-level data before relying on current backups."})
+		}
+	}
+	for _, restore := range snapshot.VolumeRestorePosture {
+		evidence := map[string]any{
+			"serviceId":           restore.ServiceID.String(),
+			"serviceName":         restore.ServiceName,
+			"volumeName":          restore.VolumeName,
+			"storageNodeId":       restore.StorageNodeID,
+			"targetStorageNodeId": restore.TargetStorageNodeID,
+			"status":              restore.Status,
+			"createdAt":           restore.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		switch {
+		case restore.Status == "failed":
+			if restore.FinishedAt != nil {
+				evidence["finishedAt"] = restore.FinishedAt.UTC().Format(time.RFC3339)
+			}
+			add(modelFinding{Severity: "critical", Category: "backup", Title: "Offline volume recovery failed", Description: "The latest offline recovery attempt for a named volume failed while the workload must remain stopped.", ResourceType: "volume_restore", ResourceID: restore.ID.String(), Evidence: evidence, Remediation: "Keep the service stopped, inspect the restore record and target-node storage, then retry recovery before starting the workload."})
+		case (restore.Status == "queued" || restore.Status == "running") && now.Sub(restore.CreatedAt) > offlineVolumeRestoreStallThreshold:
+			evidence["ageSeconds"] = int64(now.Sub(restore.CreatedAt) / time.Second)
+			evidence["maximumAgeSeconds"] = int64(offlineVolumeRestoreStallThreshold / time.Second)
+			if restore.StartedAt != nil {
+				evidence["startedAt"] = restore.StartedAt.UTC().Format(time.RFC3339)
+			}
+			add(modelFinding{Severity: "critical", Category: "backup", Title: "Offline volume recovery is stalled", Description: "An offline named-volume recovery has remained queued or running for more than thirty minutes while the workload must remain stopped.", ResourceType: "volume_restore", ResourceID: restore.ID.String(), Evidence: evidence, Remediation: "Keep the service stopped and restore worker, target-node, and object-store connectivity before retrying or safely cancelling recovery."})
 		}
 	}
 	for _, cluster := range snapshot.Clusters {

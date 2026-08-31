@@ -130,6 +130,9 @@ links for every item below.
   their finding when the aggregate includes a privileged automation identity.
   It also detects an unreferenced Git/SSH/registry credential older than thirty
   days without exposing its name, authority, username, or encrypted material.
+  A failed or thirty-minute-stalled offline named-volume recovery must produce
+  a critical deterministic finding with service, volume, and target-node
+  context while excluding the raw restore error from the model boundary.
   The gate additionally verifies audited administrator finding triage, atomic
   rollback when its audit write fails, denial of triage to the auditor identity,
   prevention of cross-tenant finding mutation, and durable notification for a

@@ -353,7 +353,9 @@ dedicated `auditor` service-account role can read a redacted platform snapshot
 and write structured findings, but has no access to normal workload APIs. The
 built-in Go runner is the default low-footprint agent and can use 9Router or any
 OpenAI-compatible endpoint. Hermes remains an optional interactive adapter for
-investigations that need its larger tool ecosystem. See `ai-auditing.md`.
+investigations that need its larger tool ecosystem. Its deterministic baseline
+also treats failed or stalled offline volume recovery as critical without
+exposing raw worker errors to the model. See `ai-auditing.md`.
 
 Catalogs are federated through organization-owned GitHub repository records.
 Each repository uses the Dokploy blueprint layout and gets a namespace, making

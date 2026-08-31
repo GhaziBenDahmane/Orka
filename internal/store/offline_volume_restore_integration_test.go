@@ -55,6 +55,17 @@ func TestOfflineVolumeRestoreTargetsReboundNode(t *testing.T) {
 	if !restore.Offline || restore.TargetStorageNodeID != "newnode" || restore.Status != "queued" {
 		t.Fatalf("offline restore=%#v", restore)
 	}
+	snapshot, err := db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.VolumeRestorePosture) != 1 {
+		t.Fatalf("offline restore audit posture=%#v", snapshot.VolumeRestorePosture)
+	}
+	posture := snapshot.VolumeRestorePosture[0]
+	if posture.ID != restore.ID || posture.ServiceID != serviceID || posture.ServiceName != "App" || posture.VolumeName != "data" || posture.StorageNodeID != "newnode" || posture.TargetStorageNodeID != "newnode" || posture.Status != "queued" || posture.CreatedAt.IsZero() {
+		t.Fatalf("offline restore audit posture=%#v", posture)
+	}
 	loaded, err := db.GetVolumeRestore(ctx, organizationID, restore.ID)
 	if err != nil || !loaded.Offline || loaded.TargetStorageNodeID != "newnode" {
 		t.Fatalf("loaded offline restore=%#v err=%v", loaded, err)
