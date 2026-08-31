@@ -89,3 +89,63 @@ func TestCreateSessionWithAuditScopesEvidenceAndRollsBackWithoutMembership(t *te
 	_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id IN ($1,$2)`, firstOrganization, secondOrganization)
 	_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id IN ($1,$2)`, userID, orphanID)
 }
+
+func TestFederatedSessionCreationSerializesWithMembershipRemoval(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, userID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Session fencing',$2)`, organizationID, "session-fencing-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!federated')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'viewer')`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: organizationID, Name: "Session fencing", Issuer: "https://identity.example.test", ClientID: "client", EncryptedClientSecret: "ciphertext", Domains: []string{"example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	removal, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer removal.Rollback(ctx)
+	var lockedUserID uuid.UUID
+	if err = removal.QueryRow(ctx, `SELECT user_id FROM memberships WHERE organization_id=$1 AND user_id=$2 FOR UPDATE`, organizationID, userID).Scan(&lockedUserID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, createErr := db.CreateSessionWithAudit(ctx, userID, &organizationID, &provider.ID, provider.Revision, []byte("membership-race-token"), time.Now().Add(time.Hour), "oidc", "", "", "", "", nil)
+		result <- createErr
+	}()
+	select {
+	case createErr := <-result:
+		t.Fatalf("session creation bypassed membership lock: %v", createErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err = removal.Exec(ctx, `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err = removal.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case createErr := <-result:
+		if !errors.Is(createErr, ErrNotFound) {
+			t.Fatalf("session creation after membership removal error=%v, want ErrNotFound", createErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session creation did not resume after membership removal")
+	}
+	var sessions int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE token_hash=$1`, []byte("membership-race-token")).Scan(&sessions); err != nil || sessions != 0 {
+		t.Fatalf("membership race retained sessions=%d err=%v", sessions, err)
+	}
+}

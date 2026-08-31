@@ -256,6 +256,10 @@ ownership record without a membership as authoritative deprovisioning. SCIM
 deletes keep that record as an API-hidden tombstone until a later directory
 create explicitly restores it, so federated login cannot silently recreate
 access after either deactivation or deletion.
+Session issuance locks the authenticated user and the memberships it will
+authorize before writing the token and audit evidence. Membership removal and
+SCIM deprovisioning therefore cannot race session revocation and leave a token
+that becomes valid if access is later restored.
 
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a

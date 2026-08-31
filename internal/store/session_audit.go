@@ -36,6 +36,20 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 		return uuid.Nil, err
 	}
 	defer tx.Rollback(ctx)
+	var currentPasswordHash string
+	err = tx.QueryRow(ctx, `SELECT password_hash FROM users WHERE id=$1 AND disabled_at IS NULL FOR UPDATE`, userID).Scan(&currentPasswordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if authMethod == "local" {
+			return uuid.Nil, ErrAuthenticationStateChanged
+		}
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if authMethod == "local" && currentPasswordHash != expectedPasswordHash {
+		return uuid.Nil, ErrAuthenticationStateChanged
+	}
 	var oidcProviderID, samlProviderID *uuid.UUID
 	if authMethod == "oidc" {
 		oidcProviderID = providerID
@@ -60,10 +74,12 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 			return uuid.Nil, ErrAuthenticationStateChanged
 		}
 	}
+	if err = lockSessionMemberships(ctx, tx, userID, organizationID); err != nil {
+		return uuid.Nil, err
+	}
 	id := uuid.New()
 	tag, err := tx.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,saml_provider_id,token_hash,expires_at,auth_method,user_agent,ip_address)
-		SELECT $1,u.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM users u
-		WHERE u.id=$2 AND u.disabled_at IS NULL AND ($8<>'local' OR u.password_hash=$11)`, id, userID, organizationID, oidcProviderID, samlProviderID, tokenHash, expires, authMethod, userAgent, ipAddress, expectedPasswordHash)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, userID, organizationID, oidcProviderID, samlProviderID, tokenHash, expires, authMethod, userAgent, ipAddress)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -95,6 +111,40 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 		return uuid.Nil, err
 	}
 	return id, nil
+}
+
+// lockSessionMemberships makes session issuance serialize with membership
+// removal. It prevents a login transaction from committing a dormant token
+// after removal has already revoked the user's prior sessions.
+func lockSessionMemberships(ctx context.Context, tx pgx.Tx, userID uuid.UUID, organizationID *uuid.UUID) error {
+	if organizationID != nil {
+		var lockedOrganizationID uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT organization_id FROM memberships WHERE organization_id=$1 AND user_id=$2 FOR KEY SHARE`, *organizationID, userID).Scan(&lockedOrganizationID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT organization_id FROM memberships WHERE user_id=$1 ORDER BY organization_id FOR KEY SHARE`, userID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var lockedOrganizationID uuid.UUID
+		if err = rows.Scan(&lockedOrganizationID); err != nil {
+			return err
+		}
+		found = true
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	if !found {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) LogoutSessionWithAudit(ctx context.Context, principal Principal, remoteAddr string) error {

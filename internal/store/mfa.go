@@ -157,6 +157,9 @@ func (s *Store) CreateMFASessionWithAudit(ctx context.Context, credential LocalL
 	if err != nil {
 		return uuid.Nil, err
 	}
+	if err = lockSessionMemberships(ctx, tx, credential.UserID, nil); err != nil {
+		return uuid.Nil, err
+	}
 	proof := "totp"
 	if totpCounter != nil {
 		if lastCounter != nil && *totpCounter <= *lastCounter {
