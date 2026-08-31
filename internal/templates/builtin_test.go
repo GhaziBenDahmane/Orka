@@ -26,6 +26,7 @@ func TestBuiltinCatalogIsSwarmSafe(t *testing.T) {
 func TestBuiltinDatabaseTemplateCatalog(t *testing.T) {
 	expectedVersions := map[string]string{
 		"clickhouse":  "25.8-alpine",
+		"libsql":      "v0.24.33",
 		"mariadb":     "11.8",
 		"meilisearch": "v1.20",
 		"mongo":       "8",
@@ -47,7 +48,7 @@ func TestBuiltinDatabaseTemplateCatalog(t *testing.T) {
 		}
 	}
 	sort.Strings(ids)
-	expectedIDs := []string{"9router", "barktrace-postgres", "barktrace-sqlite", "clickhouse", "mariadb", "meilisearch", "mongo", "mysql", "postgres", "qdrant", "redis", "timescaledb", "valkey"}
+	expectedIDs := []string{"9router", "barktrace-postgres", "barktrace-sqlite", "clickhouse", "libsql", "mariadb", "meilisearch", "mongo", "mysql", "postgres", "qdrant", "redis", "timescaledb", "valkey"}
 	if strings.Join(ids, ",") != strings.Join(expectedIDs, ",") {
 		t.Fatalf("built-in template IDs = %v, want %v", ids, expectedIDs)
 	}

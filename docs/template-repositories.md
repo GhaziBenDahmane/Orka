@@ -36,7 +36,11 @@ respectively, and `base64` uses padded standard encoding. A parameterless
 `jwt` produces a signed token with Dokploy's standard issuer and expiry.
 Signed JWT helpers must reference a declared, non-empty secret variable and may
 reference one declared JSON payload variable. Malformed, missing, negative, or
-unbounded parameters fail validation and are never deployable. `timestampms` and
+unbounded parameters fail validation and are never deployable. The derived
+`${basicAuth:username:password}` helper emits `basic:<base64(username:password)>`;
+both operands must be declared and non-empty, and usernames containing a colon
+are rejected. Derived authentication values are classified as sensitive and
+recomputed when a template is upgraded. `timestampms` and
 `timestamps` accept an optional RFC3339 or `YYYY-MM-DD` date. Catalog admission
 also bounds variable counts, source bytes, resolved bytes, and expression count
 so chained substitutions cannot amplify a small repository into unbounded
@@ -181,12 +185,12 @@ Deleting a repository also removes its catalog entries. Existing services keep
 their immutable Compose revision and template provenance snapshot.
 
 The controller seeds PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, Redis,
-Valkey, ClickHouse, Qdrant, Meilisearch, 9Router, and BarkTrace
+Valkey, libSQL, ClickHouse, Qdrant, Meilisearch, 9Router, and BarkTrace
 SQLite/PostgreSQL templates at startup. These database products remain ordinary
 Compose templates and can be registered as Compose-linked backup targets.
-libSQL remains available as a managed database; a built-in Compose template is
-deferred until the template resolver can safely derive its basic-auth value
-from generated credentials. To suggest another built-in product,
+The `${basicAuth:username:password}` template helper derives libSQL's required
+authentication value without storing a second independent secret. To suggest
+another built-in product,
 use the public [Template request](https://github.com/GhaziBenDahmane/Orka/issues/new?template=template-request.yml)
 form; to contribute it directly, follow `CONTRIBUTING.md` and add a validated blueprint under
 `internal/templates/builtin/blueprints`.

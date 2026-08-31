@@ -145,6 +145,46 @@ func TestInstantiateSupportsDokployLargeBase64Generator(t *testing.T) {
 	}
 }
 
+func TestInstantiateDerivesBasicAuthenticationFromCredentials(t *testing.T) {
+	template := DokployTemplate{Variables: map[string]string{
+		"username":  "app",
+		"password":  "${password:32}",
+		"http_auth": "${basicAuth:username:password}",
+	}}
+	template.Config.Env = map[string]any{"SQLD_HTTP_AUTH": "${http_auth}"}
+	instance, err := InstantiateWithOverrides(template, "services: {}\n", "", map[string]string{
+		"username": "operator",
+		"password": "correct horse battery staple",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "basic:" + base64.StdEncoding.EncodeToString([]byte("operator:correct horse battery staple"))
+	if instance.Environment["SQLD_HTTP_AUTH"] != want || instance.Variables["http_auth"] != want {
+		t.Fatalf("derived auth = %q, want %q", instance.Environment["SQLD_HTTP_AUTH"], want)
+	}
+	for _, descriptor := range DescribeVariables(template) {
+		if descriptor.Name == "http_auth" && (!descriptor.Generated || !descriptor.Sensitive || descriptor.Default != "") {
+			t.Fatalf("derived authentication descriptor = %#v", descriptor)
+		}
+	}
+}
+
+func TestInstantiateRejectsInvalidBasicAuthenticationInputs(t *testing.T) {
+	for name, variables := range map[string]map[string]string{
+		"missing argument": {"auth": "${basicAuth:user}"},
+		"missing variable": {"user": "app", "auth": "${basicAuth:user:password}"},
+		"empty password":   {"user": "app", "password": "", "auth": "${basicAuth:user:password}"},
+		"ambiguous user":   {"user": "app:admin", "password": "secret", "auth": "${basicAuth:user:password}"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Instantiate(DokployTemplate{Variables: variables}, "services: {}\n", ""); err == nil {
+				t.Fatal("invalid basic authentication helper was accepted")
+			}
+		})
+	}
+}
+
 func TestInstantiateMatchesDokployGeneratorDefaults(t *testing.T) {
 	template := DokployTemplate{Variables: map[string]string{
 		"password":  "${password}",

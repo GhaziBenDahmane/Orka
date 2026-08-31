@@ -94,9 +94,8 @@ recovery evidence remains.
 
 - Native catalog plus Dokploy `template.toml` compatibility and bulk importer.
 - The embedded Compose catalog includes PostgreSQL, TimescaleDB, MySQL,
-  MariaDB, MongoDB, Redis, Valkey, ClickHouse, Qdrant, and Meilisearch. libSQL
-  remains supported as a managed database pending safe derived-basic-auth
-  support in Compose template variables.
+  MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch,
+  including derived basic authentication for libSQL.
 - Safety classifications instead of silently granting host access.
 - Template instances retain encrypted resolved inputs and explicit overrides,
   expose drift-aware version provenance, and can atomically move between

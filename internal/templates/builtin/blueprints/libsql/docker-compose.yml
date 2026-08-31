@@ -1,0 +1,12 @@
+services:
+  libsql:
+    image: ghcr.io/tursodatabase/libsql-server:${LIBSQL_VERSION}
+    environment:
+      SQLD_NODE: primary
+      SQLD_DB_PATH: /var/lib/sqld
+      SQLD_HTTP_LISTEN_ADDR: 0.0.0.0:8080
+      SQLD_HTTP_AUTH: ${LIBSQL_HTTP_AUTH}
+    volumes:
+      - libsql-data:/var/lib/sqld
+volumes:
+  libsql-data: {}

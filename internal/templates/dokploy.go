@@ -131,7 +131,7 @@ func containsSensitiveGenerator(value string) bool {
 	for _, match := range expression.FindAllStringSubmatch(value, -1) {
 		helper := strings.SplitN(match[1], ":", 2)[0]
 		switch helper {
-		case "password", "base64", "hash", "jwt":
+		case "password", "base64", "hash", "jwt", "basicAuth":
 			return true
 		}
 	}
@@ -570,7 +570,7 @@ func dependenciesResolved(currentKey, value string, declared, resolved map[strin
 				return false
 			}
 		}
-		if parts[0] == "jwt" {
+		if parts[0] == "jwt" || parts[0] == "basicAuth" {
 			for _, dependency := range parts[1:] {
 				if _, isVariable := declared[dependency]; isVariable {
 					if _, ok := resolved[dependency]; !ok {
@@ -654,6 +654,22 @@ func resolve(value string, variables map[string]string, baseDomain string) (stri
 				return match
 			}
 			return base64.StdEncoding.EncodeToString(b)
+		case "basicAuth":
+			if len(parts) != 3 {
+				resolveErr = errors.New("basicAuth helper requires declared username and password variables")
+				return match
+			}
+			username, usernameOK := variables[parts[1]]
+			password, passwordOK := variables[parts[2]]
+			if !usernameOK || !passwordOK || username == "" || password == "" {
+				resolveErr = errors.New("basicAuth helper username or password variable is missing or empty")
+				return match
+			}
+			if strings.Contains(username, ":") {
+				resolveErr = errors.New("basicAuth helper username cannot contain a colon")
+				return match
+			}
+			return "basic:" + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
 		case "hash":
 			length, err := generatorLength(parts, 8)
 			if err != nil {

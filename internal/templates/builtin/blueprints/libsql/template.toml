@@ -1,0 +1,11 @@
+[variables]
+libsql_version = "v0.24.33"
+libsql_user = "app"
+libsql_password = "${password:32}"
+libsql_http_auth = "${basicAuth:libsql_user:libsql_password}"
+
+[config.env]
+LIBSQL_VERSION = "${libsql_version}"
+LIBSQL_USER = "${libsql_user}"
+LIBSQL_PASSWORD = "${libsql_password}"
+LIBSQL_HTTP_AUTH = "${libsql_http_auth}"
