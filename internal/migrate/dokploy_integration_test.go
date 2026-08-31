@@ -53,7 +53,7 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
 		`CREATE TABLE ` + quotedSchema + `.domain ("domainId" text PRIMARY KEY,"composeId" text,"applicationId" text,host text,path text,"serviceName" text,port integer,https boolean,enabled boolean,"customCertResolver" text,"internalPath" text,"stripPath" boolean)`,
 		`CREATE TABLE ` + quotedSchema + `.application ("applicationId" text PRIMARY KEY,"environmentId" text,name text,"appName" text,env text,"sourceType" text,"buildType" text,"dockerImage" text,username text,password text,command text,args text[],replicas integer,repository text,owner text,branch text,"buildPath" text,dockerfile text,"dockerBuildStage" text,"buildArgs" text,"buildSecrets" text,"enableSubmodules" boolean,"githubId" text,"gitlabId" text,"giteaId" text,"bitbucketId" text,"registryId" text,"buildRegistryId" text,"networkIds" text[] DEFAULT '{}')`,
 		`CREATE TABLE ` + quotedSchema + `.destination ("destinationId" text PRIMARY KEY,name text NOT NULL,provider text,"accessKey" text NOT NULL,"secretAccessKey" text NOT NULL,bucket text NOT NULL,region text NOT NULL,endpoint text NOT NULL,"additionalFlags" text[],"organizationId" text NOT NULL)`,
-		`CREATE TABLE ` + quotedSchema + `.backup ("backupId" text PRIMARY KEY,schedule text NOT NULL,enabled boolean,database text NOT NULL,prefix text NOT NULL,"destinationId" text NOT NULL,"keepLatestCount" integer,"backupType" text NOT NULL,"databaseType" text NOT NULL,"composeId" text,"postgresId" text,"mariadbId" text,"mysqlId" text,"mongoId" text,"libsqlId" text)`,
+		`CREATE TABLE ` + quotedSchema + `.backup ("backupId" text PRIMARY KEY,schedule text NOT NULL,enabled boolean,database text NOT NULL,prefix text NOT NULL,"destinationId" text NOT NULL,"keepLatestCount" integer,"backupType" text NOT NULL,"databaseType" text NOT NULL,"composeId" text,"serviceName" text,metadata jsonb,"postgresId" text,"mariadbId" text,"mysqlId" text,"mongoId" text,"libsqlId" text)`,
 		`CREATE TABLE ` + quotedSchema + `.volume_backup ("volumeBackupId" text PRIMARY KEY,name text NOT NULL,"volumeName" text NOT NULL,prefix text NOT NULL,"serviceType" text NOT NULL,"appName" text NOT NULL,"serviceName" text,"turnOff" boolean NOT NULL,"cronExpression" text NOT NULL,"keepLatestCount" integer,enabled boolean,"destinationId" text NOT NULL)`,
 		`CREATE TABLE ` + quotedSchema + `.slack ("slackId" text PRIMARY KEY,"webhookUrl" text NOT NULL,channel text)`,
 		`CREATE TABLE ` + quotedSchema + `.email ("emailId" text PRIMARY KEY,"smtpServer" text NOT NULL,"smtpPort" integer NOT NULL,username text NOT NULL,password text NOT NULL,"fromAddress" text NOT NULL,"toAddress" text[] NOT NULL)`,
@@ -79,9 +79,16 @@ func TestImportDokployDryRunAndIdempotence(t *testing.T) {
     image: nginx:alpine
     volumes:
       - uploads:/var/lib/uploads
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
 volumes:
   uploads: {}
-','A=one'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","buildArgs","buildSecrets","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime','GO_VERSION=1.26','',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain ("domainId","composeId","applicationId",host,path,"serviceName",port,https,enabled,"customCertResolver","internalPath","stripPath") VALUES('d1','c1',NULL,'`+fixtureHost+`','/public','web',80,true,false,'letsencrypt','/internal',true),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt','/',false)`)
+','A=one
+DB_PASSWORD=compose-secret'); INSERT INTO `+quotedSchema+`.git_provider VALUES('gp1','GitHub App','github','source-org'); INSERT INTO `+quotedSchema+`.github VALUES('gh1','https://github.com','gp1'); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType","dockerImage",args,replicas) VALUES('a1','e1','Worker','legacy-worker','WORKERS=2','docker','dockerfile','ghcr.io/example/worker:1.2','{}',2); INSERT INTO `+quotedSchema+`.application ("applicationId","environmentId",name,"appName",env,"sourceType","buildType",args,replicas,repository,owner,branch,"buildPath",dockerfile,"dockerBuildStage","buildArgs","buildSecrets","enableSubmodules","githubId","buildRegistryId") VALUES('a2','e1','Git API','legacy-api','PORT=3000','github','dockerfile','{}',1,'api','example','main','/','Dockerfile','runtime','GO_VERSION=1.26','',true,'gh1','reg1'); INSERT INTO `+quotedSchema+`.domain ("domainId","composeId","applicationId",host,path,"serviceName",port,https,enabled,"customCertResolver","internalPath","stripPath") VALUES('d1','c1',NULL,'`+fixtureHost+`','/public','web',80,true,false,'letsencrypt','/internal',true),('d2',NULL,'a1','app-`+fixtureHost+`','/',NULL,8080,true,true,'letsencrypt','/',false)`)
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.tag VALUES('tag1','Production','#22C55E','source-org'); INSERT INTO `+quotedSchema+`.project_tag VALUES('project-tag1','p1','tag1')`)
 	}
@@ -122,7 +129,7 @@ volumes:
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.volume_backup VALUES('volume1','Uploads','uploads','volumes','compose','web','web',true,'0 3 * * *',5,true,'dst1')`)
 	}
 	if err == nil {
-		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.backup VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres',NULL,'pg1',NULL,NULL,NULL,NULL)`)
+		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.backup ("backupId",schedule,enabled,database,prefix,"destinationId","keepLatestCount","backupType","databaseType","postgresId") VALUES('backup1','0 2 * * *',true,'legacydb','nightly','dst1',7,'database','postgres','pg1'); INSERT INTO `+quotedSchema+`.backup ("backupId",schedule,enabled,database,prefix,"destinationId","keepLatestCount","backupType","databaseType","composeId","serviceName",metadata) VALUES('backup-compose','0 4 * * *',true,'app','compose','dst1',7,'compose','postgres','c1','db','{"postgres":{"databaseUser":"app"}}')`)
 	}
 	if err == nil {
 		_, err = destination.Pool.Exec(ctx, `INSERT INTO `+quotedSchema+`.slack VALUES('slack1',$1,'#operations')`, encryptDokployFixture(t, sourceKey, "https://hooks.slack.example.test/services/secret-token"))
@@ -152,19 +159,19 @@ volumes:
 	parsed.RawQuery = query.Encode()
 	options := DokployOptions{SourceURL: parsed.String(), SourceOrganizationID: "source-org", TargetOrganizationID: targetOrg, RegistryPrefix: "registry.example.test/imports", ServerClusterMappings: map[string]uuid.UUID{"source-server-1": targetCluster}, DryRun: true, EncryptionKeys: [][]byte{sourceKey}}
 	report, err := ImportDokploy(ctx, destination, box, deploy.Compiler{PublicNetwork: "dockyard-public"}, options)
-	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 8 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 2 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 || report.Tags != 1 || report.ProjectTags != 1 || report.Networks != 1 || report.ServiceNetworks != 4 {
+	if err != nil || report.Projects != 1 || report.Environments != 1 || report.Services != 1 || report.Routes != 2 || report.Databases != 9 || report.Applications != 2 || report.BackupDestinations != 1 || report.BackupPolicies != 3 || report.SourceCredentials != 2 || report.NotificationEndpoints != 1 || report.Tags != 1 || report.ProjectTags != 1 || report.Networks != 1 || report.ServiceNetworks != 4 {
 		t.Fatalf("dry-run report = %#v, err = %v", report, err)
 	}
 	kindCounts := map[string]int{}
 	for _, resource := range report.Resources {
 		kindCounts[resource.SourceKind]++
 	}
-	expectedKinds := map[string]int{"project": 1, "tag": 1, "project_tag": 1, "network": 1, "service_network": 4, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 8, "backup_destination": 1, "backup_policy": 1, "volume_backup": 1, "source_credential": 2, "notification": 1}
-	if len(report.Resources) != 28 || !reflect.DeepEqual(kindCounts, expectedKinds) {
+	expectedKinds := map[string]int{"project": 1, "tag": 1, "project_tag": 1, "network": 1, "service_network": 4, "environment": 1, "compose": 1, "compose_route": 1, "application": 2, "application_route": 1, "database": 8, "compose_database": 1, "backup_destination": 1, "backup_policy": 2, "volume_backup": 1, "source_credential": 2, "notification": 1}
+	if len(report.Resources) != 30 || !reflect.DeepEqual(kindCounts, expectedKinds) {
 		t.Fatalf("migration parity resources = %#v", report.Resources)
 	}
 	encodedReport, _ := json.Marshal(report)
-	if bytes.Contains(encodedReport, []byte("legacy-secret")) || bytes.Contains(encodedReport, []byte("registry-secret")) || bytes.Contains(encodedReport, []byte("secret-token")) {
+	if bytes.Contains(encodedReport, []byte("legacy-secret")) || bytes.Contains(encodedReport, []byte("compose-secret")) || bytes.Contains(encodedReport, []byte("registry-secret")) || bytes.Contains(encodedReport, []byte("secret-token")) {
 		t.Fatal("dry-run report leaked source credentials")
 	}
 	options.DryRun = false
@@ -172,7 +179,7 @@ volumes:
 		t.Fatal(err)
 	}
 	controlPlaneVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, nil)
-	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 27 || controlPlaneVerification.Blocked != 1 {
+	if err != nil || controlPlaneVerification.Ready || controlPlaneVerification.Verified != 29 || controlPlaneVerification.Blocked != 1 {
 		t.Fatalf("control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	if _, err = VerifyDokployImport(ctx, destination, targetOrg, "not-imported", false, nil); err == nil || !strings.Contains(err.Error(), "no persisted") {
@@ -180,11 +187,11 @@ volumes:
 	}
 	acknowledgements := []string{"source_credential:github:gh1"}
 	controlPlaneVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", false, acknowledgements)
-	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 27 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
+	if err != nil || !controlPlaneVerification.Ready || controlPlaneVerification.Verified != 29 || controlPlaneVerification.Acknowledged != 1 || controlPlaneVerification.Blocked != 0 {
 		t.Fatalf("acknowledged control-plane verification=%#v err=%v", controlPlaneVerification, err)
 	}
 	operationalVerification, err := VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 13 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 15 {
 		t.Fatalf("pre-deployment operational verification=%#v err=%v", operationalVerification, err)
 	}
 	// Simulate databases imported by an older controller before compatible
@@ -210,7 +217,7 @@ volumes:
 	if err = destination.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM projects WHERE organization_id=$1),(SELECT count(*) FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM application_sources a JOIN compose_services s ON s.id=a.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM backup_destinations WHERE organization_id=$1),(SELECT count(*) FROM backup_policies b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM source_credentials WHERE organization_id=$1),(SELECT count(*) FROM notification_endpoints WHERE organization_id=$1),(SELECT count(*) FROM tags WHERE organization_id=$1),(SELECT count(*) FROM project_tags pt JOIN projects p ON p.id=pt.project_id WHERE p.organization_id=$1),(SELECT count(*) FROM managed_networks WHERE organization_id=$1),(SELECT count(*) FROM compose_service_networks sn JOIN managed_networks n ON n.id=sn.network_id WHERE n.organization_id=$1)`, targetOrg).Scan(&projects, &services, &routes, &databases, &applicationSources, &backupDestinations, &backupPolicies, &volumeBackupPolicies, &sourceCredentials, &notifications, &tags, &projectTags, &managedNetworks, &serviceNetworks); err != nil {
 		t.Fatal(err)
 	}
-	if projects != 1 || services != 11 || routes != 2 || databases != 8 || applicationSources != 1 || backupDestinations != 3 || backupPolicies != 1 || volumeBackupPolicies != 1 || sourceCredentials != 1 || notifications != 1 || tags != 1 || projectTags != 1 || managedNetworks != 1 || serviceNetworks != 4 {
+	if projects != 1 || services != 11 || routes != 2 || databases != 9 || applicationSources != 1 || backupDestinations != 4 || backupPolicies != 2 || volumeBackupPolicies != 1 || sourceCredentials != 1 || notifications != 1 || tags != 1 || projectTags != 1 || managedNetworks != 1 || serviceNetworks != 4 {
 		t.Fatalf("idempotent counts = %d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d/%d", projects, services, routes, databases, applicationSources, backupDestinations, backupPolicies, volumeBackupPolicies, sourceCredentials, notifications, tags, projectTags, managedNetworks, serviceNetworks)
 	}
 	var importedEnvironmentCluster, importedNetworkCluster uuid.UUID
@@ -240,7 +247,7 @@ volumes:
 		t.Fatal(err)
 	}
 	rows.Close()
-	if expected := []string{"libsql", "mariadb", "mongo", "mysql", "postgres", "redis", "timescaledb", "valkey"}; !reflect.DeepEqual(importedEngines, expected) {
+	if expected := []string{"libsql", "mariadb", "mongo", "mysql", "postgres", "postgres", "redis", "timescaledb", "valkey"}; !reflect.DeepEqual(importedEngines, expected) {
 		t.Fatalf("imported database engines = %v, want %v", importedEngines, expected)
 	}
 	var encryptedNotificationURL string
@@ -265,6 +272,15 @@ volumes:
 	}
 	if bytes.Contains(storedConfig, []byte("legacy-secret")) {
 		t.Fatalf("database config contains a plaintext password: %s", storedConfig)
+	}
+	composeDatabaseID := mappedID(options, "compose-database", "backup-compose")
+	var composeManagementKind, composeConnectionService, composeEncryptedCredentials string
+	if err = destination.Pool.QueryRow(ctx, `SELECT management_kind,connection_service_name,encrypted_credentials FROM database_instances WHERE id=$1`, composeDatabaseID).Scan(&composeManagementKind, &composeConnectionService, &composeEncryptedCredentials); err != nil {
+		t.Fatal(err)
+	}
+	composeCredentialsJSON, err := box.Decrypt(composeEncryptedCredentials, cryptox.ResourceContext("database-credentials", composeDatabaseID.String()))
+	if err != nil || composeManagementKind != "compose" || composeConnectionService != "db" || !bytes.Contains(composeCredentialsJSON, []byte(`"password":"compose-secret"`)) {
+		t.Fatalf("Compose database target mismatch: kind=%q service=%q credentials=%s err=%v", composeManagementKind, composeConnectionService, composeCredentialsJSON, err)
 	}
 	var destinationSecret, destinationPrefix string
 	var policyInterval, policyRetention int
@@ -307,7 +323,7 @@ volumes:
 		t.Fatalf("application build settings were not re-encrypted: %s err=%v", buildConfigJSON, err)
 	}
 	var migrationRecords, applicationMigrationRecords int
-	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 28 || applicationMigrationRecords != 2 {
+	if err = destination.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE source_kind='application') FROM dokploy_migration_resources WHERE target_organization_id=$1 AND source_organization_id='source-org'`, targetOrg).Scan(&migrationRecords, &applicationMigrationRecords); err != nil || migrationRecords != 30 || applicationMigrationRecords != 2 {
 		t.Fatalf("migration metadata records=%d application records=%d err=%v", migrationRecords, applicationMigrationRecords, err)
 	}
 
@@ -382,7 +398,7 @@ volumes:
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 13 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 14 {
 		t.Fatalf("operational verification without live observations=%#v err=%v", operationalVerification, err)
 	}
 	for _, serviceID := range serviceIDs {
@@ -391,7 +407,7 @@ volumes:
 		}
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 2 || !verificationReasonContains(operationalVerification, "volume_backup", "volume1", "storage-node binding") || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 3 || !verificationReasonContains(operationalVerification, "volume_backup", "volume1", "storage-node binding") || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") || !verificationReasonContains(operationalVerification, "backup_policy", "backup-compose", "successful encrypted backup") {
 		t.Fatalf("volume backup binding verification=%#v err=%v", operationalVerification, err)
 	}
 	composeServiceID := mappedID(options, "compose", "c1")
@@ -405,7 +421,7 @@ volumes:
 		t.Fatal(err)
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 2 || !verificationReasonContains(operationalVerification, "volume_backup", "volume1", "successful encrypted backup") || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 3 || !verificationReasonContains(operationalVerification, "volume_backup", "volume1", "successful encrypted backup") || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") || !verificationReasonContains(operationalVerification, "backup_policy", "backup-compose", "successful encrypted backup") {
 		t.Fatalf("volume backup evidence verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = destination.Pool.Exec(ctx, `INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,started_at,finished_at)
@@ -414,7 +430,7 @@ volumes:
 		t.Fatal(err)
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 1 || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 2 || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") || !verificationReasonContains(operationalVerification, "backup_policy", "backup-compose", "successful encrypted backup") {
 		t.Fatalf("database backup evidence verification=%#v err=%v", operationalVerification, err)
 	}
 	backupPolicyID := mappedID(options, "backup-policy", "backup1")
@@ -424,7 +440,7 @@ volumes:
 		t.Fatal(err)
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 1 || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 2 || !verificationReasonContains(operationalVerification, "backup_policy", "backup1", "successful encrypted backup") || !verificationReasonContains(operationalVerification, "backup_policy", "backup-compose", "successful encrypted backup") {
 		t.Fatalf("unencrypted database backup verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = destination.Pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,object_key,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,started_at,finished_at)
@@ -433,7 +449,17 @@ volumes:
 		t.Fatal(err)
 	}
 	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
-	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 27 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
+	if err != nil || operationalVerification.Ready || operationalVerification.Blocked != 1 || !verificationReasonContains(operationalVerification, "backup_policy", "backup-compose", "successful encrypted backup") {
+		t.Fatalf("Compose database backup evidence verification=%#v err=%v", operationalVerification, err)
+	}
+	composeBackupPolicyID := mappedID(options, "backup-policy", "backup-compose")
+	if _, err = destination.Pool.Exec(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,object_key,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,started_at,finished_at)
+		SELECT $1,policy.database_instance_id,'succeeded','native',policy.destination_id,'migration/compose-database.enc',42,$2,true,$3,'encrypted-data-key',now(),now()
+		FROM backup_policies policy WHERE policy.id=$4`, uuid.New(), strings.Repeat("e", 64), strings.Repeat("f", 64), composeBackupPolicyID); err != nil {
+		t.Fatal(err)
+	}
+	operationalVerification, err = VerifyDokployImport(ctx, destination, targetOrg, "source-org", true, acknowledgements)
+	if err != nil || !operationalVerification.Ready || operationalVerification.Verified != 29 || operationalVerification.Acknowledged != 1 || operationalVerification.Blocked != 0 {
 		t.Fatalf("operational verification=%#v err=%v", operationalVerification, err)
 	}
 	if _, err = destination.Pool.Exec(ctx, `UPDATE service_reconciliations SET state='degraded',last_checked_at=now() WHERE compose_service_id=$1`, composeServiceID); err != nil {
@@ -460,8 +486,9 @@ volumes:
 			"status": "passed", "postgresBacked": true, "dryRunSecretSafe": true,
 			"controlPlaneImported": true, "idempotentImport": true,
 			"composeImported": true, "applicationsImported": true,
-			"routesImported": true, "databasesImported": 8,
-			"backupConfigurationImported": true, "sourceCredentialsReencrypted": true,
+			"routesImported": true, "databasesImported": 9,
+			"composeDatabaseBackupImported": true,
+			"backupConfigurationImported":   true, "sourceCredentialsReencrypted": true,
 			"notificationsReencrypted": true, "databaseTransfersQueued": 8,
 			"transferSecretsEncrypted": true, "tenantOwnershipEnforced": true,
 			"manualAcknowledgementsExplicit": true, "operationalVerifierFailClosed": true,

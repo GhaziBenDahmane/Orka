@@ -17,7 +17,7 @@ func TestMoveComposeServicePreservesStateAndFailsClosed(t *testing.T) {
 	sourceProjectID, targetProjectID := uuid.New(), uuid.New()
 	sourceEnvironmentID, targetEnvironmentID, remoteEnvironmentID, otherEnvironmentID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	clusterID := uuid.New()
-	serviceID, databaseServiceID, busyServiceID, quotaServiceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	serviceID, databaseServiceID, linkedDatabaseID, busyServiceID, quotaServiceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	tagID, networkID := uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
@@ -40,6 +40,7 @@ func TestMoveComposeServicePreservesStateAndFailsClosed(t *testing.T) {
 		{`INSERT INTO managed_networks(id,organization_id,name,status,docker_id) VALUES($1,$2,'shared','ready','docker-network')`, []any{networkID, organizationID}},
 		{`INSERT INTO compose_service_networks(compose_service_id,network_id) VALUES($1,$2)`, []any{serviceID, networkID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17',$3,'encrypted')`, []any{uuid.New(), sourceEnvironmentID, databaseServiceID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,management_kind,connection_service_name,compose_service_id,encrypted_credentials) VALUES($1,$2,'Linked database','linked-database','postgres','17','compose','db',$3,'encrypted')`, []any{linkedDatabaseID, sourceEnvironmentID, serviceID}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key) VALUES($1,'stop.compose','{}','pending',$2)`, []any{uuid.New(), "service:" + busyServiceID.String()}},
 	} {
 		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -57,6 +58,10 @@ func TestMoveComposeServicePreservesStateAndFailsClosed(t *testing.T) {
 	var routes, networks int
 	if err = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM routes WHERE compose_service_id=$1),(SELECT count(*) FROM compose_service_networks WHERE compose_service_id=$1)`, serviceID).Scan(&routes, &networks); err != nil || routes != 1 || networks != 1 {
 		t.Fatalf("preserved routes=%d networks=%d err=%v", routes, networks, err)
+	}
+	var linkedEnvironmentID uuid.UUID
+	if err = pool.QueryRow(ctx, `SELECT environment_id FROM database_instances WHERE id=$1`, linkedDatabaseID).Scan(&linkedEnvironmentID); err != nil || linkedEnvironmentID != targetEnvironmentID {
+		t.Fatalf("linked database environment=%s err=%v", linkedEnvironmentID, err)
 	}
 	if _, err = db.MoveComposeService(ctx, organizationID, serviceID, targetEnvironmentID); err != nil {
 		t.Fatalf("idempotent move: %v", err)

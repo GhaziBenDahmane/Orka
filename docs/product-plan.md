@@ -309,7 +309,12 @@ managed-database Dokploy dry-run/import tooling, a secure operational CLI with
   changing their stable import IDs. Compatible Dokploy named-volume backup
   policies are imported with their fixed interval, retention, destination,
   quiescence, and storage-node binding; unsupported calendar schedules remain
-  explicit manual-conversion records. The Terraform/OpenTofu provider covers
+  explicit manual-conversion records. Dokploy `backupType=compose` database
+  policies are imported as explicit Compose-linked database targets for
+  PostgreSQL, MySQL, MariaDB, and MongoDB. Their credentials are re-encrypted,
+  backups and restores use the same sidecar, S3, checksum, and retention path
+  as managed databases, and ambiguous targets or unrecoverable credentials
+  remain blocked migration records. The Terraform/OpenTofu provider covers
   projects, environments, Compose services, routes, managed databases, source
   credentials, backup destinations, database backup policies, named-volume
   backup policies, federated template repositories, OIDC/SAML providers,

@@ -121,6 +121,14 @@ type preparedBackupPolicy struct {
 	intervalSeconds               int
 }
 
+type preparedComposeDatabase struct {
+	source                             sourceBackupPolicy
+	id, serviceID, environmentID       uuid.UUID
+	name, slug, version                string
+	driverSource, driverArtifactDigest string
+	encryptedCredentials               string
+}
+
 type preparedVolumeBackupPolicy struct {
 	source                       sourceVolumeBackupPolicy
 	id, serviceID, destinationID uuid.UUID
@@ -493,6 +501,7 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_destination", SourceID: item.id, TargetID: &prepared.reportID, Status: "imported", Metadata: backupDestinationMetadata(item, "")})
 	}
 	preparedPolicies := []preparedBackupPolicy{}
+	preparedComposeDatabases := []preparedComposeDatabase{}
 	preparedVolumePolicies := []preparedVolumeBackupPolicy{}
 	for _, item := range volumeBackupPolicies {
 		policyID := mappedID(options, "volume-backup-policy", item.id)
@@ -553,21 +562,70 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "volume_backup", SourceID: item.id, TargetID: &policyID, Status: "imported", Metadata: metadata})
 	}
 	seenDatabasePolicy := map[uuid.UUID]bool{}
+	composeServices := map[string]sourceCompose{}
+	for _, service := range services {
+		composeServices[service.id] = service
+	}
 	for _, item := range backupPolicies {
 		policyID := mappedID(options, "backup-policy", item.id)
-		metadata := map[string]any{"schedule": item.schedule, "databaseType": item.databaseType, "backupType": item.backupType, "prefix": item.prefix, "enabled": item.enabled, "retentionCount": item.retentionCount}
+		metadata := map[string]any{"schedule": item.schedule, "databaseType": item.databaseType, "backupType": item.backupType, "prefix": item.prefix, "enabled": item.enabled, "retentionCount": item.retentionCount, "composeId": item.composeID, "serviceName": item.serviceName}
 		reason := ""
 		interval, supportedSchedule := cronInterval(item.schedule)
-		databaseID := mappedID(options, "database:"+item.databaseType, item.databaseID)
-		if item.backupType != "database" {
-			reason = "Compose backup policies are not supported"
-		} else if !validDatabases[item.databaseType+":"+item.databaseID] || item.databaseID == "" || !dokployTransferCapableEngine(item.databaseType) {
+		databaseID := uuid.Nil
+		var preparedComposeDatabaseTarget *preparedComposeDatabase
+		if item.backupType == "database" {
+			databaseID = mappedID(options, "database:"+item.databaseType, item.databaseID)
+		} else if item.backupType == "compose" {
+			databaseID = mappedID(options, "compose-database", item.id)
+			report.Databases++
+		} else {
+			reason = "unknown Dokploy backup type"
+		}
+		if reason == "" && item.backupType == "database" && (!validDatabases[item.databaseType+":"+item.databaseID] || item.databaseID == "" || !dokployTransferCapableEngine(item.databaseType)) {
 			reason = "the referenced database was not imported or is not backup-capable"
-		} else if !supportedSchedule || interval < 900 || interval > 2_678_400 {
+		}
+		if reason == "" && item.backupType == "compose" {
+			service, found := composeServices[item.composeID]
+			if !found || !validServices[item.composeID] {
+				reason = "the referenced Compose service was not imported"
+			} else if _, supported := registry.BackupExtension(item.databaseType); !supported || !dokployTransferCapableEngine(item.databaseType) {
+				reason = "the Compose database engine is not backup-capable"
+			} else {
+				credentials, credentialErr := prepareComposeBackupCredentials(item, service, options.EncryptionKeys)
+				if credentialErr != nil {
+					reason = credentialErr.Error()
+				} else if driver, exists := registry.Engine(item.databaseType); !exists {
+					reason = "the Compose database engine is unavailable"
+				} else {
+					credentialJSON, _ := json.Marshal(credentials)
+					encryptedCredentials, encryptErr := box.Encrypt(credentialJSON, cryptox.ResourceContext("database-credentials", databaseID.String()))
+					if encryptErr != nil {
+						return report, encryptErr
+					}
+					name := strings.TrimSpace(service.name)
+					if name == "" {
+						name = service.appName
+					}
+					name += " / " + item.database
+					version := imageVersion(composeServiceImage(service.compose, item.serviceName), driver.DefaultVersion)
+					extension, _ := registry.BackupExtension(item.databaseType)
+					if _, planErr := registry.Backup(item.databaseType, version, item.serviceName, credentials, databaseID.String()+"."+extension); planErr != nil {
+						reason = "Compose database backup configuration is invalid: " + planErr.Error()
+					} else {
+						preparedComposeDatabaseTarget = &preparedComposeDatabase{
+							source: item, id: databaseID, serviceID: mappedID(options, "compose", item.composeID), environmentID: mappedID(options, "environment", service.environmentID),
+							name: name, slug: migratedSlug("compose-"+item.serviceName+"-"+item.database, databaseID), version: version,
+							driverSource: driver.Source, driverArtifactDigest: driver.ArtifactDigest, encryptedCredentials: encryptedCredentials,
+						}
+					}
+				}
+			}
+		}
+		if reason == "" && (!supportedSchedule || interval < 900 || interval > 2_678_400) {
 			reason = "cron schedule cannot be represented as a fixed 15-minute to 31-day interval"
-		} else if item.retentionCount < 1 || item.retentionCount > 100 {
+		} else if reason == "" && (item.retentionCount < 1 || item.retentionCount > 100) {
 			reason = "retention count is outside Dockyard's 1..100 range"
-		} else if seenDatabasePolicy[databaseID] {
+		} else if reason == "" && seenDatabasePolicy[databaseID] {
 			reason = "Dockyard supports one backup policy per database"
 		}
 		destinationSource, destinationFound := destinationSources[item.destinationID]
@@ -582,12 +640,19 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 			}
 		}
 		if reason != "" {
+			if item.backupType == "compose" {
+				report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_database", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: map[string]any{"composeId": item.composeID, "serviceName": item.serviceName, "database": item.database, "engine": item.databaseType}})
+			}
 			report.Skipped++
 			report.Warnings = append(report.Warnings, fmt.Sprintf("backup policy %s was skipped: %s", item.id, reason))
 			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_policy", SourceID: item.id, Status: "skipped", Reason: reason, Metadata: metadata})
 			continue
 		}
 		seenDatabasePolicy[databaseID] = true
+		if preparedComposeDatabaseTarget != nil {
+			preparedComposeDatabases = append(preparedComposeDatabases, *preparedComposeDatabaseTarget)
+			report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "compose_database", SourceID: item.id, TargetID: &databaseID, Status: "imported", Metadata: map[string]any{"composeId": item.composeID, "serviceName": item.serviceName, "database": item.database, "engine": item.databaseType}})
+		}
 		preparedDestinations[preparedDestination.key] = preparedDestination
 		preparedPolicies = append(preparedPolicies, preparedBackupPolicy{source: item, id: policyID, databaseID: databaseID, destinationID: preparedDestination.id, intervalSeconds: interval})
 		report.Resources = append(report.Resources, DokployResourceReport{SourceKind: "backup_policy", SourceID: item.id, TargetID: &policyID, Status: "imported", Metadata: metadata})
@@ -845,9 +910,17 @@ func ImportDokploy(ctx context.Context, destination *store.Store, box *cryptox.B
 		if err != nil {
 			return report, fmt.Errorf("import %s service %s: %w", item.engine, item.id, err)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,engine=excluded.engine,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, driver.Source, driver.ArtifactDigest, serviceID, encryptedCredentials, configJSON)
+		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,management_kind,connection_service_name,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'managed','',$9,$10,$11,'pending') ON CONFLICT(id) DO UPDATE SET name=excluded.name,engine=excluded.engine,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,management_kind='managed',connection_service_name='',compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,status='pending',updated_at=now()`, databaseID, mappedID(options, "environment", item.environmentID), item.name, slug, item.engine, rendered.Version, driver.Source, driver.ArtifactDigest, serviceID, encryptedCredentials, configJSON)
 		if err != nil {
 			return report, fmt.Errorf("import %s database %s: %w", item.engine, item.id, err)
+		}
+	}
+	for _, item := range preparedComposeDatabases {
+		config, _ := json.Marshal(map[string]any{"source": "dokploy", "sourceBackupId": item.source.id})
+		_, err = tx.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,management_kind,connection_service_name,compose_service_id,encrypted_credentials,config,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'compose',$9,$10,$11,$12,'pending')
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,engine=excluded.engine,version=excluded.version,driver_source=excluded.driver_source,driver_artifact_digest=excluded.driver_artifact_digest,management_kind='compose',connection_service_name=excluded.connection_service_name,compose_service_id=excluded.compose_service_id,encrypted_credentials=excluded.encrypted_credentials,config=excluded.config,updated_at=now()`, item.id, item.environmentID, item.name, item.slug, item.source.databaseType, item.version, item.driverSource, item.driverArtifactDigest, item.source.serviceName, item.serviceID, item.encryptedCredentials, config)
+		if err != nil {
+			return report, fmt.Errorf("import Compose database target %s: %w", item.source.id, err)
 		}
 	}
 	for _, assignment := range networkAssignments {

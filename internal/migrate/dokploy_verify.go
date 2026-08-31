@@ -110,6 +110,23 @@ func verifyDokployTarget(ctx context.Context, destination *store.Store, organiza
 		}
 		return "", nil
 	}
+	if resource.SourceKind == "compose_database" {
+		var status, managementKind, serviceName string
+		err := destination.Pool.QueryRow(ctx, `SELECT d.status,d.management_kind,d.connection_service_name FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&status, &managementKind, &serviceName)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "target Compose database is missing", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if managementKind != "compose" || serviceName == "" {
+			return "target database is not bound to a Compose service", nil
+		}
+		if requireOperational && status != "running" {
+			return "target Compose database is not running", nil
+		}
+		return "", nil
+	}
 	if resource.SourceKind == "database" {
 		var status, engine string
 		var serviceID uuid.UUID

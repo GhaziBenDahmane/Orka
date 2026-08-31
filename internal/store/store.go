@@ -255,19 +255,21 @@ type Deployment struct {
 }
 
 type DatabaseInstance struct {
-	ID               uuid.UUID      `json:"id"`
-	EnvironmentID    uuid.UUID      `json:"environmentId"`
-	Name             string         `json:"name"`
-	Slug             string         `json:"slug"`
-	Engine           string         `json:"engine"`
-	Version          string         `json:"version"`
-	DriverSource     string         `json:"driverSource"`
-	DriverDigest     string         `json:"driverArtifactDigest,omitempty"`
-	StorageNodeID    string         `json:"storageNodeId,omitempty"`
-	ComposeServiceID uuid.UUID      `json:"composeServiceId"`
-	Config           map[string]any `json:"config"`
-	Status           string         `json:"status"`
-	CreatedAt        time.Time      `json:"createdAt"`
+	ID                    uuid.UUID      `json:"id"`
+	EnvironmentID         uuid.UUID      `json:"environmentId"`
+	Name                  string         `json:"name"`
+	Slug                  string         `json:"slug"`
+	Engine                string         `json:"engine"`
+	Version               string         `json:"version"`
+	DriverSource          string         `json:"driverSource"`
+	DriverDigest          string         `json:"driverArtifactDigest,omitempty"`
+	ManagementKind        string         `json:"managementKind"`
+	ConnectionServiceName string         `json:"connectionServiceName,omitempty"`
+	StorageNodeID         string         `json:"storageNodeId,omitempty"`
+	ComposeServiceID      uuid.UUID      `json:"composeServiceId"`
+	Config                map[string]any `json:"config"`
+	Status                string         `json:"status"`
+	CreatedAt             time.Time      `json:"createdAt"`
 }
 
 type Template struct {
@@ -2499,12 +2501,16 @@ func (s *Store) QueueDatabaseDeletionWithAudit(ctx context.Context, principal Pr
 	}
 	defer tx.Rollback(ctx)
 	var serviceID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT database.compose_service_id FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2`, databaseID, principal.OrganizationID).Scan(&serviceID)
+	var managementKind string
+	err = tx.QueryRow(ctx, `SELECT database.compose_service_id,database.management_kind FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2`, databaseID, principal.OrganizationID).Scan(&serviceID, &managementKind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
+	}
+	if managementKind == "compose" {
+		return ErrLinkedDatabaseDeletion
 	}
 	if err = s.queueServiceDeletionTx(ctx, tx, principal.OrganizationID, serviceID, false); err != nil {
 		return err
@@ -3716,6 +3722,7 @@ func (s *Store) createDatabaseTx(ctx context.Context, tx pgx.Tx, organizationID 
 		instance.ID = uuid.New()
 	}
 	instance.ComposeServiceID = service.ID
+	instance.ManagementKind = "managed"
 	instance.Status = "pending"
 	if instance.DriverSource == "" {
 		instance.DriverSource = "unbound"
@@ -3729,7 +3736,7 @@ func (s *Store) createDatabaseTx(ctx context.Context, tx pgx.Tx, organizationID 
 
 func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (DatabaseInstance, error) {
 	var item DatabaseInstance
-	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.management_kind,d.connection_service_name,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ManagementKind, &item.ConnectionServiceName, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
@@ -3739,6 +3746,7 @@ func (s *Store) GetDatabase(ctx context.Context, organizationID, id uuid.UUID) (
 var (
 	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
 	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
+	ErrLinkedDatabaseDeletion         = errors.New("a Compose-linked database must be removed with its owning Compose service")
 	ErrBackupNotRestorable            = errors.New("backup is not restorable")
 	ErrStorageNodeMismatch            = errors.New("storage node does not match the persisted assignment")
 	ErrOfflineRestoreRequiresStopped  = errors.New("offline volume restore requires a successfully stopped service")
@@ -3807,7 +3815,7 @@ func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Prin
 	defer tx.Rollback(ctx)
 	var item DatabaseInstance
 	var composeServiceID *uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &composeServiceID, &item.Config, &item.Status, &item.CreatedAt)
+	err = tx.QueryRow(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.management_kind,d.connection_service_name,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, id, principal.OrganizationID).Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ManagementKind, &item.ConnectionServiceName, &item.StorageNodeID, &composeServiceID, &item.Config, &item.Status, &item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseInstance{}, ErrNotFound
 	}
@@ -3853,7 +3861,7 @@ func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Prin
 }
 
 func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID uuid.UUID) ([]DatabaseInstance, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.environment_id=$1 AND p.organization_id=$2 ORDER BY d.name`, environmentID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT d.id,d.environment_id,d.name,d.slug,d.engine,d.version,d.driver_source,d.driver_artifact_digest,d.management_kind,d.connection_service_name,d.storage_node_id,d.compose_service_id,d.config,d.status,d.created_at FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.environment_id=$1 AND p.organization_id=$2 ORDER BY d.name`, environmentID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -3861,7 +3869,7 @@ func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID
 	items := []DatabaseInstance{}
 	for rows.Next() {
 		var item DatabaseInstance
-		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.EnvironmentID, &item.Name, &item.Slug, &item.Engine, &item.Version, &item.DriverSource, &item.DriverDigest, &item.ManagementKind, &item.ConnectionServiceName, &item.StorageNodeID, &item.ComposeServiceID, &item.Config, &item.Status, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

@@ -92,6 +92,12 @@ Imported automatically:
   backup-capable database when its cron expression has a constant interval;
   per-policy object prefixes are preserved with deterministic destination
   variants;
+- Compose-hosted PostgreSQL, MySQL, MariaDB, and MongoDB backup policies as
+  linked database targets when the referenced service exists and the required
+  credentials can be recovered. PostgreSQL passwords are resolved from the
+  service environment (`PGPASSWORD` or `POSTGRES_PASSWORD`); records that rely
+  only on container-local authentication remain explicit manual-conversion
+  items. Linked targets never create or delete the owning Compose stack;
 - named-volume backup policies for imported Compose services and applications
   when the volume is declared in the generated Compose definition and the cron
   expression has a constant interval; the first deployment binds and pins the
@@ -231,7 +237,8 @@ database, backup destination/policy, volume-backup policy, source credential, an
 mapping. With the default `--require-operational=true`, each imported service
 and managed-database stack must have a successful deployment of its current
 revision plus a healthy Swarm reconciliation observation from the previous
-five minutes. Each database must also be running, and each PostgreSQL,
+five minutes. Each database, including a Compose-linked target, must also be
+running, and each imported managed PostgreSQL,
 TimescaleDB, MySQL, MariaDB, MongoDB, Redis, Valkey, or libSQL database must
 have a successful Dokploy data-transfer record. Every enabled named-volume policy must be bound to its
 service's Swarm storage node and have a successful encrypted backup with

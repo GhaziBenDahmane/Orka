@@ -1,6 +1,8 @@
 package migrate
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,6 +26,31 @@ func TestCronInterval(t *testing.T) {
 		if got, ok := cronInterval(schedule); ok {
 			t.Errorf("cronInterval(%q) = %d, true; want unsupported", schedule, got)
 		}
+	}
+}
+
+func TestPrepareComposeBackupCredentials(t *testing.T) {
+	service := sourceCompose{compose: `services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-unsafe-default}
+`, env: "DB_PASSWORD=source-secret\n"}
+	metadata, _ := json.Marshal(composeBackupMetadata{Postgres: &struct {
+		DatabaseUser string `json:"databaseUser"`
+	}{DatabaseUser: "app"}})
+	credentials, err := prepareComposeBackupCredentials(sourceBackupPolicy{database: "appdb", databaseType: "postgres", serviceName: "db", metadata: metadata}, service, nil)
+	if err != nil || credentials["username"] != "app" || credentials["password"] != "source-secret" || credentials["database"] != "appdb" {
+		t.Fatalf("credentials=%#v err=%v", credentials, err)
+	}
+
+	service.env = ""
+	service.compose = strings.ReplaceAll(service.compose, "${DB_PASSWORD:-unsafe-default}", "${DB_PASSWORD}")
+	if _, err = prepareComposeBackupCredentials(sourceBackupPolicy{database: "appdb", databaseType: "postgres", serviceName: "db", metadata: metadata}, service, nil); err == nil || !strings.Contains(err.Error(), "password") {
+		t.Fatalf("missing PostgreSQL password error=%v", err)
+	}
+	if _, err = prepareComposeBackupCredentials(sourceBackupPolicy{database: "appdb", databaseType: "postgres", serviceName: "missing", metadata: metadata}, service, nil); err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("missing service error=%v", err)
 	}
 }
 

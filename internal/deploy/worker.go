@@ -1093,7 +1093,7 @@ func (w *Worker) registryCredentialForDeployment(ctx context.Context, deployment
 func (w *Worker) pinPersistentStorage(ctx context.Context, serviceID uuid.UUID, stack, compose string, clusterID *uuid.UUID) (string, error) {
 	var databaseID *uuid.UUID
 	var serviceNodeID, databaseNodeID string
-	err := w.Store.Pool.QueryRow(ctx, `SELECT s.storage_node_id,d.id,COALESCE(d.storage_node_id,'') FROM compose_services s LEFT JOIN database_instances d ON d.compose_service_id=s.id WHERE s.id=$1`, serviceID).Scan(&serviceNodeID, &databaseID, &databaseNodeID)
+	err := w.Store.Pool.QueryRow(ctx, `SELECT s.storage_node_id,d.id,COALESCE(d.storage_node_id,'') FROM compose_services s LEFT JOIN database_instances d ON d.compose_service_id=s.id AND d.management_kind='managed' WHERE s.id=$1`, serviceID).Scan(&serviceNodeID, &databaseID, &databaseNodeID)
 	if err != nil {
 		return "", err
 	}
@@ -1756,7 +1756,7 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encrypted, &destinationID, &clusterID); err != nil {
+		if err := tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,COALESCE(NULLIF(d.connection_service_name,''),d.slug),d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encrypted, &destinationID, &clusterID); err != nil {
 			return err
 		}
 		if destinationID == nil {
@@ -2122,7 +2122,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID); err != nil {
+		if err := tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,COALESCE(NULLIF(d.connection_service_name,''),d.slug),d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID); err != nil {
 			return err
 		}
 		if destinationID == nil {

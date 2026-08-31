@@ -121,7 +121,8 @@ func (s *Store) moveComposeService(ctx context.Context, organizationID, serviceI
 	}
 
 	var managedDatabase bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances WHERE compose_service_id=$1)`, serviceID).Scan(&managedDatabase); err != nil {
+	var linkedDatabases int
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_instances WHERE compose_service_id=$1 AND management_kind='managed'),count(*) FILTER (WHERE management_kind='compose') FROM database_instances WHERE compose_service_id=$1`, serviceID).Scan(&managedDatabase, &linkedDatabases); err != nil {
 		return ComposeService{}, err
 	}
 	if managedDatabase {
@@ -148,12 +149,27 @@ func (s *Store) moveComposeService(ctx context.Context, organizationID, serviceI
 	if err = enforceMoveServiceQuota(ctx, tx, organizationID, "environment", targetEnvironmentID); err != nil {
 		return ComposeService{}, err
 	}
+	if linkedDatabases > 0 && targetProjectID != sourceProjectID {
+		if err = enforceMoveDatabaseQuota(ctx, tx, organizationID, "project", targetProjectID, linkedDatabases); err != nil {
+			return ComposeService{}, err
+		}
+	}
+	if linkedDatabases > 0 {
+		if err = enforceMoveDatabaseQuota(ctx, tx, organizationID, "environment", targetEnvironmentID, linkedDatabases); err != nil {
+			return ComposeService{}, err
+		}
+	}
 
 	var service ComposeService
 	err = tx.QueryRow(ctx, `UPDATE compose_services SET environment_id=$2,updated_at=now() WHERE id=$1
 		RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,desired_state,created_at,updated_at`, serviceID, targetEnvironmentID).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
 	if err != nil {
 		return ComposeService{}, err
+	}
+	if linkedDatabases > 0 {
+		if _, err = tx.Exec(ctx, `UPDATE database_instances SET environment_id=$2,updated_at=now() WHERE compose_service_id=$1 AND management_kind='compose'`, serviceID, targetEnvironmentID); err != nil {
+			return ComposeService{}, err
+		}
 	}
 	if auditPrincipal != nil {
 		if err = appendPrincipalAudit(ctx, tx, *auditPrincipal, "service.move", "compose_service", serviceID.String(), remoteAddr, map[string]any{"environmentId": targetEnvironmentID}); err != nil {
@@ -165,6 +181,25 @@ func (s *Store) moveComposeService(ctx context.Context, organizationID, serviceI
 	}
 	service.Tags, err = s.ListServiceTags(ctx, organizationID, serviceID)
 	return service, err
+}
+
+func enforceMoveDatabaseQuota(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID, additional int) error {
+	var limit *int
+	err := tx.QueryRow(ctx, `SELECT max_databases FROM resource_policies WHERE organization_id=$1 AND scope_type=$2 AND scope_id=$3`, organizationID, scopeType, scopeID).Scan(&limit)
+	if errors.Is(err, pgx.ErrNoRows) || limit == nil {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	count, err := policyResourceCount(ctx, tx, scopeType, scopeID, "databases")
+	if err != nil {
+		return err
+	}
+	if count+additional > *limit {
+		return &QuotaExceededError{Scope: scopeType, Resource: "databases", Limit: *limit}
+	}
+	return nil
 }
 
 func enforceMoveServiceQuota(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, scopeType string, scopeID uuid.UUID) error {

@@ -13,6 +13,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"gopkg.in/yaml.v3"
 )
 
 func dokployVolumeService(options DokployOptions, policy sourceVolumeBackupPolicy, services []sourceCompose, applications []sourceApplication, validServices, validApplications map[string]bool) (uuid.UUID, string, bool) {
@@ -66,9 +67,27 @@ type sourceBackupDestination struct {
 
 type sourceBackupPolicy struct {
 	id, schedule, database, prefix, destinationID, backupType, databaseType string
-	databaseID                                                              string
+	databaseID, composeID, serviceName                                      string
+	metadata                                                                json.RawMessage
 	retentionCount                                                          int
 	enabled                                                                 bool
+}
+
+type composeBackupMetadata struct {
+	Postgres *struct {
+		DatabaseUser string `json:"databaseUser"`
+	} `json:"postgres"`
+	MariaDB *struct {
+		DatabaseUser     string `json:"databaseUser"`
+		DatabasePassword string `json:"databasePassword"`
+	} `json:"mariadb"`
+	MySQL *struct {
+		DatabaseRootPassword string `json:"databaseRootPassword"`
+	} `json:"mysql"`
+	Mongo *struct {
+		DatabaseUser     string `json:"databaseUser"`
+		DatabasePassword string `json:"databasePassword"`
+	} `json:"mongo"`
 }
 
 type sourceVolumeBackupPolicy struct {
@@ -135,7 +154,8 @@ func readBackupDestinations(ctx context.Context, db *pgxpool.Pool, organizationI
 
 func readBackupPolicies(ctx context.Context, db *pgxpool.Pool, organizationID string) ([]sourceBackupPolicy, error) {
 	rows, err := db.Query(ctx, `SELECT b."backupId",b.schedule,COALESCE(b.enabled,false),b.database,b.prefix,b."destinationId",COALESCE(b."keepLatestCount",1),b."backupType"::text,b."databaseType"::text,
-		CASE b."databaseType"::text WHEN 'postgres' THEN COALESCE(b."postgresId",'') WHEN 'mysql' THEN COALESCE(b."mysqlId",'') WHEN 'mariadb' THEN COALESCE(b."mariadbId",'') WHEN 'mongo' THEN COALESCE(b."mongoId",'') WHEN 'libsql' THEN COALESCE(b."libsqlId",'') ELSE '' END
+		CASE b."databaseType"::text WHEN 'postgres' THEN COALESCE(b."postgresId",'') WHEN 'mysql' THEN COALESCE(b."mysqlId",'') WHEN 'mariadb' THEN COALESCE(b."mariadbId",'') WHEN 'mongo' THEN COALESCE(b."mongoId",'') WHEN 'libsql' THEN COALESCE(b."libsqlId",'') ELSE '' END,
+		COALESCE(b."composeId",''),COALESCE(b."serviceName",''),COALESCE(b.metadata,'{}'::jsonb)
 		FROM backup b JOIN destination d ON d."destinationId"=b."destinationId" WHERE d."organizationId"=$1 ORDER BY COALESCE(b.enabled,false) DESC,b."backupId"`, organizationID)
 	if err != nil {
 		return nil, fmt.Errorf("read Dokploy backup policies: %w", err)
@@ -144,12 +164,143 @@ func readBackupPolicies(ctx context.Context, db *pgxpool.Pool, organizationID st
 	items := []sourceBackupPolicy{}
 	for rows.Next() {
 		var item sourceBackupPolicy
-		if err = rows.Scan(&item.id, &item.schedule, &item.enabled, &item.database, &item.prefix, &item.destinationID, &item.retentionCount, &item.backupType, &item.databaseType, &item.databaseID); err != nil {
+		if err = rows.Scan(&item.id, &item.schedule, &item.enabled, &item.database, &item.prefix, &item.destinationID, &item.retentionCount, &item.backupType, &item.databaseType, &item.databaseID, &item.composeID, &item.serviceName, &item.metadata); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func prepareComposeBackupCredentials(item sourceBackupPolicy, service sourceCompose, encryptionKeys [][]byte) (map[string]string, error) {
+	var metadata composeBackupMetadata
+	if err := json.Unmarshal(item.metadata, &metadata); err != nil {
+		return nil, fmt.Errorf("invalid Compose backup metadata")
+	}
+	environment := map[string]string{}
+	if service.env != "" {
+		plain, err := decryptDokploy(service.env, encryptionKeys)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt Compose environment: %w", err)
+		}
+		environment = parseEnv(plain)
+	}
+	serviceEnvironment, err := composeServiceEnvironment(service.compose, item.serviceName, environment)
+	if err != nil {
+		return nil, err
+	}
+	credentials := map[string]string{"database": strings.TrimSpace(item.database)}
+	switch item.databaseType {
+	case "postgres":
+		if metadata.Postgres == nil {
+			return nil, fmt.Errorf("PostgreSQL backup metadata is missing")
+		}
+		credentials["username"] = strings.TrimSpace(metadata.Postgres.DatabaseUser)
+		credentials["password"] = firstEnvironmentValue(serviceEnvironment, "PGPASSWORD", "POSTGRES_PASSWORD")
+	case "mysql":
+		if metadata.MySQL == nil {
+			return nil, fmt.Errorf("MySQL backup metadata is missing")
+		}
+		credentials["username"] = "root"
+		credentials["password"] = metadata.MySQL.DatabaseRootPassword
+	case "mariadb":
+		if metadata.MariaDB == nil {
+			return nil, fmt.Errorf("MariaDB backup metadata is missing")
+		}
+		credentials["username"] = strings.TrimSpace(metadata.MariaDB.DatabaseUser)
+		credentials["password"] = metadata.MariaDB.DatabasePassword
+	case "mongo":
+		if metadata.Mongo == nil {
+			return nil, fmt.Errorf("MongoDB backup metadata is missing")
+		}
+		credentials["username"] = strings.TrimSpace(metadata.Mongo.DatabaseUser)
+		credentials["password"] = metadata.Mongo.DatabasePassword
+	default:
+		return nil, fmt.Errorf("Compose database engine %q is not supported", item.databaseType)
+	}
+	for _, key := range []string{"database", "username", "password"} {
+		if credentials[key] == "" {
+			return nil, fmt.Errorf("Compose database credential %q cannot be recovered", key)
+		}
+	}
+	return credentials, nil
+}
+
+func composeServiceEnvironment(composeYAML, serviceName string, variables map[string]string) (map[string]string, error) {
+	var document struct {
+		Services map[string]struct {
+			Environment any `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(composeYAML), &document); err != nil {
+		return nil, fmt.Errorf("parse Compose document: %w", err)
+	}
+	service, found := document.Services[serviceName]
+	if !found {
+		return nil, fmt.Errorf("Compose service %q is not declared", serviceName)
+	}
+	result := map[string]string{}
+	switch values := service.Environment.(type) {
+	case map[string]any:
+		for key, value := range values {
+			result[key] = resolveComposeEnvironmentValue(fmt.Sprint(value), variables)
+		}
+	case []any:
+		for _, raw := range values {
+			key, value, found := strings.Cut(fmt.Sprint(raw), "=")
+			if !found {
+				value = variables[key]
+			}
+			result[key] = resolveComposeEnvironmentValue(value, variables)
+		}
+	case nil:
+	default:
+		return nil, fmt.Errorf("Compose service %q has an invalid environment", serviceName)
+	}
+	for key, value := range variables {
+		if _, found := result[key]; !found {
+			result[key] = value
+		}
+	}
+	return result, nil
+}
+
+func composeServiceImage(composeYAML, serviceName string) string {
+	var document struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if yaml.Unmarshal([]byte(composeYAML), &document) != nil {
+		return ""
+	}
+	return strings.TrimSpace(document.Services[serviceName].Image)
+}
+
+func resolveComposeEnvironmentValue(value string, variables map[string]string) string {
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		expression := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+		if key, fallback, found := strings.Cut(expression, ":-"); found {
+			if resolved := variables[key]; resolved != "" {
+				return resolved
+			}
+			return fallback
+		}
+		return variables[expression]
+	}
+	if strings.HasPrefix(value, "$") && !strings.Contains(value[1:], "$") {
+		return variables[strings.TrimPrefix(value, "$")]
+	}
+	return value
+}
+
+func firstEnvironmentValue(environment map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := environment[key]; strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func readVolumeBackupPolicies(ctx context.Context, db *pgxpool.Pool, organizationID string) ([]sourceVolumeBackupPolicy, error) {

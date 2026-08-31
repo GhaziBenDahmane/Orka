@@ -1470,6 +1470,10 @@ func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	if err = s.Store.QueueDatabaseDeletionWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
+		if errors.Is(err, store.ErrLinkedDatabaseDeletion) {
+			writeError(w, http.StatusConflict, "compose_database_owned", err.Error())
+			return
+		}
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "database_busy", "cancel or wait for active database operations or an existing deletion")
 			return
