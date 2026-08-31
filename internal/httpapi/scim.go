@@ -95,12 +95,11 @@ func (s *Server) createSCIMToken(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	expiresAt := time.Now().Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour)
-	item, err := s.Store.CreateSCIMToken(r.Context(), p.OrganizationID, in.Name, in.DefaultRole, cryptox.Digest(token), expiresAt)
+	item, err := s.Store.CreateSCIMTokenWithAudit(r.Context(), p, in.Name, in.DefaultRole, cryptox.Digest(token), expiresAt, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "scim.token.create", "scim_token", item.ID.String(), r.RemoteAddr, map[string]any{"name": item.Name, "defaultRole": item.DefaultRole, "expiresAt": item.ExpiresAt})
 	writeJSON(w, 201, map[string]any{"scimToken": item, "token": token, "baseUrl": s.PublicURL + "/scim/v2"})
 }
 
@@ -120,11 +119,10 @@ func (s *Server) revokeSCIMToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.RevokeSCIMToken(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.RevokeSCIMTokenWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "scim.token.revoke", "scim_token", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -422,6 +422,9 @@ separately from users in the audit log. Prometheus exposes the remaining
 lifetime of each enabled account's current token using immutable organization
 and account IDs so operators can rotate consuming secrets before expiry.
 Non-revoked SCIM tokens expose the same seven-day operational expiry signal.
+SCIM token creation and revocation commit atomically with the administrator
+audit event, so an evidence failure cannot activate or revoke a provisioning
+credential.
 CI deployment-hook tokens follow the same bounded-expiry model, record their
 last successful use, and expose expiry metrics keyed only by immutable
 organization, service, and token IDs. Resource-finalizer metrics report active,

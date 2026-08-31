@@ -20,8 +20,37 @@ type SCIMToken struct {
 }
 
 func (s *Store) CreateSCIMToken(ctx context.Context, organizationID uuid.UUID, name, role string, hash []byte, expiresAt time.Time) (SCIMToken, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SCIMToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := createSCIMTokenTx(ctx, tx, organizationID, name, role, hash, expiresAt)
+	if err != nil {
+		return SCIMToken{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateSCIMTokenWithAudit(ctx context.Context, principal Principal, name, role string, hash []byte, expiresAt time.Time, remoteAddr string) (SCIMToken, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SCIMToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := createSCIMTokenTx(ctx, tx, principal.OrganizationID, name, role, hash, expiresAt)
+	if err != nil {
+		return SCIMToken{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "scim.token.create", "scim_token", item.ID.String(), remoteAddr, map[string]any{"name": item.Name, "defaultRole": item.DefaultRole, "expiresAt": item.ExpiresAt}); err != nil {
+		return SCIMToken{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createSCIMTokenTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, name, role string, hash []byte, expiresAt time.Time) (SCIMToken, error) {
 	item := SCIMToken{ID: uuid.New(), OrganizationID: organizationID, Name: name, DefaultRole: role, ExpiresAt: expiresAt}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,expires_at) SELECT $1,o.id,$3,$4,$5,$6 FROM organizations o WHERE o.id=$2 RETURNING created_at`, item.ID, organizationID, name, hash, role, expiresAt).Scan(&item.CreatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO scim_tokens(id,organization_id,name,token_hash,default_role,expires_at) SELECT $1,o.id,$3,$4,$5,$6 FROM organizations o WHERE o.id=$2 RETURNING created_at`, item.ID, organizationID, name, hash, role, expiresAt).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SCIMToken{}, ErrNotFound
 	}
@@ -46,7 +75,34 @@ func (s *Store) ListSCIMTokens(ctx context.Context, organizationID uuid.UUID) ([
 }
 
 func (s *Store) RevokeSCIMToken(ctx context.Context, organizationID, tokenID uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE scim_tokens SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL`, tokenID, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = revokeSCIMTokenTx(ctx, tx, organizationID, tokenID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RevokeSCIMTokenWithAudit(ctx context.Context, principal Principal, tokenID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = revokeSCIMTokenTx(ctx, tx, principal.OrganizationID, tokenID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "scim.token.revoke", "scim_token", tokenID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func revokeSCIMTokenTx(ctx context.Context, tx pgx.Tx, organizationID, tokenID uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE scim_tokens SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL`, tokenID, organizationID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
