@@ -140,6 +140,10 @@ links for every item below.
   reconciliation target while keeping encrypted certificate and private-key
   material outside the model boundary. A failed managed network must also
   produce a deterministic finding without exposing its raw Docker/agent error.
+  Fresh remote-cluster aggregate capacity and capability posture must produce
+  findings for missing managers or schedulable nodes, degraded node inventory,
+  missing Swarm/Compose support, an unready edge proxy, and unmet environment
+  minimums without exposing raw capacity, labels, or edge configuration.
   An active deployment-hook credential that remains unused after thirty days
   must produce a cleanup finding without exposing token material or identity.
   The same gate covers stale unused service-account credentials and raises

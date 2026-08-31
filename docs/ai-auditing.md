@@ -480,8 +480,9 @@ endpoint. The release-blocking check proves the snapshot reaches the model
 without Compose or encrypted environment secrets, deterministic and model
 findings are persisted, desired tags are distinguished from effective runtime
 image provenance, mutable deployed images are reported without exposing image
-identities, the durable run and audit trail complete, and the auditor token is
-denied access to normal workload APIs. A production release must still
+identities, and remote capacity/capability failures are detected without
+exposing raw cluster or edge configuration. The durable run and audit trail
+complete, and the auditor token is denied access to normal workload APIs. A production release must still
 exercise its configured external model gateway and credentials.
 
 The built-in auditor does not inherit `HTTP_PROXY`, `HTTPS_PROXY`, or

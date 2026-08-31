@@ -73,6 +73,7 @@ jq -e '
   .promptInjectionBoundaryPresent and .deterministicFindingsPersisted and
   .deployedImageProvenanceAudited and
   .agentCAMismatchDetected and .agentImageProvenanceAudited and
+  .clusterCapacityPostureAudited and
   .databaseAvailabilityAudited and
   .managedNetworkPostureAudited and
   .staleDeployCredentialAudited and

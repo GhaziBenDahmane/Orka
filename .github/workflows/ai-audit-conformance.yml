@@ -27,6 +27,7 @@ jobs:
             .deterministicFindingsPersisted and .modelFindingsPersisted and
             .deployedImageProvenanceAudited and
             .agentCAMismatchDetected and .agentImageProvenanceAudited and
+            .clusterCapacityPostureAudited and
             .databaseAvailabilityAudited and
             .managedNetworkPostureAudited and
             .staleDeployCredentialAudited and
