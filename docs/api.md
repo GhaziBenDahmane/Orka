@@ -601,6 +601,9 @@ Deletion is rejected with `resource_not_empty` while any database policy,
 database or volume artifact, volume policy, queued artifact cleanup, or audit
 archive still references the destination. The reference check and deletion run
 under the same worker fence instead of exposing database constraint errors.
+Successful destination rotation and deletion commit atomically with their
+operator audit events, so an audit persistence failure cannot leave an
+unattributed recovery-credential change.
 
 Repository creation accepts `trustedPublicKey` as an Ed25519 PEM or base64 raw
 public key and `requireSignature` as a boolean. When a key is configured every

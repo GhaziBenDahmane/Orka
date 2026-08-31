@@ -1586,7 +1586,7 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 		s.writeInternalError(w, r, http.StatusInternalServerError, "encryption_failed", "backup destination credentials could not be encrypted", err)
 		return
 	}
-	item, err := s.Store.UpdateBackupDestination(r.Context(), p.OrganizationID, store.BackupDestination{ID: destinationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	item, err := s.Store.UpdateBackupDestinationWithAudit(r.Context(), p, store.BackupDestination{ID: destinationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted}, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "resource_busy", "wait for active backup, restore, or audit-archive operations before rotating this destination")
@@ -1595,7 +1595,6 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "backup_destination.update", "backup_destination", item.ID.String(), r.RemoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -1615,11 +1614,10 @@ func (s *Server) deleteBackupDestination(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteBackupDestination(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteBackupDestinationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "backup_destination.delete", "backup_destination", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
 

@@ -2289,18 +2289,48 @@ func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid
 		return BackupDestination{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = updateBackupDestinationTx(ctx, tx, organizationID, item)
+	if err != nil {
+		return BackupDestination{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return BackupDestination{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateBackupDestinationWithAudit(ctx context.Context, principal Principal, item BackupDestination, remoteAddr string) (BackupDestination, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return BackupDestination{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = updateBackupDestinationTx(ctx, tx, principal.OrganizationID, item)
+	if err != nil {
+		return BackupDestination{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "backup_destination.update", "backup_destination", item.ID.String(), remoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket}); err != nil {
+		return BackupDestination{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return BackupDestination{}, err
+	}
+	return item, nil
+}
+
+func updateBackupDestinationTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, item BackupDestination) (BackupDestination, error) {
 	var endpoint, region, bucket, prefix string
 	var useTLS bool
-	if err = tx.QueryRow(ctx, `SELECT endpoint,region,bucket,prefix,use_tls FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR UPDATE`, item.ID, organizationID).Scan(&endpoint, &region, &bucket, &prefix, &useTLS); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT endpoint,region,bucket,prefix,use_tls FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR UPDATE`, item.ID, organizationID).Scan(&endpoint, &region, &bucket, &prefix, &useTLS); errors.Is(err, pgx.ErrNoRows) {
 		return BackupDestination{}, ErrNotFound
 	} else if err != nil {
 		return BackupDestination{}, err
 	}
-	if err = LockBackupDestinationForOperation(ctx, tx, item.ID); err != nil {
+	if err := LockBackupDestinationForOperation(ctx, tx, item.ID); err != nil {
 		return BackupDestination{}, err
 	}
 	var active bool
-	if err = tx.QueryRow(ctx, `SELECT
+	if err := tx.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1 AND status='running') OR
 		EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id WHERE backup.destination_id=$1 AND restore.status='running') OR
 		EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1 AND status='running') OR
@@ -2313,18 +2343,18 @@ func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid
 	}
 	if endpoint != item.Endpoint || region != item.Region || bucket != item.Bucket || prefix != item.Prefix || useTLS != item.UseTLS {
 		var referenced bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM backup_artifact_deletions WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM audit_archive_destinations WHERE backup_destination_id=$1)`, item.ID).Scan(&referenced); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM backup_artifact_deletions WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM audit_archive_destinations WHERE backup_destination_id=$1)`, item.ID).Scan(&referenced); err != nil {
 			return BackupDestination{}, err
 		}
 		if referenced {
 			return BackupDestination{}, ErrBusy
 		}
 	}
-	err = tx.QueryRow(ctx, `UPDATE backup_destinations SET name=$3,endpoint=$4,region=$5,bucket=$6,prefix=$7,use_tls=$8,encrypted_credentials=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,endpoint,region,bucket,prefix,use_tls,created_at,updated_at`, item.ID, organizationID, item.Name, item.Endpoint, item.Region, item.Bucket, item.Prefix, item.UseTLS, item.EncryptedCredentials).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Endpoint, &item.Region, &item.Bucket, &item.Prefix, &item.UseTLS, &item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, `UPDATE backup_destinations SET name=$3,endpoint=$4,region=$5,bucket=$6,prefix=$7,use_tls=$8,encrypted_credentials=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,endpoint,region,bucket,prefix,use_tls,created_at,updated_at`, item.ID, organizationID, item.Name, item.Endpoint, item.Region, item.Bucket, item.Prefix, item.UseTLS, item.EncryptedCredentials).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Endpoint, &item.Region, &item.Bucket, &item.Prefix, &item.UseTLS, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return BackupDestination{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 // LockBackupDestinationForOperation serializes the point where a worker makes
@@ -2368,17 +2398,39 @@ func (s *Store) DeleteBackupDestination(ctx context.Context, organizationID, id 
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteBackupDestinationTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteBackupDestinationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteBackupDestinationTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "backup_destination.delete", "backup_destination", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteBackupDestinationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	var found bool
-	if err = tx.QueryRow(ctx, `SELECT true FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&found); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT true FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&found); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
 	}
-	if err = LockBackupDestinationForOperation(ctx, tx, id); err != nil {
+	if err := LockBackupDestinationForOperation(ctx, tx, id); err != nil {
 		return err
 	}
 	var referenced bool
-	if err = tx.QueryRow(ctx, `SELECT
+	if err := tx.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM backup_policies WHERE destination_id=$1) OR
 		EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1) OR
 		EXISTS(SELECT 1 FROM volume_backup_policies WHERE destination_id=$1) OR
@@ -2397,7 +2449,7 @@ func (s *Store) DeleteBackupDestination(ctx context.Context, organizationID, id 
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) GetDatabaseBackup(ctx context.Context, organizationID, id uuid.UUID) (DatabaseBackup, error) {
