@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -64,6 +65,37 @@ func TestPlatformHTTPServerUsesBoundedTransportSettings(t *testing.T) {
 	server := newPlatformHTTPServer(":8080", handler, 35*time.Second)
 	if server.Handler == nil || server.ReadHeaderTimeout != 10*time.Second || server.ReadTimeout != 35*time.Second || server.WriteTimeout != 35*time.Second || server.IdleTimeout != 2*time.Minute || server.MaxHeaderBytes != 64<<10 {
 		t.Fatalf("unsafe HTTP server settings: %+v", server)
+	}
+}
+
+func TestAwaitHTTPServerShutdownWaitsForAllComponentsToDrain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	serverErrors := make(chan error, 1)
+	shutdownDone := make(chan struct{})
+	result := make(chan error, 1)
+	serverErrors <- http.ErrServerClosed
+	go func() {
+		result <- awaitHTTPServerShutdown(cancel, serverErrors, shutdownDone)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("listener exit did not initiate server shutdown")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("returned before all servers drained: %v", err)
+	default:
+	}
+	close(shutdownDone)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("graceful shutdown returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not return after all servers drained")
 	}
 }
 

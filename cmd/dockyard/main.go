@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -777,8 +778,6 @@ func serve() error {
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
 		return deploy.RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 45 * time.Minute}
 	}
-	go worker.Run(ctx)
-	go templates.RunRepositorySyncScheduler(ctx, db, box, &http.Client{Transport: egressTransport, Timeout: 45 * time.Second}, logger, worker.ID)
 	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, OIDCHTTPClient: &http.Client{Transport: egressTransport, Timeout: 15 * time.Second}, EgressTransport: egressTransport, Metrics: metrics, MetricsTokenHash: cryptox.Digest(cfg.MetricsToken), AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
 	httpServer := newPlatformHTTPServer(cfg.ListenAddr, api.Handler(), 30*time.Second)
 	servers := []*http.Server{httpServer}
@@ -792,13 +791,34 @@ func serve() error {
 		agentServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs}
 		servers = append(servers, agentServer)
 	}
+	var background sync.WaitGroup
+	background.Add(2)
 	go func() {
+		defer background.Done()
+		worker.Run(ctx)
+	}()
+	go func() {
+		defer background.Done()
+		templates.RunRepositorySyncScheduler(ctx, db, box, &http.Client{Transport: egressTransport, Timeout: 45 * time.Second}, logger, worker.ID)
+	}()
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		var draining sync.WaitGroup
 		for _, server := range servers {
-			_ = server.Shutdown(shutdownCtx)
+			draining.Add(1)
+			go func(server *http.Server) {
+				defer draining.Done()
+				if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
+					logger.Error("shutdown HTTP server", "address", server.Addr, "error", shutdownErr)
+				}
+			}(server)
 		}
+		draining.Wait()
+		background.Wait()
 	}()
 	logger.Info("dockyard listening", "address", cfg.ListenAddr)
 	serverErrors := make(chan error, len(servers))
@@ -807,11 +827,16 @@ func serve() error {
 		logger.Info("dockyard agent API listening", "address", cfg.AgentListenAddr)
 		go func() { serverErrors <- agentServer.ListenAndServeTLS(cfg.AgentServerCertFile, cfg.AgentServerKeyFile) }()
 	}
-	err = <-serverErrors
+	return awaitHTTPServerShutdown(stop, serverErrors, shutdownDone)
+}
+
+func awaitHTTPServerShutdown(stop context.CancelFunc, serverErrors <-chan error, shutdownDone <-chan struct{}) error {
+	err := <-serverErrors
+	stop()
+	<-shutdownDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
-	stop()
 	return err
 }
 
