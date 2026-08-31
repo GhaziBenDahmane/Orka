@@ -19,6 +19,13 @@ set -eu
 printf '%s\n' "$*" >>"$DOCKYARD_INSTALL_TEST_LOG"
 case "$1 $2" in
   "info --format") printf '%s\n' 'active true' ;;
+  "node ls")
+    manager_count=${DOCKYARD_INSTALL_TEST_HA_MANAGER_COUNT:-3}
+    index=1
+    while [ "$index" -le "$manager_count" ]; do
+      printf '%s\n' 'Ready Active'
+      index=$((index + 1))
+    done ;;
   "manifest inspect")
     if [ "${DOCKYARD_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" = "$3" ]; then exit 1; fi ;;
   "run --rm")
@@ -528,7 +535,20 @@ export DOCKYARD_AGENT_SERVER_CERT_FILE="$temporary/secrets/agent-server.crt"
 export DOCKYARD_AGENT_SERVER_KEY_FILE="$temporary/secrets/agent-server.key"
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true DOCKYARD_INSTALL_TEST_HA_MANAGER_COUNT=2 \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'HA installer accepted fewer than three ready active managers' >&2
+  exit 1
+fi
+grep -q 'requires at least three ready, active Swarm managers; found 2' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'insufficient-manager failure mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-swarm.sh" >/dev/null
+grep -q '^node ls --filter role=manager --format {{.Status}} {{.Availability}}$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q "stack config -c $root/deploy/swarm.yml -c $root/deploy/swarm-ha.yml" "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-database-url --require-tls=true$' "$DOCKYARD_INSTALL_TEST_LOG"
 for secret in dockyard_agent_ca_cert dockyard_agent_ca_key dockyard_agent_server_cert dockyard_agent_server_key; do

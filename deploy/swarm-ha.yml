@@ -28,6 +28,10 @@ services:
         mode: ingress
     deploy:
       replicas: 3
+      placement:
+        max_replicas_per_node: 1
+        preferences:
+          - spread: node.id
 
 secrets:
   dockyard_agent_ca_cert:

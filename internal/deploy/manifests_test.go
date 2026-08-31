@@ -45,7 +45,11 @@ type deploymentManifest struct {
 				Order string `yaml:"order"`
 			} `yaml:"rollback_config"`
 			Placement struct {
-				Constraints []string `yaml:"constraints"`
+				Constraints        []string `yaml:"constraints"`
+				MaxReplicasPerNode int      `yaml:"max_replicas_per_node"`
+				Preferences        []struct {
+					Spread string `yaml:"spread"`
+				} `yaml:"preferences"`
 			} `yaml:"placement"`
 		} `yaml:"deploy"`
 	} `yaml:"services"`
@@ -306,6 +310,7 @@ func TestAIGatewayPersistentStateIsPinned(t *testing.T) {
 }
 
 func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
+	base := readDeploymentManifest(t, "../../deploy/swarm.yml")
 	manifest := readDeploymentManifest(t, "../../deploy/swarm-ha.yml")
 	if replicas := manifest.Services["postgres"].Deploy.Replicas; replicas != 0 {
 		t.Fatalf("bundled PostgreSQL replicas=%d, want 0", replicas)
@@ -313,6 +318,9 @@ func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	controller := manifest.Services["dockyard"]
 	if controller.Deploy.Replicas != 3 {
 		t.Fatalf("controller replicas=%d, want 3", controller.Deploy.Replicas)
+	}
+	if !slices.Contains(base.Services["dockyard"].Deploy.Placement.Constraints, "node.role == manager") || controller.Deploy.Placement.MaxReplicasPerNode != 1 || len(controller.Deploy.Placement.Preferences) != 1 || controller.Deploy.Placement.Preferences[0].Spread != "node.id" {
+		t.Fatalf("HA controllers are not distributed one per manager: %#v", controller.Deploy.Placement)
 	}
 	if controller.Environment["DOCKYARD_REQUIRE_REMOTE_BACKUPS"] != "true" {
 		t.Fatal("HA deployment does not require remote backup storage")

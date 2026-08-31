@@ -107,6 +107,12 @@ export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT
 
 swarm_state=$(docker info --format '{{.Swarm.LocalNodeState}} {{.Swarm.ControlAvailable}}')
 [ "$swarm_state" = "active true" ] || fail "run this installer on an active Docker Swarm manager"
+if [ "$mode" = ha ]; then
+  manager_inventory=$(docker node ls --filter role=manager --format '{{.Status}} {{.Availability}}') || fail "could not inspect Swarm managers"
+  ready_active_managers=$(printf '%s\n' "$manager_inventory" | awk '$1 == "Ready" && $2 == "Active" { count++ } END { print count+0 }')
+  [ "$ready_active_managers" -ge 3 ] || fail "HA installation requires at least three ready, active Swarm managers; found $ready_active_managers"
+  unset manager_inventory ready_active_managers
+fi
 
 temporary=$(mktemp -d)
 created_secrets=""
