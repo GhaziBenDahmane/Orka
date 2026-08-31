@@ -328,6 +328,7 @@ func (r *Registry) LoadExternal(directory string) error {
 		return err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	pending := make(map[string]*externalDriver)
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink != 0 {
 			continue
@@ -357,7 +358,16 @@ func (r *Registry) LoadExternal(directory string) error {
 		if _, exists := r.drivers[driver.Name()]; exists {
 			return fmt.Errorf("database driver %q is already registered", driver.Name())
 		}
-		r.drivers[driver.Name()] = driver
+		if _, exists := pending[driver.Name()]; exists {
+			return fmt.Errorf("database driver %q is already registered", driver.Name())
+		}
+		pending[driver.Name()] = driver
+	}
+	if len(pending) == 0 {
+		return errors.New("database driver directory contains no trusted executable drivers")
+	}
+	for name, driver := range pending {
+		r.drivers[name] = driver
 	}
 	return nil
 }

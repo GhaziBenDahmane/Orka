@@ -6,10 +6,12 @@ absolute directory containing executable files owned by the controller's OS
 user (root in the published container). The directory must have the same owner;
 neither it nor its drivers may be group/world writable. A symlink cannot be
 used as the directory, and symlinked entries and non-executable files are
-ignored. Driver names cannot replace built-ins. External drivers are supported
-only on Linux. Every invocation opens the driver without following symlinks,
-revalidates the opened inode, and executes that file descriptor so a path swap
-cannot bypass the startup checks. The controller also hashes the executable
+ignored. When configured, startup fails if the directory contains no trusted
+executable driver or if any discovered driver is invalid; discovery registers
+the complete artifact set atomically. Driver names cannot replace built-ins.
+External drivers are supported only on Linux. Every invocation opens the driver
+without following symlinks, revalidates the opened inode, and executes that file
+descriptor so a path swap cannot bypass the startup checks. The controller also hashes the executable
 used for `describe`, rejects files larger than 64 MiB, and refuses every later
 operation if the newly opened artifact no longer matches that startup digest.
 The digest, but never the host path, is exposed in engine inventory and AI

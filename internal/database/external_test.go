@@ -63,6 +63,52 @@ esac
 	}
 }
 
+func TestExternalDriverRequiresAtLeastOneTrustedExecutable(t *testing.T) {
+	for _, setup := range []struct {
+		name string
+		run  func(*testing.T, string)
+	}{
+		{name: "empty directory", run: func(*testing.T, string) {}},
+		{name: "non executable file", run: func(t *testing.T, directory string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(directory, "README"), []byte("no drivers\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(setup.name, func(t *testing.T) {
+			directory := t.TempDir()
+			setup.run(t, directory)
+			if err := NewRegistry().LoadExternal(directory); err == nil || !strings.Contains(err.Error(), "no trusted executable drivers") {
+				t.Fatalf("empty driver directory error=%v", err)
+			}
+		})
+	}
+}
+
+func TestExternalDriverDiscoveryIsAtomic(t *testing.T) {
+	directory := t.TempDir()
+	valid := `#!/bin/sh
+echo '{"protocolVersion":1,"description":{"name":"atomic-test","defaultVersion":"1","capabilities":[]}}'
+`
+	invalid := `#!/bin/sh
+echo '{"protocolVersion":1,"description":{"name":"INVALID","defaultVersion":"1","capabilities":[]}}'
+`
+	if err := os.WriteFile(filepath.Join(directory, "a-valid"), []byte(valid), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "z-invalid"), []byte(invalid), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err == nil {
+		t.Fatal("invalid driver set was accepted")
+	}
+	if _, exists := registry.Engine("atomic-test"); exists {
+		t.Fatal("valid driver was partially registered before discovery failed")
+	}
+}
+
 func TestExternalDriverRejectsExecutableReplacementAfterDescription(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "replaceable-driver")
@@ -120,7 +166,7 @@ func TestExternalDriverRejectsSymlinkedDirectory(t *testing.T) {
 	}
 }
 
-func TestExternalDriverRejectsWritableDirectoryAndIgnoresSymlinks(t *testing.T) {
+func TestExternalDriverRejectsWritableDirectoryAndDoesNotFollowSymlinks(t *testing.T) {
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0775); err != nil {
 		t.Fatal(err)
@@ -138,12 +184,8 @@ func TestExternalDriverRejectsWritableDirectoryAndIgnoresSymlinks(t *testing.T) 
 	if err := os.Symlink(target, filepath.Join(directory, "linked-driver")); err != nil {
 		t.Fatal(err)
 	}
-	registry := NewRegistry()
-	if err := registry.LoadExternal(directory); err != nil {
-		t.Fatal(err)
-	}
-	if containsString(registry.Names(), "linked-driver") {
-		t.Fatal("symlinked executable was loaded")
+	if err := NewRegistry().LoadExternal(directory); err == nil || !strings.Contains(err.Error(), "no trusted executable drivers") {
+		t.Fatalf("symlinked executable was not ignored: %v", err)
 	}
 }
 
