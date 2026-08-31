@@ -70,7 +70,9 @@ header, request, response, and idle durations. Agent authentication still runs
 before any command or heartbeat handler.
 
 The packaged Swarm topology isolates controller ingress from tenant-routed
-services on a dedicated encrypted Traefik edge network. The public API accepts
+services on a dedicated encrypted, stack-scoped Traefik edge network. The
+installer rejects configurations that reuse the tenant-facing routing network
+as this trusted control network. The public API accepts
 forwarding headers only when the immediate peer belongs to an explicitly
 configured trusted-proxy CIDR, walks proxy chains from right to left, and
 ignores malformed chains. This preserves per-client authentication throttling

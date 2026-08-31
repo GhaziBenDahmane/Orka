@@ -105,6 +105,11 @@ backup paths remain explicit volumes. The Docker socket is mounted read-only at
 the filesystem level, but Docker's API still grants root-equivalent manager
 authority; protect these services as infrastructure administrators and never
 attach tenant workloads to their control networks.
+The private Traefik-to-controller overlay defaults to
+`<DOCKYARD_STACK_NAME>-edge-control`, so custom-named installations do not
+share a trusted-proxy network. `DOCKYARD_EDGE_CONTROL_NETWORK` may override the
+name, but the installer requires a valid lowercase Docker network name distinct
+from the tenant-facing `DOCKYARD_TRAEFIK_NETWORK`.
 Git checkouts are rejected before a build when their regular-file footprint
 exceeds `DOCKYARD_MAX_BUILD_WORKSPACE_BYTES`. The application default is 2 GiB;
 the supplied one-GiB tmpfs deployment uses a 768 MiB default to retain room for

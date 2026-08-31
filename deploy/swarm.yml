@@ -114,7 +114,7 @@ services:
         traefik.http.routers.dockyard.tls: "true"
         traefik.http.routers.dockyard.tls.certresolver: letsencrypt
         traefik.http.services.dockyard.loadbalancer.server.port: "8080"
-        traefik.docker.network: dockyard-edge-control
+        traefik.docker.network: ${DOCKYARD_EDGE_CONTROL_NETWORK:-dockyard-edge-control}
 
   traefik:
     image: ${TRAEFIK_IMAGE:?set TRAEFIK_IMAGE to an immutable digest}
@@ -181,7 +181,7 @@ networks:
     driver_opts:
       encrypted: ""
   edge-control:
-    name: dockyard-edge-control
+    name: ${DOCKYARD_EDGE_CONTROL_NETWORK:-dockyard-edge-control}
     driver: overlay
     driver_opts:
       encrypted: ""

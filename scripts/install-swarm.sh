@@ -8,6 +8,7 @@ DOCKYARD_SWARM_SERVICE_NAME=${stack}_dockyard
 DOCKYARD_EDGE_PROXY_SERVICE_NAME=${stack}_traefik
 export DOCKYARD_SWARM_SERVICE_NAME DOCKYARD_EDGE_PROXY_SERVICE_NAME
 network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
+edge_control_network=${DOCKYARD_EDGE_CONTROL_NETWORK:-${stack}-edge-control}
 db_password_secret=${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}
 database_url_secret=${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}
 master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
@@ -59,6 +60,9 @@ case "$mode" in single|ha) ;; *) fail "DOCKYARD_INSTALL_MODE must be single or h
 case "$stack" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_STACK_NAME" ;; esac
 case "$network" in ""|[!a-z0-9]*|*[!a-z0-9_.-]*) fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters" ;; esac
 [ "${#network}" -le 63 ] || fail "DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters"
+case "$edge_control_network" in ""|[!a-z0-9]*|*[!a-z0-9_.-]*) fail "DOCKYARD_EDGE_CONTROL_NETWORK must be a lowercase Docker network name of at most 63 characters" ;; esac
+[ "${#edge_control_network}" -le 63 ] || fail "DOCKYARD_EDGE_CONTROL_NETWORK must be a lowercase Docker network name of at most 63 characters"
+[ "$edge_control_network" != "$network" ] || fail "DOCKYARD_EDGE_CONTROL_NETWORK must differ from DOCKYARD_TRAEFIK_NETWORK"
 case "$db_password_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_DB_PASSWORD_SECRET" ;; esac
 case "$database_url_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_DATABASE_URL_SECRET" ;; esac
 case "$master_key_secret" in ""|-*|*[!A-Za-z0-9_.-]*) fail "invalid DOCKYARD_MASTER_KEY_SECRET" ;; esac
@@ -93,7 +97,8 @@ POSTGRES_IMAGE=${POSTGRES_IMAGE:-}
 TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
 export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_MASTER_KEY_SECRET DOCKYARD_METRICS_TOKEN_SECRET
 DOCKYARD_TRAEFIK_NETWORK=$network
-export DOCKYARD_TRAEFIK_NETWORK
+DOCKYARD_EDGE_CONTROL_NETWORK=$edge_control_network
+export DOCKYARD_TRAEFIK_NETWORK DOCKYARD_EDGE_CONTROL_NETWORK
 export DOCKYARD_EGRESS_PRIVATE_CIDRS="$egress_private_cidrs"
 export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT_SERVER_CERT_SECRET DOCKYARD_AGENT_SERVER_KEY_SECRET DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET
 "$root/scripts/ci/check-image-digests.sh" controller

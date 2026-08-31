@@ -41,6 +41,7 @@ case "$1 $2" in
     exit 1 ;;
   "stack deploy")
     [ "${DOCKYARD_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
+  "stack config") printf 'edge-control-network=%s\n' "$DOCKYARD_EDGE_CONTROL_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
   "service inspect")
     service=$5
     state=${DOCKYARD_INSTALL_TEST_UPDATE_STATE:-completed}
@@ -213,6 +214,28 @@ DOCKYARD_TRAEFIK_NETWORK='shared_tenant.routing' \
 grep -q '^network inspect shared_tenant.routing$' "$DOCKYARD_INSTALL_TEST_LOG"
 grep -q '^network create --driver overlay --opt encrypted --attachable shared_tenant.routing$' "$DOCKYARD_INSTALL_TEST_LOG"
 
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_STACK_NAME='dockyard_blue' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q '^edge-control-network=dockyard_blue-edge-control$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_EDGE_CONTROL_NETWORK='platform-private' \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q '^edge-control-network=platform-private$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_TRAEFIK_NETWORK='shared-network' DOCKYARD_EDGE_CONTROL_NETWORK='shared-network' \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted the public routing network as its private control network' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_EDGE_CONTROL_NETWORK must differ from DOCKYARD_TRAEFIK_NETWORK' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'colliding public and control networks mutated Docker state' >&2
+  exit 1
+fi
+
 for unsafe_network in 'Public' '-public' '.public' 'public/network' 'bad network' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; do
   : >"$DOCKYARD_INSTALL_TEST_LOG"
   if DOCKYARD_TRAEFIK_NETWORK="$unsafe_network" \
@@ -223,6 +246,20 @@ for unsafe_network in 'Public' '-public' '.public' 'public/network' 'bad network
   grep -q 'DOCKYARD_TRAEFIK_NETWORK must be a lowercase Docker network name of at most 63 characters' "$temporary/err"
   if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
     echo "unsafe Traefik network name mutated Docker state: $unsafe_network" >&2
+    exit 1
+  fi
+done
+
+for unsafe_network in 'Private' '-private' '.private' 'private/network' 'bad network' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_EDGE_CONTROL_NETWORK="$unsafe_network" \
+    "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe edge control network name: $unsafe_network" >&2
+    exit 1
+  fi
+  grep -q 'DOCKYARD_EDGE_CONTROL_NETWORK must be a lowercase Docker network name of at most 63 characters' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe edge control network name mutated Docker state: $unsafe_network" >&2
     exit 1
   fi
 done
