@@ -277,6 +277,16 @@ client ignores ambient proxy variables so those credentials are not routed
 through an unintended intermediary. 9Router and Hermes remain outside the
 control-plane trust boundary.
 
+The supplied AI stack uses separate encrypted overlays for the
+9Router-to-Headroom path and the auditor-to-9Router path. Headroom cannot reach
+either auditor identity directly, and no AI service joins the tenant ingress
+network. Explicit stop-first updates avoid concurrent 9Router writers on its
+node-local credential volume and overlapping processes using one auditor
+identity; failed task definitions roll back. Gateway processes run with
+`no-new-privileges`, while the upstream 9Router entrypoint retains only the
+container image's startup capability boundary needed to repair mounted-volume
+ownership before it drops to its unprivileged user.
+
 The snapshot uses explicit allowlisted projections rather than serializing
 normal API records. Free-form project descriptions, placement selectors,
 agent-reported cluster maps, audit metadata, and network addresses therefore

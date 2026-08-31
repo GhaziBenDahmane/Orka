@@ -1,6 +1,6 @@
 services:
   9router:
-    image: ${NINEROUTER_IMAGE:?set a digest-pinned 9Router image}
+    image: ${NINEROUTER_IMAGE:?set NINEROUTER_IMAGE to an immutable digest}
     stop_grace_period: 30s
     environment:
       DATA_DIR: /app/data
@@ -9,7 +9,8 @@ services:
       NODE_ENV: production
       HEADROOM_URL: http://headroom:8787
     volumes: [nine-router-data:/app/data]
-    networks: [ai-control]
+    networks: [ai-gateway, ai-auditors]
+    security_opt: [no-new-privileges:true]
     logging:
       driver: local
       options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
@@ -21,11 +22,14 @@ services:
         limits: {cpus: "${NINEROUTER_CPU_LIMIT:-1.0}", memory: "${NINEROUTER_MEMORY_LIMIT:-1G}"}
         reservations: {cpus: "${NINEROUTER_CPU_RESERVATION:-0.10}", memory: "${NINEROUTER_MEMORY_RESERVATION:-128M}"}
       restart_policy: {condition: on-failure, delay: 10s}
+      update_config: {parallelism: 1, order: stop-first, failure_action: rollback, monitor: 30s}
+      rollback_config: {parallelism: 1, order: stop-first, monitor: 30s}
 
   headroom:
-    image: ${HEADROOM_IMAGE:?set a digest-pinned Headroom image}
+    image: ${HEADROOM_IMAGE:?set HEADROOM_IMAGE to an immutable digest}
     stop_grace_period: 30s
-    networks: [ai-control]
+    networks: [ai-gateway]
+    security_opt: [no-new-privileges:true]
     logging:
       driver: local
       options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
@@ -35,9 +39,11 @@ services:
         limits: {cpus: "${HEADROOM_CPU_LIMIT:-1.0}", memory: "${HEADROOM_MEMORY_LIMIT:-512M}"}
         reservations: {cpus: "${HEADROOM_CPU_RESERVATION:-0.10}", memory: "${HEADROOM_MEMORY_RESERVATION:-64M}"}
       restart_policy: {condition: on-failure, delay: 10s}
+      update_config: {parallelism: 1, order: stop-first, failure_action: rollback, monitor: 30s}
+      rollback_config: {parallelism: 1, order: stop-first, monitor: 30s}
 
   security-auditor:
-    image: ${DOCKYARD_IMAGE:?set a digest-pinned Dockyard image}
+    image: ${DOCKYARD_IMAGE:?set DOCKYARD_IMAGE to an immutable digest}
     command: ["ai-auditor"]
     stop_grace_period: 30s
     environment:
@@ -45,14 +51,14 @@ services:
       DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_security_auditor_token
       DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
       DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
-      DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI-compatible model name}
+      DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI compatible model name}
       DOCKYARD_AI_AGENT_NAME: security-auditor
       DOCKYARD_AI_AUDIT_FOCUS: identity, access control, exposed services, suspicious audit activity, and secret-handling risks
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_RETRY_INTERVAL: ${DOCKYARD_AI_AUDIT_RETRY_INTERVAL:-5m}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_security_auditor_token, dockyard_ai_api_key]
-    networks: [ai-control]
+    networks: [ai-auditors]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -65,11 +71,13 @@ services:
         limits: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_LIMIT:-0.50}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_LIMIT:-256M}"}
         reservations: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_RESERVATION:-0.05}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_RESERVATION:-32M}"}
       restart_policy: {condition: on-failure, delay: 10s, max_attempts: 5}
+      update_config: {parallelism: 1, order: stop-first, failure_action: rollback, monitor: 30s}
+      rollback_config: {parallelism: 1, order: stop-first, monitor: 30s}
       placement:
         constraints: [node.role == manager]
 
   reliability-auditor:
-    image: ${DOCKYARD_IMAGE:?set a digest-pinned Dockyard image}
+    image: ${DOCKYARD_IMAGE:?set DOCKYARD_IMAGE to an immutable digest}
     command: ["ai-auditor"]
     stop_grace_period: 30s
     environment:
@@ -77,14 +85,14 @@ services:
       DOCKYARD_AI_AUDITOR_TOKEN_FILE: /run/secrets/dockyard_ai_reliability_auditor_token
       DOCKYARD_AI_BASE_URL: ${DOCKYARD_AI_BASE_URL:-http://9router:20128/v1}
       DOCKYARD_AI_API_KEY_FILE: /run/secrets/dockyard_ai_api_key
-      DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI-compatible model name}
+      DOCKYARD_AI_MODEL: ${DOCKYARD_AI_MODEL:?set an OpenAI compatible model name}
       DOCKYARD_AI_AGENT_NAME: reliability-auditor
       DOCKYARD_AI_AUDIT_FOCUS: stale clusters, capacity, failed deployments, drift, availability, and recovery readiness
       DOCKYARD_AI_AUDIT_INTERVAL: ${DOCKYARD_AI_AUDIT_INTERVAL:-24h}
       DOCKYARD_AI_AUDIT_RETRY_INTERVAL: ${DOCKYARD_AI_AUDIT_RETRY_INTERVAL:-5m}
       DOCKYARD_AI_AUDIT_TIMEOUT: ${DOCKYARD_AI_AUDIT_TIMEOUT:-10m}
     secrets: [dockyard_ai_reliability_auditor_token, dockyard_ai_api_key]
-    networks: [ai-control]
+    networks: [ai-auditors]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -97,6 +105,8 @@ services:
         limits: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_LIMIT:-0.50}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_LIMIT:-256M}"}
         reservations: {cpus: "${DOCKYARD_AI_AUDITOR_CPU_RESERVATION:-0.05}", memory: "${DOCKYARD_AI_AUDITOR_MEMORY_RESERVATION:-32M}"}
       restart_policy: {condition: on-failure, delay: 10s, max_attempts: 5}
+      update_config: {parallelism: 1, order: stop-first, failure_action: rollback, monitor: 30s}
+      rollback_config: {parallelism: 1, order: stop-first, monitor: 30s}
       placement:
         constraints: [node.role == manager]
 
@@ -111,7 +121,11 @@ secrets:
     external: true
     name: ${DOCKYARD_AI_API_KEY_SECRET:-dockyard_ai_api_key}
 networks:
-  ai-control:
+  ai-gateway:
+    driver: overlay
+    driver_opts:
+      encrypted: ""
+  ai-auditors:
     driver: overlay
     driver_opts:
       encrypted: ""

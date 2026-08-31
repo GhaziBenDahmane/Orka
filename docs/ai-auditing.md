@@ -361,9 +361,12 @@ stale environment value from overriding a rotated Docker secret and prevents
 an unavailable model-key mount from silently degrading to unauthenticated
 gateway requests.
 
-Set `DOCKYARD_AI_BASE_URL=http://9router:20128/v1` when 9Router shares the
-stack's encrypted `ai-control` network, or use another OpenAI-compatible
-endpoint. 9Router and Headroom are intentionally absent from
+Set `DOCKYARD_AI_BASE_URL=http://9router:20128/v1` when using the supplied
+stack, or use another OpenAI-compatible endpoint. The stack separates the
+gateway-side 9Router-to-Headroom path from the auditor-to-9Router path with two
+encrypted overlays. Headroom cannot connect directly to either auditor
+identity, while 9Router is the only service bridging both networks. 9Router and
+Headroom are intentionally absent from
 `dockyard-public`, preventing tenant workloads attached for ingress from
 reaching the model gateway directly. Separate replicas can use different
 `DOCKYARD_AI_AGENT_NAME` and `DOCKYARD_AI_AUDIT_FOCUS` values. The supplied manifest runs security and reliability specialists daily
@@ -377,6 +380,13 @@ to 9Router, Headroom, and both auditor services. Override the corresponding
 when capacity planning requires different bounds. The shared
 `DOCKYARD_CONTAINER_LOG_MAX_SIZE` and `DOCKYARD_CONTAINER_LOG_MAX_FILES`
 variables bound local container-log retention across this overlay as well.
+All four services use explicit stop-first updates and automatic rollback. This
+prevents two 9Router tasks from writing the node-local data volume concurrently
+and prevents replacement auditor tasks from overlapping under the same
+service-account identity. The gateway processes also run with
+`no-new-privileges`; 9Router retains the upstream image's startup capability
+set because its entrypoint must repair ownership of a newly mounted data
+volume before dropping to its unprivileged Node user.
 After a failed run, the auditor retries after
 `DOCKYARD_AI_AUDIT_RETRY_INTERVAL` (five minutes by default, or the normal
 interval when it is shorter), doubles that delay after consecutive failures,

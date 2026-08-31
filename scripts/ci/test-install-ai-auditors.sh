@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+real_docker="$(command -v docker)"
 temporary="$(mktemp -d)"
 cleanup() { rm -rf -- "$temporary"; }
 trap cleanup EXIT
@@ -79,6 +80,18 @@ export DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_FILE="$temporary/secrets/security-toke
 export DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_FILE="$temporary/secrets/reliability-token"
 export DOCKYARD_AI_API_KEY_FILE="$temporary/secrets/model-key"
 export DOCKYARD_INSTALL_STABILITY_SECONDS=0
+
+"$real_docker" stack config -c "$root/deploy/ai-auditors.yml" >"$temporary/rendered.yml"
+for image in "$DOCKYARD_IMAGE" "$NINEROUTER_IMAGE" "$HEADROOM_IMAGE"; do
+  grep -Fq "image: $image" "$temporary/rendered.yml" || {
+    echo "real docker stack config did not preserve requested image $image" >&2
+    exit 1
+  }
+done
+grep -Fq "DOCKYARD_AI_MODEL: $DOCKYARD_AI_MODEL" "$temporary/rendered.yml" || {
+  echo 'real docker stack config did not preserve the requested AI model' >&2
+  exit 1
+}
 
 : >"$DOCKYARD_AI_INSTALL_TEST_LOG"
 DOCKYARD_INSTALL_DRY_RUN=true "$root/scripts/install-ai-auditors.sh" | grep -q 'no resources were changed'

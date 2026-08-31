@@ -53,7 +53,11 @@ type deploymentManifest struct {
 			} `yaml:"placement"`
 		} `yaml:"deploy"`
 	} `yaml:"services"`
-	Volumes map[string]any `yaml:"volumes"`
+	Volumes  map[string]any `yaml:"volumes"`
+	Networks map[string]struct {
+		Driver     string            `yaml:"driver"`
+		DriverOpts map[string]string `yaml:"driver_opts"`
+	} `yaml:"networks"`
 	Secrets map[string]struct {
 		External bool   `yaml:"external"`
 		Name     string `yaml:"name"`
@@ -167,6 +171,55 @@ func TestPrivilegedControlProcessesHaveHardenedContainers(t *testing.T) {
 		service := readDeploymentManifest(t, path).Services[name]
 		if !slices.Contains(service.Volumes, "/var/run/docker.sock:/var/run/docker.sock:ro") {
 			t.Errorf("%s service %s does not mount the Docker socket read-only: %v", path, name, service.Volumes)
+		}
+	}
+}
+
+func TestAIAuditorTopologySeparatesGatewaySidecarAndAuditorIdentities(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/ai-auditors.yml")
+	for _, name := range []string{"ai-gateway", "ai-auditors"} {
+		network, ok := manifest.Networks[name]
+		if !ok || network.Driver != "overlay" {
+			t.Fatalf("missing private overlay network %s: %#v", name, network)
+		}
+		if encrypted, ok := network.DriverOpts["encrypted"]; !ok || encrypted != "" {
+			t.Fatalf("network %s is not encrypted: %#v", name, network.DriverOpts)
+		}
+	}
+	router := manifest.Services["9router"]
+	headroom := manifest.Services["headroom"]
+	security := manifest.Services["security-auditor"]
+	reliability := manifest.Services["reliability-auditor"]
+	if !slices.Contains(router.Networks, "ai-gateway") || !slices.Contains(router.Networks, "ai-auditors") {
+		t.Fatalf("9Router must bridge only the gateway and auditor overlays: %v", router.Networks)
+	}
+	if !slices.Equal(headroom.Networks, []string{"ai-gateway"}) {
+		t.Fatalf("Headroom can reach auditor identities: %v", headroom.Networks)
+	}
+	for name, service := range map[string]struct{ Networks []string }{
+		"security-auditor":    {Networks: security.Networks},
+		"reliability-auditor": {Networks: reliability.Networks},
+	} {
+		if !slices.Equal(service.Networks, []string{"ai-auditors"}) {
+			t.Errorf("%s can reach the gateway sidecar network: %v", name, service.Networks)
+		}
+	}
+	for name, service := range map[string]struct{ SecurityOpt []string }{
+		"9router":  {SecurityOpt: router.SecurityOpt},
+		"headroom": {SecurityOpt: headroom.SecurityOpt},
+	} {
+		if !slices.Contains(service.SecurityOpt, "no-new-privileges:true") {
+			t.Errorf("%s can acquire additional process privileges: %v", name, service.SecurityOpt)
+		}
+	}
+}
+
+func TestAIStackUpdatesRollBackWithoutOverlappingIdentitiesOrStateWriters(t *testing.T) {
+	manifest := readDeploymentManifest(t, "../../deploy/ai-auditors.yml")
+	for _, name := range []string{"9router", "headroom", "security-auditor", "reliability-auditor"} {
+		service := manifest.Services[name]
+		if service.Deploy.UpdateConfig.Order != "stop-first" || service.Deploy.UpdateConfig.FailureAction != "rollback" || service.Deploy.RollbackConfig.Order != "stop-first" {
+			t.Errorf("%s has unsafe update/rollback behavior: %#v", name, service.Deploy)
 		}
 	}
 }
