@@ -85,6 +85,8 @@ func main() {
 		err = validateBundledDatabaseCredentials(os.Args[2:], os.Stdin)
 	case "validate-agent-endpoints":
 		err = validateAgentEndpoints(os.Args[2:])
+	case "validate-ai-auditor-config":
+		err = validateAIAuditorConfig(os.Args[2:])
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
 	default:
@@ -97,7 +99,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
@@ -179,6 +181,29 @@ func validateAgentEndpoints(arguments []string) error {
 		return errors.New("usage: dockyard validate-agent-endpoints --control-plane-url URL --agent-url URL")
 	}
 	return agent.ValidateEndpoints(*controlPlaneURL, *agentURL)
+}
+
+func validateAIAuditorConfig(arguments []string) error {
+	flags := flag.NewFlagSet("validate-ai-auditor-config", flag.ContinueOnError)
+	controlPlaneURL := flags.String("control-plane-url", "", "control-plane HTTP(S) origin")
+	modelURL := flags.String("model-url", "", "OpenAI-compatible HTTP(S) base URL")
+	model := flags.String("model", "", "OpenAI-compatible model name")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *controlPlaneURL == "" || *modelURL == "" || *model == "" {
+		return errors.New("usage: dockyard validate-ai-auditor-config --control-plane-url URL --model-url URL --model MODEL")
+	}
+	if _, err := normalizedAuditorEndpoint("control-plane URL", *controlPlaneURL, false); err != nil {
+		return err
+	}
+	if _, err := normalizedAuditorEndpoint("model URL", *modelURL, true); err != nil {
+		return err
+	}
+	if !validAuditorMetadata(strings.TrimSpace(*model), "installer", "security") {
+		return errors.New("model name must contain between 1 and 512 bytes without NUL or line breaks")
+	}
+	return nil
 }
 
 func validateProductionCertification(arguments []string) error {

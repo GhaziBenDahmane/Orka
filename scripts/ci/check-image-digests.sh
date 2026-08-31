@@ -24,8 +24,10 @@ fi
 variables="DOCKYARD_IMAGE"
 if [ "$mode" = "controller" ]; then
   variables="$variables POSTGRES_IMAGE TRAEFIK_IMAGE"
+elif [ "$mode" = "ai" ]; then
+  variables="$variables NINEROUTER_IMAGE HEADROOM_IMAGE"
 elif [ "$mode" != "agent" ]; then
-  echo "usage: $0 [build|controller|agent]" >&2
+  echo "usage: $0 [build|controller|agent|ai]" >&2
   exit 2
 fi
 

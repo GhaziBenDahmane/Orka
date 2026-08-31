@@ -239,22 +239,32 @@ keys make it a privileged service.
 
 ## Deploy on Swarm
 
-Create one short-lived auditor service-account token in the API, then create
-Swarm secrets for it and the model gateway key. Deploy one or more focused
-auditors with the supplied overlay:
+Create one short-lived auditor service-account token in the API, store it and
+the model gateway key in mode-0600 non-symlink files, then use the supplied
+fail-closed installer:
 
 ```sh
 export DOCKYARD_AI_AUDITOR_TOKEN_SECRET=dockyard_ai_auditor_token_v1
 export DOCKYARD_AI_API_KEY_SECRET=dockyard_ai_api_key_v1
-printf '%s' "$AUDITOR_TOKEN" | docker secret create "$DOCKYARD_AI_AUDITOR_TOKEN_SECRET" -
-printf '%s' "$MODEL_API_KEY" | docker secret create "$DOCKYARD_AI_API_KEY_SECRET" -
-DOCKYARD_IMAGE='registry.example/dockyard@sha256:...' \
-NINEROUTER_IMAGE='decolua/9router@sha256:...' \
-HEADROOM_IMAGE='ghcr.io/headroomlabs-ai/headroom@sha256:...' \
-NINEROUTER_STORAGE_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')" \
-DOCKYARD_AI_MODEL='provider/model-name' \
-docker stack deploy -c deploy/ai-auditors.yml dockyard-ai
+export DOCKYARD_AI_AUDITOR_TOKEN_FILE=/secure/dockyard/ai-auditor-token
+export DOCKYARD_AI_API_KEY_FILE=/secure/dockyard/model-gateway-key
+export DOCKYARD_IMAGE='registry.example/dockyard@sha256:...'
+export NINEROUTER_IMAGE='decolua/9router@sha256:...'
+export HEADROOM_IMAGE='ghcr.io/headroomlabs-ai/headroom@sha256:...'
+export NINEROUTER_STORAGE_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')"
+export DOCKYARD_CONTROL_PLANE_URL='https://dockyard.example.com'
+export DOCKYARD_AI_MODEL='provider/model-name'
+
+DOCKYARD_INSTALL_DRY_RUN=true scripts/install-ai-auditors.sh
+scripts/install-ai-auditors.sh
 ```
+
+The installer rejects mutable or unavailable images, invalid endpoint/model
+configuration, unsafe secret files, and a missing, drained, or unavailable
+9Router storage node before it mutates Swarm. It creates only absent secrets,
+requires explicit `DOCKYARD_REUSE_EXISTING_SECRETS=true` for rotation, deploys
+with registry credentials, and verifies all four services use the requested
+digests and remain converged for the configured stability window.
 
 Docker secrets are immutable. To rotate either credential, create a new
 versioned secret, update `DOCKYARD_AI_AUDITOR_TOKEN_SECRET` or

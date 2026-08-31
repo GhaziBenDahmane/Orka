@@ -15,6 +15,19 @@ do
   "$validator" "$image" || { echo "valid image rejected: $image" >&2; exit 1; }
 done
 
+DOCKYARD_IMAGE="example/dockyard@sha256:$digest" \
+NINEROUTER_IMAGE="example/9router@sha256:$digest" \
+HEADROOM_IMAGE="example/headroom@sha256:$digest" \
+  "$root/scripts/ci/check-image-digests.sh" ai
+
+if DOCKYARD_IMAGE="example/dockyard@sha256:$digest" \
+  NINEROUTER_IMAGE='example/9router:latest' \
+  HEADROOM_IMAGE="example/headroom@sha256:$digest" \
+  "$root/scripts/ci/check-image-digests.sh" ai 2>/dev/null; then
+  echo 'AI image validation accepted a mutable 9Router image' >&2
+  exit 1
+fi
+
 for image in \
   "postgres" \
   "postgres:17@sha256:short" \

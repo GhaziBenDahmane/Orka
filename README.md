@@ -49,9 +49,10 @@ attestation format and stable-promotion procedure are in
 Production deployments use immutable image digests and Docker Swarm. The
 non-interactive installer validates the manager, images, secret files, and
 rendered stack before changing Docker state, and supports both single-manager
-and HA controller profiles. A companion installer performs the same checks for
-outbound remote-cluster agents. See [deploy/README.md](deploy/README.md) for
-the preflight, installation, upgrade, backup, and recovery procedures.
+and HA controller profiles. Companion installers apply the same fail-closed
+checks to outbound remote-cluster agents and the optional 9Router/Headroom AI
+auditor stack. See [deploy/README.md](deploy/README.md) for the preflight,
+installation, upgrade, backup, and recovery procedures.
 
 ## Development
 

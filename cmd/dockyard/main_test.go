@@ -132,6 +132,24 @@ func TestValidateAgentEndpointsCommand(t *testing.T) {
 	}
 }
 
+func TestValidateAIAuditorConfig(t *testing.T) {
+	valid := []string{"--control-plane-url", "https://dockyard.example.test", "--model-url", "http://9router:20128/v1", "--model", "provider/model"}
+	if err := validateAIAuditorConfig(valid); err != nil {
+		t.Fatalf("valid AI auditor config: %v", err)
+	}
+	for _, arguments := range [][]string{
+		{"--control-plane-url", "http://dockyard.example.test", "--model-url", "http://9router:20128/v1", "--model", "provider/model"},
+		{"--control-plane-url", "https://dockyard.example.test/path", "--model-url", "http://9router:20128/v1", "--model", "provider/model"},
+		{"--control-plane-url", "https://dockyard.example.test", "--model-url", "http://public.example.test/v1", "--model", "provider/model"},
+		{"--control-plane-url", "https://dockyard.example.test", "--model-url", "http://9router:20128/v1", "--model", ""},
+		{"--control-plane-url", "https://dockyard.example.test", "--model-url", "http://9router:20128/v1", "--model", "bad\nmodel"},
+	} {
+		if err := validateAIAuditorConfig(arguments); err == nil {
+			t.Fatalf("accepted invalid AI auditor config %#v", arguments)
+		}
+	}
+}
+
 func TestReadRestrictedMasterKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "master-key")
 	want := []byte(strings.Repeat("k", 32))

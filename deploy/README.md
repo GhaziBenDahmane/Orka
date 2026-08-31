@@ -71,6 +71,12 @@ DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
 scripts/install-swarm.sh
 ```
 
+Install the optional 9Router, Headroom, and built-in auditor stack with
+`scripts/install-ai-auditors.sh`; it applies the same immutable-image,
+restricted-secret-file, dry-run, and stable-convergence checks. See
+[`docs/ai-auditing.md`](../docs/ai-auditing.md) for the required variables and
+credential setup.
+
 The installer rejects mutable image tags, non-manager nodes, unsafe or malformed
 DNS hostnames, ACME email addresses, and routing-network names, loose secret-file permissions, malformed keys, and existing secrets unless reuse is explicitly
 acknowledged with `DOCKYARD_REUSE_EXISTING_SECRETS=true`. It validates the
