@@ -115,3 +115,20 @@ tests:
             exp_annotations:
               summary: Database recovery evidence uses an unverified utility image
               description: Successful backup evidence is missing a digest-pinned image for role utility; complete a fresh verified operation before relying on that recovery evidence.
+
+  - name: plaintext backup destination
+    interval: 1m
+    input_series:
+      - series: 'dockyard_backup_destination_tls{organization="organization-id",destination="destination-id"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DockyardBackupDestinationPlaintextTransport
+        exp_alerts:
+          - exp_labels:
+              organization: organization-id
+              destination: destination-id
+              severity: critical
+            exp_annotations:
+              summary: A referenced Dockyard backup destination does not use TLS
+              description: Backup destination destination-id in organization organization-id can expose object-store credentials in transit; move it to a certificate-validated HTTPS endpoint before running backup or restore operations.

@@ -404,6 +404,14 @@ groups:
           summary: Referenced Dockyard backup credentials are overdue for rotation
           description: Backup destination {{ $labels.destination }} in organization {{ $labels.organization }} has used the same object-store credentials for more than 180 days; rotate them in place and verify backup and restore.
 
+      - alert: DockyardBackupDestinationPlaintextTransport
+        expr: dockyard_backup_destination_tls == 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A referenced Dockyard backup destination does not use TLS
+          description: Backup destination {{ $labels.destination }} in organization {{ $labels.organization }} can expose object-store credentials in transit; move it to a certificate-validated HTTPS endpoint before running backup or restore operations.
+
       - alert: DockyardResourceFinalizerRequiresIntervention
         expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0
         for: 5m

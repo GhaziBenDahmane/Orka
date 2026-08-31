@@ -198,6 +198,9 @@ rejected at creation, policy admission, manual backup admission, and startup.
 Startup also rejects queued or running node-local database backups left by a
 previous single-controller configuration, and workers independently refuse to
 execute such jobs if the persisted state changes after startup.
+The bundled Prometheus rules also page on any referenced destination whose
+transport-TLS gauge reports zero, including legacy state created before HA was
+enabled.
 These checks run before database migrations or Docker operations.
 
 The equivalent manual commands are:
