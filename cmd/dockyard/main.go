@@ -168,6 +168,7 @@ func validateProductionCertification(arguments []string) error {
 	sourceCommit := flags.String("source-commit", "", "expected 40-character source commit")
 	candidateImage := flags.String("candidate-image", "", "expected immutable GHCR candidate image")
 	validationTime := flags.String("at", "", "validation time in RFC3339 (defaults to now)")
+	verifyEvidence := flags.Bool("verify-evidence", false, "download and verify every external evidence artifact")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -192,6 +193,27 @@ func validateProductionCertification(arguments []string) error {
 	}
 	if err = certification.Validate(*sourceCommit, *candidateImage, now); err != nil {
 		return fmt.Errorf("validate production certification: %w", err)
+	}
+	if *verifyEvidence {
+		policy := &netpolicy.Policy{}
+		client := &http.Client{
+			Transport: policy.Transport(),
+			Timeout:   2 * time.Minute,
+			CheckRedirect: func(request *http.Request, previous []*http.Request) error {
+				if len(previous) >= 5 {
+					return errors.New("too many production evidence redirects")
+				}
+				if request.URL.Scheme != "https" || request.URL.User != nil {
+					return errors.New("production evidence redirects must remain credential-free HTTPS URLs")
+				}
+				return nil
+			},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err = releaseevidence.VerifyProductionEvidence(ctx, certification, client); err != nil {
+			return fmt.Errorf("verify production certification evidence: %w", err)
+		}
 	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)

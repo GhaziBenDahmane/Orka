@@ -31,9 +31,13 @@ Submit a JSON object using schema version 1. The workflow overwrites
 Git ref, input digest, signing time, and chosen lifetime, validates the document
 with the Go release-evidence validator, verifies the
 candidate image's release-workflow signature, and signs the canonical result
-with GitHub OIDC. Evidence URLs must be stable, credential-free HTTPS URLs with
-no query string or fragment. Every referenced artifact includes its lowercase
-SHA-256 so later reviewers can detect replacement.
+with GitHub OIDC. Before signing, and again immediately before promotion, the
+workflow downloads every referenced artifact through the private-network
+egress guard and verifies its bytes against the declared SHA-256. Each download
+is limited to 64 MiB. Evidence URLs must be stable, credential-free HTTPS URLs
+with no query string or fragment. Redirects must remain credential-free HTTPS
+destinations. Every referenced artifact includes its lowercase SHA-256 so later
+reviewers can detect replacement.
 
 ```json
 {

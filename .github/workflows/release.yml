@@ -606,6 +606,7 @@ jobs:
             --file "$certification" \
             --source-commit "$GITHUB_SHA" \
             --candidate-image "$IMAGE@$DIGEST" \
+            --verify-evidence \
             >/dev/null
           release_identity="^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/(heads|tags)/.+$"
           cosign verify \

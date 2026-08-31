@@ -84,6 +84,7 @@ jobs:
             --file production-certification.input.json \
             --source-commit "$GITHUB_SHA" \
             --candidate-image "$CANDIDATE_IMAGE" \
+            --verify-evidence \
             >production-certification.json
 
       - name: Sign and verify production certification

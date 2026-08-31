@@ -2,10 +2,13 @@ package releaseevidence
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -18,6 +21,7 @@ import (
 
 const ProductionCertificationSchema = 1
 const maxProductionCertificationBytes = 256 << 10
+const maxProductionEvidenceBytes = 64 << 20
 
 var (
 	commitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
@@ -154,6 +158,60 @@ func validateProductionGate(name string, gate ProductionGate, certifiedAt time.T
 			return fmt.Errorf("gate %q contains duplicate evidence URL %q", name, record.URL)
 		}
 		seen[record.URL] = struct{}{}
+	}
+	return nil
+}
+
+// VerifyProductionEvidence downloads every referenced external artifact and
+// compares its bytes with the hash approved in the certification. Callers are
+// responsible for supplying an HTTP client whose transport enforces their
+// outbound-network policy.
+func VerifyProductionEvidence(ctx context.Context, certification ProductionCertification, client *http.Client) error {
+	return verifyProductionEvidence(ctx, certification, client, maxProductionEvidenceBytes)
+}
+
+func verifyProductionEvidence(ctx context.Context, certification ProductionCertification, client *http.Client, maximumBytes int64) error {
+	if client == nil || maximumBytes <= 0 {
+		return errors.New("production evidence HTTP client and positive size limit are required")
+	}
+	for _, gateName := range requiredProductionGates {
+		gate, exists := certification.Gates[gateName]
+		if !exists {
+			return fmt.Errorf("required production gate %q is missing", gateName)
+		}
+		for index, record := range gate.Evidence {
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, record.URL, nil)
+			if err != nil {
+				return fmt.Errorf("fetch gate %q evidence %d: %w", gateName, index, err)
+			}
+			request.Header.Set("Accept", "application/octet-stream")
+			request.Header.Set("Accept-Encoding", "identity")
+			response, err := client.Do(request)
+			if err != nil {
+				return fmt.Errorf("fetch gate %q evidence %d: %w", gateName, index, err)
+			}
+			if response.StatusCode != http.StatusOK {
+				_ = response.Body.Close()
+				return fmt.Errorf("fetch gate %q evidence %d: unexpected HTTP status %d", gateName, index, response.StatusCode)
+			}
+			if response.ContentLength > maximumBytes {
+				_ = response.Body.Close()
+				return fmt.Errorf("fetch gate %q evidence %d: artifact exceeds %d bytes", gateName, index, maximumBytes)
+			}
+			digest := sha256.New()
+			written, copyErr := io.Copy(digest, io.LimitReader(response.Body, maximumBytes+1))
+			closeErr := response.Body.Close()
+			if copyErr != nil || closeErr != nil {
+				return fmt.Errorf("fetch gate %q evidence %d: %w", gateName, index, errors.Join(copyErr, closeErr))
+			}
+			if written > maximumBytes {
+				return fmt.Errorf("fetch gate %q evidence %d: artifact exceeds %d bytes", gateName, index, maximumBytes)
+			}
+			actual := fmt.Sprintf("%x", digest.Sum(nil))
+			if actual != record.SHA256 {
+				return fmt.Errorf("verify gate %q evidence %d: sha256 mismatch", gateName, index)
+			}
+		}
 	}
 	return nil
 }

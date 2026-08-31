@@ -1,7 +1,12 @@
 package releaseevidence
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +34,63 @@ func validCertification(now time.Time) ProductionCertification {
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(7 * 24 * time.Hour),
 		Gates:          gates,
+	}
+}
+
+type productionEvidenceRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f productionEvidenceRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestVerifyProductionEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	certification := validCertification(now)
+	body := []byte("independently reviewed production evidence\n")
+	digest := fmt.Sprintf("%x", sha256.Sum256(body))
+	for name, gate := range certification.Gates {
+		gate.Evidence[0].SHA256 = digest
+		certification.Gates[name] = gate
+	}
+	requests := 0
+	client := &http.Client{Transport: productionEvidenceRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Method != http.MethodGet || request.Header.Get("Accept-Encoding") != "identity" {
+			t.Fatalf("unexpected evidence request method=%s accept-encoding=%q", request.Method, request.Header.Get("Accept-Encoding"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, ContentLength: int64(len(body)), Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header), Request: request}, nil
+	})}
+	if err := verifyProductionEvidence(context.Background(), certification, client, 1024); err != nil {
+		t.Fatal(err)
+	}
+	if requests != len(requiredProductionGates) {
+		t.Fatalf("evidence requests=%d want=%d", requests, len(requiredProductionGates))
+	}
+}
+
+func TestVerifyProductionEvidenceRejectsInvalidArtifact(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		statusCode int
+		body       string
+		maxBytes   int64
+		want       string
+	}{
+		{name: "status", statusCode: http.StatusNotFound, body: "missing", maxBytes: 1024, want: "HTTP status 404"},
+		{name: "oversized", statusCode: http.StatusOK, body: "too large", maxBytes: 4, want: "exceeds 4 bytes"},
+		{name: "hash mismatch", statusCode: http.StatusOK, body: "different", maxBytes: 1024, want: "sha256 mismatch"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			certification := validCertification(now)
+			client := &http.Client{Transport: productionEvidenceRoundTripper(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: test.statusCode, ContentLength: int64(len(test.body)), Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header), Request: request}, nil
+			})}
+			err := verifyProductionEvidence(context.Background(), certification, client, test.maxBytes)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want substring %q", err, test.want)
+			}
+		})
 	}
 }
 
