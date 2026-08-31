@@ -775,6 +775,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, err)
 			return
 		}
+		_ = auth.VerifyPasswordOrDummy("", in.Password)
 		time.Sleep(150 * time.Millisecond)
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
 		return
@@ -782,7 +783,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !s.allowAuthenticationAttempt(w, r, "login", cryptox.Digest(in.Email), 10) {
 		return
 	}
-	if !auth.VerifyPassword(credential.PasswordHash, in.Password) {
+	if !auth.VerifyPasswordOrDummy(credential.PasswordHash, in.Password) {
 		time.Sleep(150 * time.Millisecond)
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
 		return

@@ -26,6 +26,10 @@ const (
 	maxArgonSaltLen            = 64
 	minArgonKeyLen             = 16
 	maxArgonKeyLen             = 64
+	// Structurally valid but intentionally unrelated to any accepted login.
+	// It keeps missing-account checks on the same bounded Argon2 path as real
+	// accounts, reducing observable account-enumeration timing differences.
+	dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 )
 
 func HashPassword(password string) (string, error) {
@@ -71,4 +75,15 @@ func VerifyPassword(encoded, password string) bool {
 	}
 	got := argon2.IDKey([]byte(password), salt, iterations, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+// VerifyPasswordOrDummy performs password hashing even when an account lookup
+// did not return a stored hash. An empty hash always returns false.
+func VerifyPasswordOrDummy(encoded, password string) bool {
+	found := encoded != ""
+	if !found {
+		encoded = dummyPasswordHash
+	}
+	verified := VerifyPassword(encoded, password)
+	return found && verified
 }

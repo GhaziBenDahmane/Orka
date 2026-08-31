@@ -20,6 +20,21 @@ func TestPasswordRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVerifyPasswordOrDummyNeverAuthenticatesMissingAccount(t *testing.T) {
+	for _, password := range []string{"", "wrong-password", strings.Repeat("x", MaxPasswordBytes)} {
+		if VerifyPasswordOrDummy("", password) {
+			t.Fatalf("missing account authenticated with password length %d", len(password))
+		}
+	}
+	hash, err := HashPassword("a-secure-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !VerifyPasswordOrDummy(hash, "a-secure-password") || VerifyPasswordOrDummy(hash, "wrong-password") {
+		t.Fatal("real account verification semantics changed")
+	}
+}
+
 func TestPasswordLengthIsBounded(t *testing.T) {
 	if _, err := HashPassword(strings.Repeat("a", MaxPasswordBytes)); err != nil {
 		t.Fatalf("maximum-length password rejected: %v", err)
