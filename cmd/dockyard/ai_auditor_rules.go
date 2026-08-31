@@ -24,13 +24,8 @@ const offlineVolumeRestoreStallThreshold = 30 * time.Minute
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
-	truncated := false
 	add := func(finding modelFinding) {
-		if len(findings) < maxDeterministicAuditFindings {
-			findings = append(findings, finding)
-		} else {
-			truncated = true
-		}
+		findings = append(findings, finding)
 	}
 	if snapshot.IdentityPosture.ActiveOwners == 0 {
 		add(modelFinding{Severity: "critical", Category: "identity", Title: "Organization has no active owner", Description: "No active owner can perform break-glass administration or recover organization policy.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"activeOwners": 0}, Remediation: "Restore or provision an active owner through the documented recovery procedure."})
@@ -541,10 +536,36 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 			add(modelFinding{Severity: "medium", Category: "availability", Title: "Swarm service reconciliation is stale", Description: "The service has no fresh runtime observation from the last five minutes.", ResourceType: "service", ResourceID: reconciliation.ComposeServiceID.String(), Evidence: map[string]any{"lastCheckedAt": reconciliation.LastCheckedAt.UTC().Format(time.RFC3339)}, Remediation: "Restore controller reconciliation and verify the service on its assigned cluster."})
 		}
 	}
-	if truncated {
-		findings[maxDeterministicAuditFindings-1] = modelFinding{Severity: "high", Category: "audit", Title: "Deterministic audit findings were truncated", Description: fmt.Sprintf("The baseline audit reached its %d-finding safety limit.", maxDeterministicAuditFindings), ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"limit": maxDeterministicAuditFindings}, Remediation: "Resolve existing findings and rerun the audit to reveal any remaining issues."}
+	return boundDeterministicAuditFindings(findings, snapshot.Organization)
+}
+
+func boundDeterministicAuditFindings(findings []modelFinding, organizationID uuid.UUID) []modelFinding {
+	if len(findings) <= maxDeterministicAuditFindings {
+		return findings
 	}
-	return findings
+	ranked := append([]modelFinding(nil), findings...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return modelSeverityRank(ranked[i].Severity) > modelSeverityRank(ranked[j].Severity)
+	})
+	keptCount := maxDeterministicAuditFindings - 1
+	omitted := ranked[keptCount:]
+	omittedBySeverity := map[string]int{}
+	overflowSeverity := "high"
+	for _, finding := range omitted {
+		omittedBySeverity[finding.Severity]++
+		if modelSeverityRank(finding.Severity) > modelSeverityRank(overflowSeverity) {
+			overflowSeverity = finding.Severity
+		}
+	}
+	selected := append([]modelFinding(nil), ranked[:keptCount]...)
+	selected = append(selected, modelFinding{
+		Severity: overflowSeverity, Category: "audit", Title: "Deterministic audit findings were truncated",
+		Description:  fmt.Sprintf("The baseline detected %d findings and retained the %d highest-priority findings plus this overflow record.", len(findings), keptCount),
+		ResourceType: "organization", ResourceID: organizationID.String(),
+		Evidence:    map[string]any{"limit": maxDeterministicAuditFindings, "detected": len(findings), "omitted": len(omitted), "omittedBySeverity": omittedBySeverity},
+		Remediation: "Resolve the retained findings and rerun the audit; treat the omitted severity counts as unresolved risk until every finding is visible.",
+	})
+	return selected
 }
 
 func operationalSignalFindings(signals []store.AIAuditSignal, organizationID uuid.UUID) []modelFinding {

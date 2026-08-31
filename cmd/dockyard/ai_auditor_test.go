@@ -1369,13 +1369,20 @@ func TestDeterministicAuditAcceptsClusterOnActiveCertificateAuthority(t *testing
 }
 
 func TestDeterministicAuditFindingsAreBounded(t *testing.T) {
-	snapshot := store.AIAuditSnapshot{IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1}}
+	organizationID := uuid.New()
+	snapshot := store.AIAuditSnapshot{Organization: organizationID, IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1}, NotificationPosture: fullyCoveredNotifications()}
 	for range maxDeterministicAuditFindings + 10 {
 		snapshot.BackupPosture = append(snapshot.BackupPosture, store.AIAuditBackupPosture{DatabaseID: uuid.New(), Engine: "postgres"})
 	}
+	criticalID := uuid.New()
+	snapshot.VolumeRestorePosture = append(snapshot.VolumeRestorePosture, store.AIAuditVolumeRestorePosture{ID: criticalID, ServiceID: uuid.New(), Status: "failed", CreatedAt: time.Now().Add(-time.Hour)})
 	findings := deterministicAuditFindings(snapshot, time.Now())
-	if len(findings) != maxDeterministicAuditFindings || findings[len(findings)-1].Title != "Deterministic audit findings were truncated" {
+	if len(findings) != maxDeterministicAuditFindings || findings[0].Title != "Offline volume recovery failed" || findings[0].ResourceID != criticalID.String() || findings[len(findings)-1].Title != "Deterministic audit findings were truncated" {
 		t.Fatalf("bounded findings=%d last=%#v", len(findings), findings[len(findings)-1])
+	}
+	overflow := findings[len(findings)-1]
+	if overflow.Severity != "high" || overflow.ResourceID != organizationID.String() || overflow.Evidence["detected"] != maxDeterministicAuditFindings+11 || overflow.Evidence["omitted"] != 12 {
+		t.Fatalf("overflow finding=%#v", overflow)
 	}
 }
 

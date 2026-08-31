@@ -235,6 +235,11 @@ keys make it a privileged service.
   These findings survive a model gateway
   failure; the run remains marked failed so operators can distinguish
   baseline-only output from a completed model review.
+- If the deterministic baseline exceeds the per-run finding limit, it sorts by
+  severity before truncation so late-discovered critical failures cannot be
+  hidden by earlier lower-severity findings. The final slot is an explicit
+  overflow finding with omitted counts by severity; operators must treat those
+  counts as unresolved risk and rerun after reducing the visible backlog.
 - Each run records agent name/version, model, scope, timestamps, summary, and
   structured findings. Lifecycle transitions also enter the normal audit log.
 
