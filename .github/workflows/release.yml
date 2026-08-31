@@ -422,10 +422,17 @@ jobs:
         run: |
           jq -e --arg image "$RELEASE_IMAGE" --arg sourceCommit "$GITHUB_SHA" '
             .image == $image and .sourceCommit == $sourceCommit and .status == "passed" and
-            .configuredSoakSeconds >= 60 and .healthChecks >= 1 and .healthVerified and
+            .configuredSoakSeconds >= 60 and .observedSoakSeconds >= .configuredSoakSeconds and .healthChecks >= 1 and .healthVerified and
             .readinessVerified and .authenticationVerified and .metricsVerified and
             .replicaConvergenceVerified and .failedHealthCheckInjected and
-            .automaticRollbackVerified and .originalHealthcheckRestored and
+            .automaticRollbackVerified and .originalHealthcheckRestored and .imageIdentityRestored and .failedTaskIsolated and
+            (.observations.baselineImageId | test("^sha256:[a-f0-9]{64}$")) and
+            .observations.recoveredImageId == .observations.baselineImageId and
+            .observations.baselineTaskId != .observations.injectedTaskId and
+            .observations.recoveredTaskId != .observations.injectedTaskId and
+            (.observations.injectedTaskState == "complete" or .observations.injectedTaskState == "failed" or .observations.injectedTaskState == "shutdown") and .observations.injectedTaskDesiredState == "shutdown" and
+            .observations.injectedServiceVersion > .observations.baselineServiceVersion and
+            .observations.rollbackServiceVersion > .observations.injectedServiceVersion and
             .rollbackState == "rollback_completed"
           ' release-soak-evidence.json >/dev/null
 

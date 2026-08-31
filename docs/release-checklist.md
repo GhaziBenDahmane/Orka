@@ -74,7 +74,10 @@ links for every item below.
   authenticated API access, Prometheus output, and replica convergence must
   remain healthy. The gate then deploys a deliberately failing health check and
   requires Swarm to report `rollback_completed`, restore the signed digest and
-  original health configuration, and preserve the authenticated session.
+  original health configuration, and preserve the authenticated session. Its
+  evidence records measured soak duration, baseline/failed/recovered task IDs,
+  monotonic service versions, the failed task's terminal state, and matching
+  local image IDs before and after rollback.
 - `make test-lifecycle-conformance` drives the authenticated HTTP API and real
   PostgreSQL queue through successful, failed, cancelled, and rollback
   deployments. The successful deployment records Swarm-resolved image digests,
@@ -269,8 +272,9 @@ links for every item below.
   remain available as a workflow artifact. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence
-  records the exact promoted digest, observation count, and automatic rollback
-  result. The workflow initially pushes only a run-scoped candidate tag; the
+  records the exact promoted digest, measured duration, observation count,
+  task and service-version transitions, immutable image identity, and automatic
+  rollback result. The workflow initially pushes only a run-scoped candidate tag; the
   public semantic-version tag is assigned to that exact digest only after
   vulnerability scans, image and manifest signatures, checksum verification,
   soak, and all evidence validation pass. A later release verifies the prior

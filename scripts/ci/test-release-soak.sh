@@ -121,6 +121,11 @@ if ! curl --fail --silent "$base_url/readyz" >/dev/null; then
 fi
 actual_image="$(docker service inspect "$controller_service" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
 [[ "$actual_image" == "$release_image" ]] || fail "controller runs $actual_image instead of $release_image"
+baseline_service_version="$(docker service inspect "$controller_service" --format '{{.Version.Index}}')"
+baseline_task_id="$(docker service ps --filter desired-state=running --quiet "$controller_service" | head -1)"
+baseline_container_id="$(docker inspect "$baseline_task_id" --format '{{.Status.ContainerStatus.ContainerID}}')"
+baseline_image_id="$(docker inspect "$baseline_container_id" --format '{{.Image}}')"
+[[ "$baseline_image_id" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "baseline task has invalid local image identity $baseline_image_id"
 
 bootstrap="$(curl --fail-with-body --silent --show-error --header 'Content-Type: application/json' \
   --data '{"email":"soak@example.test","password":"correct horse battery staple","organization":"Release Soak"}' \
@@ -146,11 +151,16 @@ while (( $(date +%s) < deadline )); do
   ((health_checks += 1))
   sleep 5
 done
+soak_finished_epoch="$(date +%s)"
+observed_soak_seconds="$((soak_finished_epoch - start_epoch))"
+(( observed_soak_seconds >= soak_seconds )) || fail "soak ended after $observed_soak_seconds seconds, expected at least $soak_seconds"
 
 docker service update --detach \
   --health-cmd 'exit 1' --health-interval 2s --health-timeout 1s \
   --health-start-period 1s --health-retries 1 \
   "$controller_service" >/dev/null
+injected_service_version="$(docker service inspect "$controller_service" --format '{{.Version.Index}}')"
+(( injected_service_version > baseline_service_version )) || fail "failed-health update did not advance the service version"
 rollback_deadline=$((SECONDS + 240))
 rollback_state=""
 while (( SECONDS < rollback_deadline )); do
@@ -167,6 +177,25 @@ rolled_back_image="$(docker service inspect "$controller_service" --format '{{.S
 rolled_back_healthcheck="$(docker service inspect "$controller_service" --format '{{json .Spec.TaskTemplate.ContainerSpec.Healthcheck.Test}}')"
 jq -e '.[0] == "CMD-SHELL" and (.[1] | contains("/readyz")) and (.[1] | contains("exit 1") | not)' \
   <<<"$rolled_back_healthcheck" >/dev/null || fail "rollback did not restore the release health check"
+rollback_service_version="$(docker service inspect "$controller_service" --format '{{.Version.Index}}')"
+(( rollback_service_version > injected_service_version )) || fail "rollback did not advance the service version"
+
+injected_task_id=""
+injected_task_state=""
+injected_task_desired_state=""
+while read -r task_id; do
+  [[ -n "$task_id" ]] || continue
+  task_healthcheck="$(docker inspect "$task_id" --format '{{json .Spec.ContainerSpec.Healthcheck.Test}}')"
+  if jq -e 'any(.[]; . == "exit 1")' <<<"$task_healthcheck" >/dev/null 2>&1; then
+    injected_task_id="$task_id"
+    injected_task_state="$(docker inspect "$task_id" --format '{{.Status.State}}')"
+    injected_task_desired_state="$(docker inspect "$task_id" --format '{{.DesiredState}}')"
+    break
+  fi
+done < <(docker service ps --quiet --no-trunc "$controller_service")
+[[ -n "$injected_task_id" ]] || fail "no task with the injected failing health check was observed"
+[[ "$injected_task_state" =~ ^(complete|failed|shutdown)$ && "$injected_task_desired_state" == shutdown ]] || \
+  fail "injected task state was $injected_task_state/$injected_task_desired_state, expected terminal/shutdown"
 
 recovery_deadline=$((SECONDS + 120))
 while (( SECONDS < recovery_deadline )); do
@@ -181,13 +210,25 @@ done
 curl --fail --silent "$base_url/readyz" >/dev/null || fail "controller did not recover after rollback"
 curl --fail --silent "${auth_headers[@]}" "$base_url/v1/me" | \
   jq -e --arg organization "$organization_id" '.organizationId == $organization' >/dev/null || fail "session did not survive rollback"
+recovered_task_id="$(docker service ps --filter desired-state=running --quiet "$controller_service" | head -1)"
+[[ -n "$recovered_task_id" && "$baseline_task_id" != "$injected_task_id" && "$recovered_task_id" != "$injected_task_id" ]] || \
+  fail "failed update task was not isolated from the serving task"
+recovered_task_image="$(docker inspect "$recovered_task_id" --format '{{.Spec.ContainerSpec.Image}}')"
+[[ "$recovered_task_image" == "$release_image" ]] || fail "recovered task runs $recovered_task_image instead of $release_image"
+recovered_container_id="$(docker inspect "$recovered_task_id" --format '{{.Status.ContainerStatus.ContainerID}}')"
+recovered_image_id="$(docker inspect "$recovered_container_id" --format '{{.Image}}')"
+[[ "$recovered_image_id" == "$baseline_image_id" ]] || fail "rollback changed local image identity from $baseline_image_id to $recovered_image_id"
 
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 jq -n \
   --arg status passed --arg image "$release_image" --arg sourceCommit "${GITHUB_SHA:-local}" \
   --arg startedAt "$started_at" --arg finishedAt "$finished_at" --arg rollbackState "$rollback_state" \
-  --argjson configuredSoakSeconds "$soak_seconds" --argjson healthChecks "$health_checks" \
-  '{status:$status,image:$image,sourceCommit:$sourceCommit,startedAt:$startedAt,finishedAt:$finishedAt,configuredSoakSeconds:$configuredSoakSeconds,healthChecks:$healthChecks,healthVerified:true,readinessVerified:true,authenticationVerified:true,metricsVerified:true,replicaConvergenceVerified:true,failedHealthCheckInjected:true,automaticRollbackVerified:true,originalHealthcheckRestored:true,rollbackState:$rollbackState}' \
+  --arg baselineTaskId "$baseline_task_id" --arg injectedTaskId "$injected_task_id" --arg recoveredTaskId "$recovered_task_id" \
+  --arg baselineImageId "$baseline_image_id" --arg recoveredImageId "$recovered_image_id" \
+  --arg injectedTaskState "$injected_task_state" --arg injectedTaskDesiredState "$injected_task_desired_state" \
+  --argjson configuredSoakSeconds "$soak_seconds" --argjson observedSoakSeconds "$observed_soak_seconds" --argjson healthChecks "$health_checks" \
+  --argjson baselineServiceVersion "$baseline_service_version" --argjson injectedServiceVersion "$injected_service_version" --argjson rollbackServiceVersion "$rollback_service_version" \
+  '{status:$status,image:$image,sourceCommit:$sourceCommit,startedAt:$startedAt,finishedAt:$finishedAt,configuredSoakSeconds:$configuredSoakSeconds,observedSoakSeconds:$observedSoakSeconds,healthChecks:$healthChecks,observations:{baselineTaskId:$baselineTaskId,injectedTaskId:$injectedTaskId,recoveredTaskId:$recoveredTaskId,baselineImageId:$baselineImageId,recoveredImageId:$recoveredImageId,injectedTaskState:$injectedTaskState,injectedTaskDesiredState:$injectedTaskDesiredState,baselineServiceVersion:$baselineServiceVersion,injectedServiceVersion:$injectedServiceVersion,rollbackServiceVersion:$rollbackServiceVersion},healthVerified:true,readinessVerified:true,authenticationVerified:true,metricsVerified:true,replicaConvergenceVerified:true,failedHealthCheckInjected:(($injectedTaskState == "complete" or $injectedTaskState == "failed" or $injectedTaskState == "shutdown") and $injectedTaskDesiredState == "shutdown"),automaticRollbackVerified:($rollbackServiceVersion > $injectedServiceVersion),originalHealthcheckRestored:true,imageIdentityRestored:($baselineImageId == $recoveredImageId),failedTaskIsolated:($baselineTaskId != $injectedTaskId and $recoveredTaskId != $injectedTaskId),baselineTaskPreserved:($baselineTaskId == $recoveredTaskId),rollbackState:$rollbackState}' \
   >"$evidence_file"
-jq -e '.status == "passed" and .healthVerified and .readinessVerified and .authenticationVerified and .metricsVerified and .replicaConvergenceVerified and .failedHealthCheckInjected and .automaticRollbackVerified and .originalHealthcheckRestored and .rollbackState == "rollback_completed"' "$evidence_file" >/dev/null
+jq -e '.status == "passed" and .observedSoakSeconds >= .configuredSoakSeconds and .healthVerified and .readinessVerified and .authenticationVerified and .metricsVerified and .replicaConvergenceVerified and .failedHealthCheckInjected and .automaticRollbackVerified and .originalHealthcheckRestored and .imageIdentityRestored and .failedTaskIsolated and (.observations.baselineImageId | test("^sha256:[a-f0-9]{64}$")) and .observations.recoveredImageId == .observations.baselineImageId and .observations.baselineTaskId != .observations.injectedTaskId and .observations.recoveredTaskId != .observations.injectedTaskId and (.observations.injectedTaskState == "complete" or .observations.injectedTaskState == "failed" or .observations.injectedTaskState == "shutdown") and .observations.injectedTaskDesiredState == "shutdown" and .observations.injectedServiceVersion > .observations.baselineServiceVersion and .observations.rollbackServiceVersion > .observations.injectedServiceVersion and .rollbackState == "rollback_completed"' "$evidence_file" >/dev/null
 cat "$evidence_file"
