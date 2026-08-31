@@ -84,6 +84,7 @@ check-openapi: generate-openapi
 check-alerts:
 	docker run --rm --entrypoint promtool -v "$(CURDIR):/repo:ro" prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 check rules /repo/deploy/prometheus-alerts.yml
 	docker run --rm --entrypoint promtool -v "$(CURDIR):/repo:ro" -v /dev/null:/run/secrets/dockyard_metrics_token:ro prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 check config /repo/deploy/prometheus-scrape.yml
+	docker run --rm --entrypoint promtool -v "$(CURDIR)/deploy:/rules:ro" -w /rules prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996 test rules prometheus-alert-tests.yml
 
 check-licenses:
 	./scripts/ci/check-licenses.sh

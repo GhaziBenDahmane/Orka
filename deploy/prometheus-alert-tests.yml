@@ -1,0 +1,100 @@
+rule_files:
+  - prometheus-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: healthy homogeneous three-controller fleet
+    interval: 1m
+    input_series:
+      - series: 'dockyard_controller_build_info{instance="10.0.0.1:8080",version="v1.0.0",revision="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x10'
+      - series: 'dockyard_controller_build_info{instance="10.0.0.2:8080",version="v1.0.0",revision="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x10'
+      - series: 'dockyard_controller_build_info{instance="10.0.0.3:8080",version="v1.0.0",revision="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.1:8080"}'
+        values: '3x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.2:8080"}'
+        values: '3x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.3:8080"}'
+        values: '3x10'
+      - series: 'dockyard_database_driver_inventory_info{instance="10.0.0.1:8080",digest="sha256:drivers"}'
+        values: '1x10'
+      - series: 'dockyard_database_driver_inventory_info{instance="10.0.0.2:8080",digest="sha256:drivers"}'
+        values: '1x10'
+      - series: 'dockyard_database_driver_inventory_info{instance="10.0.0.3:8080",digest="sha256:drivers"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockyardControllerReplicaShortfall
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DockyardControllerBuildFleetMismatch
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DockyardDatabaseDriverFleetMismatch
+        exp_alerts: []
+
+  - name: missing controller target
+    interval: 1m
+    input_series:
+      - series: 'dockyard_controller_build_info{instance="10.0.0.1:8080",version="v1.0.0",revision="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x10'
+      - series: 'dockyard_controller_build_info{instance="10.0.0.2:8080",version="v1.0.0",revision="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.1:8080"}'
+        values: '3x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.2:8080"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DockyardControllerReplicaShortfall
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Fewer Dockyard controller replicas are being scraped than configured
+              description: Prometheus cannot see the configured number of controller tasks. Check Swarm task health and tasks.<stack>_dockyard DNS discovery before trusting fleet-wide consistency alerts.
+
+  - name: mixed controller builds and database drivers
+    interval: 1m
+    input_series:
+      - series: 'dockyard_controller_build_info{instance="10.0.0.1:8080",version="v1.0.0",revision="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x10'
+      - series: 'dockyard_controller_build_info{instance="10.0.0.2:8080",version="v1.0.1",revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+        values: '1x10'
+      - series: 'dockyard_controller_build_info{instance="10.0.0.3:8080",version="v1.0.1",revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+        values: '1x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.1:8080"}'
+        values: '3x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.2:8080"}'
+        values: '3x10'
+      - series: 'dockyard_controller_expected_replicas{instance="10.0.0.3:8080"}'
+        values: '3x10'
+      - series: 'dockyard_database_driver_inventory_info{instance="10.0.0.1:8080",digest="sha256:old"}'
+        values: '1x10'
+      - series: 'dockyard_database_driver_inventory_info{instance="10.0.0.2:8080",digest="sha256:new"}'
+        values: '1x10'
+      - series: 'dockyard_database_driver_inventory_info{instance="10.0.0.3:8080",digest="sha256:new"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockyardControllerReplicaShortfall
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: DockyardControllerBuildFleetMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Dockyard controllers are running different builds
+              description: Scraped controller replicas report different immutable version or source-revision identities; finish or roll back the controller update before control-plane maintenance.
+      - eval_time: 6m
+        alertname: DockyardDatabaseDriverFleetMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Dockyard controllers loaded different database drivers
+              description: Scraped controller replicas report different database-driver inventories; stop database recovery and migration work until every replica runs the reviewed artifacts.

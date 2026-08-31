@@ -389,7 +389,8 @@ API only after the fleet is consistent. Do not silence either alert during a
 mixed-artifact rolling deployment; drain database jobs until it clears.
 
 Validate local rule changes with `make check-alerts`; CI runs the same pinned
-Prometheus `promtool` image.
+Prometheus `promtool` image and exercises healthy, replica-shortfall, mixed-build,
+and mixed-driver HA scenarios rather than checking syntax alone.
 
 To add reviewed out-of-tree database engines, build a derived controller image
 that contains the driver executables and set
