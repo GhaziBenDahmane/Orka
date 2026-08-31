@@ -515,7 +515,55 @@ jobs:
           name: upgrade-conformance
           path: upgrade-evidence
 
+      - name: Exercise exact image control-plane recovery verifier
+        env:
+          CONTROL_PLANE_RECOVERY_IMAGE: ${{ steps.platforms.outputs.amd64 }}
+        run: |
+          set -euo pipefail
+          recovery_root="$(mktemp -d)"
+          trap 'rm -rf -- "$recovery_root"' EXIT
+          openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
+          openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
+          openssl rand 32 >"$recovery_root/master-key.bin"
+          chmod 0600 "$recovery_root/signing-key.pem" "$recovery_root/verify-key.pem" "$recovery_root/master-key.bin"
+          master_key_sha256="$(sha256sum "$recovery_root/master-key.bin" | cut -d ' ' -f1)"
+          signing_key_sha256="$(openssl pkey -pubin -in "$recovery_root/verify-key.pem" -outform DER | sha256sum | cut -d ' ' -f1)"
+          jq -n \
+            --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            --arg controllerImage "$CONTROL_PLANE_RECOVERY_IMAGE" \
+            --arg masterKeySha256 "$master_key_sha256" \
+            --arg recoverySigningKeySha256 "$signing_key_sha256" \
+            '{formatVersion:2,createdAt:$createdAt,stack:"dockyard",database:"dockyard",schemaVersion:"release-candidate",controllerImage:$controllerImage,databaseSha256:("b"*64),databaseBytes:4096,masterKeySha256:$masterKeySha256,agentCaSha256:"",recoverySigningKeySha256:$recoverySigningKeySha256}' \
+            >"$recovery_root/manifest.json"
+          openssl pkeyutl -sign -rawin -inkey "$recovery_root/signing-key.pem" -in "$recovery_root/manifest.json" -out "$recovery_root/manifest.sig"
+          verify_manifest() {
+            local manifest="$1"
+            docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --mount "type=bind,src=$manifest,dst=/input/manifest.json,readonly" \
+              --mount "type=bind,src=$recovery_root/manifest.sig,dst=/input/manifest.sig,readonly" \
+              --mount "type=bind,src=$recovery_root/verify-key.pem,dst=/input/verify-key.pem,readonly" \
+              --mount "type=bind,src=$recovery_root/master-key.bin,dst=/input/master-key.bin,readonly" \
+              --entrypoint /usr/local/bin/dockyard "$CONTROL_PLANE_RECOVERY_IMAGE" \
+              verify-control-plane-recovery-manifest \
+              --manifest /input/manifest.json --signature /input/manifest.sig \
+              --public-key-file /input/verify-key.pem --master-key-file /input/master-key.bin \
+              --stack dockyard --database dockyard --controller-image "$CONTROL_PLANE_RECOVERY_IMAGE"
+          }
+          verified_manifest="$(verify_manifest "$recovery_root/manifest.json")"
+          jq -e --argjson verified "$verified_manifest" '. == $verified' "$recovery_root/manifest.json" >/dev/null
+          jq '.databaseBytes += 1' "$recovery_root/manifest.json" >"$recovery_root/tampered-manifest.json"
+          if verify_manifest "$recovery_root/tampered-manifest.json" >"$recovery_root/stdout" 2>"$recovery_root/stderr"; then
+            echo 'candidate control-plane verifier accepted metadata modified after signing' >&2
+            exit 1
+          fi
+          jq --arg image "$CONTROL_PLANE_RECOVERY_IMAGE" \
+            '. + {candidateVerifierImage:$image,candidateManifestVerifierVerified:true,candidateTamperedManifestRejected:true}' \
+            conformance-evidence/control-plane-recovery-conformance.json >"$recovery_root/evidence.json"
+          mv "$recovery_root/evidence.json" conformance-evidence/control-plane-recovery-conformance.json
+
       - name: Aggregate database recovery evidence
+        env:
+          CONTROL_PLANE_RECOVERY_IMAGE: ${{ steps.platforms.outputs.amd64 }}
         run: |
           set -euo pipefail
           mapfile -t evidence_files < <(find recovery-evidence -type f -name 'recovery-*.json' -print | sort)
@@ -540,7 +588,7 @@ jobs:
           jq -er '.dindImage,.probeImage' swarm-ha-conformance.json | while IFS= read -r image; do
             scripts/ci/validate-image-reference.sh "$image"
           done
-          jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and (.controllerImage | test("@sha256:[a-f0-9]{64}$")) and (.schemaVersion | test("^[A-Za-z0-9._-]+$")) and .databaseBytes > 0 and .signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound and .runningControllerRejected and .tamperedManifestRejected and .tamperedDumpRejected and .wrongMasterKeyRejected and .schemaMismatchRejected and .privateDumpSnapshotVerified and .stagedCutoverVerified and .rollbackDatabaseRetained and .authenticatedStateRecovered and .auditChainContinuity == "production-required"' control-plane-recovery-conformance.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" --arg candidateVerifierImage "$CONTROL_PLANE_RECOVERY_IMAGE" '.sourceCommit == $sourceCommit and .status == "passed" and (.controllerImage | test("@sha256:[a-f0-9]{64}$")) and (.schemaVersion | test("^[A-Za-z0-9._-]+$")) and .databaseBytes > 0 and .signedManifestVerified and .singleSnapshotMetadataVerified and .deploymentIdentityBound and .runningControllerRejected and .tamperedManifestRejected and .tamperedDumpRejected and .wrongMasterKeyRejected and .schemaMismatchRejected and .privateDumpSnapshotVerified and .stagedCutoverVerified and .rollbackDatabaseRetained and .authenticatedStateRecovered and .candidateVerifierImage == $candidateVerifierImage and .candidateManifestVerifierVerified and .candidateTamperedManifestRejected and .auditChainContinuity == "production-required"' control-plane-recovery-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .deploySucceeded and .deployFailed and .deploymentCancelled and .rollbackSucceeded and .resolvedImageSnapshot and .signedWebhookAccepted and .webhookReplayRejected and .commitStatusDelivered and .failureNotificationDelivered and .workerTakeoverFenced and .staleCompletionRejected and .cancellationCompletionRace and .remoteAgentCommand' lifecycle-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .localMissingStackRepaired and .twoObservationThreshold and .duplicateRepairSuppressed and .immutableSnapshotPreserved and .desiredEditsPreserved and .maintenanceSuppressed and .activeDeploymentSuppressed and .remoteHeartbeatSuppressed and .remoteCapacitySuppressed and .remoteCapacityRecoveryQueued and .metricsExposed and .aiAuditSnapshotExposed' reconciliation-conformance.json >/dev/null
           jq -e --arg sourceCommit "$GITHUB_SHA" '.sourceCommit == $sourceCommit and .status == "passed" and .tlsVersion == "1.3" and .oldCertificateAuthenticated and .replacementIssuedPending and .oldValidBeforeConfirmation and .replacementPromotedOnHeartbeat and .oldRejectedAfterPromotion and .wrongClusterRejected and .untrustedCARejected and .expiredCertificateRejected and .mismatchedKeyRejected and .pendingMetricsConverged and .invalidReplacementPreservesIdentity and .caDualTrustMigrationVerified and .caFingerprintConverged and .newOnlyListenerVerified and .retiredCARejected' agent-certificate-conformance.json >/dev/null

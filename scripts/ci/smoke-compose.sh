@@ -283,7 +283,7 @@ jq -n \
   --arg controllerImage "$project-dockyard@$controller_image_id" \
   --arg schemaVersion "$(jq -er '.schemaVersion' "$recovery_root/control-plane/manifest.json")" \
   --argjson databaseBytes "$(jq -er '.databaseBytes' "$recovery_root/control-plane/manifest.json")" \
-  '{status:"passed",sourceCommit:$sourceCommit,createdAt:$createdAt,controllerImage:$controllerImage,schemaVersion:$schemaVersion,databaseBytes:$databaseBytes,signedManifestVerified:true,singleSnapshotMetadataVerified:true,deploymentIdentityBound:true,runningControllerRejected:true,tamperedManifestRejected:true,tamperedDumpRejected:true,wrongMasterKeyRejected:true,schemaMismatchRejected:true,privateDumpSnapshotVerified:true,stagedCutoverVerified:true,rollbackDatabaseRetained:true,authenticatedStateRecovered:true,auditChainContinuity:"production-required"}' \
+  '{status:"passed",sourceCommit:$sourceCommit,createdAt:$createdAt,controllerImage:$controllerImage,schemaVersion:$schemaVersion,databaseBytes:$databaseBytes,signedManifestVerified:true,singleSnapshotMetadataVerified:true,deploymentIdentityBound:true,runningControllerRejected:true,tamperedManifestRejected:true,tamperedDumpRejected:true,wrongMasterKeyRejected:true,schemaMismatchRejected:true,privateDumpSnapshotVerified:true,stagedCutoverVerified:true,rollbackDatabaseRetained:true,authenticatedStateRecovered:true,candidateVerifierImage:"",candidateManifestVerifierVerified:false,candidateTamperedManifestRejected:false,auditChainContinuity:"production-required"}' \
   >"$evidence_file"
 jq -e '
   .status == "passed" and (.sourceCommit | test("^[a-f0-9]{40}$")) and
@@ -293,6 +293,8 @@ jq -e '
   .runningControllerRejected and .tamperedManifestRejected and .tamperedDumpRejected and
   .wrongMasterKeyRejected and .schemaMismatchRejected and .privateDumpSnapshotVerified and
   .stagedCutoverVerified and .rollbackDatabaseRetained and .authenticatedStateRecovered and
+  .candidateVerifierImage == "" and (.candidateManifestVerifierVerified | not) and
+  (.candidateTamperedManifestRejected | not) and
   .auditChainContinuity == "production-required"
 ' "$evidence_file" >/dev/null
 cat "$evidence_file"

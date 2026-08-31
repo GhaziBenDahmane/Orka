@@ -48,7 +48,9 @@ links for every item below.
   and verifies the authenticated workload state after restart. Restore metadata
   must be strictly verified as one signed snapshot by the recorded controller
   image, and the staged database must consume the same private dump snapshot
-  whose signed checksum and size were validated.
+  whose signed checksum and size were validated. The release also invokes the
+  verifier from the exact amd64 candidate digest against valid and modified
+  signed metadata before accepting `control-plane-recovery-conformance.json`.
 - Built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace
   PostgreSQL templates deploy through the public API and remain healthy across
   a forced Swarm task replacement. The 9Router check covers deployment and
