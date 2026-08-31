@@ -38,6 +38,10 @@ func (s *Server) aiAuditSnapshot(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	if s.LocalClusterPosture != nil {
+		posture := s.LocalClusterPosture()
+		snapshot.LocalCluster = &posture
+	}
 	if len(s.AgentCACertificate) != 0 {
 		activeFingerprint, fingerprintErr := agentpki.CertificateFingerprint(s.AgentCACertificate)
 		if fingerprintErr != nil {

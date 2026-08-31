@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/agentpki"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/httpapi"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -110,7 +111,10 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	platform := httptest.NewServer((&httpapi.Server{Store: db, AgentCACertificate: activeAgentCA, AgentPreviousCACertificate: previousAgentCA}).Handler())
+	localObservedAt := time.Now().UTC()
+	platform := httptest.NewServer((&httpapi.Server{Store: db, AgentCACertificate: activeAgentCA, AgentPreviousCACertificate: previousAgentCA, LocalClusterPosture: func() clustercontract.LocalPosture {
+		return clustercontract.LocalPosture{ObservedAt: localObservedAt, InspectionStatus: clustercontract.LocalInspectionReady, Nodes: 4, ReadyNodes: 3, ActiveNodes: 2, SchedulableNodes: 1, Managers: 0, NanoCPUs: 6_000_000_000, MemoryBytes: 12_884_901_888, DockerCompose: true}
+	}}).Handler())
 	defer platform.Close()
 	modelCalled := false
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +147,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			http.Error(w, "invalid model request", http.StatusBadRequest)
 			return
 		}
-		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueBackupDestinationID.String()) || !strings.Contains(modelRequest.Messages[1].Content, offlineVolumeRestoreID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeRestorePosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":3`) || !strings.Contains(modelRequest.Messages[1].Content, `"readyNodes":2`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyConfigured":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyStatus":"network_missing"`) || !strings.Contains(modelRequest.Messages[1].Content, `"minimumNodes":2`) {
+		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueBackupDestinationID.String()) || !strings.Contains(modelRequest.Messages[1].Content, offlineVolumeRestoreID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeRestorePosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"localCluster"`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":4`) || !strings.Contains(modelRequest.Messages[1].Content, `"nanoCpus":6000000000`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":3`) || !strings.Contains(modelRequest.Messages[1].Content, `"readyNodes":2`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyConfigured":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyStatus":"network_missing"`) || !strings.Contains(modelRequest.Messages[1].Content, `"minimumNodes":2`) {
 			t.Error("model request did not contain the bounded platform snapshot and trust instruction")
 			http.Error(w, "incomplete prompt", http.StatusBadRequest)
 			return
@@ -226,7 +230,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Offline volume recovery failed", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Offline volume recovery failed", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -329,6 +333,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"agentCAMismatchDetected":        true,
 		"agentImageProvenanceAudited":    true,
 		"clusterCapacityPostureAudited":  true,
+		"localClusterPostureAudited":     true,
 		"databaseAvailabilityAudited":    true,
 		"managedNetworkPostureAudited":   true,
 		"staleDeployCredentialAudited":   true,

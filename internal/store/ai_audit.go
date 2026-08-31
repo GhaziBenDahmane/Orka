@@ -35,6 +35,7 @@ type AIAuditSnapshot struct {
 	Routes               []AIAuditRouteInfo               `json:"routes"`
 	Databases            []AIAuditDatabaseInfo            `json:"databases"`
 	DatabaseEngines      []AIAuditDatabaseEngineInfo      `json:"databaseEngines"`
+	LocalCluster         *clustercontract.LocalPosture    `json:"localCluster,omitempty"`
 	Clusters             []AIAuditClusterInfo             `json:"clusters"`
 	ManagedNetworks      []AIAuditManagedNetworkInfo      `json:"managedNetworks"`
 	CustomTLSPosture     []AIAuditCustomTLSPosture        `json:"customTlsPosture"`

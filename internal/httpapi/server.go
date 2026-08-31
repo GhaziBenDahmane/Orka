@@ -28,6 +28,7 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	backupstore "github.com/bendahma/dokploy-go/internal/backup"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/deploy"
@@ -62,6 +63,7 @@ type Server struct {
 	AgentCATrustBundle         []byte
 	AgentCAKey                 []byte
 	AgentCertificateTTL        time.Duration
+	LocalClusterPosture        func() clustercontract.LocalPosture
 	ReadinessCheck             func(context.Context) error
 	TrustedProxyCIDRs          []*net.IPNet
 }

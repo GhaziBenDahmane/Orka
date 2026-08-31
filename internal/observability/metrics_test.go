@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,6 +27,7 @@ import (
 
 func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 	m := NewMetrics()
+	m.SetLocalClusterPosture(clustercontract.LocalPosture{ObservedAt: time.Now(), InspectionStatus: clustercontract.LocalInspectionReady, Nodes: 3, ReadyNodes: 2, ActiveNodes: 2, SchedulableNodes: 1, Managers: 1, NanoCPUs: 4_000_000_000, MemoryBytes: 8_000_000_000, DockerSwarm: true, DockerCompose: true, EdgeProxyConfigured: true, EdgeProxyReady: false, EdgeProxyStatus: "inspection_failed"})
 	m.SetControllerBuild("v1.2.3", strings.Repeat("a", 40), 3)
 	m.SetCertificateExpiry("agent_ca", time.Now().Add(24*time.Hour))
 	m.ObserveHTTP("GET", "/v1/services/{serviceID}", 200, 20*time.Millisecond)
@@ -44,6 +46,15 @@ func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 		`dockyard_control_plane_certificate_expiry_seconds{certificate="agent_ca"}`,
 		`dockyard_controller_build_info{version="v1.2.3",revision="` + strings.Repeat("a", 40) + `"} 1`,
 		`dockyard_controller_expected_replicas 3`,
+		`dockyard_local_cluster_inspection_success 1`,
+		`dockyard_local_cluster_node_count 3`,
+		`dockyard_local_cluster_schedulable_node_count 1`,
+		`dockyard_local_cluster_manager_count 1`,
+		`dockyard_local_cluster_cpu_capacity_nanocpus 4000000000`,
+		`dockyard_local_cluster_memory_capacity_bytes 8000000000`,
+		`dockyard_local_cluster_docker_swarm_capable 1`,
+		`dockyard_local_cluster_docker_compose_capable 1`,
+		`dockyard_local_cluster_edge_proxy_ready{status="inspection_failed"} 0`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("missing %q in metrics:\n%s", expected, text)
@@ -698,6 +709,23 @@ func TestPrometheusAlertsCoverRemoteClusterUpgradeHealth(t *testing.T) {
 	}
 	text := string(contents)
 	for _, expected := range []string{
+		"alert: DockyardLocalClusterInspectionFailed",
+		"expr: min without (instance) (dockyard_local_cluster_inspection_success) == 0",
+		"alert: DockyardLocalClusterPostureStale",
+		"dockyard_local_cluster_observation_age_seconds",
+		"alert: DockyardLocalClusterManagerUnavailable",
+		"dockyard_local_cluster_manager_count",
+		"alert: DockyardLocalClusterUnschedulable",
+		"dockyard_local_cluster_schedulable_node_count",
+		"alert: DockyardLocalClusterNodeReadinessDegraded",
+		"dockyard_local_cluster_ready_node_count",
+		"alert: DockyardLocalClusterNodesDrained",
+		"dockyard_local_cluster_active_node_count",
+		"alert: DockyardLocalClusterCapabilityMissing",
+		"dockyard_local_cluster_docker_swarm_capable",
+		"dockyard_local_cluster_docker_compose_capable",
+		"alert: DockyardLocalEdgeProxyUnavailable",
+		"dockyard_local_cluster_edge_proxy_ready",
 		"alert: DockyardRemoteClusterHeartbeatMissing",
 		"expr: max without (instance) (dockyard_cluster_heartbeat_missing) == 1",
 		"alert: DockyardRemoteClusterManagerUnavailable",

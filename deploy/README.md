@@ -380,7 +380,9 @@ metadata, missing or disabled named-volume policies, invalid
 volume-policy inventory, missing Swarm storage-node bindings, non-quiesced
 archives, overdue restore drills, stalled durable artifact deletion, stalled or failed Dokploy
 database migrations, and maintenance mode left enabled. They also detect
-missing remote-cluster heartbeats, stalled agent upgrades, missed
+failed or stale local-Swarm inspection, missing local managers or schedulable
+nodes, degraded local capacity or runtime capabilities, missing
+remote-cluster heartbeats, stalled agent upgrades, missed
 image-verification deadlines, and paused or rolled-back Swarm agent updates,
 plus expiring, expired, or stalled certificate rotations.
 The `dockyard_control_plane_certificate_expiry_seconds` gauges separately track

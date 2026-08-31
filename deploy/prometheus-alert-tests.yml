@@ -281,6 +281,124 @@ tests:
               summary: A named-volume backup does not pause workload writers
               description: Service service-id volume cache permits writes during archive creation; enable quiescence or validate and document crash-consistent recovery.
 
+  - name: local cluster inspection failure
+    interval: 1m
+    input_series:
+      - series: 'dockyard_local_cluster_inspection_success{instance="10.0.0.1:8080"}'
+        values: '0x10'
+      - series: 'dockyard_local_cluster_inspection_success{instance="10.0.0.2:8080"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DockyardLocalClusterInspectionFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The local Docker Swarm cannot be inspected
+              description: A controller cannot establish local Swarm health; restore Docker socket and manager connectivity before deploying workloads.
+
+  - name: local cluster capacity and capability failures
+    interval: 1m
+    input_series:
+      - series: 'dockyard_local_cluster_inspection_success{instance="10.0.0.1:8080"}'
+        values: '1x20'
+      - series: 'dockyard_local_cluster_inspection_success{instance="10.0.0.2:8080"}'
+        values: '1x20'
+      - series: 'dockyard_local_cluster_observation_age_seconds{instance="10.0.0.1:8080"}'
+        values: '180x20'
+      - series: 'dockyard_local_cluster_observation_age_seconds{instance="10.0.0.2:8080"}'
+        values: '180x20'
+      - series: 'dockyard_local_cluster_node_count{instance="10.0.0.1:8080"}'
+        values: '3x20'
+      - series: 'dockyard_local_cluster_node_count{instance="10.0.0.2:8080"}'
+        values: '3x20'
+      - series: 'dockyard_local_cluster_ready_node_count{instance="10.0.0.1:8080"}'
+        values: '2x20'
+      - series: 'dockyard_local_cluster_ready_node_count{instance="10.0.0.2:8080"}'
+        values: '2x20'
+      - series: 'dockyard_local_cluster_active_node_count{instance="10.0.0.1:8080"}'
+        values: '1x20'
+      - series: 'dockyard_local_cluster_active_node_count{instance="10.0.0.2:8080"}'
+        values: '1x20'
+      - series: 'dockyard_local_cluster_schedulable_node_count{instance="10.0.0.1:8080"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_schedulable_node_count{instance="10.0.0.2:8080"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_manager_count{instance="10.0.0.1:8080"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_manager_count{instance="10.0.0.2:8080"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_docker_swarm_capable{instance="10.0.0.1:8080"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_docker_swarm_capable{instance="10.0.0.2:8080"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_docker_compose_capable{instance="10.0.0.1:8080"}'
+        values: '1x20'
+      - series: 'dockyard_local_cluster_docker_compose_capable{instance="10.0.0.2:8080"}'
+        values: '1x20'
+      - series: 'dockyard_local_cluster_edge_proxy_ready{instance="10.0.0.1:8080",status="inspection_failed"}'
+        values: '0x20'
+      - series: 'dockyard_local_cluster_edge_proxy_ready{instance="10.0.0.2:8080",status="inspection_failed"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DockyardLocalClusterPostureStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Local Docker Swarm posture is stale
+              description: The local Swarm posture sampler has not produced a current observation for more than two minutes.
+      - eval_time: 16m
+        alertname: DockyardLocalClusterManagerUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The local Docker Swarm has no manager
+              description: Current local capacity reports no Swarm manager; restore quorum before scheduling workloads.
+      - eval_time: 16m
+        alertname: DockyardLocalClusterUnschedulable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The local Docker Swarm has no schedulable node
+              description: Current local capacity reports no ready active node eligible for workloads.
+      - eval_time: 16m
+        alertname: DockyardLocalClusterNodeReadinessDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Local Docker Swarm nodes are unavailable
+              description: The local Swarm reports fewer ready nodes than total nodes.
+      - eval_time: 16m
+        alertname: DockyardLocalClusterNodesDrained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Local Docker Swarm nodes remain drained
+              description: The local Swarm reports ready nodes that are not active for scheduling.
+      - eval_time: 16m
+        alertname: DockyardLocalClusterCapabilityMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The local runtime lacks a required capability
+              description: The controller's local runtime does not provide both Docker Swarm scheduling and Docker Compose workloads.
+      - eval_time: 16m
+        alertname: DockyardLocalEdgeProxyUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The local edge proxy is unavailable
+              description: The configured local Traefik contract is not ready for managed routing or certificate updates.
+
   - name: remote cluster capacity and capability failures
     interval: 1m
     input_series:

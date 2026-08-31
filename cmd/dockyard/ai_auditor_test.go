@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
 )
@@ -1421,6 +1422,51 @@ func TestDeterministicAuditDetectsRemoteClusterCapacityAndCapabilityFailures(t *
 	}
 	if finding := titles["Remote cluster does not meet environment capacity requirements"]; finding.ResourceID != environmentID.String() || finding.Evidence["clusterId"] != clusterID.String() {
 		t.Fatalf("environment capacity evidence=%#v", finding)
+	}
+}
+
+func TestDeterministicAuditDetectsLocalClusterFailures(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		LocalCluster: &clustercontract.LocalPosture{
+			ObservedAt: now, InspectionStatus: clustercontract.LocalInspectionReady,
+			Nodes: 3, ReadyNodes: 2, ActiveNodes: 1, SchedulableNodes: 0,
+			EdgeProxyConfigured: true, EdgeProxyStatus: "inspection_failed",
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]bool{}
+	for _, finding := range findings {
+		titles[finding.Title] = true
+		if finding.ResourceType == "local_cluster" && finding.ResourceID != "local" {
+			t.Fatalf("local finding exposed an unexpected identity: %#v", finding)
+		}
+	}
+	for _, title := range []string{"Local Swarm has no manager", "Local Swarm has no schedulable node", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Local edge proxy is not ready"} {
+		if !titles[title] {
+			t.Errorf("missing %q in %#v", title, findings)
+		}
+	}
+	if len(findings) != 6 {
+		t.Fatalf("local cluster findings=%d, want 6: %#v", len(findings), findings)
+	}
+}
+
+func TestDeterministicAuditDoesNotTrustFailedOrStaleLocalInspection(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	base := store.AIAuditSnapshot{Organization: uuid.New(), IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1}, NotificationPosture: fullyCoveredNotifications()}
+	failed := base
+	failed.LocalCluster = &clustercontract.LocalPosture{ObservedAt: now, InspectionStatus: clustercontract.LocalInspectionFailed}
+	if findings := deterministicAuditFindings(failed, now); len(findings) != 1 || findings[0].Title != "Local Swarm inspection failed" {
+		t.Fatalf("failed local inspection findings=%#v", findings)
+	}
+	stale := base
+	stale.LocalCluster = &clustercontract.LocalPosture{ObservedAt: now.Add(-3 * time.Minute), InspectionStatus: clustercontract.LocalInspectionReady, Nodes: 1, ReadyNodes: 1, ActiveNodes: 1, SchedulableNodes: 1, Managers: 1, DockerSwarm: true, DockerCompose: true}
+	if findings := deterministicAuditFindings(stale, now); len(findings) != 1 || findings[0].Title != "Local Swarm posture is stale" {
+		t.Fatalf("stale local posture findings=%#v", findings)
 	}
 }
 

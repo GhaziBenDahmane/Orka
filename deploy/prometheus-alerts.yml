@@ -319,6 +319,78 @@ groups:
           summary: A remote Dockyard cluster has stopped heartbeating
           description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} has been silent for more than two minutes or has never completed its first heartbeat.
 
+      - alert: DockyardLocalClusterInspectionFailed
+        expr: min without (instance) (dockyard_local_cluster_inspection_success) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The local Docker Swarm cannot be inspected
+          description: A controller cannot establish local Swarm health; restore Docker socket and manager connectivity before deploying workloads.
+
+      - alert: DockyardLocalClusterPostureStale
+        expr: max without (instance) (dockyard_local_cluster_observation_age_seconds) > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Local Docker Swarm posture is stale
+          description: The local Swarm posture sampler has not produced a current observation for more than two minutes.
+
+      - alert: DockyardLocalClusterManagerUnavailable
+        expr: max without (instance) (dockyard_local_cluster_manager_count) == 0 and min without (instance) (dockyard_local_cluster_inspection_success) == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The local Docker Swarm has no manager
+          description: Current local capacity reports no Swarm manager; restore quorum before scheduling workloads.
+
+      - alert: DockyardLocalClusterUnschedulable
+        expr: max without (instance) (dockyard_local_cluster_schedulable_node_count) == 0 and min without (instance) (dockyard_local_cluster_inspection_success) == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The local Docker Swarm has no schedulable node
+          description: Current local capacity reports no ready active node eligible for workloads.
+
+      - alert: DockyardLocalClusterNodeReadinessDegraded
+        expr: max without (instance) (dockyard_local_cluster_ready_node_count) < max without (instance) (dockyard_local_cluster_node_count) and min without (instance) (dockyard_local_cluster_inspection_success) == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Local Docker Swarm nodes are unavailable
+          description: The local Swarm reports fewer ready nodes than total nodes.
+
+      - alert: DockyardLocalClusterNodesDrained
+        expr: max without (instance) (dockyard_local_cluster_active_node_count) < max without (instance) (dockyard_local_cluster_ready_node_count) and min without (instance) (dockyard_local_cluster_inspection_success) == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Local Docker Swarm nodes remain drained
+          description: The local Swarm reports ready nodes that are not active for scheduling.
+
+      - alert: DockyardLocalClusterCapabilityMissing
+        expr: (min without (instance) (dockyard_local_cluster_docker_swarm_capable) == 0 or min without (instance) (dockyard_local_cluster_docker_compose_capable) == 0) and min without (instance) (dockyard_local_cluster_inspection_success) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The local runtime lacks a required capability
+          description: The controller's local runtime does not provide both Docker Swarm scheduling and Docker Compose workloads.
+
+      - alert: DockyardLocalEdgeProxyUnavailable
+        expr: max without (instance, status) (dockyard_local_cluster_edge_proxy_ready) == 0 and min without (instance) (dockyard_local_cluster_inspection_success) == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The local edge proxy is unavailable
+          description: The configured local Traefik contract is not ready for managed routing or certificate updates.
+
       - alert: DockyardRemoteClusterManagerUnavailable
         expr: max without (instance) (dockyard_cluster_manager_count) == 0
         for: 2m

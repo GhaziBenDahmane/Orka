@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/composevolume"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/jackc/pgx/v5"
@@ -55,11 +56,30 @@ type Metrics struct {
 	controllerVersion             string
 	controllerRevision            string
 	expectedControllerReplicas    int
+	localCluster                  clustercontract.LocalPosture
 	buildWorkspaceLimitRejections uint64
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time), driverSet: make(map[string]DatabaseDriverInfo), controllerVersion: "dev", controllerRevision: "unknown", expectedControllerReplicas: 1}
+	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time), driverSet: make(map[string]DatabaseDriverInfo), controllerVersion: "dev", controllerRevision: "unknown", expectedControllerReplicas: 1, localCluster: clustercontract.LocalPosture{InspectionStatus: clustercontract.LocalInspectionNotSampled}}
+}
+
+func (m *Metrics) SetLocalClusterPosture(posture clustercontract.LocalPosture) {
+	if posture.InspectionStatus != clustercontract.LocalInspectionReady && posture.InspectionStatus != clustercontract.LocalInspectionFailed {
+		posture = clustercontract.LocalPosture{ObservedAt: posture.ObservedAt, InspectionStatus: clustercontract.LocalInspectionFailed}
+	}
+	if posture.InspectionStatus == clustercontract.LocalInspectionReady && clustercontract.ValidateCapacity(posture.Capacity()) != nil {
+		posture = clustercontract.LocalPosture{ObservedAt: posture.ObservedAt, InspectionStatus: clustercontract.LocalInspectionFailed}
+	}
+	m.mu.Lock()
+	m.localCluster = posture
+	m.mu.Unlock()
+}
+
+func (m *Metrics) LocalClusterPosture() clustercontract.LocalPosture {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.localCluster
 }
 
 // SetControllerBuild records immutable, bounded build identity and the desired
@@ -555,6 +575,7 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	controllerVersion := m.controllerVersion
 	controllerRevision := m.controllerRevision
 	expectedControllerReplicas := m.expectedControllerReplicas
+	localCluster := m.localCluster
 	certificateExpiries := make(map[string]time.Time, len(m.certificates))
 	for name, expiresAt := range m.certificates {
 		certificateExpiries[name] = expiresAt
@@ -566,6 +587,7 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	fmt.Fprintln(w, "# HELP dockyard_controller_expected_replicas Desired controller replica count configured for this deployment.")
 	fmt.Fprintln(w, "# TYPE dockyard_controller_expected_replicas gauge")
 	fmt.Fprintf(w, "dockyard_controller_expected_replicas %d\n", expectedControllerReplicas)
+	renderLocalClusterMetrics(w, localCluster, time.Now())
 	renderCounter(w, "dockyard_http_requests_total", "HTTP requests by method, route, and status.", httpItems, []string{"method", "route", "status"})
 	renderHistogram(w, "dockyard_http_request_duration_seconds", "HTTP request latency.", httpItems, []string{"method", "route", "status"})
 	renderCounter(w, "dockyard_operations_total", "Completed background operations by kind and status.", operationItems, []string{"kind", "status"})
@@ -583,6 +605,54 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	now := time.Now()
 	for _, name := range names {
 		fmt.Fprintf(w, "dockyard_control_plane_certificate_expiry_seconds%s %g\n", labels([]string{"certificate"}, []string{name}), certificateExpiries[name].Sub(now).Seconds())
+	}
+}
+
+func renderLocalClusterMetrics(w io.Writer, posture clustercontract.LocalPosture, now time.Time) {
+	inspectionOK := posture.InspectionStatus == clustercontract.LocalInspectionReady
+	fmt.Fprintln(w, "# HELP dockyard_local_cluster_inspection_success Whether the latest bounded inspection of the controller's local Swarm succeeded.")
+	fmt.Fprintln(w, "# TYPE dockyard_local_cluster_inspection_success gauge")
+	fmt.Fprintf(w, "dockyard_local_cluster_inspection_success %d\n", boolMetric(inspectionOK))
+	fmt.Fprintln(w, "# HELP dockyard_local_cluster_observation_age_seconds Age of the latest local Swarm inspection, or -1 before the first attempt.")
+	fmt.Fprintln(w, "# TYPE dockyard_local_cluster_observation_age_seconds gauge")
+	age := float64(-1)
+	if !posture.ObservedAt.IsZero() {
+		age = max(0, now.Sub(posture.ObservedAt).Seconds())
+	}
+	fmt.Fprintf(w, "dockyard_local_cluster_observation_age_seconds %g\n", age)
+	values := []struct {
+		name  string
+		help  string
+		value int64
+	}{
+		{"dockyard_local_cluster_node_count", "Total nodes in the controller's local Swarm.", posture.Nodes},
+		{"dockyard_local_cluster_ready_node_count", "Ready nodes in the controller's local Swarm.", posture.ReadyNodes},
+		{"dockyard_local_cluster_active_node_count", "Active nodes in the controller's local Swarm.", posture.ActiveNodes},
+		{"dockyard_local_cluster_schedulable_node_count", "Schedulable nodes in the controller's local Swarm.", posture.SchedulableNodes},
+		{"dockyard_local_cluster_manager_count", "Swarm managers in the controller's local Swarm.", posture.Managers},
+		{"dockyard_local_cluster_cpu_capacity_nanocpus", "Aggregate schedulable CPU capacity in the controller's local Swarm.", posture.NanoCPUs},
+		{"dockyard_local_cluster_memory_capacity_bytes", "Aggregate schedulable memory capacity in the controller's local Swarm.", posture.MemoryBytes},
+	}
+	for _, value := range values {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %d\n", value.name, value.help, value.name, value.name, value.value)
+	}
+	for _, capability := range []struct {
+		name, help string
+		value      bool
+	}{
+		{"dockyard_local_cluster_docker_swarm_capable", "Whether the controller's local runtime supports Docker Swarm.", posture.DockerSwarm},
+		{"dockyard_local_cluster_docker_compose_capable", "Whether the controller's local runtime accepts Docker Compose workloads.", posture.DockerCompose},
+	} {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %d\n", capability.name, capability.help, capability.name, capability.name, boolMetric(capability.value))
+	}
+	if posture.EdgeProxyConfigured {
+		status := posture.EdgeProxyStatus
+		if status != "ready" && status != "inspection_failed" {
+			status = "invalid"
+		}
+		fmt.Fprintln(w, "# HELP dockyard_local_cluster_edge_proxy_ready Whether the configured local edge proxy contract is ready.")
+		fmt.Fprintln(w, "# TYPE dockyard_local_cluster_edge_proxy_ready gauge")
+		fmt.Fprintf(w, "dockyard_local_cluster_edge_proxy_ready%s %d\n", labels([]string{"status"}, []string{status}), boolMetric(posture.EdgeProxyReady))
 	}
 }
 

@@ -74,6 +74,7 @@ jq -e '
   .deployedImageProvenanceAudited and
   .agentCAMismatchDetected and .agentImageProvenanceAudited and
   .clusterCapacityPostureAudited and
+  .localClusterPostureAudited and
   .databaseAvailabilityAudited and
   .managedNetworkPostureAudited and
   .staleDeployCredentialAudited and

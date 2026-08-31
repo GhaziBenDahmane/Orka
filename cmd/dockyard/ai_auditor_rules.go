@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/google/uuid"
@@ -432,6 +433,37 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 				evidence["startedAt"] = restore.StartedAt.UTC().Format(time.RFC3339)
 			}
 			add(modelFinding{Severity: "critical", Category: "backup", Title: "Offline volume recovery is stalled", Description: "An offline named-volume recovery has remained queued or running for more than thirty minutes while the workload must remain stopped.", ResourceType: "volume_restore", ResourceID: restore.ID.String(), Evidence: evidence, Remediation: "Keep the service stopped and restore worker, target-node, and object-store connectivity before retrying or safely cancelling recovery."})
+		}
+	}
+	if local := snapshot.LocalCluster; local != nil {
+		fresh := !local.ObservedAt.IsZero() && now.Sub(local.ObservedAt) <= 2*time.Minute
+		if local.InspectionStatus != clustercontract.LocalInspectionReady {
+			add(modelFinding{Severity: "critical", Category: "cluster", Title: "Local Swarm inspection failed", Description: "The controller cannot establish the health and capacity of its local Docker Swarm.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"inspectionStatus": local.InspectionStatus}, Remediation: "Restore the controller's Docker socket access and Swarm manager connectivity, then confirm a fresh successful posture sample."})
+		} else if !fresh {
+			observedAt := ""
+			if !local.ObservedAt.IsZero() {
+				observedAt = local.ObservedAt.UTC().Format(time.RFC3339)
+			}
+			add(modelFinding{Severity: "high", Category: "cluster", Title: "Local Swarm posture is stale", Description: "The controller has not refreshed its local Swarm health and capacity inside the two-minute monitoring window.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"observedAt": observedAt}, Remediation: "Restore the local posture sampler and Docker manager connectivity before deploying workloads."})
+		} else {
+			if local.Managers == 0 {
+				add(modelFinding{Severity: "critical", Category: "capacity", Title: "Local Swarm has no manager", Description: "The controller's local Swarm reports no manager capable of maintaining cluster state.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"nodes": local.Nodes, "managers": local.Managers}, Remediation: "Restore or promote a healthy Swarm manager before scheduling local workloads."})
+			}
+			if local.SchedulableNodes == 0 {
+				add(modelFinding{Severity: "critical", Category: "capacity", Title: "Local Swarm has no schedulable node", Description: "The controller's local Swarm has no ready active node eligible to receive workloads.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"nodes": local.Nodes, "readyNodes": local.ReadyNodes, "activeNodes": local.ActiveNodes, "schedulableNodes": local.SchedulableNodes}, Remediation: "Restore a ready active node, remove unintended drain constraints, and confirm capacity before deploying."})
+			}
+			if local.ReadyNodes < local.Nodes {
+				add(modelFinding{Severity: "high", Category: "capacity", Title: "Local Swarm nodes are not ready", Description: "One or more nodes in the controller's local Swarm are unavailable.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"nodes": local.Nodes, "readyNodes": local.ReadyNodes}, Remediation: "Recover or remove unavailable Swarm nodes and verify quorum and workload redundancy."})
+			}
+			if local.ActiveNodes < local.ReadyNodes {
+				add(modelFinding{Severity: "medium", Category: "capacity", Title: "Local Swarm nodes are drained", Description: "One or more ready local Swarm nodes are not active for scheduling.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"readyNodes": local.ReadyNodes, "activeNodes": local.ActiveNodes}, Remediation: "Confirm the drain is intentional or return the affected nodes to active availability."})
+			}
+			if !local.DockerSwarm || !local.DockerCompose {
+				add(modelFinding{Severity: "critical", Category: "cluster", Title: "Local runtime capability is missing", Description: "The controller's local runtime does not provide both required Swarm scheduling and Compose workload capabilities.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"dockerSwarm": local.DockerSwarm, "dockerCompose": local.DockerCompose}, Remediation: "Restore Docker Swarm access and the Compose workload adapter before deploying local workloads."})
+			}
+			if local.EdgeProxyConfigured && !local.EdgeProxyReady {
+				add(modelFinding{Severity: "high", Category: "network", Title: "Local edge proxy is not ready", Description: "The configured local edge proxy cannot accept managed routing or certificate updates.", ResourceType: "local_cluster", ResourceID: "local", Evidence: map[string]any{"edgeProxyConfigured": true, "edgeProxyReady": false, "edgeProxyStatus": local.EdgeProxyStatus}, Remediation: "Repair the local Traefik service, public network, and file-provider integration, then confirm a ready posture sample."})
+			}
 		}
 	}
 	for _, cluster := range snapshot.Clusters {

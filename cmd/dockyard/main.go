@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/agent"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/config"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
@@ -771,6 +772,7 @@ func serve() error {
 	metrics.SetCertificateExpiry("agent_ca", cfg.AgentCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_previous_ca", cfg.AgentPreviousCAExpiresAt)
 	metrics.SetCertificateExpiry("agent_server", cfg.AgentServerCertExpiresAt)
+	sampleLocalClusterPosture(ctx, swarm, metrics)
 	egressPolicy := &netpolicy.Policy{Allowed: cfg.EgressPrivateCIDRs}
 	egressTransport := egressPolicy.Transport()
 	notificationClient := &http.Client{Transport: egressTransport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("notification redirects are disabled") }}
@@ -778,7 +780,7 @@ func serve() error {
 	worker.RemoteScheduler = func(clusterID uuid.UUID) deploy.Scheduler {
 		return deploy.RemoteSwarm{Store: db, Box: box, ClusterID: clusterID, Timeout: 45 * time.Minute}
 	}
-	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, OIDCHTTPClient: &http.Client{Transport: egressTransport, Timeout: 15 * time.Second}, EgressTransport: egressTransport, Metrics: metrics, MetricsTokenHash: cryptox.Digest(cfg.MetricsToken), AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
+	api := &httpapi.Server{Store: db, Box: box, Compiler: compiler, Databases: databaseRegistry, Swarm: swarm, SessionTTL: cfg.SessionTTL, Logger: logger, PublicURL: cfg.PublicURL, OIDCHTTPClient: &http.Client{Transport: egressTransport, Timeout: 15 * time.Second}, EgressTransport: egressTransport, Metrics: metrics, MetricsTokenHash: cryptox.Digest(cfg.MetricsToken), AgentCACertificate: cfg.AgentCACertificate, AgentPreviousCACertificate: cfg.AgentPreviousCACertificate, AgentCATrustBundle: cfg.AgentCATrustBundle, AgentCAKey: cfg.AgentCAKey, AgentCertificateTTL: cfg.AgentCertificateTTL, LocalClusterPosture: metrics.LocalClusterPosture, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}
 	httpServer := newPlatformHTTPServer(cfg.ListenAddr, api.Handler(), 30*time.Second)
 	servers := []*http.Server{httpServer}
 	var agentServer *http.Server
@@ -792,7 +794,7 @@ func serve() error {
 		servers = append(servers, agentServer)
 	}
 	var background sync.WaitGroup
-	background.Add(2)
+	background.Add(3)
 	go func() {
 		defer background.Done()
 		worker.Run(ctx)
@@ -800,6 +802,10 @@ func serve() error {
 	go func() {
 		defer background.Done()
 		templates.RunRepositorySyncScheduler(ctx, db, box, &http.Client{Transport: egressTransport, Timeout: 45 * time.Second}, logger, worker.ID)
+	}()
+	go func() {
+		defer background.Done()
+		runLocalClusterPostureSampler(ctx, swarm, metrics)
 	}()
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -828,6 +834,29 @@ func serve() error {
 		go func() { serverErrors <- agentServer.ListenAndServeTLS(cfg.AgentServerCertFile, cfg.AgentServerKeyFile) }()
 	}
 	return awaitHTTPServerShutdown(stop, serverErrors, shutdownDone)
+}
+
+type localClusterPostureInspector interface {
+	LocalClusterPosture(context.Context) clustercontract.LocalPosture
+}
+
+func sampleLocalClusterPosture(parent context.Context, inspector localClusterPostureInspector, metrics *observability.Metrics) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	metrics.SetLocalClusterPosture(inspector.LocalClusterPosture(ctx))
+}
+
+func runLocalClusterPostureSampler(ctx context.Context, inspector localClusterPostureInspector, metrics *observability.Metrics) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sampleLocalClusterPosture(ctx, inspector, metrics)
+		}
+	}
 }
 
 func awaitHTTPServerShutdown(stop context.CancelFunc, serverErrors <-chan error, shutdownDone <-chan struct{}) error {

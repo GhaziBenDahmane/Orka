@@ -75,7 +75,11 @@ keys make it a privileged service.
   reported agent runtime image plus allowlisted aggregate node, CPU, memory,
   Swarm/Compose capability, and edge-proxy readiness posture. Raw capacity
   maps, labels, edge service/network identities, and dynamic paths remain
-  excluded. The latest agent upgrade includes its
+  excluded. The controller's local Swarm is sampled separately every thirty
+  seconds and exposes the same aggregate node, schedulability, manager, CPU,
+  memory, runtime-capability, and edge-readiness posture without node names,
+  IDs, Docker errors, service names, network names, or filesystem paths. A
+  failed or stale inspection is itself a deterministic finding. The latest agent upgrade includes its
   immutable target, state, attempt count, deadline, and overdue flag, but never
   its encrypted command, result, or raw failure text. Pending and leased
   outbound agent commands are grouped by cluster and kind with due-pending and
