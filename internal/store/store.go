@@ -2247,6 +2247,21 @@ func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid
 	} else if err != nil {
 		return BackupDestination{}, err
 	}
+	if err = LockBackupDestinationForOperation(ctx, tx, item.ID); err != nil {
+		return BackupDestination{}, err
+	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1 AND status='running') OR
+		EXISTS(SELECT 1 FROM database_restores restore JOIN database_backups backup ON backup.id=restore.database_backup_id WHERE backup.destination_id=$1 AND restore.status='running') OR
+		EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1 AND status='running') OR
+		EXISTS(SELECT 1 FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.destination_id=$1 AND restore.status='running') OR
+		EXISTS(SELECT 1 FROM audit_archive_batches batch JOIN audit_archive_destinations archive ON archive.id=batch.destination_id WHERE archive.backup_destination_id=$1 AND batch.status='running')`, item.ID).Scan(&active); err != nil {
+		return BackupDestination{}, err
+	}
+	if active {
+		return BackupDestination{}, ErrBusy
+	}
 	if endpoint != item.Endpoint || region != item.Region || bucket != item.Bucket || prefix != item.Prefix || useTLS != item.UseTLS {
 		var referenced bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM backup_artifact_deletions WHERE destination_id=$1) OR EXISTS(SELECT 1 FROM audit_archive_destinations WHERE backup_destination_id=$1)`, item.ID).Scan(&referenced); err != nil {
@@ -2261,6 +2276,15 @@ func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid
 		return BackupDestination{}, err
 	}
 	return item, tx.Commit(ctx)
+}
+
+// LockBackupDestinationForOperation serializes the point where a worker makes
+// an operation running with destination mutation. Workers release the lock
+// after committing the running state; mutators then either observe that state
+// and fail busy, or commit first so the worker loads the new credentials.
+func LockBackupDestinationForOperation(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('dockyard:backup-destination:' || $1::text,0))`, id)
+	return err
 }
 
 func (s *Store) ListBackupDestinations(ctx context.Context, organizationID uuid.UUID) ([]BackupDestination, error) {

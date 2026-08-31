@@ -582,6 +582,13 @@ the same ephemeral secret-mount contract as Dockerfile or Railpack builds.
 | POST | `/v1/environments/{id}/databases` | Provision a managed data service definition |
 | GET/POST/PUT/DELETE | `/v1/backup-destinations…` | Manage and rotate credentials for encrypted S3-compatible destinations |
 
+Backup-destination rotation is rejected with `resource_busy` while a database
+or volume backup/restore or immutable audit-archive batch is running. Worker
+operation start and destination mutation share a PostgreSQL advisory fence, so
+a race either adopts the new tested credentials or leaves the rotation pending
+for the operator to retry; it cannot begin with a silently superseded secret.
+Queued operations are not blocked and use the new credentials when they start.
+
 Repository creation accepts `trustedPublicKey` as an Ed25519 PEM or base64 raw
 public key and `requireSignature` as a boolean. When a key is configured every
 sync verifies the catalog manifest and signature before any database write;

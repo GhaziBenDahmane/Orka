@@ -77,7 +77,10 @@ allowed to finish before deletion can begin.
   authenticated context, preventing ciphertext from being transplanted between
   services. Managed-database, source, and backup-destination credentials are
   likewise bound to their resource IDs. Workers retain read compatibility with
-  legacy unbound ciphertext.
+  legacy unbound ciphertext. Backup-destination mutation shares an advisory
+  transaction fence with database, volume, and audit-archive operation start;
+  credential rotation cannot overtake an operation that committed its running
+  state, while a later operation necessarily observes the replacement secret.
 - Uploaded application ZIPs are size-bounded, fully validated, encrypted with
   service-bound authenticated data, and stored in PostgreSQL so any controller
   can execute the build. Extraction rejects traversal, links, devices, FIFOs,

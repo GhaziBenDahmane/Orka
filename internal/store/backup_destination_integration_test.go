@@ -116,6 +116,48 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	if updated, err = db.UpdateBackupDestination(ctx, orgID, updated); err != nil || updated.EncryptedCredentials != "second-rotation" {
 		t.Fatalf("credential-only rotation=%#v err=%v", updated, err)
 	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE database_backups SET status='running',started_at=now() WHERE id=$1`, backup.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated.EncryptedCredentials = "blocked-rotation"
+	if _, err = db.UpdateBackupDestination(ctx, orgID, updated); !errors.Is(err, ErrBusy) {
+		t.Fatalf("credential rotation during active backup error=%v, want busy", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE database_backups SET status='failed',finished_at=now() WHERE id=$1`, backup.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated.EncryptedCredentials = "third-rotation"
+	if updated, err = db.UpdateBackupDestination(ctx, orgID, updated); err != nil || updated.EncryptedCredentials != "third-rotation" {
+		t.Fatalf("credential rotation after backup completion=%#v err=%v", updated, err)
+	}
+	operation, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = operation.Exec(ctx, `UPDATE database_backups SET status='running',started_at=now(),finished_at=NULL WHERE id=$1`, backup.ID); err != nil {
+		_ = operation.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err = LockBackupDestinationForOperation(ctx, operation, owned.ID); err != nil {
+		_ = operation.Rollback(ctx)
+		t.Fatal(err)
+	}
+	updated.EncryptedCredentials = "racing-rotation"
+	rotationResult := make(chan error, 1)
+	go func() {
+		_, rotateErr := db.UpdateBackupDestination(ctx, orgID, updated)
+		rotationResult <- rotateErr
+	}()
+	waitForBlockedStoreQuery(t, ctx, db, "pg_advisory_xact_lock")
+	if err = operation.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-rotationResult; !errors.Is(err, ErrBusy) {
+		t.Fatalf("racing credential rotation error=%v, want busy", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE database_backups SET status='failed',finished_at=now() WHERE id=$1`, backup.ID); err != nil {
+		t.Fatal(err)
+	}
 	changedLocation := updated
 	changedLocation.Bucket = "different-bucket"
 	if _, err = db.UpdateBackupDestination(ctx, orgID, changedLocation); !errors.Is(err, ErrBusy) {

@@ -114,6 +114,8 @@ recovery evidence remains.
   client-side, per-backup envelope encryption for local and remote artifacts.
   Secret-free AI and Prometheus posture identifies abandoned destinations and
   referenced object-store credentials that have not rotated within 180 days.
+  Credential rotation is serialized with running database, volume, and
+  immutable audit-archive operations while queued work adopts the new secret.
 - Remote backup and restore execution through outbound agents using short-lived
   presigned transfers, per-backup encryption, and end-to-end checksum checks.
 - Scheduled drill failure notifications, overdue alerts, and per-database

@@ -176,6 +176,13 @@ func (s *Store) queueAuditArchive(ctx context.Context, organizationID, destinati
 func (s *Store) GetAuditArchiveBatchForJob(ctx context.Context, jobID, leaseID, id uuid.UUID) (AuditArchiveBatch, error) {
 	var item AuditArchiveBatch
 	err := s.WithJobLease(ctx, jobID, leaseID, func(tx pgx.Tx) error {
+		var backupDestinationID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT d.id FROM audit_archive_batches b JOIN audit_archive_destinations a ON a.id=b.destination_id JOIN backup_destinations d ON d.id=a.backup_destination_id WHERE b.id=$1 AND a.enabled`, id).Scan(&backupDestinationID); err != nil {
+			return err
+		}
+		if err := LockBackupDestinationForOperation(ctx, tx, backupDestinationID); err != nil {
+			return err
+		}
 		return tx.QueryRow(ctx, `UPDATE audit_archive_batches b SET status='running',started_at=COALESCE(started_at,now()) FROM audit_archive_destinations a,backup_destinations d WHERE b.id=$1 AND a.id=b.destination_id AND d.id=a.backup_destination_id AND a.enabled RETURNING b.id,b.destination_id,a.organization_id,b.first_event_id,b.last_event_id,b.previous_sha256,b.object_key,a.retention_days,b.created_at,d.id,d.organization_id,d.name,d.endpoint,d.region,d.bucket,d.prefix,d.use_tls,d.encrypted_credentials,d.created_at,d.updated_at`, id).Scan(&item.ID, &item.DestinationID, &item.OrganizationID, &item.FirstEventID, &item.LastEventID, &item.PreviousSHA256, &item.ObjectKey, &item.RetentionDays, &item.CreatedAt, &item.BackupDestination.ID, &item.BackupDestination.OrganizationID, &item.BackupDestination.Name, &item.BackupDestination.Endpoint, &item.BackupDestination.Region, &item.BackupDestination.Bucket, &item.BackupDestination.Prefix, &item.BackupDestination.UseTLS, &item.BackupDestination.EncryptedCredentials, &item.BackupDestination.CreatedAt, &item.BackupDestination.UpdatedAt)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

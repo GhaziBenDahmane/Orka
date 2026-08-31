@@ -1444,7 +1444,10 @@ func (w *Worker) backupVolume(ctx context.Context, j job) error {
 	var clusterID *uuid.UUID
 	var quiesce bool
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE volume_backups backup SET status='running',started_at=now() FROM compose_services service,environments environment WHERE backup.id=$1 AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING service.id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.destination_id,backup.volume_name,backup.storage_node_id,backup.quiesce,environment.cluster_id`, backupID).Scan(&serviceID, &stackName, &compose, &serviceNodeID, &destinationID, &volumeName, &backupNodeID, &quiesce, &clusterID)
+		if err := tx.QueryRow(ctx, `UPDATE volume_backups backup SET status='running',started_at=now() FROM compose_services service,environments environment WHERE backup.id=$1 AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING service.id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.destination_id,backup.volume_name,backup.storage_node_id,backup.quiesce,environment.cluster_id`, backupID).Scan(&serviceID, &stackName, &compose, &serviceNodeID, &destinationID, &volumeName, &backupNodeID, &quiesce, &clusterID); err != nil {
+			return err
+		}
+		return store.LockBackupDestinationForOperation(ctx, tx, destinationID)
 	})
 	if err != nil {
 		return err
@@ -1519,7 +1522,10 @@ func (w *Worker) restoreVolume(ctx context.Context, j job) error {
 	var expectedSize int64
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE volume_restores restore SET status='running',started_at=now() FROM volume_backups backup,compose_services service,environments environment WHERE restore.id=$1 AND backup.id=restore.volume_backup_id AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING backup.id,backup.destination_id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.volume_name,backup.storage_node_id,backup.object_key,backup.sha256,backup.plaintext_sha256,backup.encrypted_data_key,backup.size_bytes,environment.cluster_id`, restoreID).Scan(&backupID, &destinationID, &stackName, &compose, &serviceNodeID, &volumeName, &backupNodeID, &objectKey, &expectedHash, &plaintextHash, &encryptedKey, &expectedSize, &clusterID)
+		if err := tx.QueryRow(ctx, `UPDATE volume_restores restore SET status='running',started_at=now() FROM volume_backups backup,compose_services service,environments environment WHERE restore.id=$1 AND backup.id=restore.volume_backup_id AND service.id=backup.compose_service_id AND environment.id=service.environment_id RETURNING backup.id,backup.destination_id,service.stack_name,service.compose_yaml,service.storage_node_id,backup.volume_name,backup.storage_node_id,backup.object_key,backup.sha256,backup.plaintext_sha256,backup.encrypted_data_key,backup.size_bytes,environment.cluster_id`, restoreID).Scan(&backupID, &destinationID, &stackName, &compose, &serviceNodeID, &volumeName, &backupNodeID, &objectKey, &expectedHash, &plaintextHash, &encryptedKey, &expectedSize, &clusterID); err != nil {
+			return err
+		}
+		return store.LockBackupDestinationForOperation(ctx, tx, destinationID)
 	})
 	if err != nil {
 		return err
@@ -1703,7 +1709,13 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encrypted, &destinationID, &clusterID)
+		if err := tx.QueryRow(ctx, `UPDATE database_backups b SET status='running',started_at=now() FROM database_instances d,compose_services s,environments e WHERE b.id=$1 AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.destination_id,e.cluster_id`, backupID).Scan(&databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encrypted, &destinationID, &clusterID); err != nil {
+			return err
+		}
+		if destinationID == nil {
+			return nil
+		}
+		return store.LockBackupDestinationForOperation(ctx, tx, *destinationID)
 	})
 	if err != nil {
 		return err
@@ -2053,7 +2065,13 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	var destinationID *uuid.UUID
 	var clusterID *uuid.UUID
 	err = w.Store.WithJobLease(ctx, j.ID, j.LeaseID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID)
+		if err := tx.QueryRow(ctx, `UPDATE database_restores r SET status='running',started_at=now() FROM database_backups b,database_instances d,compose_services s,environments e WHERE r.id=$1 AND b.id=r.database_backup_id AND d.id=b.database_instance_id AND s.id=d.compose_service_id AND e.id=s.environment_id RETURNING r.kind,b.id,d.id,d.engine,d.version,d.driver_source,d.driver_artifact_digest,s.stack_name,d.slug,d.encrypted_credentials,b.path,b.sha256,b.size_bytes,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,e.cluster_id`, restoreID).Scan(&kind, &backupID, &databaseID, &engine, &version, &driverSource, &driverDigest, &stackName, &serviceName, &encryptedCredentials, &path, &expectedHash, &expectedSize, &artifactEncrypted, &plaintextHash, &encryptedDataKey, &destinationID, &objectKey, &clusterID); err != nil {
+			return err
+		}
+		if destinationID == nil {
+			return nil
+		}
+		return store.LockBackupDestinationForOperation(ctx, tx, *destinationID)
 	})
 	if err != nil {
 		return err
