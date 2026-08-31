@@ -224,6 +224,8 @@ A tenant cannot PATCH a global user ID
 that it does not own. Because email identities are shared across organizations,
 SCIM rejects `displayName` changes while the identity is visible in another
 organization; this prevents one tenant from rewriting another tenant's profile.
+Organization invitations cannot override active, inactive, or deleted SCIM
+ownership, including when the invitation predates directory deprovisioning.
 Organization administrators can manage manually provisioned members, while
 only owners can assign or alter the owner role. Role changes and removals are
 serialized per organization and cannot remove its last active owner. Members

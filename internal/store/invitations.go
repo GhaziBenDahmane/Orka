@@ -71,12 +71,17 @@ func createOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, organization
 	} else if err != nil {
 		return OrganizationInvitation{}, err
 	}
-	var member bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.email=$2)`, organizationID, email).Scan(&member); err != nil {
+	var member, scimManaged bool
+	if err := tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.email=$2),
+		EXISTS(SELECT 1 FROM scim_user_defaults d JOIN users u ON u.id=d.user_id WHERE d.organization_id=$1 AND u.email=$2)`, organizationID, email).Scan(&member, &scimManaged); err != nil {
 		return OrganizationInvitation{}, err
 	}
 	if member {
 		return OrganizationInvitation{}, ErrAlreadyMember
+	}
+	if scimManaged {
+		return OrganizationInvitation{}, ErrSCIMManaged
 	}
 	if _, err := tx.Exec(ctx, `UPDATE organization_invitations SET revoked_at=now() WHERE organization_id=$1 AND email=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, organizationID, email); err != nil {
 		return OrganizationInvitation{}, err
@@ -208,7 +213,7 @@ func acceptOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, tokenHash []
 	}
 	acceptance.InvitationID = invitationID
 	var disabledAt *time.Time
-	err = tx.QueryRow(ctx, `SELECT id,disabled_at FROM users WHERE email=$1`, acceptance.Email).Scan(&acceptance.UserID, &disabledAt)
+	err = tx.QueryRow(ctx, `SELECT id,disabled_at FROM users WHERE email=$1 FOR UPDATE`, acceptance.Email).Scan(&acceptance.UserID, &disabledAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !acceptance.RequireSSO && passwordHash == "" {
 			return InvitationAcceptance{}, ErrPasswordRequired
@@ -226,6 +231,13 @@ func acceptOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, tokenHash []
 	}
 	if err != nil {
 		return InvitationAcceptance{}, err
+	}
+	var scimManaged bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)`, acceptance.OrganizationID, acceptance.UserID).Scan(&scimManaged); err != nil {
+		return InvitationAcceptance{}, err
+	}
+	if scimManaged {
+		return InvitationAcceptance{}, ErrSCIMManaged
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO NOTHING`, acceptance.OrganizationID, acceptance.UserID, acceptance.Role); err != nil {
 		return InvitationAcceptance{}, err

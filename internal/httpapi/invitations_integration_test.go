@@ -113,6 +113,29 @@ func TestOrganizationInvitationLifecycle(t *testing.T) {
 		t.Fatalf("existing user credentials changed hash=%q err=%v", retainedHash, err)
 	}
 
+	scimUserID := uuid.New()
+	scimEmail := "scim-deprovisioned@invite.test"
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!scim')`, scimUserID, scimEmail); err != nil {
+		t.Fatal(err)
+	}
+	preexistingSCIMToken := "dky_inv_scim-preexisting-012345678901234567890"
+	if _, err = db.CreateOrganizationInvitation(ctx, organizationID, ownerID, scimEmail, "viewer", "owner", cryptox.Digest(preexistingSCIMToken), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,deleted_at) VALUES($1,$2,'viewer',now())`, organizationID, scimUserID); err != nil {
+		t.Fatal(err)
+	}
+	if status, body = apiRequest(t, server.URL+"/v1/invitations/accept", http.MethodPost, map[string]string{"token": preexistingSCIMToken}); status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"scim_managed"`)) {
+		t.Fatalf("SCIM-owned invitation acceptance status=%d body=%s", status, body)
+	}
+	if status, body = scopedAPIRequest(t, invitationsURL, adminToken, organizationID, http.MethodPost, map[string]any{"email": scimEmail, "role": "viewer"}); status != http.StatusConflict || !bytes.Contains(body, []byte(`"code":"scim_managed"`)) {
+		t.Fatalf("SCIM-owned invitation creation status=%d body=%s", status, body)
+	}
+	var invitationAccepted bool
+	if err = db.Pool.QueryRow(ctx, `SELECT accepted_at IS NOT NULL FROM organization_invitations WHERE token_hash=$1`, cryptox.Digest(preexistingSCIMToken)).Scan(&invitationAccepted); err != nil || invitationAccepted {
+		t.Fatalf("rejected SCIM-owned invitation accepted=%v err=%v", invitationAccepted, err)
+	}
+
 	ssoInvitation, err := db.CreateOrganizationInvitation(ctx, otherOrganizationID, ownerID, "new-sso@invite.test", "viewer", "owner", cryptox.Digest("dky_inv_sso-test-token-012345678901234567890"), time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
