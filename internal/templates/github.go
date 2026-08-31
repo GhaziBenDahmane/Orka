@@ -136,18 +136,13 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 			cleanup()
 			return "", nil, errors.New("template repository exceeds entry limit")
 		}
-		clean := path.Clean(header.Name)
-		if len(clean) > maxCatalogPathBytes || strings.Contains(header.Name, `\`) || path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+		_, parts, pathErr := canonicalCatalogArchivePath(header.Name, header.Typeflag == tar.TypeDir)
+		if pathErr != nil {
 			cleanup()
-			return "", nil, errors.New("template repository contains an unsafe path")
-		}
-		parts := strings.Split(clean, "/")
-		if len(parts) > maxCatalogPathDepth+1 {
-			cleanup()
-			return "", nil, errors.New("template repository path exceeds depth limit")
+			return "", nil, pathErr
 		}
 		if archiveRoot == "" {
-			if !githubPart.MatchString(parts[0]) || len(parts[0]) > 255 {
+			if parts[0] == "." || parts[0] == ".." || !githubPart.MatchString(parts[0]) {
 				cleanup()
 				return "", nil, errors.New("template repository has an invalid archive root")
 			}
@@ -214,6 +209,30 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 		return "", nil, errors.New("template repository archive is empty")
 	}
 	return directory, cleanup, nil
+}
+
+func canonicalCatalogArchivePath(name string, directory bool) (string, []string, error) {
+	if name == "" || len(name) > maxCatalogPathBytes || strings.ContainsRune(name, '\\') || strings.IndexFunc(name, func(char rune) bool { return char < 0x20 || char == 0x7f }) >= 0 {
+		return "", nil, errors.New("template repository contains an unsafe path")
+	}
+	candidate := name
+	if directory && strings.HasSuffix(candidate, "/") {
+		candidate = strings.TrimSuffix(candidate, "/")
+	}
+	clean := path.Clean(candidate)
+	if candidate == "" || clean != candidate || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", nil, errors.New("template repository contains a non-canonical path")
+	}
+	parts := strings.Split(clean, "/")
+	if len(parts) > maxCatalogPathDepth+1 {
+		return "", nil, errors.New("template repository path exceeds depth limit")
+	}
+	for _, part := range parts {
+		if part == "" || len(part) > 255 {
+			return "", nil, errors.New("template repository contains an invalid path segment")
+		}
+	}
+	return clean, parts, nil
 }
 
 func catalogHTTPClient(client *http.Client) *http.Client {

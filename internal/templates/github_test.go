@@ -142,8 +142,12 @@ func TestFetchCatalogArchiveExtractsSingleRoot(t *testing.T) {
 func TestFetchCatalogArchiveRejectsUnsafeStructure(t *testing.T) {
 	deepPath := "catalog-main/" + strings.Repeat("directory/", maxCatalogPathDepth) + "file"
 	tests := map[string][]catalogArchiveEntry{
-		"parent traversal": {{name: "../escaped", directory: true}},
-		"backslash path":   {{name: `catalog-main\blueprints`, directory: true}},
+		"parent traversal":     {{name: "../escaped", directory: true}},
+		"normalized traversal": {{name: "catalog-main/blueprints/../escaped", directory: true}},
+		"duplicate separator":  {{name: "catalog-main//blueprints/demo", directory: true}},
+		"backslash path":       {{name: `catalog-main\blueprints`, directory: true}},
+		"control character":    {{name: "catalog-main/blueprints/bad\nname", directory: true}},
+		"oversized segment":    {{name: "catalog-main/" + strings.Repeat("a", 256), directory: true}},
 		"multiple roots": {
 			{name: "catalog-main/blueprints/", directory: true},
 			{name: "other-main/blueprints/", directory: true},

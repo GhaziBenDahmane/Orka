@@ -57,10 +57,11 @@ TOML or metadata, and duplicate identities still reject the atomic snapshot.
 
 Repository downloads accept only canonical HTTPS GitHub URLs and use GitHub's
 archive endpoint rather than invoking a shell. Extraction rejects links,
-special files, traversal, oversized files, oversized archives, and excessive
-entry counts. It also requires one consistent archive root, bounds path length
-and nesting depth, and fully consumes the gzip stream under separate compressed
-and expanded-size limits before publishing anything. A sync records success or
+special files, traversal, non-canonical paths, control characters, oversized
+path segments, oversized files, oversized archives, and excessive entry counts.
+It also requires one consistent archive root, bounds path length and nesting
+depth, and fully consumes the gzip stream under separate compressed and
+expanded-size limits before publishing anything. A sync records success or
 its bounded failure message. For a
 production catalog, provide its PEM or base64 Ed25519 public key and enable
 `requireSignature`. Dockyard then verifies `catalog.manifest.json` and
