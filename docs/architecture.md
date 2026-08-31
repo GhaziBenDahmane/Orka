@@ -5,6 +5,12 @@ reconciler, and job workers share PostgreSQL as their source of truth. Docker
 Swarm remains responsible for service placement and desired-state convergence;
 Docker Compose remains the portable workload definition.
 
+Controller startup serializes schema validation and migration through a
+PostgreSQL session advisory lock, so all HA replicas may start concurrently.
+The lock-owning connection is returned to the pool only after PostgreSQL
+confirms release; an uncertain unlock closes that connection so a leaked
+session lock cannot stall later controller rollouts.
+
 ## Deployment lifecycle
 
 1. An authenticated actor creates a deployment for a Compose service.

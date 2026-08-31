@@ -91,6 +91,50 @@ func TestMigrateFreshInstallIsCompleteAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateSerializesConcurrentControllerStartup(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	const controllers = 3
+	start := make(chan struct{})
+	results := make(chan error, controllers)
+	for range controllers {
+		go func() {
+			<-start
+			results <- Migrate(ctx, pool)
+		}()
+	}
+	close(start)
+	for range controllers {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent migration failed: %v", err)
+		}
+	}
+	expected := embeddedMigrationCount(t)
+	var applied, distinct int
+	if err := pool.QueryRow(ctx, `SELECT count(*),count(DISTINCT version) FROM schema_migrations`).Scan(&applied, &distinct); err != nil {
+		t.Fatal(err)
+	}
+	if applied != expected || distinct != expected {
+		t.Fatalf("migration inventory applied=%d distinct=%d expected=%d", applied, distinct, expected)
+	}
+	probePool, err := pgxpool.NewWithConfig(ctx, pool.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probePool.Close()
+	probe, err := probePool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probe.Release()
+	var lockAvailable bool
+	if err := probe.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, migrationAdvisoryLock).Scan(&lockAvailable); err != nil || !lockAvailable {
+		t.Fatalf("migration lock was not released: available=%v err=%v", lockAvailable, err)
+	}
+	if _, err := probe.Exec(ctx, `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLock); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrateRejectsUnknownFutureMigration(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {

@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const migrationAdvisoryLock int64 = 721046140
 
 //go:embed migrations/*.sql
 var migrations embed.FS
@@ -54,11 +57,11 @@ func migrateThrough(ctx context.Context, pool *pgxpool.Pool, lastVersion string)
 	if err != nil {
 		return fmt.Errorf("acquire migration connection: %w", err)
 	}
-	defer conn.Release()
-	if _, err = conn.Exec(ctx, `SELECT pg_advisory_lock(721046140)`); err != nil {
+	if _, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationAdvisoryLock); err != nil {
+		conn.Release()
 		return fmt.Errorf("lock migrations: %w", err)
 	}
-	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock(721046140)`)
+	defer releaseMigrationLock(conn)
 	var migrationTableExists bool
 	if err = conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name='schema_migrations')`).Scan(&migrationTableExists); err != nil {
 		return fmt.Errorf("inspect migration schema: %w", err)
@@ -112,6 +115,19 @@ func migrateThrough(ctx context.Context, pool *pgxpool.Pool, lastVersion string)
 		}
 	}
 	return validateAppliedMigrations(ctx, conn, entries)
+}
+
+// releaseMigrationLock never returns a connection that may still own the
+// session-level migration lock to the pool. Closing a connection is the
+// PostgreSQL fail-safe that releases all of its session locks.
+func releaseMigrationLock(conn *pgxpool.Conn) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var unlocked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLock).Scan(&unlocked); err != nil || !unlocked {
+		_ = conn.Conn().Close(ctx)
+	}
+	conn.Release()
 }
 
 func rejectUnknownAppliedMigrations(ctx context.Context, database migrationRows, expected []embeddedMigration) error {
