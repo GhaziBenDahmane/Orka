@@ -43,7 +43,8 @@ before using the audited rebind endpoint.
 Dockyard starts a fresh process for each call, writes one JSON request to stdin,
 and reads one JSON response from stdout. Protocol version 1 supports
 `describe`, `render`, `backup`, `restore`, and `readiness`. Calls time out after
-15 seconds and input and output are each capped at 4 MiB. The Go SDK rejects
+15 seconds, post-exit output-pipe draining is bounded, and input and output are
+each capped at 4 MiB. The Go SDK rejects
 unknown request fields, trailing JSON, and operation-confused request shapes
 before invoking driver code. The controller independently bounds its encoded
 request and validates render names, versions, utility hosts, credential maps,

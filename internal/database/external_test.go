@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
 )
@@ -229,6 +230,33 @@ echo '{"protocolVersion":1,"description":{"name":"environment-test","defaultVers
 	t.Setenv("DOCKYARD_MASTER_KEY", "controller-secret")
 	if err := NewRegistry().LoadExternal(directory); err != nil {
 		t.Fatalf("sanitized driver environment: %v", err)
+	}
+}
+
+func TestExternalDriverBoundsInheritedOutputDescriptors(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "forking-driver")
+	script := `#!/bin/sh
+request=$(cat)
+case "$request" in
+  *'"operation":"describe"'*) echo '{"protocolVersion":1,"description":{"name":"forking-test","defaultVersion":"1","capabilities":[]}}' ;;
+  *) sleep 5 & echo '{"protocolVersion":1,"result":{"composeYaml":"services: {}","environment":{},"credentials":{},"internalUrl":"http://data:1","version":"1"}}' ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	if err := registry.LoadExternal(directory); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err := registry.Render("forking-test", Request{Name: "data"})
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("driver call waited %s for an inherited output descriptor", elapsed)
+	}
+	if err == nil || !strings.Contains(err.Error(), "failed during render") {
+		t.Fatalf("forking driver error=%v", err)
 	}
 }
 

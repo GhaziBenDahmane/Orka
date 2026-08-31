@@ -29,6 +29,7 @@ type externalDriver struct {
 }
 
 const maxExternalDriverBytes = 64 << 20
+const externalDriverWaitDelay = time.Second
 
 const (
 	maxExternalRenderEntries    = 128
@@ -207,6 +208,10 @@ func (d *externalDriver) call(request databaseplugin.Request, operation string) 
 	defer cancel()
 	command := exec.CommandContext(ctx, "/proc/self/fd/3")
 	command.ExtraFiles = []*os.File{executable}
+	// A faulty driver may fork a child that inherits stdout or stderr. Bound
+	// the post-exit pipe drain so that such a child cannot hold a controller
+	// worker indefinitely after the driver exits or its context is cancelled.
+	command.WaitDelay = externalDriverWaitDelay
 	// Do not leak the controller's database URL, master key, or provider
 	// credentials into an extension process. Use a fixed system path rather
 	// than inheriting a potentially attacker-controlled controller PATH.
