@@ -6,7 +6,7 @@ project="dockyard-template-smoke"
 port="${DOCKYARD_TEMPLATE_SMOKE_PORT:-18081}"
 evidence_file="${DOCKYARD_TEMPLATE_EVIDENCE:-template-conformance.json}"
 barktrace_version="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}"
-template_selection="${DOCKYARD_TEMPLATE_SMOKE_TEMPLATES:-9router postgres redis barktrace-sqlite barktrace-postgres}"
+template_selection="${DOCKYARD_TEMPLATE_SMOKE_TEMPLATES:-9router postgres redis libsql barktrace-sqlite barktrace-postgres}"
 read -r -a template_keys <<<"$template_selection"
 if (( ${#template_keys[@]} == 0 )); then
   echo "DOCKYARD_TEMPLATE_SMOKE_TEMPLATES must select at least one template" >&2
@@ -15,7 +15,7 @@ fi
 declare -A selected_templates=()
 for template_key in "${template_keys[@]}"; do
   case "$template_key" in
-    9router|postgres|redis|barktrace-sqlite|barktrace-postgres) ;;
+    9router|postgres|redis|libsql|barktrace-sqlite|barktrace-postgres) ;;
     *) echo "unsupported template smoke target: $template_key" >&2; exit 1 ;;
   esac
   if [[ -n "${selected_templates[$template_key]:-}" ]]; then
@@ -84,6 +84,31 @@ task_local_image_id() {
   docker inspect "$container_id" --format '{{.Image}}'
 }
 
+libsql_request() {
+  local stack="$1" service_name="$2" statements="$3"
+  docker run --rm --network "${stack}_default" \
+    --env LIBSQL_HOST="$service_name" \
+    --env LIBSQL_USER=smoke \
+    --env LIBSQL_PASSWORD=template-smoke-libsql \
+    --env LIBSQL_STATEMENTS="$statements" \
+    python:3.13-alpine python3 -c '
+import base64, json, os, time, urllib.request
+url = "http://%s:8080/" % os.environ["LIBSQL_HOST"]
+token = base64.b64encode((os.environ["LIBSQL_USER"] + ":" + os.environ["LIBSQL_PASSWORD"]).encode()).decode()
+request = urllib.request.Request(url, data=json.dumps({"statements": json.loads(os.environ["LIBSQL_STATEMENTS"])}).encode(), headers={"authorization": "Basic " + token, "content-type": "application/json"}, method="POST")
+for attempt in range(60):
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            result = json.load(response)
+        if any(item.get("error") for item in result): raise RuntimeError(result)
+        print(json.dumps(result, separators=(",", ":")))
+        break
+    except Exception:
+        if attempt == 59: raise
+        time.sleep(1)
+'
+}
+
 seed_product_state() {
   local template_key="$1" service_name="$2" stack="$3" container_id postgres_id
   container_id="$(service_container "$service_name")"
@@ -99,6 +124,9 @@ seed_product_state() {
       ;;
     redis)
       docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis SET dockyard:template:smoke "$state_marker" >/dev/null
+      ;;
+    libsql)
+      libsql_request "$stack" "$service_name" "$(jq -cn --arg marker "$state_marker" '["CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id INTEGER PRIMARY KEY, value TEXT NOT NULL)","INSERT OR REPLACE INTO dockyard_template_smoke(id,value) VALUES (1,\""+$marker+"\")"]')" >/dev/null
       ;;
     barktrace-sqlite)
       docker exec "$container_id" /app/barktrace healthcheck
@@ -133,6 +161,10 @@ verify_product_state() {
       ;;
     redis)
       test "$(docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis GET dockyard:template:smoke)" = "$state_marker"
+      ;;
+    libsql)
+      value="$(libsql_request "$stack" "$service_name" '["SELECT value FROM dockyard_template_smoke WHERE id=1"]' | jq -er '.[0].results.rows[0][0]')"
+      test "$value" = "$state_marker"
       ;;
     barktrace-sqlite)
       docker exec "$container_id" /app/barktrace healthcheck
@@ -196,6 +228,9 @@ for template_key in "${template_keys[@]}"; do
       ;;
     redis)
       variables='{"redis_password":"template-smoke-redis"}'
+      ;;
+    libsql)
+      variables='{"libsql_user":"smoke","libsql_password":"template-smoke-libsql"}'
       ;;
     barktrace-sqlite)
       variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"$barktrace_version\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"

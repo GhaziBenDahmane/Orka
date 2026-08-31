@@ -127,7 +127,7 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 		t.Fatal("template smoke state verifier function is missing")
 	}
 	verifyBody := script[verifyStart : verifyStart+verifyEnd]
-	for _, mutation := range []string{"INSERT INTO dockyard_template_smoke", " SET dockyard:template:smoke ", "> /data/.dockyard-template-smoke"} {
+	for _, mutation := range []string{"INSERT INTO dockyard_template_smoke", "INSERT OR REPLACE INTO dockyard_template_smoke", " SET dockyard:template:smoke ", "> /data/.dockyard-template-smoke"} {
 		if strings.Contains(verifyBody, mutation) {
 			t.Fatalf("post-restart verifier mutates persisted state with %q", mutation)
 		}
@@ -155,6 +155,9 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 	if !strings.Contains(verifyBody, `stat -c '%d:%i' /data/barktrace.db`) {
 		t.Fatal("BarkTrace SQLite smoke must verify the original database file survives replacement")
 	}
+	if !strings.Contains(script, `libsql_password":"template-smoke-libsql`) || !strings.Contains(verifyBody, `SELECT value FROM dockyard_template_smoke WHERE id=1`) {
+		t.Fatal("libSQL template smoke must authenticate and verify persisted application data")
+	}
 	for _, evidence := range []string{"stateSeededBeforeRestart", "postRestartReadOnly", "dependencyRestartVerified", "sqliteFileIdentityVerified"} {
 		if !strings.Contains(loop, evidence) {
 			t.Fatalf("template conformance evidence is missing %s", evidence)
@@ -171,6 +174,9 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 	}
 	if !strings.Contains(string(releaseWorkflow), `.dependencyImages | length == 1 and .[0].service == "postgres"`) {
 		t.Fatal("release promotion does not require the BarkTrace PostgreSQL dependency image")
+	}
+	if !strings.Contains(string(releaseWorkflow), `.productCount == 6`) || !strings.Contains(string(releaseWorkflow), `["9router","barktrace-postgres","barktrace-sqlite","libsql","postgres","redis"]`) {
+		t.Fatal("release promotion does not require the authenticated libSQL template smoke evidence")
 	}
 }
 
