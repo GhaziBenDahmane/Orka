@@ -263,8 +263,11 @@ failed evidence cannot retain encrypted credentials or cancel queued delivery.
 Agent enrollment is disabled unless both `DOCKYARD_AGENT_CA_CERT` and
 `DOCKYARD_AGENT_CA_KEY` (or their `_FILE` variants) are configured. The
 enrollment token is stored only as a SHA-256 digest, expires after 15 minutes,
-and is consumed atomically. The issued client certificate is bound to the
-cluster ID and expires after seven days by default.
+and is consumed atomically. Cluster creation, state/maintenance changes,
+enrollment-token issuance, and deletion queueing commit atomically with their
+operator audit events; failed evidence also rolls back command cancellation and
+the deletion finalizer. The issued client certificate is bound to the cluster
+ID and expires after seven days by default.
 Heartbeat traffic is accepted only on the optional dedicated agent listener;
 the client certificate must chain to the configured active/previous CA trust
 bundle and its serial must match the cluster's latest enrollment. Enrollment,

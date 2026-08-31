@@ -67,10 +67,40 @@ type ClusterEnrollment struct {
 }
 
 func (s *Store) CreateCluster(ctx context.Context, item Cluster) (Cluster, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Cluster{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createClusterTx(ctx, tx, item)
+	if err != nil {
+		return Cluster{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateClusterWithAudit(ctx context.Context, principal Principal, item Cluster, remoteAddr string) (Cluster, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Cluster{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createClusterTx(ctx, tx, item)
+	if err != nil {
+		return Cluster{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "cluster.create", "cluster", item.ID.String(), remoteAddr, nil); err != nil {
+		return Cluster{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createClusterTx(ctx context.Context, tx pgx.Tx, item Cluster) (Cluster, error) {
 	item.ID = uuid.New()
 	item.State = "pending"
 	labels, _ := json.Marshal(item.Labels)
-	err := s.Pool.QueryRow(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,labels) SELECT $1,o.id,$3,$4,'pending',$5 FROM organizations o WHERE o.id=$2 RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Slug, labels).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,labels) SELECT $1,o.id,$3,$4,'pending',$5 FROM organizations o WHERE o.id=$2 RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Slug, labels).Scan(&item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -117,15 +147,41 @@ func (s *Store) UpdateClusterState(ctx context.Context, organizationID, clusterI
 }
 
 func (s *Store) UpdateClusterConfiguration(ctx context.Context, organizationID, clusterID uuid.UUID, state string, maintenanceStartsAt, maintenanceEndsAt *time.Time) (Cluster, error) {
+	return s.updateClusterConfiguration(ctx, Principal{}, organizationID, clusterID, state, maintenanceStartsAt, maintenanceEndsAt, "", false)
+}
+
+func (s *Store) UpdateClusterConfigurationWithAudit(ctx context.Context, principal Principal, clusterID uuid.UUID, state string, maintenanceStartsAt, maintenanceEndsAt *time.Time, remoteAddr string) (Cluster, error) {
+	return s.updateClusterConfiguration(ctx, principal, principal.OrganizationID, clusterID, state, maintenanceStartsAt, maintenanceEndsAt, remoteAddr, true)
+}
+
+func (s *Store) updateClusterConfiguration(ctx context.Context, principal Principal, organizationID, clusterID uuid.UUID, state string, maintenanceStartsAt, maintenanceEndsAt *time.Time, remoteAddr string, audit bool) (Cluster, error) {
 	if state != "active" && state != "draining" && state != "disabled" {
 		return Cluster{}, errors.New("invalid cluster state")
 	}
 	if (maintenanceStartsAt == nil) != (maintenanceEndsAt == nil) || maintenanceStartsAt != nil && !maintenanceEndsAt.After(*maintenanceStartsAt) {
 		return Cluster{}, errors.New("invalid maintenance window")
 	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Cluster{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := updateClusterConfigurationTx(ctx, tx, organizationID, clusterID, state, maintenanceStartsAt, maintenanceEndsAt)
+	if err != nil {
+		return Cluster{}, err
+	}
+	if audit {
+		if err = appendPrincipalAudit(ctx, tx, principal, "cluster.state.update", "cluster", clusterID.String(), remoteAddr, map[string]any{"state": state, "maintenanceStartsAt": maintenanceStartsAt, "maintenanceEndsAt": maintenanceEndsAt}); err != nil {
+			return Cluster{}, err
+		}
+	}
+	return item, tx.Commit(ctx)
+}
+
+func updateClusterConfigurationTx(ctx context.Context, tx pgx.Tx, organizationID, clusterID uuid.UUID, state string, maintenanceStartsAt, maintenanceEndsAt *time.Time) (Cluster, error) {
 	var item Cluster
 	var labels, capacity, capabilities []byte
-	err := s.Pool.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,capabilities,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &capabilities, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, `UPDATE clusters SET state=$3,maintenance_starts_at=$4,maintenance_ends_at=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL AND ($3<>'active' OR certificate_not_after>now()) RETURNING id,organization_id,name,slug,state,labels,capacity,capabilities,agent_version,agent_image,agent_update_state,docker_version,certificate_ca_fingerprint,pending_certificate_ca_fingerprint,certificate_not_after,last_seen_at,maintenance_starts_at,maintenance_ends_at,created_at,updated_at`, clusterID, organizationID, state, maintenanceStartsAt, maintenanceEndsAt).Scan(&item.ID, &item.OrganizationID, &item.Name, &item.Slug, &item.State, &labels, &capacity, &capabilities, &item.AgentVersion, &item.AgentImage, &item.AgentUpdateState, &item.DockerVersion, &item.CertificateAuthorityFingerprint, &item.PendingCertificateAuthorityFingerprint, &item.CertificateNotAfter, &item.LastSeenAt, &item.MaintenanceStartsAt, &item.MaintenanceEndsAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Cluster{}, ErrNotFound
 	}
@@ -141,8 +197,30 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = queueClusterDeletionTx(ctx, tx, organizationID, clusterID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) QueueClusterDeletionWithAudit(ctx context.Context, principal Principal, clusterID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = queueClusterDeletionTx(ctx, tx, principal.OrganizationID, clusterID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "cluster.delete", "cluster", clusterID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func queueClusterDeletionTx(ctx context.Context, tx pgx.Tx, organizationID, clusterID uuid.UUID) error {
 	var deleting, assigned bool
-	err = tx.QueryRow(ctx, `SELECT c.deletion_requested_at IS NOT NULL,EXISTS(SELECT 1 FROM environments e WHERE e.cluster_id=c.id) OR EXISTS(SELECT 1 FROM managed_networks n WHERE n.cluster_id=c.id) FROM clusters c WHERE c.id=$1 AND c.organization_id=$2 FOR UPDATE`, clusterID, organizationID).Scan(&deleting, &assigned)
+	err := tx.QueryRow(ctx, `SELECT c.deletion_requested_at IS NOT NULL,EXISTS(SELECT 1 FROM environments e WHERE e.cluster_id=c.id) OR EXISTS(SELECT 1 FROM managed_networks n WHERE n.cluster_id=c.id) FROM clusters c WHERE c.id=$1 AND c.organization_id=$2 FOR UPDATE`, clusterID, organizationID).Scan(&deleting, &assigned)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -165,7 +243,7 @@ func (s *Store) QueueClusterDeletion(ctx context.Context, organizationID, cluste
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.cluster',$2,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.cluster' AND payload->>'clusterId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, clusterID.String()); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) AuthenticateClusterCertificate(ctx context.Context, clusterID uuid.UUID, serial string) error {
@@ -510,7 +588,34 @@ func lockClusterCommandOwner(ctx context.Context, tx pgx.Tx, clusterID, commandI
 }
 
 func (s *Store) CreateClusterEnrollmentToken(ctx context.Context, organizationID, clusterID, creatorID uuid.UUID, tokenHash []byte, expiresAt time.Time) error {
-	tag, err := s.Pool.Exec(ctx, `INSERT INTO cluster_enrollment_tokens(id,cluster_id,token_hash,expires_at,created_by) SELECT $1,c.id,$4,$5,$3 FROM clusters c WHERE c.id=$2 AND c.organization_id=$6 AND c.state<>'disabled'`, uuid.New(), clusterID, nullableUUID(creatorID), tokenHash, expiresAt, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = createClusterEnrollmentTokenTx(ctx, tx, organizationID, clusterID, creatorID, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CreateClusterEnrollmentTokenWithAudit(ctx context.Context, principal Principal, clusterID uuid.UUID, tokenHash []byte, expiresAt time.Time, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = createClusterEnrollmentTokenTx(ctx, tx, principal.OrganizationID, clusterID, principal.UserID, tokenHash, expiresAt); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "cluster.enrollment_token.create", "cluster", clusterID.String(), remoteAddr, map[string]any{"expiresAt": expiresAt}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func createClusterEnrollmentTokenTx(ctx context.Context, tx pgx.Tx, organizationID, clusterID, creatorID uuid.UUID, tokenHash []byte, expiresAt time.Time) error {
+	tag, err := tx.Exec(ctx, `INSERT INTO cluster_enrollment_tokens(id,cluster_id,token_hash,expires_at,created_by) SELECT $1,c.id,$4,$5,$3 FROM clusters c WHERE c.id=$2 AND c.organization_id=$6 AND c.state<>'disabled'`, uuid.New(), clusterID, nullableUUID(creatorID), tokenHash, expiresAt, organizationID)
 	if err != nil {
 		return err
 	}

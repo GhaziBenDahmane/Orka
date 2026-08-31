@@ -243,12 +243,11 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateCluster(r.Context(), store.Cluster{OrganizationID: p.OrganizationID, Name: input.Name, Slug: input.Slug, Labels: input.Labels})
+	item, err := s.Store.CreateClusterWithAudit(r.Context(), p, store.Cluster{Name: input.Name, Slug: input.Slug, Labels: input.Labels}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.create", "cluster", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -280,12 +279,11 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpdateClusterConfiguration(r.Context(), p.OrganizationID, clusterID, input.State, input.MaintenanceStartsAt, input.MaintenanceEndsAt)
+	item, err := s.Store.UpdateClusterConfigurationWithAudit(r.Context(), p, clusterID, input.State, input.MaintenanceStartsAt, input.MaintenanceEndsAt, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.state.update", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"state": input.State, "maintenanceStartsAt": input.MaintenanceStartsAt, "maintenanceEndsAt": input.MaintenanceEndsAt})
 	writeJSON(w, 200, item)
 }
 
@@ -296,7 +294,7 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.QueueClusterDeletion(r.Context(), p.OrganizationID, clusterID); err != nil {
+	if err = s.Store.QueueClusterDeletionWithAudit(r.Context(), p, clusterID, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "cluster_busy", "move or delete assigned environments before deleting the cluster")
 			return
@@ -304,7 +302,6 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.delete", "cluster", clusterID.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 
@@ -339,11 +336,10 @@ func (s *Server) createClusterEnrollmentToken(w http.ResponseWriter, r *http.Req
 	}
 	p := principal(r)
 	expiresAt := time.Now().Add(15 * time.Minute)
-	if err = s.Store.CreateClusterEnrollmentToken(r.Context(), p.OrganizationID, clusterID, p.UserID, cryptox.Digest(token), expiresAt); err != nil {
+	if err = s.Store.CreateClusterEnrollmentTokenWithAudit(r.Context(), p, clusterID, cryptox.Digest(token), expiresAt, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.enrollment_token.create", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"expiresAt": expiresAt})
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expiresAt": expiresAt})
 }
 
