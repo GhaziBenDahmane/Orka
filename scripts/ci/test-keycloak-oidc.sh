@@ -66,4 +66,7 @@ fi
 export SSL_CERT_FILE="$work_dir/keycloak.crt"
 export DOCKYARD_TEST_DATABASE_URL="postgres://dockyard:dockyard@127.0.0.1:${postgres_port}/dockyard_test?sslmode=disable"
 export DOCKYARD_TEST_KEYCLOAK_ISSUER="$issuer"
-"$work_dir/httpapi-conformance.test" -test.timeout=5m -test.run='^TestKeycloak(OIDC|SAML)Conformance$' -test.count=1 -test.v
+test_log="$work_dir/keycloak-sso-tests.log"
+"$work_dir/httpapi-conformance.test" -test.timeout=5m -test.run='^TestKeycloak(OIDC|SAML)Conformance$' -test.count=1 -test.v | tee "$test_log"
+grep -Eq '^--- PASS: TestKeycloakOIDCConformance ' "$test_log"
+grep -Eq '^--- PASS: TestKeycloakSAMLConformance ' "$test_log"

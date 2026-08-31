@@ -202,6 +202,8 @@ links for every item below.
   callback replay rejection. Its SAML flow imports the generated SP metadata into Keycloak and
   verifies a signed AuthnRequest, signed responses, SP- and IdP-initiated login,
   JIT provisioning, session authentication, and assertion replay rejection.
+  The harness requires explicit PASS records from both named flows before CI
+  may emit positive SSO evidence; an empty or stale test selector fails closed.
   Exercise two-phase SAML SP certificate rollover against each configured
   provider: publish the replacement, refresh IdP metadata, prove the old key
   remains active before promotion, promote, and verify a new login.
