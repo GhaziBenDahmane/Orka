@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,6 +110,53 @@ func TestVerifyProductionEvidenceRejectsUnsafeURLBeforeTransport(t *testing.T) {
 	}
 	if requests != 0 {
 		t.Fatalf("unsafe evidence URL reached transport %d time(s)", requests)
+	}
+}
+
+func TestVerifyProductionEvidenceEnforcesRedirectPolicy(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	certification := validCertification(now)
+	requests := 0
+	client := &http.Client{Transport: productionEvidenceRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if requests != 1 {
+			t.Fatalf("unsafe redirect reached transport: %s", request.URL)
+		}
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": {"http://evidence.example.test/plaintext.json"}},
+			Body:       io.NopCloser(strings.NewReader("redirect")),
+			Request:    request,
+		}, nil
+	})}
+	err := verifyProductionEvidence(context.Background(), certification, client, 1024)
+	if err == nil || !strings.Contains(err.Error(), "redirect URL") {
+		t.Fatalf("unsafe redirect error=%v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("unsafe redirect made %d transport requests, want 1", requests)
+	}
+}
+
+func TestVerifyProductionEvidencePreservesCallerRedirectPolicy(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	certification := validCertification(now)
+	client := &http.Client{
+		Transport: productionEvidenceRoundTripper(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": {"https://evidence.example.test/redirected.json"}},
+				Body:       io.NopCloser(strings.NewReader("redirect")),
+				Request:    request,
+			}, nil
+		}),
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("caller rejected redirect")
+		},
+	}
+	err := verifyProductionEvidence(context.Background(), certification, client, 1024)
+	if err == nil || !strings.Contains(err.Error(), "caller rejected redirect") {
+		t.Fatalf("caller redirect policy error=%v", err)
 	}
 }
 

@@ -200,6 +200,22 @@ func verifyProductionEvidence(ctx context.Context, certification ProductionCerti
 	if client == nil || maximumBytes <= 0 {
 		return errors.New("production evidence HTTP client and positive size limit are required")
 	}
+	// Enforce the evidence redirect contract here rather than relying on every
+	// caller to configure it correctly. Copying the client avoids mutating a
+	// shared client while retaining any stricter redirect policy supplied by the
+	// caller. Evidence retrieval never needs ambient cookies.
+	verifiedClient := *client
+	callerRedirectPolicy := client.CheckRedirect
+	verifiedClient.Jar = nil
+	verifiedClient.CheckRedirect = func(request *http.Request, previous []*http.Request) error {
+		if err := CheckProductionEvidenceRedirect(request, previous); err != nil {
+			return err
+		}
+		if callerRedirectPolicy != nil {
+			return callerRedirectPolicy(request, previous)
+		}
+		return nil
+	}
 	for _, gateName := range requiredProductionGates {
 		gate, exists := certification.Gates[gateName]
 		if !exists {
@@ -215,7 +231,7 @@ func verifyProductionEvidence(ctx context.Context, certification ProductionCerti
 			}
 			request.Header.Set("Accept", "application/octet-stream")
 			request.Header.Set("Accept-Encoding", "identity")
-			response, err := client.Do(request)
+			response, err := verifiedClient.Do(request)
 			if err != nil {
 				return fmt.Errorf("fetch gate %q evidence %d: %w", gateName, index, err)
 			}
