@@ -165,7 +165,7 @@ groups:
           severity: critical
         annotations:
           summary: An offline named-volume recovery failed
-          description: Keep the affected service stopped, inspect its restore record and storage-node assignment, and retry recovery before starting the workload.
+          description: Service {{ $labels.service }} volume {{ $labels.volume }} failed offline recovery; keep the workload stopped, inspect its restore record and storage-node assignment, and retry recovery before starting it.
 
       - alert: DockyardOfflineVolumeRestoreStalled
         expr: dockyard_volume_restore_active_age_seconds{mode="offline"} > 1800
