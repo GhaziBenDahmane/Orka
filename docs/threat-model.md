@@ -158,7 +158,11 @@ labels. Expiry and stalled/failed convergence are monitored independently.
 ### Replay, stale work, and split brain
 
 Webhook delivery IDs, SAML assertions, OIDC state, invitation tokens, and agent
-enrollment tokens are one-time or replay-protected. An agent enrollment result
+enrollment tokens are one-time or replay-protected. OIDC and SAML login states
+also bind the exact provider configuration revision; JIT provisioning and
+session issuance revalidate it while holding database locks, preventing an
+in-flight callback from crossing a provider update or disable/re-enable cycle.
+An agent enrollment result
 is retryable only for the exact CSR bound to the consumed token, preventing a
 dropped response from requiring an unsafe reusable credential. Durable jobs and remote
 commands use expiring per-attempt fencing identifiers. Resource transitions

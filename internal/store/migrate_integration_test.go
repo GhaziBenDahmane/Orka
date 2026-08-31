@@ -432,7 +432,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -450,6 +450,45 @@ func TestMigrateRejectsChecksumMismatch(t *testing.T) {
 	}
 	if err := Migrate(ctx, pool); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("expected checksum mismatch, got %v", err)
+	}
+}
+
+func TestMigrateBindsPendingSSOStatesToProviderRevisions(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "113_federated_session_provider.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, oidcProviderID, samlProviderID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'SSO revision migration',$2)`, []any{organizationID, "sso-revision-migration-" + organizationID.String()}},
+		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret) VALUES($1,$2,'oidc','https://oidc.example.test','client','encrypted')`, []any{oidcProviderID, organizationID}},
+		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key) VALUES($1,$2,'saml','<metadata/>','certificate','encrypted')`, []any{samlProviderID, organizationID}},
+		{`INSERT INTO oidc_states(token_hash,provider_id,code_verifier,nonce,expires_at) VALUES($1,$2,'verifier','nonce',now()+interval '10 minutes')`, []any{[]byte("legacy-oidc-state"), oidcProviderID}},
+		{`INSERT INTO saml_states(token_hash,provider_id,request_id,expires_at) VALUES($1,$2,'request-id',now()+interval '10 minutes')`, []any{[]byte("legacy-saml-state"), samlProviderID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var oidcRevision, samlRevision int64
+	var pendingStates int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT revision FROM oidc_providers WHERE id=$1),(SELECT revision FROM saml_providers WHERE id=$2),(SELECT count(*) FROM oidc_states)+(SELECT count(*) FROM saml_states)`, oidcProviderID, samlProviderID).Scan(&oidcRevision, &samlRevision, &pendingStates); err != nil {
+		t.Fatal(err)
+	}
+	if oidcRevision != 1 || samlRevision != 1 || pendingStates != 0 {
+		t.Fatalf("migrated revisions oidc=%d saml=%d pending_states=%d", oidcRevision, samlRevision, pendingStates)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO oidc_states(token_hash,provider_id,code_verifier,nonce,expires_at) VALUES($1,$2,'verifier','nonce',now()+interval '10 minutes')`, []byte("unbound-state"), oidcProviderID); err == nil {
+		t.Fatal("post-migration OIDC state without provider revision was accepted")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE saml_providers SET revision=0 WHERE id=$1`, samlProviderID); err == nil {
+		t.Fatal("non-positive provider revision was accepted")
 	}
 }
 

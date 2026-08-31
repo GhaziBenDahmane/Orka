@@ -4333,6 +4333,15 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 	} else if err != nil {
 		return uuid.Nil, err
 	}
+	var enabled bool
+	var revision int64
+	if err = tx.QueryRow(ctx, `SELECT enabled,revision FROM oidc_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, p.ID, p.OrganizationID).Scan(&enabled, &revision); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
+		return uuid.Nil, ErrNotFound
+	} else if err != nil {
+		return uuid.Nil, err
+	} else if revision != p.Revision {
+		return uuid.Nil, ErrAuthenticationStateChanged
+	}
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
 		return uuid.Nil, err
 	}
@@ -4671,6 +4680,15 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 		return uuid.Nil, ErrNotFound
 	} else if err != nil {
 		return uuid.Nil, err
+	}
+	var enabled bool
+	var revision int64
+	if err = tx.QueryRow(ctx, `SELECT enabled,revision FROM saml_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, p.ID, p.OrganizationID).Scan(&enabled, &revision); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
+		return uuid.Nil, ErrNotFound
+	} else if err != nil {
+		return uuid.Nil, err
+	} else if revision != p.Revision {
+		return uuid.Nil, ErrAuthenticationStateChanged
 	}
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
 		return uuid.Nil, err

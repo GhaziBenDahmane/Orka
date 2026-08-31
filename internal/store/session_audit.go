@@ -39,19 +39,25 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 	var oidcProviderID, samlProviderID *uuid.UUID
 	if authMethod == "oidc" {
 		oidcProviderID = providerID
-		var current bool
-		if err = tx.QueryRow(ctx, `SELECT true FROM oidc_providers WHERE id=$1 AND organization_id=$2 AND enabled AND revision=$3 FOR KEY SHARE`, *providerID, *organizationID, providerRevision).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
+		var enabled bool
+		var currentRevision int64
+		if err = tx.QueryRow(ctx, `SELECT enabled,revision FROM oidc_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, *providerID, *organizationID).Scan(&enabled, &currentRevision); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
 			return uuid.Nil, ErrNotFound
 		} else if err != nil {
 			return uuid.Nil, err
+		} else if currentRevision != providerRevision {
+			return uuid.Nil, ErrAuthenticationStateChanged
 		}
 	} else if authMethod == "saml" {
 		samlProviderID = providerID
-		var current bool
-		if err = tx.QueryRow(ctx, `SELECT true FROM saml_providers WHERE id=$1 AND organization_id=$2 AND enabled AND revision=$3 FOR KEY SHARE`, *providerID, *organizationID, providerRevision).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
+		var enabled bool
+		var currentRevision int64
+		if err = tx.QueryRow(ctx, `SELECT enabled,revision FROM saml_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, *providerID, *organizationID).Scan(&enabled, &currentRevision); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
 			return uuid.Nil, ErrNotFound
 		} else if err != nil {
 			return uuid.Nil, err
+		} else if currentRevision != providerRevision {
+			return uuid.Nil, ErrAuthenticationStateChanged
 		}
 	}
 	id := uuid.New()

@@ -14,7 +14,11 @@ Terraform update.
 Provider and mandatory-SSO mutations require an organization owner because
 they change the identity trust boundary. Administrators retain read access.
 Disabling or changing a provider revokes its pending login attempts and active
-sessions; sessions issued by other providers remain valid.
+sessions; sessions issued by other providers remain valid. Every login state
+captures the provider configuration revision that initiated it. Callback JIT
+provisioning and session issuance lock and revalidate that exact revision, so a
+callback already in flight cannot create a membership or session after an
+owner changes, disables, or briefly disables and re-enables the provider.
 
 The SAML CLI lifecycle is `saml-providers`, `create-saml-provider JSON`,
 `update-saml-provider ID JSON`, `enable-saml-provider ID`, and
@@ -97,9 +101,11 @@ For every configured provider, verify and record:
 3. JIT provisioning assigns the configured non-owner default role;
 4. an unverified email and an email outside the allowed domains are rejected;
 5. disabled providers cannot start or complete login and their existing sessions are revoked;
-6. sessions are bound to the intended organization and exact provider;
-7. two organizations using the same email remain tenant-isolated;
-8. mandatory SSO and the documented owner break-glass procedure both work.
+6. changing or disable/re-enabling a provider while a callback is in flight
+   rejects stale JIT provisioning and session issuance;
+7. sessions are bound to the intended organization and exact provider;
+8. two organizations using the same email remain tenant-isolated;
+9. mandatory SSO and the documented owner break-glass procedure both work.
 
 For SAML-capable providers, additionally import Dockyard's generated service
 provider metadata, require signed assertions, test both supported initiation
