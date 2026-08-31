@@ -351,6 +351,8 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 		if backup.LastBackupStatus != "succeeded" {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database lacks a successful backup", Description: "No latest successful backup is visible for this managed database.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine, "lastBackupStatus": backup.LastBackupStatus}, Remediation: "Run a backup, resolve any failure, and verify the resulting artifact checksum."})
+		} else if !backup.LastBackupArtifactValid {
+			add(modelFinding{Severity: "critical", Category: "backup", Title: "Database backup artifact metadata is invalid", Description: "The latest successful database backup lacks the complete size, checksum, encryption, or storage metadata required for restore.", ResourceType: "database", ResourceID: resourceID, Evidence: map[string]any{"engine": backup.Engine}, Remediation: "Do not rely on this recovery point; complete a fresh encrypted backup and a successful restore drill."})
 		} else if recoveryEvidenceOverdue(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute) {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Database backup is overdue", Description: "The latest successful database backup is older than twice the configured interval.", ResourceType: "database", ResourceID: resourceID, Evidence: recoveryAgeEvidence(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute), Remediation: "Inspect the backup scheduler and destination, then complete a fresh verified backup."})
 		}
@@ -389,6 +391,8 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 		if backup.LastBackupStatus != "succeeded" {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Volume lacks a successful backup", Description: "No latest successful encrypted backup is visible for a protected named volume.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName, "lastBackupStatus": backup.LastBackupStatus}, Remediation: "Run a volume backup, resolve any failure, and verify the resulting artifact checksum."})
+		} else if !backup.LastBackupArtifactValid {
+			add(modelFinding{Severity: "critical", Category: "backup", Title: "Volume backup artifact metadata is invalid", Description: "The latest successful named-volume backup lacks the complete size, checksum, encryption-key, or object metadata required for restore.", ResourceType: "service", ResourceID: resourceID, Evidence: map[string]any{"volumeName": backup.VolumeName}, Remediation: "Do not rely on this recovery point; complete a fresh encrypted backup and a controlled restore rehearsal."})
 		} else if backup.PolicyEnabled && recoveryEvidenceOverdue(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute) {
 			evidence := recoveryAgeEvidence(now, backup.LastBackupAt, backup.IntervalSeconds, 30*time.Minute)
 			evidence["volumeName"] = backup.VolumeName

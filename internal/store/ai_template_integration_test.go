@@ -350,7 +350,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 			($4,'other-source-org','database','postgres:other-db',$5,'imported','','{"private":"other-migration-secret"}',now()-interval '1 minute')`, []any{organizationID, projectID, databaseID, otherOrganizationID, otherDatabaseID}},
 		{`INSERT INTO database_migrations(id,database_instance_id,source_kind,source_id,source_engine,source_version,source_host,encrypted_source_config,status,finished_at) VALUES($1,$2,'dokploy','source-db','postgres','17','legacy-db.internal','migration-source-secret','succeeded',now())`, []any{uuid.New(), databaseID}},
 		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,verify_restore) VALUES($1,$2,3600,14,true,now(),true)`, []any{policyID, databaseID}},
-		{`INSERT INTO database_backups(id,database_instance_id,status,format,finished_at) VALUES($1,$2,'succeeded','dump',now())`, []any{backupID, databaseID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,path,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'succeeded','dump',$3,42,$4,true,$5,'wrapped-key',now())`, []any{backupID, databaseID, "/var/lib/dockyard/backups/" + backupID.String() + "/" + backupID.String() + ".dump.enc", strings.Repeat("a", 64), strings.Repeat("b", 64)}},
 		{`INSERT INTO database_restores(id,database_backup_id,status,kind,finished_at) VALUES($1,$2,'succeeded','drill',now())`, []any{uuid.New(), backupID}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,agent_image,agent_update_state,deletion_requested_at) VALUES($1,$2,'Paris','paris','active','{"secret":"target-cluster-label-secret"}','{"secret":"target-cluster-capacity-secret"}',$3,'updating',now()-interval '20 minutes')`, []any{clusterID, organizationID, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,attempts,target_image,last_error,run_after) VALUES($1,$2,'agent.upgrade','agent-command-secret','verifying',1,$3,'target-agent-error-secret',now()-interval '1 minute')`, []any{upgradeID, clusterID, "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)}},
@@ -431,7 +431,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	if len(snapshot.Projects) != 1 || snapshot.Projects[0].ID != projectID || len(snapshot.Environments) != 1 || snapshot.Environments[0].ID != environmentID || !snapshot.Environments[0].PlacementSelectorConfigured {
 		t.Fatalf("inventory projection projects=%#v environments=%#v", snapshot.Projects, snapshot.Environments)
 	}
-	if len(snapshot.BackupPosture) != 1 || snapshot.BackupPosture[0].DatabaseID != databaseID || !snapshot.BackupPosture[0].VerifyRestore || snapshot.BackupPosture[0].LastBackupStatus != "succeeded" || snapshot.BackupPosture[0].LastRestoreDrillStatus != "succeeded" {
+	if len(snapshot.BackupPosture) != 1 || snapshot.BackupPosture[0].DatabaseID != databaseID || !snapshot.BackupPosture[0].VerifyRestore || snapshot.BackupPosture[0].LastBackupStatus != "succeeded" || !snapshot.BackupPosture[0].LastBackupArtifactValid || snapshot.BackupPosture[0].LastRestoreDrillStatus != "succeeded" {
 		t.Fatalf("backup posture=%#v", snapshot.BackupPosture)
 	}
 	if len(snapshot.Routes) != 1 || snapshot.Routes[0].ID != routeID || snapshot.Routes[0].ComposeServiceID != serviceID || snapshot.Routes[0].TLS {

@@ -707,7 +707,7 @@ func TestDeterministicAuditDetectsNamedVolumesWithoutPolicies(t *testing.T) {
 		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		NotificationPosture: fullyCoveredNotifications(),
 		WorkloadPosture:     []store.AIAuditWorkloadPosture{{ServiceID: serviceID, DefinitionParseable: true, NamedVolumes: []string{"cache", "uploads"}}},
-		VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{ServiceID: serviceID, VolumeName: "cache", PolicyEnabled: true, StorageNodeID: "node-1", IntervalSeconds: 3600, LastBackupStatus: "succeeded", LastBackupAt: &now, Quiesce: true, LastRestoreStatus: "succeeded", LastRestoreAt: &now}},
+		VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{ServiceID: serviceID, VolumeName: "cache", PolicyEnabled: true, StorageNodeID: "node-1", IntervalSeconds: 3600, LastBackupStatus: "succeeded", LastBackupAt: &now, LastBackupArtifactValid: true, Quiesce: true, LastRestoreStatus: "succeeded", LastRestoreAt: &now}},
 	}
 	findings := deterministicAuditFindings(snapshot, now)
 	if len(findings) != 1 || findings[0].Title != "Named volume has no backup policy" || findings[0].ResourceType != "service_volume" || findings[0].ResourceID != serviceID.String()+"/uploads" {
@@ -920,12 +920,12 @@ func TestDeterministicAuditDetectsOverdueRecoveryEvidence(t *testing.T) {
 				NotificationPosture: fullyCoveredNotifications(),
 				BackupPosture: []store.AIAuditBackupPosture{{
 					DatabaseID: uuid.New(), PolicyConfigured: true, PolicyEnabled: true, IntervalSeconds: 3600,
-					VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt, LastBackupUtilityImage: pinnedUtility,
+					VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt, LastBackupArtifactValid: true, LastBackupUtilityImage: pinnedUtility,
 					LastRestoreDrillStatus: "succeeded", LastRestoreDrillAt: test.restoreAt, LastRestoreUtilityImage: pinnedUtility, LastRestoreReadinessImage: pinnedUtility,
 				}},
 				VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{
 					ServiceID: uuid.New(), VolumeName: "uploads", StorageNodeID: "nodeabc123", PolicyEnabled: true,
-					IntervalSeconds: 3600, Quiesce: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt,
+					IntervalSeconds: 3600, Quiesce: true, LastBackupStatus: "succeeded", LastBackupAt: test.backupAt, LastBackupArtifactValid: true,
 					LastRestoreStatus: "succeeded", LastRestoreAt: test.restoreAt,
 				}},
 			}
@@ -949,7 +949,7 @@ func TestDeterministicAuditDetectsMutableDatabaseRecoveryUtilities(t *testing.T)
 		NotificationPosture: fullyCoveredNotifications(),
 		BackupPosture: []store.AIAuditBackupPosture{{
 			DatabaseID: uuid.New(), Engine: "postgres", PolicyConfigured: true, PolicyEnabled: true, IntervalSeconds: 3600,
-			VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: &now, LastBackupUtilityImage: "postgres:17",
+			VerifyRestore: true, LastBackupStatus: "succeeded", LastBackupAt: &now, LastBackupArtifactValid: true, LastBackupUtilityImage: "postgres:17",
 			LastRestoreDrillStatus: "succeeded", LastRestoreDrillAt: &now, LastRestoreUtilityImage: "postgres:17",
 		}},
 	}
@@ -959,6 +959,34 @@ func TestDeterministicAuditDetectsMutableDatabaseRecoveryUtilities(t *testing.T)
 		titles[finding.Title] = true
 	}
 	for _, title := range []string{"Database backup utility provenance is missing", "Database restore drill utility provenance is missing"} {
+		if !titles[title] {
+			t.Fatalf("missing finding %q in %#v", title, findings)
+		}
+	}
+}
+
+func TestDeterministicAuditRejectsSuccessfulBackupsWithInvalidArtifactMetadata(t *testing.T) {
+	now := time.Now().UTC()
+	databaseID, serviceID := uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		BackupPosture: []store.AIAuditBackupPosture{{
+			DatabaseID: databaseID, Engine: "postgres", PolicyConfigured: true, PolicyEnabled: true, IntervalSeconds: 3600,
+			LastBackupStatus: "succeeded", LastBackupAt: &now, LastBackupUtilityImage: "postgres@sha256:" + strings.Repeat("a", 64),
+		}},
+		VolumeBackupPosture: []store.AIAuditVolumeBackupPosture{{
+			ServiceID: serviceID, VolumeName: "uploads", StorageNodeID: "nodeabc123", PolicyEnabled: true,
+			IntervalSeconds: 3600, Quiesce: true, LastBackupStatus: "succeeded", LastBackupAt: &now,
+		}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]bool{}
+	for _, finding := range findings {
+		titles[finding.Title] = true
+	}
+	for _, title := range []string{"Database backup artifact metadata is invalid", "Volume backup artifact metadata is invalid"} {
 		if !titles[title] {
 			t.Fatalf("missing finding %q in %#v", title, findings)
 		}
