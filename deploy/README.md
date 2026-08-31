@@ -376,9 +376,10 @@ Managed-network metrics distinguish local and remote lifecycle state, page on
 terminal provisioning errors, and warn when creation remains pending for more
 than fifteen minutes; network deletions participate in the same finalizer
 alerts.
-Shared-database recovery gauges are collapsed across the per-task `instance`
-label, so an HA controller fleet produces one alert per affected resource
-rather than one page per replica.
+Shared-database gauges are collapsed across the per-task `instance` label, so
+an HA controller fleet produces one alert per affected resource rather than
+one page per replica. Per-process health and build-identity signals retain the
+instance label so a faulty controller remains identifiable.
 Non-revoked SCIM tokens have equivalent expiry gauges and alerts
 so directory provisioning does not stop silently. The
 `dockyard_expired_credential_backlog` gauge reports retained records that an

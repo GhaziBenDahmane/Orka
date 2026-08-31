@@ -455,6 +455,51 @@ func TestPrometheusRecoveryAlertsDeduplicateHAReplicas(t *testing.T) {
 	}
 }
 
+func TestPrometheusSharedStateAlertsDeduplicateHAReplicas(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, metric := range []string{
+		"dockyard_job_stale_leases",
+		"dockyard_template_repository_sync_pending_age_seconds",
+		"dockyard_template_repository_sync_running_age_seconds",
+		"dockyard_template_repository_sync_failed",
+		"dockyard_ai_audit_last_failure_age_seconds",
+		"dockyard_ai_audit_completion_overdue",
+		"dockyard_ai_audit_running_age_seconds",
+		"dockyard_maintenance_scopes",
+		"dockyard_cluster_heartbeat_missing",
+		"dockyard_cluster_agent_update_failure",
+		"dockyard_agent_upgrade_verification_overdue",
+		"dockyard_agent_upgrade_active_age_seconds",
+		"dockyard_cluster_certificate_expiry_seconds",
+		"dockyard_cluster_certificate_rotation_pending_age_seconds",
+		"dockyard_custom_tls_certificate_expiry_seconds",
+		"dockyard_edge_tls_reconciliation",
+		"dockyard_edge_tls_reconciliation_age_seconds",
+		"dockyard_service_account_token_expiry_seconds",
+		"dockyard_deploy_token_expiry_seconds",
+		"dockyard_source_credential_rotation_age_seconds",
+		"dockyard_backup_destination_credential_rotation_age_seconds",
+		"dockyard_backup_destination_tls",
+		"dockyard_resource_finalizers",
+		"dockyard_resource_finalizer_oldest_age_seconds",
+		"dockyard_managed_networks",
+		"dockyard_managed_network_provisioning_age_seconds",
+		"dockyard_scim_token_expiry_seconds",
+		"dockyard_expired_credential_backlog",
+		"dockyard_saml_certificate_expiry_seconds",
+		"dockyard_saml_certificate_valid",
+		"dockyard_saml_certificate_rotation_pending_age_seconds",
+	} {
+		if !strings.Contains(text, "without (instance) ("+metric) {
+			t.Errorf("shared-state alert for %s does not collapse replicated HA series", metric)
+		}
+	}
+}
+
 func TestPrometheusAlertsCoverAIAuditHealth(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
 	if err != nil {
@@ -463,11 +508,11 @@ func TestPrometheusAlertsCoverAIAuditHealth(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardAIAuditFailed",
-		"expr: dockyard_ai_audit_last_failure_age_seconds < 900",
+		"expr: min without (instance) (dockyard_ai_audit_last_failure_age_seconds) < 900",
 		"alert: DockyardAIAuditOverdue",
-		"expr: dockyard_ai_audit_completion_overdue == 1",
+		"expr: max without (instance) (dockyard_ai_audit_completion_overdue) == 1",
 		"alert: DockyardAIAuditStuck",
-		"expr: dockyard_ai_audit_running_age_seconds > 600",
+		"expr: max without (instance) (dockyard_ai_audit_running_age_seconds) > 600",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -483,11 +528,11 @@ func TestPrometheusAlertsCoverTemplateRepositorySyncHealth(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardTemplateRepositorySyncQueued",
-		"expr: dockyard_template_repository_sync_pending_age_seconds > 300",
+		"expr: max without (instance) (dockyard_template_repository_sync_pending_age_seconds) > 300",
 		"alert: DockyardTemplateRepositorySyncStuck",
-		"expr: dockyard_template_repository_sync_running_age_seconds > 600",
+		"expr: max without (instance) (dockyard_template_repository_sync_running_age_seconds) > 600",
 		"alert: DockyardTemplateRepositorySyncFailed",
-		"expr: dockyard_template_repository_sync_failed == 1",
+		"expr: max without (instance) (dockyard_template_repository_sync_failed) == 1",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -519,9 +564,9 @@ func TestPrometheusAlertsCoverServiceAccountExpiry(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardServiceAccountTokenExpiring",
-		"expr: dockyard_service_account_token_expiry_seconds > 0 and dockyard_service_account_token_expiry_seconds < 604800",
+		"expr: min without (instance) (dockyard_service_account_token_expiry_seconds) > 0 and min without (instance) (dockyard_service_account_token_expiry_seconds) < 604800",
 		"alert: DockyardServiceAccountTokenExpired",
-		"expr: dockyard_service_account_token_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_service_account_token_expiry_seconds) <= 0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -537,23 +582,23 @@ func TestPrometheusAlertsCoverDeployTokensAndFinalizers(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardDeployTokenExpiring",
-		"expr: dockyard_deploy_token_expiry_seconds > 0 and dockyard_deploy_token_expiry_seconds < 604800",
+		"expr: min without (instance) (dockyard_deploy_token_expiry_seconds) > 0 and min without (instance) (dockyard_deploy_token_expiry_seconds) < 604800",
 		"alert: DockyardDeployTokenExpired",
-		"expr: dockyard_deploy_token_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_deploy_token_expiry_seconds) <= 0",
 		"alert: DockyardSourceCredentialRotationOverdue",
-		"expr: dockyard_source_credential_rotation_age_seconds > 15552000",
+		"expr: max without (instance) (dockyard_source_credential_rotation_age_seconds) > 15552000",
 		"alert: DockyardBackupDestinationCredentialRotationOverdue",
-		"expr: dockyard_backup_destination_credential_rotation_age_seconds > 15552000",
+		"expr: max without (instance) (dockyard_backup_destination_credential_rotation_age_seconds) > 15552000",
 		"alert: DockyardBackupDestinationPlaintextTransport",
-		"expr: dockyard_backup_destination_tls == 0",
+		"expr: min without (instance) (dockyard_backup_destination_tls) == 0",
 		"alert: DockyardResourceFinalizerRequiresIntervention",
-		`expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
+		`expr: max without (instance) (dockyard_resource_finalizers{state=~"failed|missing"}) > 0`,
 		"alert: DockyardResourceFinalizerStalled",
-		`expr: dockyard_resource_finalizer_oldest_age_seconds > 900 unless on (organization, kind) dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
+		`expr: max without (instance) (dockyard_resource_finalizer_oldest_age_seconds) > 900 unless on (organization, kind) max without (instance) (dockyard_resource_finalizers{state=~"failed|missing"}) > 0`,
 		"alert: DockyardManagedNetworkProvisioningFailed",
-		`expr: dockyard_managed_networks{status="error"} > 0`,
+		`expr: max without (instance) (dockyard_managed_networks{status="error"}) > 0`,
 		"alert: DockyardManagedNetworkProvisioningStalled",
-		"expr: dockyard_managed_network_provisioning_age_seconds > 900",
+		"expr: max without (instance) (dockyard_managed_network_provisioning_age_seconds) > 900",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -569,9 +614,9 @@ func TestPrometheusAlertsCoverSCIMTokenExpiry(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardSCIMTokenExpiring",
-		"expr: dockyard_scim_token_expiry_seconds > 0 and dockyard_scim_token_expiry_seconds < 604800",
+		"expr: min without (instance) (dockyard_scim_token_expiry_seconds) > 0 and min without (instance) (dockyard_scim_token_expiry_seconds) < 604800",
 		"alert: DockyardSCIMTokenExpired",
-		"expr: dockyard_scim_token_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_scim_token_expiry_seconds) <= 0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -587,7 +632,7 @@ func TestPrometheusAlertsCoverCredentialCleanup(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardCredentialCleanupBacklog",
-		"expr: dockyard_expired_credential_backlog > 0",
+		"expr: max without (instance) (dockyard_expired_credential_backlog) > 0",
 		"for: 2h",
 	} {
 		if !strings.Contains(text, expected) {
@@ -604,13 +649,13 @@ func TestPrometheusAlertsCoverSAMLCertificateHealth(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardSAMLCertificateExpiring",
-		"expr: dockyard_saml_certificate_expiry_seconds > 0 and dockyard_saml_certificate_expiry_seconds < 2592000",
+		"expr: min without (instance) (dockyard_saml_certificate_expiry_seconds) > 0 and min without (instance) (dockyard_saml_certificate_expiry_seconds) < 2592000",
 		"alert: DockyardSAMLCertificateExpired",
-		"expr: dockyard_saml_certificate_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_saml_certificate_expiry_seconds) <= 0",
 		"alert: DockyardSAMLCertificateInvalid",
-		"expr: dockyard_saml_certificate_valid == 0 unless on (organization, provider, kind) dockyard_saml_certificate_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_saml_certificate_valid) == 0 unless on (organization, provider, kind) min without (instance) (dockyard_saml_certificate_expiry_seconds) <= 0",
 		"alert: DockyardSAMLCertificateRotationStalled",
-		"expr: dockyard_saml_certificate_rotation_pending_age_seconds > 604800",
+		"expr: max without (instance) (dockyard_saml_certificate_rotation_pending_age_seconds) > 604800",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -626,19 +671,19 @@ func TestPrometheusAlertsCoverRemoteClusterUpgradeHealth(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardRemoteClusterHeartbeatMissing",
-		"expr: dockyard_cluster_heartbeat_missing == 1",
+		"expr: max without (instance) (dockyard_cluster_heartbeat_missing) == 1",
 		"alert: DockyardAgentUpgradeRollback",
-		"expr: dockyard_cluster_agent_update_failure == 1",
+		"expr: max without (instance) (dockyard_cluster_agent_update_failure) == 1",
 		"alert: DockyardAgentUpgradeVerificationOverdue",
-		"expr: dockyard_agent_upgrade_verification_overdue > 0",
+		"expr: max without (instance) (dockyard_agent_upgrade_verification_overdue) > 0",
 		"alert: DockyardAgentUpgradeStalled",
-		`expr: dockyard_agent_upgrade_active_age_seconds{status=~"pending|leased"} > 900`,
+		`expr: max without (instance) (dockyard_agent_upgrade_active_age_seconds{status=~"pending|leased"}) > 900`,
 		"alert: DockyardAgentCertificateExpiring",
-		"expr: dockyard_cluster_certificate_expiry_seconds > 0 and dockyard_cluster_certificate_expiry_seconds < 79200",
+		"expr: min without (instance) (dockyard_cluster_certificate_expiry_seconds) > 0 and min without (instance) (dockyard_cluster_certificate_expiry_seconds) < 79200",
 		"alert: DockyardAgentCertificateExpired",
-		"expr: dockyard_cluster_certificate_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_cluster_certificate_expiry_seconds) <= 0",
 		"alert: DockyardAgentCertificateRotationStalled",
-		"expr: dockyard_cluster_certificate_rotation_pending_age_seconds > 300",
+		"expr: max without (instance) (dockyard_cluster_certificate_rotation_pending_age_seconds) > 300",
 		"alert: DockyardControlPlaneCertificateExpiring",
 		"expr: dockyard_control_plane_certificate_expiry_seconds > 0 and dockyard_control_plane_certificate_expiry_seconds < 604800",
 		"alert: DockyardControlPlaneCertificateExpired",
@@ -658,13 +703,13 @@ func TestPrometheusAlertsCoverCustomTLSHealth(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardCustomTLSCertificateExpiring",
-		"expr: dockyard_custom_tls_certificate_expiry_seconds > 0 and dockyard_custom_tls_certificate_expiry_seconds < 2592000",
+		"expr: min without (instance) (dockyard_custom_tls_certificate_expiry_seconds) > 0 and min without (instance) (dockyard_custom_tls_certificate_expiry_seconds) < 2592000",
 		"alert: DockyardCustomTLSCertificateExpired",
-		"expr: dockyard_custom_tls_certificate_expiry_seconds <= 0",
+		"expr: min without (instance) (dockyard_custom_tls_certificate_expiry_seconds) <= 0",
 		"alert: DockyardEdgeTLSReconciliationFailed",
-		`expr: dockyard_edge_tls_reconciliation{status="error"} == 1`,
+		`expr: max without (instance) (dockyard_edge_tls_reconciliation{status="error"}) == 1`,
 		"alert: DockyardEdgeTLSReconciliationStalled",
-		`expr: dockyard_edge_tls_reconciliation_age_seconds{status="pending"} > 300`,
+		`expr: max without (instance) (dockyard_edge_tls_reconciliation_age_seconds{status="pending"}) > 300`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

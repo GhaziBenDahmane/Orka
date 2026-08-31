@@ -29,7 +29,7 @@ groups:
           description: Scraped controller replicas report different immutable version or source-revision identities; finish or roll back the controller update before control-plane maintenance.
 
       - alert: DockyardStaleJobLease
-        expr: dockyard_job_stale_leases > 0
+        expr: max without (instance) (dockyard_job_stale_leases) > 0
         for: 2m
         labels:
           severity: critical
@@ -63,7 +63,7 @@ groups:
           description: A Git checkout or uploaded ZIP expanded beyond DOCKYARD_MAX_BUILD_WORKSPACE_BYTES. Review the rejected deployment before changing the limit.
 
       - alert: DockyardTemplateRepositorySyncQueued
-        expr: dockyard_template_repository_sync_pending_age_seconds > 300
+        expr: max without (instance) (dockyard_template_repository_sync_pending_age_seconds) > 300
         for: 5m
         labels:
           severity: warning
@@ -72,7 +72,7 @@ groups:
           description: Repository {{ $labels.repository }} in organization {{ $labels.organization }} has waited more than five minutes for the catalog scheduler.
 
       - alert: DockyardTemplateRepositorySyncStuck
-        expr: dockyard_template_repository_sync_running_age_seconds > 600
+        expr: max without (instance) (dockyard_template_repository_sync_running_age_seconds) > 600
         for: 5m
         labels:
           severity: warning
@@ -81,7 +81,7 @@ groups:
           description: Repository {{ $labels.repository }} in organization {{ $labels.organization }} has remained in the running state for more than ten minutes.
 
       - alert: DockyardTemplateRepositorySyncFailed
-        expr: dockyard_template_repository_sync_failed == 1
+        expr: max without (instance) (dockyard_template_repository_sync_failed) == 1
         for: 5m
         labels:
           severity: warning
@@ -117,7 +117,7 @@ groups:
           description: Successful {{ $labels.operation }} evidence is missing a digest-pinned image for role {{ $labels.role }}; complete a fresh verified operation before relying on that recovery evidence.
 
       - alert: DockyardAIAuditFailed
-        expr: dockyard_ai_audit_last_failure_age_seconds < 900
+        expr: min without (instance) (dockyard_ai_audit_last_failure_age_seconds) < 900
         labels:
           severity: warning
         annotations:
@@ -125,7 +125,7 @@ groups:
           description: The AI auditor for organization {{ $labels.organization }} reported a failed run in the last fifteen minutes.
 
       - alert: DockyardAIAuditOverdue
-        expr: dockyard_ai_audit_completion_overdue == 1
+        expr: max without (instance) (dockyard_ai_audit_completion_overdue) == 1
         for: 15m
         labels:
           severity: warning
@@ -134,7 +134,7 @@ groups:
           description: Organization {{ $labels.organization }} has an active auditor token but no completed audit within the expected 48-hour window.
 
       - alert: DockyardAIAuditStuck
-        expr: dockyard_ai_audit_running_age_seconds > 600
+        expr: max without (instance) (dockyard_ai_audit_running_age_seconds) > 600
         for: 5m
         labels:
           severity: warning
@@ -293,7 +293,7 @@ groups:
           description: A destructive native database migration exhausted its retries in the last fifteen minutes.
 
       - alert: DockyardMaintenanceModeLeftEnabled
-        expr: sum(dockyard_maintenance_scopes) > 0
+        expr: sum(max without (instance) (dockyard_maintenance_scopes)) > 0
         for: 4h
         labels:
           severity: warning
@@ -302,7 +302,7 @@ groups:
           description: At least one resource scope has been in maintenance mode for four hours.
 
       - alert: DockyardRemoteClusterHeartbeatMissing
-        expr: dockyard_cluster_heartbeat_missing == 1
+        expr: max without (instance) (dockyard_cluster_heartbeat_missing) == 1
         for: 5m
         labels:
           severity: critical
@@ -311,7 +311,7 @@ groups:
           description: Cluster {{ $labels.cluster }} in organization {{ $labels.organization }} has been silent for more than two minutes or has never completed its first heartbeat.
 
       - alert: DockyardAgentUpgradeRollback
-        expr: dockyard_cluster_agent_update_failure == 1
+        expr: max without (instance) (dockyard_cluster_agent_update_failure) == 1
         for: 1m
         labels:
           severity: critical
@@ -320,7 +320,7 @@ groups:
           description: Cluster {{ $labels.cluster }} reports Swarm update state {{ $labels.state }}; inspect the service and upgrade history before retrying.
 
       - alert: DockyardAgentUpgradeVerificationOverdue
-        expr: dockyard_agent_upgrade_verification_overdue > 0
+        expr: max without (instance) (dockyard_agent_upgrade_verification_overdue) > 0
         for: 2m
         labels:
           severity: critical
@@ -329,7 +329,7 @@ groups:
           description: Cluster {{ $labels.cluster }} did not confirm the requested image digest before the controller deadline.
 
       - alert: DockyardAgentUpgradeStalled
-        expr: dockyard_agent_upgrade_active_age_seconds{status=~"pending|leased"} > 900
+        expr: max without (instance) (dockyard_agent_upgrade_active_age_seconds{status=~"pending|leased"}) > 900
         for: 5m
         labels:
           severity: warning
@@ -338,7 +338,7 @@ groups:
           description: Cluster {{ $labels.cluster }} has had an upgrade in {{ $labels.status }} state for more than fifteen minutes.
 
       - alert: DockyardAgentCertificateExpiring
-        expr: dockyard_cluster_certificate_expiry_seconds > 0 and dockyard_cluster_certificate_expiry_seconds < 79200
+        expr: min without (instance) (dockyard_cluster_certificate_expiry_seconds) > 0 and min without (instance) (dockyard_cluster_certificate_expiry_seconds) < 79200
         for: 15m
         labels:
           severity: warning
@@ -347,7 +347,7 @@ groups:
           description: Cluster {{ $labels.cluster }} has less than 22 hours of certificate validity and automatic rotation has not replaced it.
 
       - alert: DockyardAgentCertificateExpired
-        expr: dockyard_cluster_certificate_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_cluster_certificate_expiry_seconds) <= 0
         labels:
           severity: critical
         annotations:
@@ -355,7 +355,7 @@ groups:
           description: Cluster {{ $labels.cluster }} can no longer authenticate until it is re-enrolled.
 
       - alert: DockyardAgentCertificateRotationStalled
-        expr: dockyard_cluster_certificate_rotation_pending_age_seconds > 300
+        expr: max without (instance) (dockyard_cluster_certificate_rotation_pending_age_seconds) > 300
         for: 5m
         labels:
           severity: critical
@@ -364,7 +364,7 @@ groups:
           description: Cluster {{ $labels.cluster }} has not authenticated with its issued replacement certificate.
 
       - alert: DockyardCustomTLSCertificateExpiring
-        expr: dockyard_custom_tls_certificate_expiry_seconds > 0 and dockyard_custom_tls_certificate_expiry_seconds < 2592000
+        expr: min without (instance) (dockyard_custom_tls_certificate_expiry_seconds) > 0 and min without (instance) (dockyard_custom_tls_certificate_expiry_seconds) < 2592000
         for: 15m
         labels:
           severity: warning
@@ -373,7 +373,7 @@ groups:
           description: Certificate {{ $labels.certificate }} expires in less than thirty days; rotate it in organization settings.
 
       - alert: DockyardCustomTLSCertificateExpired
-        expr: dockyard_custom_tls_certificate_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_custom_tls_certificate_expiry_seconds) <= 0
         labels:
           severity: critical
         annotations:
@@ -381,7 +381,7 @@ groups:
           description: Certificate {{ $labels.certificate }} is expired and attached HTTPS routes may be unavailable.
 
       - alert: DockyardEdgeTLSReconciliationFailed
-        expr: dockyard_edge_tls_reconciliation{status="error"} == 1
+        expr: max without (instance) (dockyard_edge_tls_reconciliation{status="error"}) == 1
         for: 2m
         labels:
           severity: critical
@@ -390,7 +390,7 @@ groups:
           description: Target {{ $labels.target }} exhausted its retries; inspect the worker and Traefik edge service before deploying attached workloads.
 
       - alert: DockyardEdgeTLSReconciliationStalled
-        expr: dockyard_edge_tls_reconciliation_age_seconds{status="pending"} > 300
+        expr: max without (instance) (dockyard_edge_tls_reconciliation_age_seconds{status="pending"}) > 300
         for: 5m
         labels:
           severity: warning
@@ -416,7 +416,7 @@ groups:
           description: The {{ $labels.certificate }} certificate is expired and remote agent authentication is impaired.
 
       - alert: DockyardServiceAccountTokenExpiring
-        expr: dockyard_service_account_token_expiry_seconds > 0 and dockyard_service_account_token_expiry_seconds < 604800
+        expr: min without (instance) (dockyard_service_account_token_expiry_seconds) > 0 and min without (instance) (dockyard_service_account_token_expiry_seconds) < 604800
         for: 15m
         labels:
           severity: warning
@@ -425,7 +425,7 @@ groups:
           description: Service account {{ $labels.account }} ({{ $labels.role }}) expires in less than seven days; rotate its token and update the consuming secret.
 
       - alert: DockyardServiceAccountTokenExpired
-        expr: dockyard_service_account_token_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_service_account_token_expiry_seconds) <= 0
         labels:
           severity: critical
         annotations:
@@ -433,7 +433,7 @@ groups:
           description: Service account {{ $labels.account }} ({{ $labels.role }}) can no longer authenticate; rotate its token or disable the identity.
 
       - alert: DockyardDeployTokenExpiring
-        expr: dockyard_deploy_token_expiry_seconds > 0 and dockyard_deploy_token_expiry_seconds < 604800
+        expr: min without (instance) (dockyard_deploy_token_expiry_seconds) > 0 and min without (instance) (dockyard_deploy_token_expiry_seconds) < 604800
         for: 15m
         labels:
           severity: warning
@@ -442,7 +442,7 @@ groups:
           description: Deploy token {{ $labels.token }} for service {{ $labels.service }} expires in less than seven days; replace the CI secret and revoke the old credential.
 
       - alert: DockyardDeployTokenExpired
-        expr: dockyard_deploy_token_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_deploy_token_expiry_seconds) <= 0
         labels:
           severity: warning
         annotations:
@@ -450,7 +450,7 @@ groups:
           description: Deploy token {{ $labels.token }} can no longer trigger service {{ $labels.service }} and should be revoked after its CI consumer is updated.
 
       - alert: DockyardSourceCredentialRotationOverdue
-        expr: dockyard_source_credential_rotation_age_seconds > 15552000
+        expr: max without (instance) (dockyard_source_credential_rotation_age_seconds) > 15552000
         for: 1h
         labels:
           severity: warning
@@ -459,7 +459,7 @@ groups:
           description: Source credential {{ $labels.credential }} ({{ $labels.kind }}) in organization {{ $labels.organization }} has not been rotated for more than 180 days; rotate it in place and verify its bound consumers.
 
       - alert: DockyardBackupDestinationCredentialRotationOverdue
-        expr: dockyard_backup_destination_credential_rotation_age_seconds > 15552000
+        expr: max without (instance) (dockyard_backup_destination_credential_rotation_age_seconds) > 15552000
         for: 1h
         labels:
           severity: warning
@@ -468,7 +468,7 @@ groups:
           description: Backup destination {{ $labels.destination }} in organization {{ $labels.organization }} has used the same object-store credentials for more than 180 days; rotate them in place and verify backup and restore.
 
       - alert: DockyardBackupDestinationPlaintextTransport
-        expr: dockyard_backup_destination_tls == 0
+        expr: min without (instance) (dockyard_backup_destination_tls) == 0
         labels:
           severity: critical
         annotations:
@@ -476,7 +476,7 @@ groups:
           description: Backup destination {{ $labels.destination }} in organization {{ $labels.organization }} can expose object-store credentials in transit; move it to a certificate-validated HTTPS endpoint before running backup or restore operations.
 
       - alert: DockyardResourceFinalizerRequiresIntervention
-        expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0
+        expr: max without (instance) (dockyard_resource_finalizers{state=~"failed|missing"}) > 0
         for: 5m
         labels:
           severity: critical
@@ -485,7 +485,7 @@ groups:
           description: Organization {{ $labels.organization }} has {{ $value }} {{ $labels.kind }} deletion(s) with a failed or missing finalizer job.
 
       - alert: DockyardResourceFinalizerStalled
-        expr: dockyard_resource_finalizer_oldest_age_seconds > 900 unless on (organization, kind) dockyard_resource_finalizers{state=~"failed|missing"} > 0
+        expr: max without (instance) (dockyard_resource_finalizer_oldest_age_seconds) > 900 unless on (organization, kind) max without (instance) (dockyard_resource_finalizers{state=~"failed|missing"}) > 0
         for: 5m
         labels:
           severity: warning
@@ -494,7 +494,7 @@ groups:
           description: Organization {{ $labels.organization }} has a {{ $labels.kind }} deletion pending for more than fifteen minutes.
 
       - alert: DockyardManagedNetworkProvisioningFailed
-        expr: dockyard_managed_networks{status="error"} > 0
+        expr: max without (instance) (dockyard_managed_networks{status="error"}) > 0
         for: 5m
         labels:
           severity: critical
@@ -503,7 +503,7 @@ groups:
           description: Organization {{ $labels.organization }} has {{ $value }} failed {{ $labels.scope }} {{ $labels.driver }} network(s); inspect the network state and durable job failure before retrying.
 
       - alert: DockyardManagedNetworkProvisioningStalled
-        expr: dockyard_managed_network_provisioning_age_seconds > 900
+        expr: max without (instance) (dockyard_managed_network_provisioning_age_seconds) > 900
         for: 5m
         labels:
           severity: warning
@@ -512,7 +512,7 @@ groups:
           description: Managed network {{ $labels.network }} in organization {{ $labels.organization }} has not become ready within fifteen minutes.
 
       - alert: DockyardSCIMTokenExpiring
-        expr: dockyard_scim_token_expiry_seconds > 0 and dockyard_scim_token_expiry_seconds < 604800
+        expr: min without (instance) (dockyard_scim_token_expiry_seconds) > 0 and min without (instance) (dockyard_scim_token_expiry_seconds) < 604800
         for: 15m
         labels:
           severity: warning
@@ -521,7 +521,7 @@ groups:
           description: SCIM token {{ $labels.token }} expires in less than seven days; replace it in the identity provider and revoke the old token.
 
       - alert: DockyardSCIMTokenExpired
-        expr: dockyard_scim_token_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_scim_token_expiry_seconds) <= 0
         labels:
           severity: critical
         annotations:
@@ -529,7 +529,7 @@ groups:
           description: SCIM token {{ $labels.token }} can no longer provision identities; issue a replacement and update the identity provider.
 
       - alert: DockyardCredentialCleanupBacklog
-        expr: dockyard_expired_credential_backlog > 0
+        expr: max without (instance) (dockyard_expired_credential_backlog) > 0
         for: 2h
         labels:
           severity: warning
@@ -538,7 +538,7 @@ groups:
           description: More than two hourly cleanup passes have left {{ $value }} expired {{ $labels.kind }} record(s); inspect the audit-pruner controller lease and database health.
 
       - alert: DockyardSAMLCertificateExpiring
-        expr: dockyard_saml_certificate_expiry_seconds > 0 and dockyard_saml_certificate_expiry_seconds < 2592000
+        expr: min without (instance) (dockyard_saml_certificate_expiry_seconds) > 0 and min without (instance) (dockyard_saml_certificate_expiry_seconds) < 2592000
         for: 15m
         labels:
           severity: warning
@@ -547,7 +547,7 @@ groups:
           description: SAML provider {{ $labels.provider }} {{ $labels.kind }} trust expires in less than thirty days; complete the provider rollover before login is interrupted.
 
       - alert: DockyardSAMLCertificateExpired
-        expr: dockyard_saml_certificate_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_saml_certificate_expiry_seconds) <= 0
         labels:
           severity: critical
         annotations:
@@ -555,7 +555,7 @@ groups:
           description: SAML provider {{ $labels.provider }} {{ $labels.kind }} trust has expired and federated login is impaired.
 
       - alert: DockyardSAMLCertificateInvalid
-        expr: dockyard_saml_certificate_valid == 0 unless on (organization, provider, kind) dockyard_saml_certificate_expiry_seconds <= 0
+        expr: min without (instance) (dockyard_saml_certificate_valid) == 0 unless on (organization, provider, kind) min without (instance) (dockyard_saml_certificate_expiry_seconds) <= 0
         for: 5m
         labels:
           severity: critical
@@ -564,7 +564,7 @@ groups:
           description: SAML provider {{ $labels.provider }} {{ $labels.kind }} certificate material is malformed or not currently valid.
 
       - alert: DockyardSAMLCertificateRotationStalled
-        expr: dockyard_saml_certificate_rotation_pending_age_seconds > 604800
+        expr: max without (instance) (dockyard_saml_certificate_rotation_pending_age_seconds) > 604800
         for: 15m
         labels:
           severity: warning

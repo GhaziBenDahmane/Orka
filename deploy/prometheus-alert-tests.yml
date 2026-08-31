@@ -119,7 +119,9 @@ tests:
   - name: plaintext backup destination
     interval: 1m
     input_series:
-      - series: 'dockyard_backup_destination_tls{organization="organization-id",destination="destination-id"}'
+      - series: 'dockyard_backup_destination_tls{instance="10.0.0.1:8080",organization="organization-id",destination="destination-id"}'
+        values: '0x10'
+      - series: 'dockyard_backup_destination_tls{instance="10.0.0.2:8080",organization="organization-id",destination="destination-id"}'
         values: '0x10'
     alert_rule_test:
       - eval_time: 1m
