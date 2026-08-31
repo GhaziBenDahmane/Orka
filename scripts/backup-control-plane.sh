@@ -125,8 +125,16 @@ esac
 
 umask 077
 temporary=$(mktemp -d "$parent/.dockyard-recovery.XXXXXX")
-cleanup() { rm -rf -- "$temporary"; }
-trap cleanup EXIT HUP INT TERM
+cleanup() {
+  status=${1:-$?}
+  rm -rf -- "$temporary"
+  trap - EXIT HUP INT TERM
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'cleanup 129' HUP
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 if ! printf '%s' "$master_key" | base64 -d >"$temporary/master-key.bin" 2>/dev/null || [ "$(wc -c <"$temporary/master-key.bin" | tr -d ' ')" -ne 32 ]; then
   echo "DOCKYARD_MASTER_KEY must be a base64-encoded 32-byte key" >&2
   exit 1

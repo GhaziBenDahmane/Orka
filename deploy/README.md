@@ -106,6 +106,9 @@ successful one. The remote-agent and AI-auditor installers likewise return
 nonzero when interrupted. Their failed first installations also remove the
 submitted stack and only the resources created by that installer invocation;
 failed upgrades preserve the pre-existing stack and resources.
+Backup and restore scripts use the same nonzero signal semantics; an interrupted
+AI gateway backup removes its helper service and secret and restores the
+original 9Router replica count before returning.
 The supplied Swarm manifests set CPU and memory reservations plus hard limits
 for every long-running platform, agent, and AI service. Override the documented
 `*_CPU_LIMIT`, `*_MEMORY_LIMIT`, `*_CPU_RESERVATION`, and

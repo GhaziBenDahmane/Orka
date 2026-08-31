@@ -46,7 +46,13 @@ case "$1 $2" in
   "secret create") ;;
   "service create") ;;
   "service ps")
-    if [ "${ORKA_AI_RECOVERY_TEST_FAIL_TASK:-false}" = true ]; then printf '%s\n' 'Failed 1 second ago|sensitive failure'; else printf '%s\n' 'Complete 1 second ago|'; fi ;;
+    if [ "${ORKA_AI_RECOVERY_TEST_PENDING_TASK:-false}" = true ]; then
+      printf '%s\n' 'Running 1 second ago|'
+    elif [ "${ORKA_AI_RECOVERY_TEST_FAIL_TASK:-false}" = true ]; then
+      printf '%s\n' 'Failed 1 second ago|sensitive failure'
+    else
+      printf '%s\n' 'Complete 1 second ago|'
+    fi ;;
   "service logs") printf '%s\n' '{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","plaintextSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","sizeBytes":123}' ;;
   "service rm")
     if [ "${ORKA_AI_RECOVERY_TEST_SERVICE_RM_FAIL_ALWAYS:-false}" = true ]; then
@@ -67,7 +73,7 @@ MOCK
 chmod +x "$temporary/bin/docker"
 cat >"$temporary/bin/sleep" <<'MOCK'
 #!/bin/sh
-exit 0
+/bin/sleep "${ORKA_AI_RECOVERY_TEST_SLEEP_SECONDS:-0}"
 MOCK
 chmod +x "$temporary/bin/sleep"
 
@@ -101,6 +107,37 @@ if grep -Fq 'upload-secret' "$bundle/manifest.json" || grep -Fq "$(<"$DOCKYARD_A
 fi
 grep -q '^service scale --detach=false dockyard-ai_9router=0$' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
+
+: >"$ORKA_AI_RECOVERY_TEST_LOG"
+ORKA_AI_RECOVERY_TEST_PENDING_TASK=true ORKA_AI_RECOVERY_TEST_SLEEP_SECONDS=0.05 \
+  "$root/scripts/backup-ai-gateway.sh" "$temporary/output/interrupted-backup" \
+  >"$temporary/out" 2>"$temporary/err" &
+backup_pid=$!
+attempt=0
+while ! grep -q '^service create ' "$ORKA_AI_RECOVERY_TEST_LOG"; do
+  if ! kill -0 "$backup_pid" 2>/dev/null; then
+    wait "$backup_pid" || true
+    echo 'AI gateway backup exited before the interruption test reached its helper service' >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 100 ] || {
+    kill -TERM "$backup_pid" 2>/dev/null || true
+    wait "$backup_pid" || true
+    echo 'AI gateway backup did not reach its helper service during interruption test' >&2
+    exit 1
+  }
+  /bin/sleep 0.01
+done
+kill -TERM "$backup_pid"
+if wait "$backup_pid"; then
+  echo 'interrupted AI gateway backup returned a successful exit status' >&2
+  exit 1
+fi
+grep -q '^service rm ' "$ORKA_AI_RECOVERY_TEST_LOG"
+grep -q '^secret rm ' "$ORKA_AI_RECOVERY_TEST_LOG"
+grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
+test ! -e "$temporary/output/interrupted-backup"
 
 verify_manifest() {
   local manifest_path="$1"

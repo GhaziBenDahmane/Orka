@@ -113,7 +113,7 @@ remove_helper_resources() {
   [ "$cleanup_failed" = false ]
 }
 cleanup() {
-  status=$?
+  status=${1:-$?}
   remove_helper_resources || status=1
   if [ "$quiesced" = true ]; then
     docker service scale --detach=false "$service=$replicas" >/dev/null 2>&1 || status=1
@@ -122,7 +122,10 @@ cleanup() {
   trap - EXIT HUP INT TERM
   exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'cleanup 129' HUP
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 aad="orka-ai-gateway:${stack}:${created_at}"

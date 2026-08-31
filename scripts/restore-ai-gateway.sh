@@ -150,13 +150,16 @@ remove_helper_resources() {
   [ "$cleanup_failed" = false ]
 }
 cleanup() {
-  status=$?
+  status=${1:-$?}
   remove_helper_resources || status=1
   rm -rf -- "$temporary"
   trap - EXIT HUP INT TERM
   exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'cleanup 129' HUP
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 jq -n --rawfile transferUrl "$url_file" --rawfile encryptionKey "$key_file" --arg aad "$aad" --arg sha256 "$artifact_sha256" --arg plaintextSha256 "$plaintext_sha256" --argjson sizeBytes "$artifact_bytes" '{mode:"restore",transferUrl:$transferUrl,encryptionKey:$encryptionKey,encryptionAad:$aad,sha256:$sha256,plaintextSha256:$plaintextSha256,sizeBytes:$sizeBytes}' >"$temporary/job.json"
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,src=$temporary/job.json,dst=/run/job.json,readonly" --entrypoint /usr/local/bin/dockyard "$helper_image" validate-volume-artifact-job --job-file /run/job.json >/dev/null || fail "restore URL or signed artifact parameters are invalid"
