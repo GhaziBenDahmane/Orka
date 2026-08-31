@@ -209,6 +209,10 @@ links for every item below.
   deliberately corrupted contents, preservation of permissions and safe
   symlinks, workload resumption, data survival after a service restart, and
   retention losing safely to a restore queued after candidate selection.
+  Exercise the offline recovery path on a multi-node Swarm: stop and rebind a
+  workload, restore its retained artifact onto the new node without starting
+  application services, then start it and verify the pre-failure data. Evidence
+  must identify the old backup node and the snapshotted restore target.
   Repeat the measurement on every production storage driver because the CI
   RTO is not a production SLO.
 - Test the configured OIDC/SAML/SCIM providers and mandatory-SSO break-glass

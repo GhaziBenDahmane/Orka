@@ -92,6 +92,7 @@ func TestValidateVolumeArtifactJobRejectsUnsafePlacement(t *testing.T) {
 		"volume":  func(job *VolumeArtifactJob) { job.VolumeName = "../host" },
 		"node":    func(job *VolumeArtifactJob) { job.NodeID = "node;bad" },
 		"network": func(job *VolumeArtifactJob) { job.Network = "Bad Network" },
+		"offline": func(job *VolumeArtifactJob) { job.Offline = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			job := base
@@ -108,6 +109,14 @@ func TestValidateVolumeArtifactJobRejectsUnsafePlacement(t *testing.T) {
 	restore.SizeBytes = 42
 	if err := ValidateVolumeArtifactJob(restore); err == nil || !strings.Contains(err.Error(), "quiesce") {
 		t.Fatalf("non-quiesced restore error=%v", err)
+	}
+	restore.Offline = true
+	if err := ValidateVolumeArtifactJob(restore); err != nil {
+		t.Fatalf("offline restore rejected: %v", err)
+	}
+	restore.Quiesce = true
+	if err := ValidateVolumeArtifactJob(restore); err == nil || !strings.Contains(err.Error(), "either") {
+		t.Fatalf("ambiguous restore mode error=%v", err)
 	}
 }
 
@@ -159,6 +168,39 @@ exit 1
 				t.Fatalf("unrelated service was scaled:\n%s", callText)
 			}
 		})
+	}
+}
+
+func TestRunVolumeArtifactOfflineRestoreDoesNotStartOrScaleWorkload(t *testing.T) {
+	directory := t.TempDir()
+	docker, calls := filepath.Join(directory, "docker"), filepath.Join(directory, "calls")
+	digest, encryptedHash, plaintextHash := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + calls + `"
+if [ "$1" = service ] && [ "$2" = inspect ]; then echo 'registry.example/dockyard@sha256:` + digest + `'; exit 0; fi
+if [ "$1" = secret ] && [ "$2" = create ]; then cat >/dev/null; exit 0; fi
+if [ "$1" = service ] && [ "$2" = create ]; then exit 0; fi
+if [ "$1" = service ] && [ "$2" = ps ]; then echo 'Complete 1 second ago|'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = logs ]; then echo '{"sha256":"` + encryptedHash + `","plaintextSha256":"` + plaintextHash + `","sizeBytes":42}'; exit 0; fi
+if [ "$1" = service ] && [ "$2" = rm ]; then exit 0; fi
+if [ "$1" = secret ] && [ "$2" = rm ]; then exit 0; fi
+exit 1
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+	_, err := (Swarm{DockerBin: docker, ServiceName: "dockyard_dockyard", Timeout: time.Second}).RunVolumeArtifact(context.Background(), VolumeArtifactJob{Job: volumeartifact.Job{Mode: "restore", TransferURL: "https://objects.example.test/download", EncryptionKey: key, EncryptionAAD: "volume-backup:test", SHA256: encryptedHash, PlaintextSHA256: plaintextHash, SizeBytes: 42}, VolumeName: "app_uploads", NodeID: "nodeabc123", StackName: "app", Offline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logged, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callText := string(logged)
+	if strings.Contains(callText, "service ls") || strings.Contains(callText, "service scale") || !strings.Contains(callText, "service create") {
+		t.Fatalf("offline restore touched application replicas or did not create its helper:\n%s", callText)
 	}
 }
 

@@ -2864,6 +2864,10 @@ func (s *Server) deployService(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	item, err := s.Store.QueueDeploymentWithAudit(r.Context(), p, serviceID, "manual", r.RemoteAddr)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "service_busy", "wait for the active offline restore before deploying the service")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
@@ -2902,6 +2906,10 @@ func (s *Server) startService(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	item, err := s.Store.QueueServiceStartWithAudit(r.Context(), p, serviceID, r.RemoteAddr)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "service_busy", "wait for the active restore or data operation before starting the service")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
@@ -2960,6 +2968,10 @@ func (s *Server) rollbackService(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	item, err := s.Store.QueueRollbackWithAudit(r.Context(), p, serviceID, r.RemoteAddr)
 	if err != nil {
+		if errors.Is(err, store.ErrBusy) {
+			writeError(w, http.StatusConflict, "service_busy", "wait for the active offline restore before rolling back the service")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}

@@ -521,7 +521,8 @@ rolls back the policy, destination, batch, and job changes.
 | GET | `/v1/services/{id}/volumes` | List mounted declared named volumes and their resolved Swarm names |
 | GET/PUT/DELETE | `/v1/services/{id}/volume-backup-policies…` | Manage encrypted retained backup policy per named volume; deletion returns `409 volume_backup_policy_busy` while a backup or restore is active and preserves completed history |
 | GET/POST | `/v1/services/{id}/volume-backups…` | List or queue named-volume backups; duplicate active requests return `409 backup_in_progress` |
-| GET/POST | `/v1/services/{id}/volume-restores…` | List restore history or queue a confirmed restore; concurrent requests return `409 restore_in_progress` |
+| GET | `/v1/services/{id}/volume-restores` | List restore history, including snapshotted target node and offline mode |
+| POST | `/v1/volume-backups/{id}/restore` | Queue a confirmed restore; `offline: true` requires a successfully stopped service and restores directly onto its assigned node without starting the workload; concurrent requests return `409 restore_in_progress` |
 | GET | `/v1/services/{id}/deploy-tokens` | List CI deploy-hook credentials without secret material |
 | POST | `/v1/services/{id}/deploy-tokens` | Create an expiring CI deploy hook |
 | DELETE | `/v1/services/{id}/deploy-tokens/{tokenId}` | Revoke a CI deploy-hook credential |
@@ -531,9 +532,12 @@ rolls back the policy, destination, batch, and job changes.
 | POST | `/v1/hooks/provider/{id}` | Verify a provider push event and deploy |
 
 Operations that need running containers—database backup/restore/migration and
-named-volume backup/restore—return `409 service_stopped` while their owning
-service is stopped. Scheduled policies remain due and resume after the service
-is started; their schedule is not silently advanced while stopped.
+named-volume backup/online restore—return `409 service_stopped` while their
+owning service is stopped. A named-volume restore explicitly submitted with
+`offline: true` instead requires a completed stop operation, snapshots the
+current storage-node assignment, and never restarts the workload. Scheduled
+policies remain due and resume after the service is started; their schedule is
+not silently advanced while stopped.
 
 Manual deployment, service start/stop, rollback, and deployment cancellation
 commit desired-state changes, immutable snapshots, worker jobs, cancellation
@@ -767,16 +771,19 @@ or deliberately relocating that volume remains an explicit operator recovery
 action.
 
 Storage-node rebinding never copies data. Stop the service and wait for its
-stop job to succeed, copy or restore every stack volume onto the replacement
-node, verify the copied data independently, then run
-`dockyardctl rebind-service-storage-node SERVICE_ID NODE_ID SERVICE_SLUG`.
+stop job to succeed, then either copy every stack volume onto the replacement
+node before rebinding or rebind first and queue one
+`restore-volume-offline BACKUP_ID SERVICE_SLUG` operation per named volume.
+Offline restores mount only the assigned target volume and keep the workload
+stopped, so application initialization cannot race recovery.
 Only an administrator can perform this operation. The transaction rejects a
 running, deleting, unassigned, or busy service, updates a linked managed
 database atomically, and records the old and new node IDs in the audit log.
 Before committing, the controller verifies that the target belongs to the
 service's local or remote Swarm and is currently ready and active; an
 unreachable node inventory fails closed.
-Start the service only after the rebind succeeds.
+Start the service only after the rebind and every required copy or offline
+restore succeeds.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
 optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.

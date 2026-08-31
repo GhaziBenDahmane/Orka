@@ -108,6 +108,10 @@ recovery evidence remains.
   their running tasks resolve to one node; every deployment, rollback, and
   reconciliation snapshot is then constrained to that node so node loss fails
   unavailable instead of silently creating empty storage elsewhere.
+- Administrators can relocate a successfully stopped workload to a verified
+  ready node and restore retained named-volume backups directly onto that node
+  while the application remains offline; restore jobs snapshot the target so
+  concurrent lifecycle changes cannot redirect recovered data.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch engine-specific backup/restore, streaming checksums,
   interval policies, retention, and opt-in isolated restore drills.

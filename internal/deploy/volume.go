@@ -27,6 +27,7 @@ type VolumeArtifactJob struct {
 	Network    string `json:"network,omitempty"`
 	StackName  string `json:"stackName"`
 	Quiesce    bool   `json:"quiesce"`
+	Offline    bool   `json:"offline,omitempty"`
 }
 
 type VolumeArtifactRunner interface {
@@ -49,8 +50,11 @@ func ValidateVolumeArtifactJob(job VolumeArtifactJob) error {
 	if !safeName.MatchString(job.StackName) {
 		return errors.New("invalid volume artifact stack name")
 	}
-	if job.Mode == "restore" && !job.Quiesce {
-		return errors.New("volume restores must quiesce mounting services")
+	if job.Mode != "restore" && job.Offline {
+		return errors.New("offline mode is only valid for volume restores")
+	}
+	if job.Mode == "restore" && job.Quiesce == job.Offline {
+		return errors.New("volume restores must either quiesce a running stack or target a confirmed offline stack")
 	}
 	return nil
 }

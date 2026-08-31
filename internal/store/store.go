@@ -1029,6 +1029,21 @@ func activeServiceOperations(ctx context.Context, tx pgx.Tx, serviceIDs []uuid.U
 	return activeChildOperations(ctx, tx, serviceIDs, nil)
 }
 
+func ensureNoActiveOfflineVolumeRestoreTx(ctx context.Context, tx pgx.Tx, serviceID uuid.UUID) error {
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(
+		SELECT 1 FROM volume_restores restore
+		JOIN volume_backups backup ON backup.id=restore.volume_backup_id
+		WHERE backup.compose_service_id=$1 AND restore.offline AND restore.status IN ('queued','running')
+	)`, serviceID).Scan(&active); err != nil {
+		return err
+	}
+	if active {
+		return ErrBusy
+	}
+	return nil
+}
+
 func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uuid.UUID) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -2276,6 +2291,9 @@ func (s *Store) queueDeploymentTx(ctx context.Context, tx pgx.Tx, organizationID
 	}
 	if requireStopped && desiredState != "stopped" {
 		return Deployment{}, ErrServiceAlreadyRunning
+	}
+	if err = ensureNoActiveOfflineVolumeRestoreTx(ctx, tx, serviceID); err != nil {
+		return Deployment{}, err
 	}
 	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return Deployment{}, err
@@ -3544,6 +3562,9 @@ func (s *Store) queueRollbackTx(ctx context.Context, tx pgx.Tx, organizationID, 
 	if err = ensureEnvironmentClusterWritable(ctx, tx, environmentID); err != nil {
 		return Deployment{}, err
 	}
+	if err = ensureNoActiveOfflineVolumeRestoreTx(ctx, tx, serviceID); err != nil {
+		return Deployment{}, err
+	}
 	var desiredCompose, effectiveCompose, encrypted string
 	var registryCredentialID *uuid.UUID
 	var registryServer, registryUsername, encryptedRegistryCredential string
@@ -3654,6 +3675,7 @@ var (
 	ErrDatabaseDriverIdentityMismatch = errors.New("database driver identity does not match the managed database")
 	ErrDatabaseDriverConfirmation     = errors.New("confirmation must match database slug")
 	ErrStorageNodeMismatch            = errors.New("storage node does not match the persisted assignment")
+	ErrOfflineRestoreRequiresStopped  = errors.New("offline volume restore requires a successfully stopped service")
 	ErrDatabaseStorageNodeMismatch    = ErrStorageNodeMismatch
 )
 

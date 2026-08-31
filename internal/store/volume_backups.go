@@ -47,13 +47,15 @@ type VolumeBackup struct {
 }
 
 type VolumeRestore struct {
-	ID             uuid.UUID  `json:"id"`
-	VolumeBackupID uuid.UUID  `json:"volumeBackupId"`
-	Status         string     `json:"status"`
-	Error          string     `json:"error,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	StartedAt      *time.Time `json:"startedAt,omitempty"`
-	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
+	ID                  uuid.UUID  `json:"id"`
+	VolumeBackupID      uuid.UUID  `json:"volumeBackupId"`
+	TargetStorageNodeID string     `json:"targetStorageNodeId,omitempty"`
+	Offline             bool       `json:"offline"`
+	Status              string     `json:"status"`
+	Error               string     `json:"error,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	StartedAt           *time.Time `json:"startedAt,omitempty"`
+	FinishedAt          *time.Time `json:"finishedAt,omitempty"`
 }
 
 func (s *Store) UpsertVolumeBackupPolicy(ctx context.Context, organizationID, serviceID uuid.UUID, volumeName, nodeID string, destinationID uuid.UUID, intervalSeconds, retentionCount int, quiesce, enabled bool) (VolumeBackupPolicy, error) {
@@ -319,7 +321,7 @@ func (s *Store) QueueVolumeRestore(ctx context.Context, organizationID, backupID
 		return VolumeRestore{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := queueVolumeRestoreTx(ctx, tx, organizationID, backupID, actorID, confirmation)
+	item, err := queueVolumeRestoreTx(ctx, tx, organizationID, backupID, actorID, confirmation, false)
 	if err != nil {
 		return VolumeRestore{}, err
 	}
@@ -335,11 +337,11 @@ func (s *Store) QueueVolumeRestoreWithAudit(ctx context.Context, principal Princ
 		return VolumeRestore{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := queueVolumeRestoreTx(ctx, tx, principal.OrganizationID, backupID, principal.UserID, confirmation)
+	item, err := queueVolumeRestoreTx(ctx, tx, principal.OrganizationID, backupID, principal.UserID, confirmation, false)
 	if err != nil {
 		return VolumeRestore{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "volume_restore.create", "volume_restore", item.ID.String(), remoteAddr, map[string]any{"backupId": backupID}); err != nil {
+	if err = appendPrincipalAudit(ctx, tx, principal, "volume_restore.create", "volume_restore", item.ID.String(), remoteAddr, map[string]any{"backupId": backupID, "targetStorageNodeId": item.TargetStorageNodeID, "offline": false}); err != nil {
 		return VolumeRestore{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -348,12 +350,31 @@ func (s *Store) QueueVolumeRestoreWithAudit(ctx context.Context, principal Princ
 	return item, nil
 }
 
-func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backupID, actorID uuid.UUID, confirmation string) (VolumeRestore, error) {
+func (s *Store) QueueOfflineVolumeRestoreWithAudit(ctx context.Context, principal Principal, backupID uuid.UUID, confirmation, remoteAddr string) (VolumeRestore, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return VolumeRestore{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := queueVolumeRestoreTx(ctx, tx, principal.OrganizationID, backupID, principal.UserID, confirmation, true)
+	if err != nil {
+		return VolumeRestore{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "volume_restore.create", "volume_restore", item.ID.String(), remoteAddr, map[string]any{"backupId": backupID, "targetStorageNodeId": item.TargetStorageNodeID, "offline": true}); err != nil {
+		return VolumeRestore{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeRestore{}, err
+	}
+	return item, nil
+}
+
+func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backupID, actorID uuid.UUID, confirmation string, offline bool) (VolumeRestore, error) {
 	var serviceID uuid.UUID
-	var slug, status string
+	var slug, status, storageNodeID string
 	var deleting bool
 	var desiredState string
-	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState)
+	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state,service.storage_node_id FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState, &storageNodeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound
 	}
@@ -363,8 +384,23 @@ func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backup
 	if deleting {
 		return VolumeRestore{}, ErrDeleting
 	}
-	if desiredState != "running" {
+	if !offline && desiredState != "running" {
 		return VolumeRestore{}, ErrServiceStopped
+	}
+	if offline {
+		if desiredState != "stopped" {
+			return VolumeRestore{}, ErrOfflineRestoreRequiresStopped
+		}
+		var stopped bool
+		if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT status='succeeded' FROM jobs WHERE kind='stop.compose' AND resource_key=$1 ORDER BY created_at DESC,id DESC LIMIT 1),false)`, "service:"+serviceID.String()).Scan(&stopped); err != nil {
+			return VolumeRestore{}, err
+		}
+		if !stopped {
+			return VolumeRestore{}, ErrOfflineRestoreRequiresStopped
+		}
+	}
+	if storageNodeID == "" {
+		return VolumeRestore{}, ErrStorageNodeUnassigned
 	}
 	if status != "succeeded" {
 		return VolumeRestore{}, errors.New("volume backup is not restorable")
@@ -381,8 +417,8 @@ func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backup
 	if active {
 		return VolumeRestore{}, ErrBusy
 	}
-	item := VolumeRestore{ID: uuid.New(), VolumeBackupID: backupID, Status: "queued"}
-	if err = tx.QueryRow(ctx, `INSERT INTO volume_restores(id,volume_backup_id,status,actor_user_id) VALUES($1,$2,'queued',$3) RETURNING created_at`, item.ID, backupID, nullableUUID(actorID)).Scan(&item.CreatedAt); err != nil {
+	item := VolumeRestore{ID: uuid.New(), VolumeBackupID: backupID, TargetStorageNodeID: storageNodeID, Offline: offline, Status: "queued"}
+	if err = tx.QueryRow(ctx, `INSERT INTO volume_restores(id,volume_backup_id,target_storage_node_id,offline,status,actor_user_id) VALUES($1,$2,$3,$4,'queued',$5) RETURNING created_at`, item.ID, backupID, storageNodeID, offline, nullableUUID(actorID)).Scan(&item.CreatedAt); err != nil {
 		return VolumeRestore{}, err
 	}
 	payload, _ := json.Marshal(map[string]string{"restoreId": item.ID.String()})
@@ -394,7 +430,7 @@ func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backup
 
 func (s *Store) GetVolumeRestore(ctx context.Context, organizationID, id uuid.UUID) (VolumeRestore, error) {
 	var item VolumeRestore
-	err := s.Pool.QueryRow(ctx, `SELECT restore.id,restore.volume_backup_id,restore.status,restore.error,restore.created_at,restore.started_at,restore.finished_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE restore.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.VolumeBackupID, &item.Status, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT restore.id,restore.volume_backup_id,restore.target_storage_node_id,restore.offline,restore.status,restore.error,restore.created_at,restore.started_at,restore.finished_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE restore.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.VolumeBackupID, &item.TargetStorageNodeID, &item.Offline, &item.Status, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound
 	}
@@ -402,7 +438,7 @@ func (s *Store) GetVolumeRestore(ctx context.Context, organizationID, id uuid.UU
 }
 
 func (s *Store) ListVolumeRestores(ctx context.Context, organizationID, serviceID uuid.UUID) ([]VolumeRestore, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT restore.id,restore.volume_backup_id,restore.status,restore.error,restore.created_at,restore.started_at,restore.finished_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND p.organization_id=$2 ORDER BY restore.created_at DESC LIMIT 100`, serviceID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT restore.id,restore.volume_backup_id,restore.target_storage_node_id,restore.offline,restore.status,restore.error,restore.created_at,restore.started_at,restore.finished_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND p.organization_id=$2 ORDER BY restore.created_at DESC LIMIT 100`, serviceID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +446,7 @@ func (s *Store) ListVolumeRestores(ctx context.Context, organizationID, serviceI
 	items := []VolumeRestore{}
 	for rows.Next() {
 		var item VolumeRestore
-		if err = rows.Scan(&item.ID, &item.VolumeBackupID, &item.Status, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.VolumeBackupID, &item.TargetStorageNodeID, &item.Offline, &item.Status, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

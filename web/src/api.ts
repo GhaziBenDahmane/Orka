@@ -49,7 +49,7 @@ export type BackupPolicy = { id: string; databaseInstanceId: string; intervalSec
 export type ServiceVolume = { name: string; dockerName: string; storageNodeId?: string };
 export type VolumeBackupPolicy = { id: string; composeServiceId: string; volumeName: string; destinationId: string; intervalSeconds: number; retentionCount: number; quiesce: boolean; enabled: boolean; nextRunAt: string; lastRunAt?: string };
 export type VolumeBackup = { id: string; composeServiceId: string; volumeName: string; storageNodeId: string; destinationId: string; quiesce: boolean; status: string; sizeBytes?: number; sha256?: string; plaintextSha256?: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
-export type VolumeRestore = { id: string; volumeBackupId: string; status: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
+export type VolumeRestore = { id: string; volumeBackupId: string; targetStorageNodeId?: string; offline: boolean; status: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type ResourcePolicy = { organizationId: string; scopeType: "organization" | "project" | "environment"; scopeId: string; maintenance: boolean; maintenanceReason: string; maxProjects: number | null; maxEnvironments: number | null; maxServices: number | null; maxDatabases: number | null; updatedAt: string };
 export type AuthSettings = { organizationId: string; requireSso: boolean; updatedAt: string };
 export type AuditEvent = { id: number; actorUserId?: string; actorServiceAccountId?: string; action: string; resourceType: string; resourceId: string; remoteAddr: string; metadata: Record<string, unknown> | null; createdAt: string };
@@ -191,7 +191,7 @@ export const api = {
   backupVolume: (serviceId: string, volumeName: string) => request<VolumeBackup>(`/v1/services/${serviceId}/volume-backups/${encodeURIComponent(volumeName)}`, { method: "POST", body: "{}" }),
   volumeBackup: (backupId: string) => request<VolumeBackup>(`/v1/volume-backups/${backupId}`),
   cancelVolumeBackup: (backupId: string) => request<{ status: string }>(`/v1/volume-backups/${backupId}/cancel`, { method: "POST", body: "{}" }),
-  restoreVolumeBackup: (backupId: string, confirm: string) => request<VolumeRestore>(`/v1/volume-backups/${backupId}/restore`, { method: "POST", body: JSON.stringify({ confirm }) }),
+  restoreVolumeBackup: (backupId: string, confirm: string, offline = false) => request<VolumeRestore>(`/v1/volume-backups/${backupId}/restore`, { method: "POST", body: JSON.stringify({ confirm, offline }) }),
   volumeRestore: (restoreId: string) => request<VolumeRestore>(`/v1/volume-restores/${restoreId}`),
   cancelVolumeRestore: (restoreId: string) => request<{ status: string }>(`/v1/volume-restores/${restoreId}/cancel`, { method: "POST", body: "{}" }),
   templates: (cursor = "") => request<PaginatedEnvelope<Template>>(`/v1/templates?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),

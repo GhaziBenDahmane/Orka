@@ -181,15 +181,29 @@ func (s *Server) restoreVolumeBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Confirm string `json:"confirm"`
+		Offline bool   `json:"offline"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueVolumeRestoreWithAudit(r.Context(), p, id, in.Confirm, r.RemoteAddr)
+	var item store.VolumeRestore
+	if in.Offline {
+		item, err = s.Store.QueueOfflineVolumeRestoreWithAudit(r.Context(), p, id, in.Confirm, r.RemoteAddr)
+	} else {
+		item, err = s.Store.QueueVolumeRestoreWithAudit(r.Context(), p, id, in.Confirm, r.RemoteAddr)
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "restore_in_progress", "wait for the active volume restore to finish before starting another")
+			return
+		}
+		if errors.Is(err, store.ErrOfflineRestoreRequiresStopped) {
+			writeError(w, http.StatusConflict, "offline_restore_requires_stopped_service", err.Error())
+			return
+		}
+		if errors.Is(err, store.ErrStorageNodeUnassigned) {
+			writeError(w, http.StatusConflict, "storage_node_unassigned", err.Error())
 			return
 		}
 		if strings.Contains(err.Error(), "confirmation") || strings.Contains(err.Error(), "not restorable") {

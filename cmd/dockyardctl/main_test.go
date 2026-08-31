@@ -160,6 +160,7 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"preview-template", "template-id", `{}`}, http.MethodPost, "/v1/templates/template-id/preview"},
 		{[]string{"move-service", "service-id", "environment-id"}, http.MethodPut, "/v1/services/service-id/environment"},
 		{[]string{"rebind-service-storage-node", "service-id", "node-id", "service-slug"}, http.MethodPost, "/v1/services/service-id/storage-node-rebind"},
+		{[]string{"restore-volume-offline", "backup-id", "service-slug"}, http.MethodPost, "/v1/volume-backups/backup-id/restore"},
 		{[]string{"template-versions", "service-id"}, http.MethodGet, "/v1/services/service-id/template-versions"},
 		{[]string{"clusters"}, http.MethodGet, "/v1/clusters"},
 		{[]string{"create-cluster", `{}`}, http.MethodPost, "/v1/clusters"},
@@ -201,6 +202,17 @@ func TestVolumeCommandBodies(t *testing.T) {
 	confirmation := input.(map[string]string)
 	if confirmation["confirm"] != "production-api" {
 		t.Fatalf("restore input=%#v", confirmation)
+	}
+	method, path, input, err = commandRequest([]string{"restore-volume-offline", "backup-id", "production-api"}, strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPost || path != "/v1/volume-backups/backup-id/restore" {
+		t.Fatalf("method=%q path=%q", method, path)
+	}
+	offline := input.(map[string]any)
+	if offline["confirm"] != "production-api" || offline["offline"] != true {
+		t.Fatalf("offline restore input=%#v", offline)
 	}
 }
 

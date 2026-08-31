@@ -623,6 +623,11 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodPost, "/v1/volume-backups/" + args[1] + "/restore", map[string]string{"confirm": args[2]}, nil
+	case "restore-volume-offline":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/volume-backups/" + args[1] + "/restore", map[string]any{"confirm": args[2], "offline": true}, nil
 	case "volume-restore":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -991,5 +996,5 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules)")
 }

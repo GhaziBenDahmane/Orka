@@ -152,8 +152,10 @@ dockyardctl deploy SERVICE_ID
 dockyardctl stop SERVICE_ID
 dockyardctl start SERVICE_ID
 dockyardctl move-service SERVICE_ID TARGET_ENVIRONMENT_ID
-# After a successful stop and an operator-managed volume copy/restore:
+# After a successful stop and an operator-managed volume copy:
 dockyardctl rebind-service-storage-node SERVICE_ID TARGET_NODE_ID SERVICE_SLUG
+# Or restore each retained backup onto the rebound node before starting:
+dockyardctl restore-volume-offline BACKUP_ID SERVICE_SLUG
 ```
 
 Core project, environment, service, database, template, deployment, log, and
@@ -274,7 +276,10 @@ credentials from standard input without placing them in shell history.
 Named-volume recovery also has dedicated commands: `volumes SERVICE_ID`,
 `volume-policies SERVICE_ID`, `put-volume-policy SERVICE_ID VOLUME_NAME JSON`,
 `backup-volume SERVICE_ID VOLUME_NAME`, `volume-backups SERVICE_ID`, and
-`restore-volume BACKUP_ID SERVICE_SLUG`. Backup and restore inspection and
+`restore-volume BACKUP_ID SERVICE_SLUG`. After a stopped service is rebound to
+a replacement storage node, `restore-volume-offline BACKUP_ID SERVICE_SLUG`
+recreates that volume from its encrypted backup without starting the workload.
+Backup and restore inspection and
 cancellation use `volume-backup`, `volume-restore`, `cancel-volume-backup`, and
 `cancel-volume-restore`.
 
