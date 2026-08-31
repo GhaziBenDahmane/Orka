@@ -383,7 +383,10 @@ variables bound local container-log retention across this overlay as well.
 All four services use explicit stop-first updates and automatic rollback. This
 prevents two 9Router tasks from writing the node-local data volume concurrently
 and prevents replacement auditor tasks from overlapping under the same
-service-account identity. The gateway processes also run with
+service-account identity. Swarm probes 9Router's upstream `/api/health`
+endpoint during normal operation and the update monitor, so a replacement that
+starts but cannot serve requests is restarted and cannot be treated as a
+successful rollout. The gateway processes also run with
 `no-new-privileges`; 9Router retains the upstream image's startup capability
 set because its entrypoint must repair ownership of a newly mounted data
 volume before dropping to its unprivileged Node user.

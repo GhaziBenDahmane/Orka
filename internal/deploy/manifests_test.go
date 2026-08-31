@@ -216,6 +216,9 @@ func TestAIAuditorTopologySeparatesGatewaySidecarAndAuditorIdentities(t *testing
 
 func TestAIStackUpdatesRollBackWithoutOverlappingIdentitiesOrStateWriters(t *testing.T) {
 	manifest := readDeploymentManifest(t, "../../deploy/ai-auditors.yml")
+	if probe := manifest.Services["9router"].Healthcheck.Test; !slices.Contains(probe, "http://127.0.0.1:20128/api/health") {
+		t.Fatalf("9Router update is not gated by its upstream health endpoint: %v", probe)
+	}
 	for _, name := range []string{"9router", "headroom", "security-auditor", "reliability-auditor"} {
 		service := manifest.Services[name]
 		if service.Deploy.UpdateConfig.Order != "stop-first" || service.Deploy.UpdateConfig.FailureAction != "rollback" || service.Deploy.RollbackConfig.Order != "stop-first" {
