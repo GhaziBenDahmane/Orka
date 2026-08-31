@@ -168,7 +168,12 @@ links for every item below.
   and an active deployment and verify repair is suppressed.
 - Preserve the `make test-swarm-ha` evidence artifact, then repeat leader
   partition, minority-write rejection, quorum restoration, and workload
-  convergence across the production-equivalent multi-host Swarm network.
+  convergence across the production-equivalent multi-host Swarm network. The
+  nested-Docker gate records leader replacement, rescheduled task IDs,
+  failed-manager reachability and recovery, service-version immutability while
+  quorum is absent, and the first mutation committed after quorum returns. Its
+  minority mutation is killed inside the isolated manager so it cannot remain
+  pending and commit after the client-side deadline.
 - Back up and restore each advertised backup-capable database engine. Record
   measured RPO/RTO and verify checksum, application-level data, retention, and
   restore-drill alerts. Race retention against queued manual restores and
