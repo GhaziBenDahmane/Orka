@@ -19,7 +19,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/netpolicy"
 )
 
-const ProductionCertificationSchema = 1
+const ProductionCertificationSchema = 2
 const maxProductionCertificationBytes = 256 << 10
 const maxProductionEvidenceBytes = 64 << 20
 
@@ -33,6 +33,7 @@ var requiredProductionGates = [...]string{
 	"external-integrations",
 	"production-data-upgrade",
 	"production-storage-recovery",
+	"ai-gateway-recovery",
 	"multi-host-swarm",
 	"hardening-review",
 	"control-plane-recovery",

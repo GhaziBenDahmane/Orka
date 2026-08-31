@@ -32,7 +32,7 @@ downloads and byte-compares the complete inventory, and only then publishes
 the release. A retry may resume that exact draft but rejects any conflicting
 release.
 
-Submit a JSON object using schema version 1. The workflow overwrites
+Submit a JSON object using schema version 2. The workflow overwrites
 `sourceCommit`, `candidateImage`, `createdAt`, and `expiresAt` with its selected
 Git ref, input digest, signing time, and chosen lifetime, validates the document
 with the Go release-evidence validator, verifies the
@@ -47,7 +47,7 @@ reviewers can detect replacement.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "environment": "production-eu",
   "owner": "release-manager@example.com",
   "gates": {
@@ -65,6 +65,11 @@ reviewers can detect replacement.
       "owner": "database-team",
       "completedAt": "2026-08-30T10:00:00Z",
       "evidence": [{"name":"RPO and RTO report","url":"https://evidence.example.com/releases/v1/recovery.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+    },
+    "ai-gateway-recovery": {
+      "owner": "ai-platform-team",
+      "completedAt": "2026-08-30T10:00:00Z",
+      "evidence": [{"name":"encrypted 9Router recovery report","url":"https://evidence.example.com/releases/v1/ai-gateway-recovery.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
     },
     "multi-host-swarm": {
       "owner": "platform-team",
@@ -96,8 +101,15 @@ reviewers can detect replacement.
 ```
 
 Certifications are valid for at most 31 days, and every gate must have completed
-within 30 days of certification. The eight gate names are fixed so a typo or an
+within 30 days of certification. The nine gate names are fixed so a typo or an
 invented substitute cannot silently pass. `external-integrations` covers the
 configured Entra ID, Okta, Google Workspace, object storage, registry,
 notification, and model-gateway boundaries; record `not applicable` decisions
 inside the referenced report rather than omitting the gate.
+
+`ai-gateway-recovery` must be exercised against production-equivalent,
+node-local 9Router storage. Its evidence must prove an encrypted backup and
+offline restore, validate restored application and provider configuration, and
+show successful post-restore runs from both independently authenticated AI
+auditors. The automated recovery conformance suite is supporting evidence, not
+a substitute for this infrastructure-bound exercise.

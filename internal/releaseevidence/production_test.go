@@ -111,7 +111,9 @@ func TestProductionCertificationValidation(t *testing.T) {
 		{"expired", func(c *ProductionCertification) { c.ExpiresAt = now.Add(-time.Minute) }, "expiresAt"},
 		{"stale", func(c *ProductionCertification) { c.CreatedAt = now.Add(-31 * 24 * time.Hour) }, "createdAt"},
 		{"future", func(c *ProductionCertification) { c.CreatedAt = now.Add(time.Second) }, "createdAt"},
+		{"old schema", func(c *ProductionCertification) { c.SchemaVersion = 1 }, "schemaVersion must be 2"},
 		{"missing gate", func(c *ProductionCertification) { delete(c.Gates, requiredProductionGates[0]) }, "exactly"},
+		{"missing AI gateway recovery", func(c *ProductionCertification) { delete(c.Gates, "ai-gateway-recovery") }, "exactly"},
 		{"unknown gate", func(c *ProductionCertification) { c.Gates["invented"] = c.Gates[requiredProductionGates[0]] }, "exactly"},
 		{"no evidence", func(c *ProductionCertification) {
 			gate := c.Gates[requiredProductionGates[0]]
