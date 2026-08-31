@@ -595,6 +595,10 @@ operation start and destination mutation share a PostgreSQL advisory fence, so
 a race either adopts the new tested credentials or leaves the rotation pending
 for the operator to retry; it cannot begin with a silently superseded secret.
 Queued operations are not blocked and use the new credentials when they start.
+Deletion is rejected with `resource_not_empty` while any database policy,
+database or volume artifact, volume policy, queued artifact cleanup, or audit
+archive still references the destination. The reference check and deletion run
+under the same worker fence instead of exposing database constraint errors.
 
 Repository creation accepts `trustedPublicKey` as an Ed25519 PEM or base64 raw
 public key and `requireSignature` as a boolean. When a key is configured every

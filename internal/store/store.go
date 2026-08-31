@@ -2314,14 +2314,41 @@ func (s *Store) GetBackupDestination(ctx context.Context, organizationID, id uui
 }
 
 func (s *Store) DeleteBackupDestination(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM backup_destinations WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var found bool
+	if err = tx.QueryRow(ctx, `SELECT true FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&found); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if err = LockBackupDestinationForOperation(ctx, tx, id); err != nil {
+		return err
+	}
+	var referenced bool
+	if err = tx.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM backup_policies WHERE destination_id=$1) OR
+		EXISTS(SELECT 1 FROM database_backups WHERE destination_id=$1) OR
+		EXISTS(SELECT 1 FROM volume_backup_policies WHERE destination_id=$1) OR
+		EXISTS(SELECT 1 FROM volume_backups WHERE destination_id=$1) OR
+		EXISTS(SELECT 1 FROM backup_artifact_deletions WHERE destination_id=$1) OR
+		EXISTS(SELECT 1 FROM audit_archive_destinations WHERE backup_destination_id=$1)`, id).Scan(&referenced); err != nil {
+		return err
+	}
+	if referenced {
+		return ErrBusy
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM backup_destinations WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (s *Store) GetDatabaseBackup(ctx context.Context, organizationID, id uuid.UUID) (DatabaseBackup, error) {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
@@ -191,12 +190,21 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	}
 
 	err = db.DeleteBackupDestination(ctx, orgID, owned.ID)
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
-		t.Fatalf("delete referenced destination error = %v, want foreign-key violation", err)
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("delete referenced destination error = %v, want busy", err)
 	}
 	if err = db.DeleteBackupDestination(ctx, orgID, foreign.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant destination deletion error = %v, want not found", err)
+	}
+	disposable, err := db.CreateBackupDestination(ctx, BackupDestination{OrganizationID: orgID, Name: "disposable", Endpoint: "http://minio:9000", Bucket: "temporary", EncryptedCredentials: "ciphertext"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DeleteBackupDestination(ctx, orgID, disposable.ID); err != nil {
+		t.Fatalf("delete unreferenced destination: %v", err)
+	}
+	if _, err = db.GetBackupDestination(ctx, orgID, disposable.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted destination lookup error = %v, want not found", err)
 	}
 }
 

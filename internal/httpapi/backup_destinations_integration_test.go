@@ -133,4 +133,11 @@ func TestBackupDestinationCredentialRotation(t *testing.T) {
 	if err != nil || !bytes.Contains(plain, []byte("new-access")) || !bytes.Contains(plain, []byte("new-secret")) || bytes.Contains(plain, []byte("old-secret")) {
 		t.Fatalf("rotated credentials were not persisted safely: %v", err)
 	}
+	response, data = do(http.MethodDelete, "/v1/backup-destinations/"+created.ID.String(), nil)
+	if response.StatusCode != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"resource_not_empty"`)) {
+		t.Fatalf("referenced destination deletion status=%d body=%s", response.StatusCode, data)
+	}
+	if _, err = db.GetBackupDestination(ctx, organizationID, created.ID); err != nil {
+		t.Fatalf("blocked deletion removed backup destination: %v", err)
+	}
 }
