@@ -181,7 +181,9 @@ links for every item below.
   exercises the exact engine-specific readiness, backup, and restore commands
   against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
   ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON
-  record per engine.
+  record per engine. Every case mounts the driver's production data path on a
+  named volume, removes and recreates the database container after restore,
+  and reads the restored application data again without reseeding it.
   The release workflow runs the same matrix, validates a machine-readable
   record for each engine, and publishes their aggregate as
   `database-recovery-evidence.json`; repeat on production-equivalent storage

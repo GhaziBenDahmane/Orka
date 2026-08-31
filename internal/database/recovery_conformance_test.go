@@ -60,6 +60,37 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 	}
 }
 
+func TestRecoveryConformanceUsesRenderedDatabaseDataPaths(t *testing.T) {
+	registry := database.NewRegistry()
+	versions := map[string]string{
+		"postgres": "17", "mysql": "8.4", "mariadb": "11.8", "mongo": "8",
+		"redis": "8", "valkey": "8", "libsql": "v0.24.33",
+		"clickhouse": "25.8-alpine", "qdrant": "v1.15", "meilisearch": "v1.20",
+	}
+	for engine, version := range versions {
+		t.Run(engine, func(t *testing.T) {
+			result, err := registry.Render(engine, database.Request{Name: "database", Version: version, Config: map[string]any{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "database-data:" + recoveryDataPath(engine); !strings.Contains(result.ComposeYAML, want) {
+				t.Fatalf("recovery path %q does not match rendered Compose:\n%s", want, result.ComposeYAML)
+			}
+		})
+	}
+	for _, workflow := range []string{"database-recovery.yml", "release.yml"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", workflow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, field := range []string{"replacementVerified", "persistentVolumeVerified"} {
+			if !strings.Contains(string(raw), "."+field+" == true") {
+				t.Fatalf("%s does not require %s evidence", workflow, field)
+			}
+		}
+	}
+}
+
 func clickHouseRecovery() recoveryCase {
 	return recoveryCase{
 		engine: "clickhouse", version: "25.8-alpine", image: "clickhouse/clickhouse-server",
@@ -189,7 +220,9 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	}
 	credentials := map[string]string{"username": "dockyard", "password": password, "database": "app"}
 	container := "dy-" + tc.engine + "-" + uuid.NewString()[:8]
-	args := []string{"run", "--detach", "--name", container, "--network", network}
+	volume := "dy-recovery-data-" + tc.engine + "-" + uuid.NewString()[:8]
+	dataPath := recoveryDataPath(tc.engine)
+	args := []string{"run", "--detach", "--name", container, "--network", network, "--volume", volume + ":" + dataPath}
 	for key, value := range tc.serverEnv {
 		args = append(args, "--env", key+"="+value)
 	}
@@ -200,7 +233,10 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	args = append(args, image+":"+tc.version)
 	args = append(args, tc.serverArgs...)
 	docker(t, ctx, nil, args...)
-	t.Cleanup(func() { _, _ = dockerOutput(context.Background(), nil, "rm", "--force", container) })
+	t.Cleanup(func() {
+		_, _ = dockerOutput(context.Background(), nil, "rm", "--force", container)
+		_, _ = dockerOutput(context.Background(), nil, "volume", "rm", volume)
+	})
 
 	scheduler := deploy.Swarm{DockerBin: "docker"}
 	readiness, err := registry.Readiness(tc.engine, tc.version, container, credentials)
@@ -251,11 +287,35 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	}
 	restoreFinished := time.Now()
 	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
-	docker(t, ctx, nil, "restart", container)
+	docker(t, ctx, nil, "rm", "--force", container)
+	docker(t, ctx, nil, args...)
 	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
 	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
-	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true, "restartVerified": true})
+	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true, "restartVerified": true, "replacementVerified": true, "persistentVolumeVerified": true})
 	t.Logf("RECOVERY_EVIDENCE %s", evidence)
+}
+
+func recoveryDataPath(engine string) string {
+	switch engine {
+	case "postgres":
+		return "/var/lib/postgresql/data"
+	case "mysql", "mariadb":
+		return "/var/lib/mysql"
+	case "mongo":
+		return "/data/db"
+	case "redis", "valkey":
+		return "/data"
+	case "libsql":
+		return "/var/lib/sqld"
+	case "clickhouse":
+		return "/var/lib/clickhouse"
+	case "qdrant":
+		return "/qdrant/storage"
+	case "meilisearch":
+		return "/meili_data"
+	default:
+		panic("missing recovery data path for " + engine)
+	}
 }
 
 func waitForRecoveryDatabase(t *testing.T, ctx context.Context, scheduler deploy.Swarm, network string, readiness database.BackupPlan, container string) {
