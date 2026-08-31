@@ -44,6 +44,14 @@ type fakeScheduler struct {
 	storageNode        string
 	volumeNode         string
 	volumeArtifact     *deploy.VolumeArtifactJob
+	resolvedImage      string
+}
+
+func (f *fakeScheduler) ResolveUtilityImage(_ context.Context, image string) (string, error) {
+	if f.resolvedImage != "" {
+		return f.resolvedImage, nil
+	}
+	return image, nil
 }
 
 func (f *fakeScheduler) RunVolumeArtifact(_ context.Context, job deploy.VolumeArtifactJob) (volumeartifact.Result, error) {
@@ -680,7 +688,7 @@ func TestExecuteArtifactJobEncryptsUploadAndDecryptsDownload(t *testing.T) {
 	}))
 	defer server.Close()
 	key := bytes.Repeat([]byte{9}, 32)
-	upload := deploy.RemoteArtifactJob{Mode: "upload", Network: "db_default", Image: "postgres", Command: []string{"pg_dump", "backup.dump"}, ArtifactName: "backup.dump", TransferURL: server.URL, EncryptionKey: base64.RawStdEncoding.EncodeToString(key), EncryptionAAD: "database-backup:test"}
+	upload := deploy.RemoteArtifactJob{Mode: "upload", Network: "db_default", Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_dump", "backup.dump"}, ArtifactName: "backup.dump", TransferURL: server.URL, EncryptionKey: base64.RawStdEncoding.EncodeToString(key), EncryptionAAD: "database-backup:test"}
 	payload, _ := json.Marshal(upload)
 	client := &Client{cfg: Config{StateDirectory: t.TempDir()}, swarm: &fakeScheduler{artifact: plaintxt}}
 	encoded, err := client.executeCommand(context.Background(), command{Kind: "database.utility", Payload: payload})
@@ -781,7 +789,7 @@ func TestExecuteOfflineVolumeArtifactCommandPreservesSafetyMode(t *testing.T) {
 func TestExecuteDatabaseTransferCommand(t *testing.T) {
 	scheduler := &fakeScheduler{}
 	client := &Client{swarm: scheduler}
-	payload, _ := json.Marshal(deploy.DatabaseTransferJob{Network: "db_default", ArtifactName: "migration.dump", Backup: database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore"}}})
+	payload, _ := json.Marshal(deploy.DatabaseTransferJob{Network: "db_default", ArtifactName: "migration.dump", Backup: database.BackupPlan{Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_restore"}}})
 	output, err := client.executeCommand(context.Background(), command{Kind: "database.transfer", Payload: payload})
 	if err != nil {
 		t.Fatal(err)
@@ -791,6 +799,15 @@ func TestExecuteDatabaseTransferCommand(t *testing.T) {
 	}
 	var result deploy.DatabaseTransferResult
 	if err = json.Unmarshal([]byte(output), &result); err != nil || result.SizeBytes != 42 {
+		t.Fatalf("output=%q err=%v", output, err)
+	}
+}
+
+func TestExecuteImageResolveCommandReturnsDigestPinnedIdentity(t *testing.T) {
+	want := "postgres@sha256:" + strings.Repeat("d", 64)
+	client := &Client{swarm: &fakeScheduler{resolvedImage: want}}
+	output, err := client.executeCommand(context.Background(), command{Kind: "image.resolve", Payload: []byte(`{"image":"postgres:17"}`)})
+	if err != nil || output != want {
 		t.Fatalf("output=%q err=%v", output, err)
 	}
 }

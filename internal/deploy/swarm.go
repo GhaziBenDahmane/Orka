@@ -44,6 +44,12 @@ type Scheduler interface {
 	RunContainerJob(context.Context, string, string, string, map[string]string, []string) (string, error)
 }
 
+// UtilityImageResolver converts a driver-provided image tag into the exact
+// manifest digest that all subsequent utility commands must execute.
+type UtilityImageResolver interface {
+	ResolveUtilityImage(context.Context, string) (string, error)
+}
+
 // ServiceCommandRunner executes a bounded command inside one running task of a
 // Compose service. It is optional so storage-only schedulers remain small.
 type ServiceCommandRunner interface {
@@ -106,6 +112,7 @@ type NetworkManager interface {
 }
 
 var _ Scheduler = Swarm{}
+var _ UtilityImageResolver = Swarm{}
 var _ ServiceCommandRunner = Swarm{}
 var _ VolumeArtifactRunner = Swarm{}
 var _ VolumeNodeResolver = Swarm{}
@@ -1018,11 +1025,39 @@ func (s Swarm) ResolveVolumeNode(ctx context.Context, stackName, volumeName stri
 	return "", errors.New("volume storage node could not be resolved")
 }
 
+func (s Swarm) ResolveUtilityImage(ctx context.Context, image string) (string, error) {
+	reference, err := ociref.Parse(image)
+	if err != nil {
+		return "", errors.New("invalid utility image")
+	}
+	if reference.Digest != "" {
+		return reference.Repository + "@" + reference.Digest, nil
+	}
+	if _, err = s.run(ctx, "pull", image); err != nil {
+		return "", fmt.Errorf("pull utility image: %w", err)
+	}
+	output, err := s.run(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", image)
+	if err != nil {
+		return "", fmt.Errorf("inspect utility image: %w", err)
+	}
+	var repoDigests []string
+	if err = json.Unmarshal([]byte(strings.TrimSpace(output)), &repoDigests); err != nil {
+		return "", fmt.Errorf("decode utility image digests: %w", err)
+	}
+	for _, candidate := range repoDigests {
+		resolved, parseErr := ociref.Parse(candidate)
+		if parseErr == nil && resolved.Digest != "" {
+			return reference.Repository + "@" + resolved.Digest, nil
+		}
+	}
+	return "", errors.New("pulled utility image has no sha256 repository digest")
+}
+
 func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {
 	if !safeName.MatchString(network) {
 		return "", fmt.Errorf("invalid network name %q", network)
 	}
-	if err := database.ValidateUtilityPlan(database.BackupPlan{Image: image, Command: command, Environment: environment}); err != nil {
+	if err := database.ValidateResolvedUtilityPlan(database.BackupPlan{Image: image, Command: command, Environment: environment}); err != nil {
 		return "", err
 	}
 	if len(command) == 0 || !safeName.MatchString(command[0]) {

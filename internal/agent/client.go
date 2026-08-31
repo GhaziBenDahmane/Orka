@@ -737,6 +737,12 @@ func (c *Client) executeCommand(ctx context.Context, cmd command) (string, error
 		return "", err
 	}
 	switch cmd.Kind {
+	case "image.resolve":
+		resolver, ok := c.swarm.(deploy.UtilityImageResolver)
+		if !ok {
+			return "", errors.New("scheduler does not support utility image resolution")
+		}
+		return resolver.ResolveUtilityImage(ctx, payload.Image)
 	case "swarm.deploy":
 		result, err := c.swarm.Deploy(ctx, payload.StackName, payload.Compose, payload.Environment, payload.RegistryCredential)
 		encoded, _ := json.Marshal(result)

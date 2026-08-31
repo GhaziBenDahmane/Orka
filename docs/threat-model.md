@@ -134,6 +134,12 @@ controller or agent compromise.
 
 Production controller, agent, builder, database-tool, and release images are
 required to use immutable digests where the platform owns the image choice.
+Database drivers may describe utility images with version tags, but the target
+manager resolves each tag once after pull. All readiness, backup, restore, and
+migration execution then fails closed unless the plan uses that sha256 digest;
+remote execution commands and successful operation records retain the same
+identity. This prevents a tag mutation between resolution and execution and
+makes recovery evidence attributable to exact tool bytes.
 Git credentials are host-bound, SSH requires pinned known-host entries, and
 write-only rotation preserves stable references while active deployments and
 catalog synchronizations fence credential changes; submodules remain

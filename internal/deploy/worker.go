@@ -1403,6 +1403,25 @@ func (w *Worker) scheduler(clusterID *uuid.UUID) Scheduler {
 	return w.Swarm
 }
 
+func resolveUtilityPlan(ctx context.Context, scheduler Scheduler, plan database.BackupPlan) (database.BackupPlan, error) {
+	if err := database.ValidateUtilityPlan(plan); err != nil {
+		return plan, err
+	}
+	resolver, ok := scheduler.(UtilityImageResolver)
+	if !ok {
+		return plan, errors.New("scheduler does not support utility image resolution")
+	}
+	resolved, err := resolver.ResolveUtilityImage(ctx, plan.Image)
+	if err != nil {
+		return plan, err
+	}
+	plan.Image = resolved
+	if err = database.ValidateResolvedUtilityPlan(plan); err != nil {
+		return plan, err
+	}
+	return plan, nil
+}
+
 func (w *Worker) ensureDatabaseDriver(ctx context.Context, databaseID uuid.UUID, engine, source, digest string) error {
 	if w.Databases == nil {
 		return errors.New("database registry is not configured")
@@ -1757,11 +1776,12 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}
-	if err = database.ValidateUtilityPlan(plan); err != nil {
+	scheduler := w.scheduler(clusterID)
+	if plan, err = resolveUtilityPlan(ctx, scheduler, plan); err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}
 	if clusterID != nil {
-		remote, ok := w.scheduler(clusterID).(RemoteSwarm)
+		remote, ok := scheduler.(RemoteSwarm)
 		if !ok {
 			return w.failBackup(ctx, j, backupID, errors.New("remote cluster scheduler does not support artifact transport"))
 		}
@@ -1831,7 +1851,7 @@ func (w *Worker) backupDatabase(ctx context.Context, j job) error {
 		}
 		storedPath = ""
 	}
-	err = w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,encrypted=true,plaintext_sha256=$6,encrypted_data_key=$7,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum, plainSum, wrappedDataKey)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='succeeded',path=$2,object_key=$3,size_bytes=$4,sha256=$5,encrypted=true,plaintext_sha256=$6,encrypted_data_key=$7,utility_image=$8,finished_at=now() WHERE id=$1`, backupID, storedPath, objectKey, size, sum, plainSum, wrappedDataKey, plan.Image)
 	if err != nil {
 		// The object is not referenced until the metadata update commits. Remove
 		// it with a fresh context when cancellation or a transient database error
@@ -1886,7 +1906,7 @@ func (w *Worker) backupDatabaseRemote(ctx context.Context, j job, backupID uuid.
 	if err != nil {
 		return w.failBackup(ctx, j, backupID, err)
 	}
-	err = w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='succeeded',path='',object_key=$2,size_bytes=$3,sha256=$4,encrypted=true,plaintext_sha256=$5,encrypted_data_key=$6,finished_at=now() WHERE id=$1`, backupID, objectKey, result.SizeBytes, result.SHA256, result.PlaintextSHA256, wrapped)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_backups SET status='succeeded',path='',object_key=$2,size_bytes=$3,sha256=$4,encrypted=true,plaintext_sha256=$5,encrypted_data_key=$6,utility_image=$7,finished_at=now() WHERE id=$1`, backupID, objectKey, result.SizeBytes, result.SHA256, result.PlaintextSHA256, wrapped, plan.Image)
 	if err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -2161,6 +2181,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		}
 	}
 	credentials := map[string]string{}
+	readinessImage := ""
 	if kind == "drill" {
 		drillName := "verify"
 		rendered, renderErr := w.Databases.Render(engine, database.Request{Name: drillName, Version: version})
@@ -2187,6 +2208,11 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 		if readinessErr != nil {
 			return w.failRestore(ctx, j, restoreID, readinessErr)
 		}
+		readiness, readinessErr = resolveUtilityPlan(ctx, w.Swarm, readiness)
+		if readinessErr != nil {
+			return w.failRestore(ctx, j, restoreID, readinessErr)
+		}
+		readinessImage = readiness.Image
 		ready := false
 		for attempt := 0; attempt < 12; attempt++ {
 			if _, readinessErr = w.Swarm.RunContainerJob(ctx, stackName+"_default", readiness.Image, "", readiness.Environment, readiness.Command); readinessErr == nil {
@@ -2215,7 +2241,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
-	if err = database.ValidateUtilityPlan(plan); err != nil {
+	if plan, err = resolveUtilityPlan(ctx, w.Swarm, plan); err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
 	if err = writePlanFiles(filepath.Dir(cleanPath), plan.Files); err != nil {
@@ -2228,7 +2254,7 @@ func (w *Worker) restoreDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
-	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',utility_image=$2,readiness_image=$3,finished_at=now() WHERE id=$1`, restoreID, plan.Image, readinessImage)
 	return err
 }
 
@@ -2267,6 +2293,7 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 	}
 	defer clear(dataKey)
 	credentials := map[string]string{}
+	readinessImage := ""
 	if kind == "drill" {
 		drillName := "verify"
 		rendered, renderErr := w.Databases.Render(engine, database.Request{Name: drillName, Version: version})
@@ -2293,6 +2320,11 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 		if readinessErr != nil {
 			return w.failRestore(ctx, j, restoreID, readinessErr)
 		}
+		readiness, readinessErr = resolveUtilityPlan(ctx, remote, readiness)
+		if readinessErr != nil {
+			return w.failRestore(ctx, j, restoreID, readinessErr)
+		}
+		readinessImage = readiness.Image
 		ready := false
 		for attempt := 0; attempt < 12; attempt++ {
 			if _, readinessErr = remote.RunContainerJob(ctx, stackName+"_default", readiness.Image, "", readiness.Environment, readiness.Command); readinessErr == nil {
@@ -2322,6 +2354,9 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 	if err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
+	if plan, err = resolveUtilityPlan(ctx, remote, plan); err != nil {
+		return w.failRestore(ctx, j, restoreID, err)
+	}
 	size := int64(0)
 	if expectedSize != nil {
 		size = *expectedSize
@@ -2330,7 +2365,7 @@ func (w *Worker) restoreDatabaseRemote(ctx context.Context, j job, restoreID, ba
 	if err != nil {
 		return w.failRestore(ctx, j, restoreID, err)
 	}
-	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',finished_at=now() WHERE id=$1`, restoreID)
+	err = w.updateResourceForJob(ctx, j, `UPDATE database_restores SET status='succeeded',utility_image=$2,readiness_image=$3,finished_at=now() WHERE id=$1`, restoreID, plan.Image, readinessImage)
 	return err
 }
 
@@ -2417,6 +2452,15 @@ func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
 	if err != nil {
 		return fail(err)
 	}
+	if backupPlan, err = resolveUtilityPlan(ctx, scheduler, backupPlan); err != nil {
+		return fail(err)
+	}
+	if restorePlan, err = resolveUtilityPlan(ctx, scheduler, restorePlan); err != nil {
+		return fail(err)
+	}
+	if readiness, err = resolveUtilityPlan(ctx, scheduler, readiness); err != nil {
+		return fail(err)
+	}
 	if _, err = scheduler.RunContainerJob(ctx, stackName+"_default", readiness.Image, "", readiness.Environment, readiness.Command); err != nil {
 		return fail(fmt.Errorf("target database is not ready: %w", err))
 	}
@@ -2434,7 +2478,7 @@ func (w *Worker) migrateDatabase(ctx context.Context, j job) error {
 	if result.SizeBytes <= 0 || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(result.SHA256) {
 		return fail(errors.New("database transfer returned invalid checksum evidence"))
 	}
-	return w.updateResourceForJob(ctx, j, `UPDATE database_migrations SET status='succeeded',size_bytes=$2,sha256=$3,output=$4,error='',finished_at=now() WHERE id=$1`, migrationID, result.SizeBytes, result.SHA256, output)
+	return w.updateResourceForJob(ctx, j, `UPDATE database_migrations SET status='succeeded',size_bytes=$2,sha256=$3,output=$4,source_utility_image=$5,target_utility_image=$6,readiness_image=$7,error='',finished_at=now() WHERE id=$1`, migrationID, result.SizeBytes, result.SHA256, output, backupPlan.Image, restorePlan.Image, readiness.Image)
 }
 
 func (w *Worker) failDatabaseMigration(ctx context.Context, j job, id uuid.UUID, migrationErr error) error {

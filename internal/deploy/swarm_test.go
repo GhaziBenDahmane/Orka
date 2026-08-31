@@ -524,18 +524,55 @@ func TestRunContainerJobOverridesImageEntrypoint(t *testing.T) {
 	if err := os.WriteFile(docker, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	output, err := (Swarm{DockerBin: docker}).RunContainerJob(context.Background(), "test-network", "postgres:17", directory, map[string]string{"PGPASSWORD": "secret"}, []string{"pg_dump", "--host", "database"})
+	image := "postgres@sha256:" + strings.Repeat("a", 64)
+	output, err := (Swarm{DockerBin: docker}).RunContainerJob(context.Background(), "test-network", image, directory, map[string]string{"PGPASSWORD": "secret"}, []string{"pg_dump", "--host", "database"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	entrypointAt := strings.Index(output, "--entrypoint\npg_dump\n")
-	imageAt := strings.Index(output, "postgres:17\n")
+	imageAt := strings.Index(output, image+"\n")
 	commandAt := strings.Index(output, "--host\ndatabase\n")
 	if entrypointAt < 0 || imageAt < entrypointAt || commandAt < imageAt {
 		t.Fatalf("unexpected docker arguments:\n%s", output)
 	}
 	if strings.Contains(output, "secret") {
 		t.Fatal("environment secret leaked into command arguments")
+	}
+}
+
+func TestResolveUtilityImagePullsTagAndReturnsRequestedRepositoryDigest(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	logPath := filepath.Join(directory, "calls")
+	digest := strings.Repeat("b", 64)
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + logPath + `"
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  printf '["mirror.example.test/library/postgres@sha256:` + digest + `"]\n'
+fi
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := (Swarm{DockerBin: docker}).ResolveUtilityImage(context.Background(), "registry.example.test/data/postgres:17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "registry.example.test/data/postgres@sha256:" + digest
+	if resolved != want {
+		t.Fatalf("resolved=%q, want %q", resolved, want)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(calls), "pull registry.example.test/data/postgres:17") || !strings.Contains(string(calls), "image inspect --format") {
+		t.Fatalf("calls=%q err=%v", calls, err)
+	}
+}
+
+func TestResolveUtilityImageCanonicalizesPinnedReferenceWithoutDocker(t *testing.T) {
+	digest := strings.Repeat("c", 64)
+	resolved, err := (Swarm{DockerBin: filepath.Join(t.TempDir(), "missing")}).ResolveUtilityImage(context.Background(), "postgres:17@sha256:"+digest)
+	if err != nil || resolved != "postgres@sha256:"+digest {
+		t.Fatalf("resolved=%q err=%v", resolved, err)
 	}
 }
 
@@ -565,8 +602,8 @@ esac
 	job := DatabaseTransferJob{
 		Network:      "database-stack_default",
 		ArtifactName: "transfer.dump",
-		Backup:       database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump", "--file", "/backup/transfer.dump"}, Environment: map[string]string{"PGPASSWORD": "source-secret"}},
-		Restore:      database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore", "/backup/transfer.dump"}, Environment: map[string]string{"PGPASSWORD": "target-secret"}},
+		Backup:       database.BackupPlan{Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_dump", "--file", "/backup/transfer.dump"}, Environment: map[string]string{"PGPASSWORD": "source-secret"}},
+		Restore:      database.RestorePlan{Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_restore", "/backup/transfer.dump"}, Environment: map[string]string{"PGPASSWORD": "target-secret"}},
 	}
 	result, err := (Swarm{DockerBin: docker}).RunDatabaseTransfer(context.Background(), job)
 	if err != nil {

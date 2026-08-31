@@ -51,8 +51,15 @@ before invoking driver code. The controller independently bounds its encoded
 request and validates render names, versions, utility hosts, credential maps,
 and artifact filenames before starting the privileged extension process.
 Utility plans are executed in the same isolated Docker jobs as built-in
-drivers; image names and artifact
-extensions are validated before execution. Plans are limited to 128 non-empty
+drivers. A driver may return a version tag, but the target Swarm manager pulls
+that tag once, inspects the resulting repository digest, and returns a
+`repository@sha256:...` identity before any utility command is queued. Local
+and remote execution boundaries reject mutable images; encrypted agent
+commands for readiness, backup, restore, and migration therefore carry only
+the resolved digest. Successful backup, restore, and migration records expose
+the exact utility image identities as recovery evidence. Images without a
+repository digest fail closed. Image names and artifact extensions are
+validated before resolution. Plans are limited to 128 non-empty
 arguments (128 KiB total), 128 POSIX-named environment entries (1 MiB total),
 and 32 basename-only helper files (1 MiB total). An argument is at most 16 KiB,
 an environment value or helper file is at most 64 KiB, and NUL bytes are

@@ -255,6 +255,10 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if err != nil {
 		t.Fatal(err)
 	}
+	readiness.Image, err = scheduler.ResolveUtilityImage(ctx, readiness.Image)
+	if err != nil {
+		t.Fatal(err)
+	}
 	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
 
 	clientEnv := map[string]string{"PGPASSWORD": credentials["password"], "MYSQL_PWD": credentials["password"], "REDISCLI_AUTH": credentials["password"]}
@@ -276,6 +280,10 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if err != nil {
 		t.Fatal(err)
 	}
+	backup.Image, err = scheduler.ResolveUtilityImage(ctx, backup.Image)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writePlanFiles(t, directory, backup.Files)
 	backupStarted := time.Now()
 	if _, err = scheduler.RunContainerJob(ctx, network, backup.Image, directory, backup.Environment, backup.Command); err != nil {
@@ -290,6 +298,10 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	runRecoveryClient(t, ctx, scheduler, network, container, tc, clientEnv, tc.clearCommand)
 
 	restore, err := registry.Restore(tc.engine, tc.version, container, credentials, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore.Image, err = scheduler.ResolveUtilityImage(ctx, restore.Image)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +393,11 @@ func verifyRecoveryData(t *testing.T, ctx context.Context, scheduler deploy.Swar
 func runRecoveryClient(t *testing.T, ctx context.Context, scheduler deploy.Swarm, network, container string, tc recoveryCase, environment map[string]string, command []string) string {
 	t.Helper()
 	if tc.clientImage != "" {
-		output, err := scheduler.RunContainerJob(ctx, network, tc.clientImage, "", environment, command)
+		image, resolveErr := scheduler.ResolveUtilityImage(ctx, tc.clientImage)
+		if resolveErr != nil {
+			t.Fatalf("resolve database client image: %v", resolveErr)
+		}
+		output, err := scheduler.RunContainerJob(ctx, network, image, "", environment, command)
 		if err != nil {
 			t.Fatalf("database client job: %v\n%s", err, output)
 		}

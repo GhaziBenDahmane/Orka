@@ -68,6 +68,8 @@ func TestWorkerMigratesDatabaseWithFencedNativeTransfer(t *testing.T) {
 	directory := t.TempDir()
 	dockerBin, restoreMarker := filepath.Join(directory, "docker"), filepath.Join(directory, "restored")
 	script := `#!/bin/sh
+if [ "$1" = "pull" ]; then exit 0; fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then printf '["postgres@sha256:` + strings.Repeat("a", 64) + `"]\n'; exit 0; fi
 mount=""
 entrypoint=""
 filename=""
@@ -99,7 +101,7 @@ esac
 		t.Fatal(err)
 	}
 	got, err := db.GetDatabaseMigration(ctx, organizationID, migration.ID)
-	if err != nil || got.Status != "succeeded" || got.SizeBytes == nil || *got.SizeBytes != int64(len("native migration dump")) || len(got.SHA256) != 64 {
+	if err != nil || got.Status != "succeeded" || got.SizeBytes == nil || *got.SizeBytes != int64(len("native migration dump")) || len(got.SHA256) != 64 || !strings.Contains(got.SourceUtilityImage, "@sha256:") || got.SourceUtilityImage != got.TargetUtilityImage || got.ReadinessImage != got.TargetUtilityImage {
 		t.Fatalf("migration=%#v err=%v", got, err)
 	}
 	if strings.Contains(got.Output, "source-secret") || strings.Contains(got.Output, "target-secret") || !strings.Contains(got.Output, "[REDACTED]") {

@@ -341,7 +341,7 @@ func (s *Store) enqueueClusterCommand(ctx context.Context, clusterID, commandID 
 			return ClusterCommand{}, err
 		}
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,owner_job_id,owner_job_lease_id) SELECT $1,c.id,$3,$4,$5,$6 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','swarm.network-create','swarm.network-remove','container.run','database.utility','database.transfer') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload, nullableUUID(jobID), nullableUUID(jobLeaseID)).Scan(&item.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,owner_job_id,owner_job_lease_id) SELECT $1,c.id,$3,$4,$5,$6 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' AND ($3 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','swarm.network-create','swarm.network-remove','container.run','image.resolve','database.utility','database.transfer') OR NOT COALESCE(now()>=c.maintenance_starts_at AND now()<c.maintenance_ends_at,false)) RETURNING created_at`, item.ID, clusterID, kind, encryptedPayload, nullableUUID(jobID), nullableUUID(jobLeaseID)).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClusterCommand{}, clusterCommandUnavailableError(ctx, tx, clusterID, kind)
 	}
@@ -403,7 +403,7 @@ func enqueueAgentUpgradeTx(ctx context.Context, tx pgx.Tx, organizationID, clust
 func clusterCommandUnavailableError(ctx context.Context, db policyQueryer, clusterID uuid.UUID, kind string) error {
 	var writable, fresh bool
 	err := db.QueryRow(ctx, `SELECT
-		state='active' AND ($2 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','container.run','database.utility','database.transfer') OR NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false)),
+		state='active' AND ($2 NOT IN ('swarm.deploy','swarm.storage-node','swarm.volume-artifact','container.run','image.resolve','database.utility','database.transfer') OR NOT COALESCE(now()>=maintenance_starts_at AND now()<maintenance_ends_at,false)),
 		COALESCE(last_seen_at>now()-interval '2 minutes',false)
 		FROM clusters WHERE id=$1`, clusterID, kind).Scan(&writable, &fresh)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !writable) {

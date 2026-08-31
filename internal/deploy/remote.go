@@ -13,6 +13,7 @@ import (
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/database"
 	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 	"github.com/google/uuid"
@@ -103,10 +104,25 @@ func (s RemoteSwarm) RunContainerJob(ctx context.Context, network, image, mountS
 	if mountSource != "" {
 		return "", errors.New("remote container jobs cannot mount controller paths")
 	}
-	if err := database.ValidateUtilityPlan(database.BackupPlan{Image: image, Command: command, Environment: environment}); err != nil {
+	if err := database.ValidateResolvedUtilityPlan(database.BackupPlan{Image: image, Command: command, Environment: environment}); err != nil {
 		return "", err
 	}
 	return s.run(ctx, "container.run", map[string]any{"network": network, "image": image, "environment": environment, "command": command})
+}
+
+func (s RemoteSwarm) ResolveUtilityImage(ctx context.Context, image string) (string, error) {
+	if _, err := ociref.Parse(image); err != nil {
+		return "", errors.New("invalid utility image")
+	}
+	resolved, err := s.run(ctx, "image.resolve", map[string]string{"image": image})
+	if err != nil {
+		return "", err
+	}
+	resolved = strings.TrimSpace(resolved)
+	if !ociref.IsDigestPinned(resolved) {
+		return "", errors.New("agent returned a utility image without a sha256 digest")
+	}
+	return resolved, nil
 }
 
 func (s RemoteSwarm) RunServiceCommand(ctx context.Context, stackName, targetService, shell, command string) (string, error) {
@@ -261,7 +277,7 @@ func ValidateRemoteArtifactJob(job RemoteArtifactJob) error {
 			return errors.New("artifact download requires SHA-256 checksums and size")
 		}
 	}
-	return database.ValidateUtilityPlan(database.BackupPlan{Image: job.Image, Command: job.Command, Environment: job.Environment, Files: job.Files})
+	return database.ValidateResolvedUtilityPlan(database.BackupPlan{Image: job.Image, Command: job.Command, Environment: job.Environment, Files: job.Files})
 }
 
 func ValidateDatabaseTransferJob(job DatabaseTransferJob) error {
@@ -277,10 +293,10 @@ func ValidateDatabaseTransferJob(job DatabaseTransferJob) error {
 	if _, exists := job.Restore.Files[job.ArtifactName]; exists {
 		return errors.New("restore utility file conflicts with artifact name")
 	}
-	if err := database.ValidateUtilityPlan(job.Backup); err != nil {
+	if err := database.ValidateResolvedUtilityPlan(job.Backup); err != nil {
 		return fmt.Errorf("invalid backup utility plan: %w", err)
 	}
-	if err := database.ValidateUtilityPlan(job.Restore); err != nil {
+	if err := database.ValidateResolvedUtilityPlan(job.Restore); err != nil {
 		return fmt.Errorf("invalid restore utility plan: %w", err)
 	}
 	return nil

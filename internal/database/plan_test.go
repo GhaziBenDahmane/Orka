@@ -78,6 +78,17 @@ func TestValidateUtilityPlanRejectsAggregateLimits(t *testing.T) {
 	}
 }
 
+func TestValidateResolvedUtilityPlanRequiresDigest(t *testing.T) {
+	plan := BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}}
+	if err := ValidateResolvedUtilityPlan(plan); err == nil {
+		t.Fatal("mutable utility image was accepted at execution boundary")
+	}
+	plan.Image = "postgres@sha256:" + strings.Repeat("a", 64)
+	if err := ValidateResolvedUtilityPlan(plan); err != nil {
+		t.Fatalf("digest-pinned utility image rejected: %v", err)
+	}
+}
+
 func repeatedStrings(count int, value string) []string {
 	values := make([]string, count)
 	for index := range values {

@@ -106,7 +106,7 @@ func TestRemoteSwarmQueuesEncryptedCommandAndWaitsForFencedResult(t *testing.T) 
 		err    error
 	}, 1)
 	go func() {
-		transferResult, transferErr := remote.RunDatabaseTransfer(ownedContext, DatabaseTransferJob{Network: "db_default", ArtifactName: "transfer.dump", Backup: database.BackupPlan{Image: "postgres:17", Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres:17", Command: []string{"pg_restore"}}})
+		transferResult, transferErr := remote.RunDatabaseTransfer(ownedContext, DatabaseTransferJob{Network: "db_default", ArtifactName: "transfer.dump", Backup: database.BackupPlan{Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_dump"}}, Restore: database.RestorePlan{Image: "postgres@sha256:" + strings.Repeat("a", 64), Command: []string{"pg_restore"}}})
 		transferChannel <- struct {
 			result DatabaseTransferResult
 			err    error

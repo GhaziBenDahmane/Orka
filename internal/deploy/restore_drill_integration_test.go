@@ -73,6 +73,8 @@ func TestRestoreDrillUsesIsolatedStackAndEncryptedArtifact(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s ' "$@" >> ` + strconv.Quote(logPath) + `; printf '\n' >> ` + strconv.Quote(logPath) + `
 if [ "$1" = info ]; then echo active; exit 0; fi
+if [ "$1" = pull ]; then exit 0; fi
+if [ "$1" = image ] && [ "$2" = inspect ]; then printf '["postgres@sha256:` + strings.Repeat("a", 64) + `"]\n'; exit 0; fi
 if [ "$1" = network ] && [ "$2" = inspect ]; then echo 'overlay|swarm|true|{"encrypted":""}'; exit 0; fi
 if [ "$1" = network ]; then exit 0; fi
 if [ "$1" = stack ] && [ "$2" = services ]; then for argument in "$@"; do stack_name="$argument"; done; printf '%s\t%s\n' "${stack_name}_verify" 'postgres:17@sha256:` + strings.Repeat("a", 64) + `'; exit 0; fi
@@ -109,7 +111,7 @@ while [ "$#" -gt 0 ]; do case "$1" in --volume) shift; mount="${1%%:*}" ;; --ent
 		t.Fatal(err)
 	}
 	restore, err := db.GetDatabaseRestore(ctx, orgID, restoreID)
-	if err != nil || restore.Status != "succeeded" || restore.Kind != "drill" {
+	if err != nil || restore.Status != "succeeded" || restore.Kind != "drill" || !strings.Contains(restore.UtilityImage, "@sha256:") || restore.ReadinessImage != restore.UtilityImage {
 		t.Fatalf("restore drill = %#v, err = %v", restore, err)
 	}
 	logData, _ := os.ReadFile(logPath)

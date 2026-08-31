@@ -113,6 +113,8 @@ func TestWorkerBacksUpAndRestoresThroughS3(t *testing.T) {
 	restoreLog := filepath.Join(work, "restore.log")
 	dockerBin := filepath.Join(work, "docker")
 	script := `#!/bin/sh
+if [ "$1" = "pull" ]; then exit 0; fi
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then printf '["postgres@sha256:` + strings.Repeat("a", 64) + `"]\n'; exit 0; fi
 mount=""
 entrypoint=""
 filename=""
@@ -148,7 +150,7 @@ esac
 		t.Fatal(err)
 	}
 	backup, err = db.GetDatabaseBackup(ctx, orgID, backup.ID)
-	if err != nil || backup.Status != "succeeded" || backup.Path != "" || backup.ObjectKey == "" || backup.SHA256 == "" || !backup.Encrypted || backup.PlaintextSHA256 == "" || backup.EncryptedDataKey == "" || !strings.HasSuffix(backup.ObjectKey, ".enc") {
+	if err != nil || backup.Status != "succeeded" || backup.Path != "" || backup.ObjectKey == "" || backup.SHA256 == "" || !backup.Encrypted || backup.PlaintextSHA256 == "" || backup.EncryptedDataKey == "" || !strings.HasSuffix(backup.ObjectKey, ".enc") || !strings.Contains(backup.UtilityImage, "@sha256:") {
 		t.Fatalf("remote backup = %#v, err = %v", backup, err)
 	}
 	t.Cleanup(func() {
@@ -180,7 +182,7 @@ esac
 		t.Fatal(err)
 	}
 	restore, err = db.GetDatabaseRestore(ctx, orgID, restore.ID)
-	if err != nil || restore.Status != "succeeded" {
+	if err != nil || restore.Status != "succeeded" || restore.UtilityImage != backup.UtilityImage {
 		t.Fatalf("restore = %#v, err = %v", restore, err)
 	}
 	if restored, readErr := os.ReadFile(restoreLog); readErr != nil || string(restored) != "restored\n" {

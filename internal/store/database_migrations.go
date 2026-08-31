@@ -24,6 +24,9 @@ type DatabaseMigration struct {
 	SizeBytes             *int64     `json:"sizeBytes,omitempty"`
 	SHA256                string     `json:"sha256,omitempty"`
 	Output                string     `json:"output,omitempty"`
+	SourceUtilityImage    string     `json:"sourceUtilityImage,omitempty"`
+	TargetUtilityImage    string     `json:"targetUtilityImage,omitempty"`
+	ReadinessImage        string     `json:"readinessImage,omitempty"`
 	Error                 string     `json:"error,omitempty"`
 	CreatedAt             time.Time  `json:"createdAt"`
 	StartedAt             *time.Time `json:"startedAt,omitempty"`
@@ -87,7 +90,7 @@ func (s *Store) queueDatabaseMigration(ctx context.Context, organizationID uuid.
 
 func (s *Store) GetDatabaseMigration(ctx context.Context, organizationID, id uuid.UUID) (DatabaseMigration, error) {
 	var item DatabaseMigration
-	err := s.Pool.QueryRow(ctx, `SELECT m.id,m.database_instance_id,m.source_kind,m.source_id,m.source_engine,m.source_version,m.source_host,m.status,m.size_bytes,m.sha256,m.output,m.error,m.created_at,m.started_at,m.finished_at FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseInstanceID, &item.SourceKind, &item.SourceID, &item.SourceEngine, &item.SourceVersion, &item.SourceHost, &item.Status, &item.SizeBytes, &item.SHA256, &item.Output, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT m.id,m.database_instance_id,m.source_kind,m.source_id,m.source_engine,m.source_version,m.source_host,m.status,m.size_bytes,m.sha256,m.output,m.source_utility_image,m.target_utility_image,m.readiness_image,m.error,m.created_at,m.started_at,m.finished_at FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseInstanceID, &item.SourceKind, &item.SourceID, &item.SourceEngine, &item.SourceVersion, &item.SourceHost, &item.Status, &item.SizeBytes, &item.SHA256, &item.Output, &item.SourceUtilityImage, &item.TargetUtilityImage, &item.ReadinessImage, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseMigration{}, ErrNotFound
 	}
@@ -95,7 +98,7 @@ func (s *Store) GetDatabaseMigration(ctx context.Context, organizationID, id uui
 }
 
 func (s *Store) ListDatabaseMigrations(ctx context.Context, organizationID, databaseInstanceID uuid.UUID) ([]DatabaseMigration, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.database_instance_id,m.source_kind,m.source_id,m.source_engine,m.source_version,m.source_host,m.status,m.size_bytes,m.sha256,m.output,m.error,m.created_at,m.started_at,m.finished_at FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.database_instance_id=$1 AND p.organization_id=$2 ORDER BY m.created_at DESC LIMIT 100`, databaseInstanceID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT m.id,m.database_instance_id,m.source_kind,m.source_id,m.source_engine,m.source_version,m.source_host,m.status,m.size_bytes,m.sha256,m.output,m.source_utility_image,m.target_utility_image,m.readiness_image,m.error,m.created_at,m.started_at,m.finished_at FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE m.database_instance_id=$1 AND p.organization_id=$2 ORDER BY m.created_at DESC LIMIT 100`, databaseInstanceID, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +106,7 @@ func (s *Store) ListDatabaseMigrations(ctx context.Context, organizationID, data
 	items := []DatabaseMigration{}
 	for rows.Next() {
 		var item DatabaseMigration
-		if err = rows.Scan(&item.ID, &item.DatabaseInstanceID, &item.SourceKind, &item.SourceID, &item.SourceEngine, &item.SourceVersion, &item.SourceHost, &item.Status, &item.SizeBytes, &item.SHA256, &item.Output, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.DatabaseInstanceID, &item.SourceKind, &item.SourceID, &item.SourceEngine, &item.SourceVersion, &item.SourceHost, &item.Status, &item.SizeBytes, &item.SHA256, &item.Output, &item.SourceUtilityImage, &item.TargetUtilityImage, &item.ReadinessImage, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

@@ -10,7 +10,7 @@ func validRemoteArtifactJob() RemoteArtifactJob {
 	return RemoteArtifactJob{
 		Mode:            "download",
 		Network:         "database_default",
-		Image:           "postgres:17",
+		Image:           "postgres@sha256:" + strings.Repeat("a", 64),
 		Command:         []string{"pg_restore", "backup.dump"},
 		ArtifactName:    "backup.dump",
 		TransferURL:     "https://objects.example.test/backups/object?signature=value",

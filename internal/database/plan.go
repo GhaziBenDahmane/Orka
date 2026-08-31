@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/bendahma/dokploy-go/internal/ociref"
 )
 
 const (
@@ -64,6 +66,19 @@ func ValidateUtilityPlan(plan BackupPlan) error {
 		return errors.New("invalid utility artifact extension")
 	}
 	return ValidateUtilityFiles(plan.Files)
+}
+
+// ValidateResolvedUtilityPlan is the execution-boundary validator. Drivers may
+// describe utilities with version tags, but no utility container may execute
+// until the scheduler has resolved that tag to an immutable manifest digest.
+func ValidateResolvedUtilityPlan(plan BackupPlan) error {
+	if err := ValidateUtilityPlan(plan); err != nil {
+		return err
+	}
+	if !ociref.IsDigestPinned(plan.Image) {
+		return errors.New("utility image must be pinned by sha256 digest")
+	}
+	return nil
 }
 
 // ValidateUtilityFiles is also used immediately before filesystem writes so a

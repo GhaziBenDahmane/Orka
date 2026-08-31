@@ -358,6 +358,7 @@ type DatabaseBackup struct {
 	EncryptedDataKey   string     `json:"-"`
 	DestinationID      *uuid.UUID `json:"destinationId,omitempty"`
 	ObjectKey          string     `json:"objectKey,omitempty"`
+	UtilityImage       string     `json:"utilityImage,omitempty"`
 	Error              string     `json:"error,omitempty"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	StartedAt          *time.Time `json:"startedAt,omitempty"`
@@ -368,6 +369,8 @@ type DatabaseRestore struct {
 	DatabaseBackupID uuid.UUID  `json:"databaseBackupId"`
 	Status           string     `json:"status"`
 	Kind             string     `json:"kind"`
+	UtilityImage     string     `json:"utilityImage,omitempty"`
+	ReadinessImage   string     `json:"readinessImage,omitempty"`
 	Error            string     `json:"error,omitempty"`
 	CreatedAt        time.Time  `json:"createdAt"`
 	StartedAt        *time.Time `json:"startedAt,omitempty"`
@@ -3323,7 +3326,7 @@ func deleteBackupDestinationTx(ctx context.Context, tx pgx.Tx, organizationID, i
 
 func (s *Store) GetDatabaseBackup(ctx context.Context, organizationID, id uuid.UUID) (DatabaseBackup, error) {
 	var b DatabaseBackup
-	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.status,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&b.ID, &b.DatabaseInstanceID, &b.Status, &b.Format, &b.Path, &b.SizeBytes, &b.SHA256, &b.Encrypted, &b.PlaintextSHA256, &b.EncryptedDataKey, &b.DestinationID, &b.ObjectKey, &b.Error, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT b.id,b.database_instance_id,b.status,b.format,b.path,b.size_bytes,b.sha256,b.encrypted,b.plaintext_sha256,b.encrypted_data_key,b.destination_id,b.object_key,b.utility_image,b.error,b.created_at,b.started_at,b.finished_at FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&b.ID, &b.DatabaseInstanceID, &b.Status, &b.Format, &b.Path, &b.SizeBytes, &b.SHA256, &b.Encrypted, &b.PlaintextSHA256, &b.EncryptedDataKey, &b.DestinationID, &b.ObjectKey, &b.UtilityImage, &b.Error, &b.CreatedAt, &b.StartedAt, &b.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseBackup{}, ErrNotFound
 	}
@@ -3446,7 +3449,7 @@ func requireDatabaseServiceRunning(ctx context.Context, tx pgx.Tx, composeServic
 
 func (s *Store) GetDatabaseRestore(ctx context.Context, organizationID, id uuid.UUID) (DatabaseRestore, error) {
 	var item DatabaseRestore
-	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.database_backup_id,r.status,r.kind,r.error,r.created_at,r.started_at,r.finished_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseBackupID, &item.Status, &item.Kind, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
+	err := s.Pool.QueryRow(ctx, `SELECT r.id,r.database_backup_id,r.status,r.kind,r.utility_image,r.readiness_image,r.error,r.created_at,r.started_at,r.finished_at FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&item.ID, &item.DatabaseBackupID, &item.Status, &item.Kind, &item.UtilityImage, &item.ReadinessImage, &item.Error, &item.CreatedAt, &item.StartedAt, &item.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}
