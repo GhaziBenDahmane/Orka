@@ -472,11 +472,6 @@ func migrateDokployData(arguments []string) error {
 	}
 	defer db.Pool.Close()
 	report, err := dockyardmigrate.QueueDokployDatabaseTransfers(ctx, db, box, dockyardmigrate.DokployOptions{SourceURL: *sourceURL, SourceOrganizationID: *sourceOrganization, TargetOrganizationID: targetID, DryRun: *dryRun}, manifest)
-	if err == nil && !*dryRun {
-		for _, item := range report.Items {
-			db.AuditOrganization(ctx, targetID, "database_migration.queue", "database_migration", item.ID.String(), "cli", map[string]any{"sourceKind": item.SourceKind, "sourceId": item.SourceID, "databaseInstanceId": item.DatabaseInstanceID})
-		}
-	}
 	_ = json.NewEncoder(os.Stdout).Encode(report)
 	return err
 }

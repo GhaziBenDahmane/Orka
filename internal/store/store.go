@@ -4667,29 +4667,11 @@ func (s *Store) AuthenticateSCIM(ctx context.Context, hash []byte) (uuid.UUID, s
 	return orgID, role, err
 }
 
-func (s *Store) Audit(ctx context.Context, p *Principal, action, resourceType, resourceID, remoteAddr string, metadata any) {
-	b, _ := json.Marshal(metadata)
-	var org, user, serviceAccount any
-	if p != nil {
-		org = p.OrganizationID
-		user = nullableUUID(p.UserID)
-		if p.ServiceAccountID != nil {
-			serviceAccount = *p.ServiceAccountID
-		}
-	}
-	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, org, user, serviceAccount, action, resourceType, resourceID, remoteAddr, b)
-}
-
 func nullableUUID(id uuid.UUID) any {
 	if id == uuid.Nil {
 		return nil
 	}
 	return id
-}
-
-func (s *Store) AuditOrganization(ctx context.Context, organizationID uuid.UUID, action, resourceType, resourceID, remoteAddr string, metadata any) {
-	b, _ := json.Marshal(metadata)
-	_, _ = s.Pool.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,NULL,$2,$3,$4,$5,$6)`, organizationID, action, resourceType, resourceID, remoteAddr, b)
 }
 
 // AuditOrganizationTx appends a system-initiated tenant audit event as part of

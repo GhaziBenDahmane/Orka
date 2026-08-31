@@ -31,6 +31,14 @@ type DatabaseMigration struct {
 }
 
 func (s *Store) QueueDatabaseMigration(ctx context.Context, organizationID uuid.UUID, item DatabaseMigration) (DatabaseMigration, error) {
+	return s.queueDatabaseMigration(ctx, organizationID, item, "", false)
+}
+
+func (s *Store) QueueDatabaseMigrationWithSystemAudit(ctx context.Context, organizationID uuid.UUID, item DatabaseMigration, remoteAddr string) (DatabaseMigration, error) {
+	return s.queueDatabaseMigration(ctx, organizationID, item, remoteAddr, true)
+}
+
+func (s *Store) queueDatabaseMigration(ctx context.Context, organizationID uuid.UUID, item DatabaseMigration, remoteAddr string, audit bool) (DatabaseMigration, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return DatabaseMigration{}, err
@@ -65,8 +73,16 @@ func (s *Store) QueueDatabaseMigration(ctx context.Context, organizationID uuid.
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts,resource_key) VALUES($1,'migrate.database',$2,3,$3)`, uuid.New(), payload, "database:"+item.DatabaseInstanceID.String()); err != nil {
 		return DatabaseMigration{}, err
 	}
+	if audit {
+		if err = s.AuditOrganizationTx(ctx, tx, organizationID, "database_migration.queue", "database_migration", item.ID.String(), remoteAddr, map[string]any{"sourceKind": item.SourceKind, "sourceId": item.SourceID, "databaseInstanceId": item.DatabaseInstanceID}); err != nil {
+			return DatabaseMigration{}, err
+		}
+	}
 	item.EncryptedSourceConfig = ""
-	return item, tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseMigration{}, err
+	}
+	return item, nil
 }
 
 func (s *Store) GetDatabaseMigration(ctx context.Context, organizationID, id uuid.UUID) (DatabaseMigration, error) {

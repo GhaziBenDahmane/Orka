@@ -271,7 +271,8 @@ func SyncClaimedRepository(ctx context.Context, db *store.Store, box *cryptox.Bo
 	}
 	token, err := repositoryToken(ctx, db, box, repository)
 	if err != nil {
-		return ImportReport{}, errors.Join(err, db.FinishTemplateRepositorySync(ctx, repository, "failed", boundedSyncError(err)))
+		metadata := map[string]any{"imported": 0, "restricted": 0, "invalid": 0, "failed": 0, "scheduled": true, "error": boundedSyncError(err)}
+		return ImportReport{}, errors.Join(err, db.FinishTemplateRepositorySyncWithAudit(ctx, repository, "failed", boundedSyncError(err), "scheduler", metadata))
 	}
 	root, cleanup, err := FetchGitHubCatalog(ctx, client, repository.RepositoryURL, repository.GitRef, token)
 	if err == nil {
@@ -286,7 +287,11 @@ func SyncClaimedRepository(ctx context.Context, db *store.Store, box *cryptox.Bo
 	if err != nil {
 		status, message = "failed", boundedSyncError(err)
 	}
-	if finishErr := db.FinishTemplateRepositorySync(ctx, repository, status, message); finishErr != nil {
+	metadata := map[string]any{"imported": report.Imported, "restricted": report.Restricted, "invalid": report.Invalid, "failed": len(report.Failed), "scheduled": true}
+	if err != nil {
+		metadata["error"] = boundedSyncError(err)
+	}
+	if finishErr := db.FinishTemplateRepositorySyncWithAudit(ctx, repository, status, message, "scheduler", metadata); finishErr != nil {
 		if err == nil {
 			err = finishErr
 		} else {
@@ -351,13 +356,10 @@ func RunRepositorySyncScheduler(ctx context.Context, db *store.Store, box *crypt
 					logger.Error("claim due template repository", "error", claimErr)
 					break
 				}
-				report, syncErr := SyncClaimedRepository(ctx, db, box, client, repository)
-				metadata := map[string]any{"imported": report.Imported, "restricted": report.Restricted, "invalid": report.Invalid, "failed": len(report.Failed), "scheduled": true}
+				_, syncErr := SyncClaimedRepository(ctx, db, box, client, repository)
 				if syncErr != nil {
-					metadata["error"] = syncErr.Error()
 					logger.Error("scheduled template repository sync", "repository_id", repository.ID, "error", syncErr)
 				}
-				db.AuditOrganization(ctx, repository.OrganizationID, "template_repository.sync", "template_repository", repository.ID.String(), "scheduler", metadata)
 			}
 		}
 		select {

@@ -557,6 +557,9 @@ First-time agent enrollment atomically consumes its one-time token, activates
 the cluster certificate, and records the system audit event. Signed provider
 webhooks likewise record replay protection, deployment snapshots, worker jobs,
 pending commit status, and their system audit evidence in one transaction.
+Dokploy native database-transfer admission commits the migration record and
+worker job with its system audit evidence. Scheduled template-repository sync
+finalization commits the fenced attempt status and system audit event together.
 
 Service schedules accept standard five-field cron expressions (including
 ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`

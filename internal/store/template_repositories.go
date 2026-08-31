@@ -321,17 +321,38 @@ func (s *Store) ClaimDueTemplateRepository(ctx context.Context) (TemplateReposit
 }
 
 func (s *Store) FinishTemplateRepositorySync(ctx context.Context, repository TemplateRepository, status, message string) error {
+	return s.finishTemplateRepositorySync(ctx, repository, status, message, "", nil, false)
+}
+
+func (s *Store) FinishTemplateRepositorySyncWithAudit(ctx context.Context, repository TemplateRepository, status, message, remoteAddr string, metadata any) error {
+	return s.finishTemplateRepositorySync(ctx, repository, status, message, remoteAddr, metadata, true)
+}
+
+func (s *Store) finishTemplateRepositorySync(ctx context.Context, repository TemplateRepository, status, message, remoteAddr string, metadata any, audit bool) error {
 	if status != "succeeded" && status != "failed" {
 		return errors.New("invalid template repository sync status")
 	}
 	if repository.SyncAttemptID == nil {
 		return ErrBusy
 	}
-	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET last_sync_status=$3,last_sync_error=$4,last_synced_at=now(),sync_started_at=NULL,sync_attempt_id=NULL,next_sync_at=CASE WHEN sync_interval_seconds>0 THEN now()+(sync_interval_seconds * interval '1 second') ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND last_sync_status='running' AND sync_attempt_id=$5`, repository.ID, repository.OrganizationID, status, message, *repository.SyncAttemptID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE template_repositories SET last_sync_status=$3,last_sync_error=$4,last_synced_at=now(),sync_started_at=NULL,sync_attempt_id=NULL,next_sync_at=CASE WHEN sync_interval_seconds>0 THEN now()+(sync_interval_seconds * interval '1 second') ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND last_sync_status='running' AND sync_attempt_id=$5`, repository.ID, repository.OrganizationID, status, message, *repository.SyncAttemptID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrBusy
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if audit {
+		if err = s.AuditOrganizationTx(ctx, tx, repository.OrganizationID, "template_repository.sync", "template_repository", repository.ID.String(), remoteAddr, metadata); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizationID, id uuid.UUID, trustedPublicKey string, requireSignature bool, credentialID *uuid.UUID, syncIntervalSeconds int) error {

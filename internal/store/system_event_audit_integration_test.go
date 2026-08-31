@@ -128,3 +128,120 @@ func TestWebhookDeploymentCommitsWithSystemAudit(t *testing.T) {
 		t.Fatalf("webhook deployment audit count=%d err=%v", count, err)
 	}
 }
+
+func TestDatabaseMigrationQueueCommitsWithSystemAudit(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, projectID, environmentID, serviceID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Migration system audit',$2)`, []any{organizationID, "migration-system-audit-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Database','database',$3,'services: {}')`, []any{serviceID, environmentID, "migration-system-audit-" + serviceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials,status) VALUES($1,$2,'Database','database','postgres','17',$3,'encrypted','running')`, []any{databaseID, environmentID, serviceID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS reject_database_migration_queue_audit ON audit_events`)
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS reject_database_migration_queue_audit()`)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	if _, err := pool.Exec(ctx, `CREATE FUNCTION reject_database_migration_queue_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='database_migration.queue' THEN RAISE EXCEPTION 'forced audit failure'; END IF; RETURN NEW; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `CREATE TRIGGER reject_database_migration_queue_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION reject_database_migration_queue_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	failedID := uuid.New()
+	input := DatabaseMigration{ID: failedID, DatabaseInstanceID: databaseID, SourceKind: "dokploy", SourceID: "source-db", SourceEngine: "postgres", SourceVersion: "17", SourceHost: "source.internal", EncryptedSourceConfig: "encrypted"}
+	if _, err := db.QueueDatabaseMigrationWithSystemAudit(ctx, organizationID, input, "cli"); err == nil {
+		t.Fatal("database migration queued without audit evidence")
+	}
+	var migrations, jobs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM database_migrations WHERE id=$1`, failedID).Scan(&migrations); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='migrate.database' AND payload->>'migrationId'=$1`, failedID.String()).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if migrations != 0 || jobs != 0 {
+		t.Fatalf("failed evidence retained migration work: migrations=%d jobs=%d", migrations, jobs)
+	}
+	if _, err := pool.Exec(ctx, `DROP TRIGGER reject_database_migration_queue_audit ON audit_events`); err != nil {
+		t.Fatal(err)
+	}
+	input.ID = uuid.New()
+	queued, err := db.QueueDatabaseMigrationWithSystemAudit(ctx, organizationID, input, "cli")
+	if err != nil || queued.Status != "queued" {
+		t.Fatalf("audited database migration=%#v err=%v", queued, err)
+	}
+	var count int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id IS NULL AND actor_service_account_id IS NULL AND action='database_migration.queue' AND resource_id=$2`, organizationID, queued.ID.String()).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("database migration audit count=%d err=%v", count, err)
+	}
+}
+
+func TestTemplateRepositoryFinalizationCommitsWithSystemAudit(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Template system audit',$2)`, organizationID, "template-system-audit-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS reject_template_sync_audit ON audit_events`)
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS reject_template_sync_audit()`)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Catalog", Slug: "catalog", RepositoryURL: "https://github.com/acme/catalog", GitRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.SyncAttemptID == nil {
+		t.Fatalf("claimed repository=%#v err=%v", claimed, err)
+	}
+	if _, err = pool.Exec(ctx, `CREATE FUNCTION reject_template_sync_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='template_repository.sync' THEN RAISE EXCEPTION 'forced audit failure'; END IF; RETURN NEW; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `CREATE TRIGGER reject_template_sync_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION reject_template_sync_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]any{"imported": 1, "scheduled": true}
+	if err = db.FinishTemplateRepositorySyncWithAudit(ctx, claimed, "succeeded", "", "scheduler", metadata); err == nil {
+		t.Fatal("template sync finalized without audit evidence")
+	}
+	stored, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || stored.LastSyncStatus != "running" || stored.SyncAttemptID == nil || *stored.SyncAttemptID != *claimed.SyncAttemptID {
+		t.Fatalf("failed evidence finalized template sync: repository=%#v err=%v", stored, err)
+	}
+	if _, err = pool.Exec(ctx, `DROP TRIGGER reject_template_sync_audit ON audit_events`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishTemplateRepositorySyncWithAudit(ctx, claimed, "succeeded", "", "scheduler", metadata); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || stored.LastSyncStatus != "succeeded" || stored.SyncAttemptID != nil {
+		t.Fatalf("audited template sync finalization=%#v err=%v", stored, err)
+	}
+	var count int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id IS NULL AND actor_service_account_id IS NULL AND action='template_repository.sync' AND resource_id=$2`, organizationID, repository.ID.String()).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("template sync audit count=%d err=%v", count, err)
+	}
+}

@@ -144,7 +144,7 @@ func QueueDokployDatabaseTransfers(ctx context.Context, destination *store.Store
 		if err != nil {
 			return report, err
 		}
-		item, err = destination.QueueDatabaseMigration(ctx, options.TargetOrganizationID, item)
+		item, err = destination.QueueDatabaseMigrationWithSystemAudit(ctx, options.TargetOrganizationID, item, "cli")
 		if errors.Is(err, store.ErrBusy) {
 			return report, fmt.Errorf("database %s already has an active migration", connection.SourceID)
 		}
