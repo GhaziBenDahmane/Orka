@@ -77,7 +77,7 @@ func (s *Server) putVolumeBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertVolumeBackupPolicy(r.Context(), p.OrganizationID, service.ID, volumeName, nodeID, in.DestinationID, in.IntervalSeconds, in.RetentionCount, in.Quiesce, in.Enabled)
+	item, err := s.Store.UpsertVolumeBackupPolicyWithAudit(r.Context(), p, service.ID, volumeName, nodeID, in.DestinationID, in.IntervalSeconds, in.RetentionCount, in.Quiesce, in.Enabled, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrStorageNodeMismatch) {
 			writeError(w, http.StatusConflict, "storage_node_mismatch", err.Error())
@@ -86,7 +86,6 @@ func (s *Server) putVolumeBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "volume_backup_policy.update", "service", service.ID.String(), r.RemoteAddr, map[string]any{"volumeName": volumeName, "destinationId": in.DestinationID, "intervalSeconds": in.IntervalSeconds, "retentionCount": in.RetentionCount, "quiesce": in.Quiesce, "enabled": in.Enabled, "storageNodeId": nodeID})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -98,7 +97,7 @@ func (s *Server) deleteVolumeBackupPolicy(w http.ResponseWriter, r *http.Request
 	}
 	volumeName := r.PathValue("volumeName")
 	p := principal(r)
-	if err = s.Store.DeleteVolumeBackupPolicy(r.Context(), p.OrganizationID, serviceID, volumeName); err != nil {
+	if err = s.Store.DeleteVolumeBackupPolicyWithAudit(r.Context(), p, serviceID, volumeName, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "volume_backup_policy_busy", "wait for active backups and restores to finish before deleting the policy")
 			return
@@ -106,7 +105,6 @@ func (s *Server) deleteVolumeBackupPolicy(w http.ResponseWriter, r *http.Request
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "volume_backup_policy.delete", "service", serviceID.String(), r.RemoteAddr, map[string]string{"volumeName": volumeName})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -131,7 +129,7 @@ func (s *Server) createVolumeBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueVolumeBackup(r.Context(), p.OrganizationID, serviceID, r.PathValue("volumeName"), p.UserID)
+	item, err := s.Store.QueueVolumeBackupWithAudit(r.Context(), p, serviceID, r.PathValue("volumeName"), r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "backup_in_progress", "wait for the active volume backup to finish before starting another")
@@ -140,7 +138,6 @@ func (s *Server) createVolumeBackup(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "volume_backup.create", "volume_backup", item.ID.String(), r.RemoteAddr, map[string]any{"serviceId": serviceID, "volumeName": item.VolumeName})
 	writeJSON(w, http.StatusAccepted, item)
 }
 
@@ -189,7 +186,7 @@ func (s *Server) restoreVolumeBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueVolumeRestore(r.Context(), p.OrganizationID, id, p.UserID, in.Confirm)
+	item, err := s.Store.QueueVolumeRestoreWithAudit(r.Context(), p, id, in.Confirm, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "restore_in_progress", "wait for the active volume restore to finish before starting another")
@@ -202,7 +199,6 @@ func (s *Server) restoreVolumeBackup(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "volume_restore.create", "volume_restore", item.ID.String(), r.RemoteAddr, map[string]any{"backupId": id})
 	writeJSON(w, http.StatusAccepted, item)
 }
 

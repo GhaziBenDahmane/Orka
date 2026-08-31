@@ -62,8 +62,40 @@ func (s *Store) UpsertVolumeBackupPolicy(ctx context.Context, organizationID, se
 		return VolumeBackupPolicy{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := upsertVolumeBackupPolicyTx(ctx, tx, organizationID, serviceID, volumeName, nodeID, destinationID, intervalSeconds, retentionCount, quiesce, enabled)
+	if err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpsertVolumeBackupPolicyWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, volumeName, nodeID string, destinationID uuid.UUID, intervalSeconds, retentionCount int, quiesce, enabled bool, remoteAddr string) (VolumeBackupPolicy, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := upsertVolumeBackupPolicyTx(ctx, tx, principal.OrganizationID, serviceID, volumeName, nodeID, destinationID, intervalSeconds, retentionCount, quiesce, enabled)
+	if err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	metadata := map[string]any{"volumeName": volumeName, "destinationId": destinationID, "intervalSeconds": intervalSeconds, "retentionCount": retentionCount, "quiesce": quiesce, "enabled": enabled, "storageNodeId": nodeID}
+	if err = appendPrincipalAudit(ctx, tx, principal, "volume_backup_policy.update", "service", serviceID.String(), remoteAddr, metadata); err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	return item, nil
+}
+
+func upsertVolumeBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName, nodeID string, destinationID uuid.UUID, intervalSeconds, retentionCount int, quiesce, enabled bool) (VolumeBackupPolicy, error) {
 	var lockedID uuid.UUID
 	var composeYAML string
+	var err error
 	if err = tx.QueryRow(ctx, `SELECT s.id,s.compose_yaml FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 AND EXISTS(SELECT 1 FROM backup_destinations d WHERE d.id=$3 AND d.organization_id=$2) FOR UPDATE OF s`, serviceID, organizationID, destinationID).Scan(&lockedID, &composeYAML); errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackupPolicy{}, ErrNotFound
 	} else if err != nil {
@@ -98,7 +130,7 @@ func (s *Store) UpsertVolumeBackupPolicy(ctx context.Context, organizationID, se
 	if err != nil {
 		return VolumeBackupPolicy{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListVolumeBackupPolicies(ctx context.Context, organizationID, serviceID uuid.UUID) ([]VolumeBackupPolicy, error) {
@@ -124,8 +156,30 @@ func (s *Store) DeleteVolumeBackupPolicy(ctx context.Context, organizationID, se
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteVolumeBackupPolicyTx(ctx, tx, organizationID, serviceID, volumeName); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteVolumeBackupPolicyWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, volumeName, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteVolumeBackupPolicyTx(ctx, tx, principal.OrganizationID, serviceID, volumeName); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "volume_backup_policy.delete", "service", serviceID.String(), remoteAddr, map[string]string{"volumeName": volumeName}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteVolumeBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName string) error {
 	var policyID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT policy.id FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE policy.compose_service_id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID)
+	err := tx.QueryRow(ctx, `SELECT policy.id FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE policy.compose_service_id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -151,7 +205,7 @@ func (s *Store) DeleteVolumeBackupPolicy(ctx context.Context, organizationID, se
 	if tag.RowsAffected() != 1 {
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID uuid.UUID, volumeName string, actorID uuid.UUID) (VolumeBackup, error) {
@@ -160,13 +214,44 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 		return VolumeBackup{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := queueVolumeBackupTx(ctx, tx, organizationID, serviceID, volumeName, actorID)
+	if err != nil {
+		return VolumeBackup{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeBackup{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) QueueVolumeBackupWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, volumeName, remoteAddr string) (VolumeBackup, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return VolumeBackup{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := queueVolumeBackupTx(ctx, tx, principal.OrganizationID, serviceID, volumeName, principal.UserID)
+	if err != nil {
+		return VolumeBackup{}, err
+	}
+	metadata := map[string]any{"serviceId": serviceID, "volumeName": item.VolumeName}
+	if err = appendPrincipalAudit(ctx, tx, principal, "volume_backup.create", "volume_backup", item.ID.String(), remoteAddr, metadata); err != nil {
+		return VolumeBackup{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeBackup{}, err
+	}
+	return item, nil
+}
+
+func queueVolumeBackupTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName string, actorID uuid.UUID) (VolumeBackup, error) {
 	var policyID, destinationID uuid.UUID
 	var nodeID string
 	var quiesce bool
 	var deleting bool
 	var desiredState string
 	var retentionCount int
-	err = tx.QueryRow(ctx, `SELECT policy.id,policy.destination_id,service.storage_node_id,policy.quiesce,policy.retention_count,service.deletion_requested_at IS NOT NULL,service.desired_state FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID, &destinationID, &nodeID, &quiesce, &retentionCount, &deleting, &desiredState)
+	err := tx.QueryRow(ctx, `SELECT policy.id,policy.destination_id,service.storage_node_id,policy.quiesce,policy.retention_count,service.deletion_requested_at IS NOT NULL,service.desired_state FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE service.id=$1 AND policy.volume_name=$2 AND p.organization_id=$3 FOR UPDATE OF service,policy`, serviceID, volumeName, organizationID).Scan(&policyID, &destinationID, &nodeID, &quiesce, &retentionCount, &deleting, &desiredState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackup{}, ErrNotFound
 	}
@@ -199,7 +284,7 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'backup.volume',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return VolumeBackup{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListVolumeBackups(ctx context.Context, organizationID, serviceID uuid.UUID) ([]VolumeBackup, error) {
@@ -234,11 +319,41 @@ func (s *Store) QueueVolumeRestore(ctx context.Context, organizationID, backupID
 		return VolumeRestore{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := queueVolumeRestoreTx(ctx, tx, organizationID, backupID, actorID, confirmation)
+	if err != nil {
+		return VolumeRestore{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeRestore{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) QueueVolumeRestoreWithAudit(ctx context.Context, principal Principal, backupID uuid.UUID, confirmation, remoteAddr string) (VolumeRestore, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return VolumeRestore{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := queueVolumeRestoreTx(ctx, tx, principal.OrganizationID, backupID, principal.UserID, confirmation)
+	if err != nil {
+		return VolumeRestore{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "volume_restore.create", "volume_restore", item.ID.String(), remoteAddr, map[string]any{"backupId": backupID}); err != nil {
+		return VolumeRestore{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return VolumeRestore{}, err
+	}
+	return item, nil
+}
+
+func queueVolumeRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backupID, actorID uuid.UUID, confirmation string) (VolumeRestore, error) {
 	var serviceID uuid.UUID
 	var slug, status string
 	var deleting bool
 	var desiredState string
-	err = tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState)
+	err := tx.QueryRow(ctx, `SELECT service.id,service.slug,backup.status,service.deletion_requested_at IS NOT NULL,service.desired_state FROM volume_backups backup JOIN compose_services service ON service.id=backup.compose_service_id JOIN environments e ON e.id=service.environment_id JOIN projects p ON p.id=e.project_id WHERE backup.id=$1 AND p.organization_id=$2 FOR UPDATE OF service,backup`, backupID, organizationID).Scan(&serviceID, &slug, &status, &deleting, &desiredState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return VolumeRestore{}, ErrNotFound
 	}
@@ -274,7 +389,7 @@ func (s *Store) QueueVolumeRestore(ctx context.Context, organizationID, backupID
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'restore.volume',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return VolumeRestore{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) GetVolumeRestore(ctx context.Context, organizationID, id uuid.UUID) (VolumeRestore, error) {

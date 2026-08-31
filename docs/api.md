@@ -723,6 +723,8 @@ operator audit evidence in one transaction. Backup-policy creation, updates,
 and deletion use the same boundary. If audit persistence fails, no recovery job
 is queued and the previous policy remains intact. User and service-account
 callers retain distinct audit attribution.
+Named-volume backup/restore creation and volume-policy updates/deletion provide
+the same guarantee, including rollback of storage-node binding and queued jobs.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
