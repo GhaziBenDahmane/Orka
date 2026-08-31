@@ -787,6 +787,25 @@ func TestDeterministicAuditDetectsPlaintextBackupDestination(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsBackupDestinationCredentialLifecycle(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	unusedID, overdueID := uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		BackupDestinations: []store.AIAuditBackupDestinationInfo{
+			{ID: unusedID, UseTLS: true, CreatedAt: now.Add(-31 * 24 * time.Hour), LastRotatedAt: now.Add(-31 * 24 * time.Hour)},
+			{ID: overdueID, UseTLS: true, DatabasePolicies: 1, AuditArchives: 1, CreatedAt: now.Add(-400 * 24 * time.Hour), LastRotatedAt: now.Add(-181 * 24 * time.Hour)},
+			{ID: uuid.New(), UseTLS: true, VolumePolicies: 1, CreatedAt: now.Add(-400 * 24 * time.Hour), LastRotatedAt: now.Add(-179 * 24 * time.Hour)},
+		},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 2 || findings[0].Title != "Unused backup destination is stale" || findings[0].ResourceID != unusedID.String() || findings[1].Title != "Backup destination credential rotation is overdue" || findings[1].ResourceID != overdueID.String() || findings[1].Severity != "high" || findings[1].Evidence["ageDays"] != 181 {
+		t.Fatalf("backup destination credential findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsTemplateRepositoryFreshness(t *testing.T) {
 	now := time.Now().UTC()
 	stale, fresh := now.Add(-3*time.Hour), now.Add(-30*time.Minute)

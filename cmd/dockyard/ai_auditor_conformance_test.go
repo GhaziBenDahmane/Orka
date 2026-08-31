@@ -44,6 +44,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	managedNetworkID := uuid.New()
 	staleDeployTokenID := uuid.New()
 	staleSourceCredentialID, overdueSourceCredentialID := uuid.New(), uuid.New()
+	overdueBackupDestinationID := uuid.New()
 	customTLSHost := "ai-" + customTLSCertificateID.String() + ".example.test"
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
 	ownerToken := "dky_ai_owner_conformance_" + uuid.NewString()
@@ -98,6 +99,8 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,revision) VALUES($1,$2,'Mutable runtime service','mutable-runtime-service',$3,$4,1)`, []any{mutableRuntimeServiceID, environmentID, "ai-conformance-" + mutableRuntimeServiceID.String(), "services: {app: {image: example.invalid/desired:released}}"}},
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,$3,$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), mutableRuntimeServiceID, "services: {app: {image: example.invalid/" + runtimeImageMarker + ":latest}}"}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Failed database','failed-database','postgres','17','encrypted','error')`, []any{failedDatabaseID, environmentID}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials,created_at,updated_at) VALUES($1,$2,'Conformance backup','https://s3.example.test','conformance',true,$3,now()-interval '1 year',now()-interval '181 days')`, []any{overdueBackupDestinationID, organizationID, "backup-destination:" + secretMarker}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id) VALUES($1,$2,86400,7,true,now()+interval '1 day',$3)`, []any{uuid.New(), failedDatabaseID, overdueBackupDestinationID}},
 	}
 	for _, statement := range statements {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -137,7 +140,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			http.Error(w, "invalid model request", http.StatusBadRequest)
 			return
 		}
-		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) {
+		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueBackupDestinationID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) {
 			t.Error("model request did not contain the bounded platform snapshot and trust instruction")
 			http.Error(w, "incomplete prompt", http.StatusBadRequest)
 			return
@@ -203,7 +206,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Managed network provisioning failed", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}

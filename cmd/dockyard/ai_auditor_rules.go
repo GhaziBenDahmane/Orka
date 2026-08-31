@@ -19,6 +19,7 @@ const jobHeartbeatStallThreshold = 2 * time.Minute
 const agentCommandStallThreshold = 2 * time.Minute
 const edgeTLSReconciliationStallThreshold = 5 * time.Minute
 const managedNetworkProvisioningStallThreshold = 15 * time.Minute
+const credentialRotationThreshold = 180 * 24 * time.Hour
 
 func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) []modelFinding {
 	findings := make([]modelFinding, 0)
@@ -102,7 +103,7 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		if references == 0 && now.Sub(credential.CreatedAt) > 30*24*time.Hour {
 			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Unused source credential is stale", Description: "An encrypted Git, SSH, or registry credential has no workload, status, or template-catalog references and is more than thirty days old.", ResourceType: "source_credential", ResourceID: credential.ID.String(), Evidence: map[string]any{"kind": credential.Kind, "createdAt": credential.CreatedAt.UTC().Format(time.RFC3339), "ageDays": int(now.Sub(credential.CreatedAt).Hours() / 24), "references": references}, Remediation: "Confirm the credential has no external consumer, then delete it from the organization credential inventory."})
 		}
-		if references > 0 && !credential.LastRotatedAt.IsZero() && now.Sub(credential.LastRotatedAt) > 180*24*time.Hour {
+		if references > 0 && !credential.LastRotatedAt.IsZero() && now.Sub(credential.LastRotatedAt) > credentialRotationThreshold {
 			add(modelFinding{Severity: "medium", Category: "supply_chain", Title: "Source credential rotation is overdue", Description: "A Git, SSH, or registry credential still used by workloads, status callbacks, or template catalogs has not been rotated in more than 180 days.", ResourceType: "source_credential", ResourceID: credential.ID.String(), Evidence: map[string]any{"kind": credential.Kind, "lastRotatedAt": credential.LastRotatedAt.UTC().Format(time.RFC3339), "ageDays": int(now.Sub(credential.LastRotatedAt).Hours() / 24), "references": references}, Remediation: "Rotate the credential in place, update its external issuer if needed, and verify every bound workload or catalog can still authenticate."})
 		}
 	}
@@ -209,8 +210,15 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		add(modelFinding{Severity: "critical", Category: "network", Title: "Custom TLS edge target is missing", Description: "An enabled custom-certificate route has no edge reconciliation target, so certificate readiness cannot be established.", ResourceType: "edge_tls_target", ResourceID: targetKey, Evidence: evidence, Remediation: "Re-save the route or rotate its certificate to recreate the target, then verify reconciliation is ready before deploying the service."})
 	}
 	for _, destination := range snapshot.BackupDestinations {
+		references := destination.DatabasePolicies + destination.VolumePolicies + destination.AuditArchives
 		if !destination.UseTLS {
 			add(modelFinding{Severity: "high", Category: "backup", Title: "Backup destination permits plaintext object-store transport", Description: "A configured backup destination can send credentials and recovery data without transport encryption.", ResourceType: "backup_destination", ResourceID: destination.ID.String(), Evidence: map[string]any{"useTls": false, "databasePolicyReferences": destination.DatabasePolicies, "volumePolicyReferences": destination.VolumePolicies, "auditArchiveReferences": destination.AuditArchives}, Remediation: "Move the destination to a certificate-validated TLS endpoint, rotate its credentials, and verify database, volume, and audit-archive delivery."})
+		}
+		if references == 0 && !destination.CreatedAt.IsZero() && now.Sub(destination.CreatedAt) > 30*24*time.Hour {
+			add(modelFinding{Severity: "medium", Category: "backup", Title: "Unused backup destination is stale", Description: "An encrypted object-store destination has no database, volume, or audit-archive policy references and is more than thirty days old.", ResourceType: "backup_destination", ResourceID: destination.ID.String(), Evidence: map[string]any{"createdAt": destination.CreatedAt.UTC().Format(time.RFC3339), "ageDays": int(now.Sub(destination.CreatedAt).Hours() / 24), "references": references}, Remediation: "Confirm the destination has no external retention purpose, then delete it or attach it to the intended backup policy."})
+		}
+		if references > 0 && !destination.LastRotatedAt.IsZero() && now.Sub(destination.LastRotatedAt) > credentialRotationThreshold {
+			add(modelFinding{Severity: "high", Category: "backup", Title: "Backup destination credential rotation is overdue", Description: "Credentials for an object-store destination used by database, volume, or immutable audit backups have not been rotated in more than 180 days.", ResourceType: "backup_destination", ResourceID: destination.ID.String(), Evidence: map[string]any{"lastRotatedAt": destination.LastRotatedAt.UTC().Format(time.RFC3339), "ageDays": int(now.Sub(destination.LastRotatedAt).Hours() / 24), "databasePolicyReferences": destination.DatabasePolicies, "volumePolicyReferences": destination.VolumePolicies, "auditArchiveReferences": destination.AuditArchives}, Remediation: "Issue replacement object-store credentials, rotate the destination in place, and verify a backup plus restore before revoking the old credentials."})
 		}
 	}
 	for _, network := range snapshot.ManagedNetworks {

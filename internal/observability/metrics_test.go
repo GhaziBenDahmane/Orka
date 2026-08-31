@@ -122,7 +122,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,expires_at) VALUES($1,$2,$3,'metrics-deploy-hook',now()+interval '1 day')`, []any{deployTokenID, serviceID, []byte("metrics-deploy-token-" + deployTokenID.String())}},
 		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at) VALUES($1,$2,'registry','Metrics registry','registry.example.test','builder','encrypted',now()-interval '1 year',now()-interval '181 days')`, []any{sourceCredentialID, organizationA}},
 		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://example.test/metrics.git','app','registry.example.test/metrics/app',$2)`, []any{serviceID, sourceCredentialID}},
-		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'Metrics destination','https://s3.example.test','backups','encrypted')`, []any{destinationID, organizationA}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials,created_at,updated_at) VALUES($1,$2,'Metrics destination','https://s3.example.test','backups','encrypted',now()-interval '1 year',now()-interval '181 days')`, []any{destinationID, organizationA}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'uploads',$3,3600,7,true,true,now()+interval '1 hour')`, []any{volumePolicyID, serviceID, destinationID}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'cache',$3,3600,7,true,true,now()+interval '1 hour')`, []any{missingVolumePolicyID, serviceID, destinationID}},
 		{`INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,started_at,finished_at) VALUES($1,$2,$3,'uploads','nodeabc123',$4,true,'succeeded','volume.enc',42,$5,$6,'encrypted',now()-interval '2 hours',now()-interval '1 hour')`, []any{volumeBackupID, volumePolicyID, serviceID, destinationID, strings.Repeat("a", 64), strings.Repeat("b", 64)}},
@@ -171,7 +171,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		}
 	}
 	metrics := recorder.Body.String()
-	for _, metric := range []string{"dockyard_deploy_token_expiry_seconds", "dockyard_source_credential_rotation_age_seconds", "dockyard_resource_finalizers", "dockyard_resource_finalizer_oldest_age_seconds", "dockyard_custom_tls_certificate_expiry_seconds", "dockyard_edge_tls_reconciliation", "dockyard_edge_tls_reconciliation_age_seconds"} {
+	for _, metric := range []string{"dockyard_deploy_token_expiry_seconds", "dockyard_source_credential_rotation_age_seconds", "dockyard_backup_destination_credential_rotation_age_seconds", "dockyard_resource_finalizers", "dockyard_resource_finalizer_oldest_age_seconds", "dockyard_custom_tls_certificate_expiry_seconds", "dockyard_edge_tls_reconciliation", "dockyard_edge_tls_reconciliation_age_seconds"} {
 		if !strings.Contains(metrics, "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -179,6 +179,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	for _, expected := range []string{
 		`dockyard_deploy_token_expiry_seconds{organization="` + organizationA.String() + `",service="` + serviceID.String() + `",token="` + deployTokenID.String() + `"}`,
 		`dockyard_source_credential_rotation_age_seconds{organization="` + organizationA.String() + `",credential="` + sourceCredentialID.String() + `",kind="registry"}`,
+		`dockyard_backup_destination_credential_rotation_age_seconds{organization="` + organizationA.String() + `",destination="` + destinationID.String() + `"}`,
 		`dockyard_resource_finalizers{organization="` + organizationA.String() + `",kind="cluster",state="failed"} 1`,
 		`dockyard_resource_finalizer_oldest_age_seconds{organization="` + organizationA.String() + `",kind="cluster"}`,
 		`dockyard_managed_networks{organization="` + organizationA.String() + `",scope="local",driver="overlay",status="error"} 1`,
@@ -368,6 +369,8 @@ func TestPrometheusAlertsCoverDeployTokensAndFinalizers(t *testing.T) {
 		"expr: dockyard_deploy_token_expiry_seconds <= 0",
 		"alert: DockyardSourceCredentialRotationOverdue",
 		"expr: dockyard_source_credential_rotation_age_seconds > 15552000",
+		"alert: DockyardBackupDestinationCredentialRotationOverdue",
+		"expr: dockyard_backup_destination_credential_rotation_age_seconds > 15552000",
 		"alert: DockyardResourceFinalizerRequiresIntervention",
 		`expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0`,
 		"alert: DockyardResourceFinalizerStalled",

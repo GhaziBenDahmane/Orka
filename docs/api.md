@@ -338,9 +338,13 @@ details, and encrypted build configuration are excluded. The baseline detects
 invalid transports, missing SSH trust credentials, missing drop artifacts,
 undeployed source changes, and successful Git builds without a recorded commit.
 Separate source-credential posture exposes an opaque inventory ID, credential
-class, creation time, and tenant-scoped workload/status/catalog reference
-counts. It excludes names, authorities, usernames, and encrypted secrets; an
-unreferenced credential older than thirty days produces a cleanup finding.
+class, creation/last-rotation times, and tenant-scoped workload/status/catalog
+reference counts. It excludes names, authorities, usernames, and encrypted
+secrets; an unreferenced credential older than thirty days produces a cleanup
+finding and a referenced credential older than 180 days produces a rotation
+finding. Backup-destination posture applies the same secret-free timestamps
+and lifecycle findings using database, volume, and audit-archive references;
+object-store endpoints, buckets, prefixes, and credentials remain excluded.
 The `signals30d` collection aggregates tenant-scoped deployment, database and
 volume recovery, migration, audit archive, remote-agent command, commit-status,
 notification, and prior AI-audit counts by status. With at least four

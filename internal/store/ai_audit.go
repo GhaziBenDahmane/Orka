@@ -486,6 +486,8 @@ type AIAuditBackupDestinationInfo struct {
 	DatabasePolicies int64     `json:"databasePolicyReferences"`
 	VolumePolicies   int64     `json:"volumePolicyReferences"`
 	AuditArchives    int64     `json:"auditArchiveReferences"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastRotatedAt    time.Time `json:"lastRotatedAt"`
 }
 
 type AIAuditTemplateRepositoryInfo struct {
@@ -1530,7 +1532,8 @@ func (s *Store) loadAIAuditIntegrationPosture(ctx context.Context, organizationI
 		SELECT destination.id,destination.use_tls,
 			(SELECT count(*) FROM backup_policies policy WHERE policy.destination_id=destination.id),
 			(SELECT count(*) FROM volume_backup_policies policy WHERE policy.destination_id=destination.id),
-			(SELECT count(*) FROM audit_archive_destinations archive WHERE archive.backup_destination_id=destination.id)
+			(SELECT count(*) FROM audit_archive_destinations archive WHERE archive.backup_destination_id=destination.id),
+			destination.created_at,destination.updated_at
 		FROM backup_destinations destination
 		WHERE destination.organization_id=$1
 		ORDER BY destination.id`, organizationID)
@@ -1540,7 +1543,7 @@ func (s *Store) loadAIAuditIntegrationPosture(ctx context.Context, organizationI
 	defer rows.Close()
 	for rows.Next() {
 		var item AIAuditBackupDestinationInfo
-		if err = rows.Scan(&item.ID, &item.UseTLS, &item.DatabasePolicies, &item.VolumePolicies, &item.AuditArchives); err != nil {
+		if err = rows.Scan(&item.ID, &item.UseTLS, &item.DatabasePolicies, &item.VolumePolicies, &item.AuditArchives, &item.CreatedAt, &item.LastRotatedAt); err != nil {
 			return err
 		}
 		*destinations = append(*destinations, item)

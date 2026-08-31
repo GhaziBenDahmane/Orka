@@ -110,12 +110,14 @@ keys make it a privileged service.
   the model boundary.
 - Delivery and storage integration posture exposes only opaque webhook and
   service IDs, webhook provider/enabled state, opaque backup-destination IDs,
-  TLS state, and database/volume/audit-archive reference counts. Webhook names,
-  branches and secrets plus object-store endpoints, buckets, prefixes, and
-  credentials remain outside the model boundary. The deterministic baseline
-  reports every backup destination that permits plaintext object-store traffic.
+  TLS state, creation/last-rotation times, and database/volume/audit-archive
+  reference counts. Webhook names, branches and secrets plus object-store
+  endpoints, buckets, prefixes, and credentials remain outside the model
+  boundary. The deterministic baseline reports plaintext destinations, unused
+  destinations older than thirty days, and referenced credentials not rotated
+  for more than 180 days.
 - Source-credential posture exposes only opaque IDs, credential class,
-  creation time, and workload/status/catalog reference counts. Credential
+  creation/last-rotation times, and workload/status/catalog reference counts. Credential
   names, Git or registry authorities, usernames, and encrypted material remain
   excluded. Unreferenced credentials older than thirty days produce a
   deterministic cleanup finding.
@@ -336,8 +338,9 @@ The control-plane metrics endpoint exposes global run counts by status and
 per-organization ages for the latest completion, latest failure, and oldest
 running audit. Agent names and model names are deliberately excluded from
 labels so user-controlled values cannot create unbounded Prometheus series.
-Referenced source credentials also expose a secret-free rotation-age series;
-the supplied rules warn after 180 days even if the AI audit schedule is down.
+Referenced source credentials and backup destinations also expose secret-free
+rotation-age series; the supplied rules warn after 180 days even if the AI
+audit schedule is down.
 
 The supplied Prometheus rules warn when an audit fails, remains running for
 more than ten minutes, or an organization with an active auditor token has no

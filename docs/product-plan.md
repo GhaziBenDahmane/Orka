@@ -112,6 +112,8 @@ recovery evidence remains.
   interval policies, retention, and opt-in isolated restore drills.
 - S3-compatible multipart storage with encrypted destination credentials and
   client-side, per-backup envelope encryption for local and remote artifacts.
+  Secret-free AI and Prometheus posture identifies abandoned destinations and
+  referenced object-store credentials that have not rotated within 180 days.
 - Remote backup and restore execution through outbound agents using short-lived
   presigned transfers, per-backup encryption, and end-to-end checksum checks.
 - Scheduled drill failure notifications, overdue alerts, and per-database

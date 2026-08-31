@@ -351,6 +351,15 @@ groups:
           summary: A referenced Dockyard source credential is overdue for rotation
           description: Source credential {{ $labels.credential }} ({{ $labels.kind }}) in organization {{ $labels.organization }} has not been rotated for more than 180 days; rotate it in place and verify its bound consumers.
 
+      - alert: DockyardBackupDestinationCredentialRotationOverdue
+        expr: dockyard_backup_destination_credential_rotation_age_seconds > 15552000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Referenced Dockyard backup credentials are overdue for rotation
+          description: Backup destination {{ $labels.destination }} in organization {{ $labels.organization }} has used the same object-store credentials for more than 180 days; rotate them in place and verify backup and restore.
+
       - alert: DockyardResourceFinalizerRequiresIntervention
         expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0
         for: 5m
