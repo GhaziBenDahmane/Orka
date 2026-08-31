@@ -70,6 +70,106 @@ func TestSSOPolicyTransitionsCommitWithAudit(t *testing.T) {
 	}
 }
 
+func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, userID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SSO state revocation',$2)`, organizationID, "sso-state-revocation-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	principal := Principal{OrganizationID: organizationID, UserID: userID}
+	invalidPrincipal := Principal{OrganizationID: organizationID, UserID: uuid.New()}
+	oidcProvider, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: organizationID, Name: "OIDC", Issuer: "https://identity.example.test", ClientID: "client", EncryptedClientSecret: "ciphertext", Domains: []string{"example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	samlProvider, err := db.CreateSAMLProvider(ctx, SAMLProvider{OrganizationID: organizationID, Name: "SAML", IDPMetadata: "metadata", CertificatePEM: "certificate", EncryptedPrivateKey: "key", Domains: []string{"example.test"}, EmailAttribute: "email", NameAttribute: "name", DefaultRole: "developer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		kind       string
+		providerID uuid.UUID
+		create     func([]byte) error
+		count      func([]byte) int
+	}{
+		{
+			name:       "oidc",
+			kind:       "oidc",
+			providerID: oidcProvider.ID,
+			create: func(state []byte) error {
+				return db.CreateOIDCState(ctx, state, oidcProvider.ID, "verifier", "nonce")
+			},
+			count: func(state []byte) int {
+				var count int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM oidc_states WHERE token_hash=$1 AND provider_id=$2`, state, oidcProvider.ID).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				return count
+			},
+		},
+		{
+			name:       "saml",
+			kind:       "saml",
+			providerID: samlProvider.ID,
+			create: func(state []byte) error {
+				return db.CreateSAMLState(ctx, state, samlProvider.ID, "request-id")
+			},
+			count: func(state []byte) int {
+				var count int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE token_hash=$1 AND provider_id=$2`, state, samlProvider.ID).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				return count
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rollbackState := []byte(test.name + "-rollback")
+			if err := test.create(rollbackState); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SetSSOProviderEnabledWithAudit(ctx, invalidPrincipal, test.providerID, test.kind, false, "127.0.0.1:1234"); err == nil {
+				t.Fatal("provider transition succeeded without a valid audit actor")
+			}
+			if count := test.count(rollbackState); count != 1 {
+				t.Fatalf("failed audited transition retained %d pending states, want 1", count)
+			}
+
+			disableState := []byte(test.name + "-disable")
+			if err := test.create(disableState); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SetSSOProviderEnabledWithAudit(ctx, principal, test.providerID, test.kind, false, "127.0.0.1:1234"); err != nil {
+				t.Fatal(err)
+			}
+			if count := test.count(disableState); count != 0 {
+				t.Fatalf("disable retained %d pending states, want 0", count)
+			}
+
+			enableState := []byte(test.name + "-enable")
+			if err := test.create(enableState); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SetSSOProviderEnabledWithAudit(ctx, principal, test.providerID, test.kind, true, "127.0.0.1:1234"); err != nil {
+				t.Fatal(err)
+			}
+			if count := test.count(enableState); count != 0 {
+				t.Fatalf("enable retained %d pending states, want 0", count)
+			}
+		})
+	}
+}
+
 func TestOIDCProviderMutationCommitsWithAudit(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {
