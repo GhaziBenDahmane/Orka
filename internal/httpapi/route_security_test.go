@@ -27,8 +27,8 @@ func TestPlatformRoutesUseTheExpectedAuthenticationBoundary(t *testing.T) {
 				t.Errorf("public route %s unexpectedly uses %s", pattern, wrapper)
 			}
 		case strings.HasPrefix(path, "/scim/v2/"):
-			if wrapper != "direct" {
-				t.Errorf("SCIM route %s unexpectedly uses %s instead of its SCIM token boundary", pattern, wrapper)
+			if wrapper != "rateLimitSCIM" {
+				t.Errorf("SCIM route %s uses %s, want the pre-authentication SCIM rate-limit boundary", pattern, wrapper)
 			}
 		case strings.HasPrefix(path, "/v1/"):
 			if wrapper != "requireAuth" && wrapper != "requireRole" && wrapper != "requireResourceRole" && wrapper != "requireAuditor" {

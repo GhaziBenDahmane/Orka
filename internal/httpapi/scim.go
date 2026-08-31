@@ -133,6 +133,38 @@ func (s *Server) scimPrincipal(r *http.Request) (uuid.UUID, string, error) {
 	}
 	return s.Store.AuthenticateSCIM(r.Context(), cryptox.Digest(token))
 }
+
+func (s *Server) rateLimitSCIM(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := bearerToken(r)
+		if !ok {
+			token = "missing"
+		}
+		limits := []struct {
+			bucket string
+			key    []byte
+			limit  int
+		}{
+			{bucket: "scim-client", key: authenticationClientKey(r), limit: 1200},
+			{bucket: "scim-credential", key: cryptox.Digest(token), limit: 600},
+		}
+		for _, item := range limits {
+			allowed, retryAfter, err := s.Store.ConsumeRateLimit(r.Context(), item.bucket, item.key, item.limit, time.Minute)
+			if err != nil {
+				s.logger().ErrorContext(r.Context(), "SCIM rate limit failed", "error_type", fmt.Sprintf("%T", err), "request_id", requestID(r))
+				scimError(w, http.StatusInternalServerError, "SCIM request could not be authorized")
+				return
+			}
+			if !allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				scimError(w, http.StatusTooManyRequests, "too many SCIM requests")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func scimJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/scim+json")
 	w.WriteHeader(status)
