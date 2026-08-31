@@ -557,6 +557,9 @@ key. Each invocation has a 1–86400 second timeout, 1 MiB output cap, durable
 history, cancellation, and failure notification support. Non-idempotent
 commands are never automatically retried after a worker lease expires. A
 stopped or maintenance-blocked service keeps its due cursor unchanged.
+Operator-created schedule definitions, updates, deletion, manual execution,
+and execution cancellation commit with audit evidence. Audit failure preserves
+the prior schedule and cannot enqueue or cancel a command job.
 
 Route basic-auth passwords are 1–72 UTF-8 bytes, accepted only on create or
 explicit rotation, bcrypt-hashed at cost 12, and never returned. Compiled Traefik labels remove

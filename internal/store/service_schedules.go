@@ -94,16 +94,46 @@ func scanServiceSchedule(row pgx.Row) (ServiceSchedule, error) {
 const serviceScheduleColumns = `schedule.id,schedule.compose_service_id,schedule.name,schedule.description,schedule.cron_expression,schedule.timezone,schedule.target_service,schedule.shell,schedule.command,schedule.timeout_seconds,schedule.enabled,schedule.next_run_at,schedule.created_at,schedule.updated_at`
 
 func (s *Store) CreateServiceSchedule(ctx context.Context, organizationID uuid.UUID, item ServiceSchedule) (ServiceSchedule, error) {
-	item, err := normalizeServiceSchedule(item, time.Now())
-	if err != nil {
-		return ServiceSchedule{}, err
-	}
-	item.ID = uuid.New()
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ServiceSchedule{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = s.createServiceScheduleTx(ctx, tx, organizationID, item)
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceSchedule{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) CreateServiceScheduleWithAudit(ctx context.Context, principal Principal, item ServiceSchedule, remoteAddr string) (ServiceSchedule, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = s.createServiceScheduleTx(ctx, tx, principal.OrganizationID, item)
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_schedule.create", "service_schedule", item.ID.String(), remoteAddr, map[string]any{"serviceId": item.ComposeServiceID}); err != nil {
+		return ServiceSchedule{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceSchedule{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) createServiceScheduleTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, item ServiceSchedule) (ServiceSchedule, error) {
+	item, err := normalizeServiceSchedule(item, time.Now())
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	item.ID = uuid.New()
 	var compose string
 	err = tx.QueryRow(ctx, `SELECT service.compose_yaml FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.id=$1 AND project.organization_id=$2 AND service.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL FOR UPDATE OF service`, item.ComposeServiceID, organizationID).Scan(&compose)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -121,7 +151,7 @@ func (s *Store) CreateServiceSchedule(ctx context.Context, organizationID uuid.U
 	if err != nil {
 		return ServiceSchedule{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListServiceSchedules(ctx context.Context, organizationID, serviceID uuid.UUID) ([]ServiceSchedule, error) {
@@ -150,16 +180,46 @@ func (s *Store) GetServiceSchedule(ctx context.Context, organizationID, serviceI
 }
 
 func (s *Store) UpdateServiceSchedule(ctx context.Context, organizationID, serviceID uuid.UUID, item ServiceSchedule) (ServiceSchedule, error) {
-	item.ComposeServiceID = serviceID
-	item, err := normalizeServiceSchedule(item, time.Now())
-	if err != nil {
-		return ServiceSchedule{}, err
-	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ServiceSchedule{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = s.updateServiceScheduleTx(ctx, tx, organizationID, serviceID, item)
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceSchedule{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateServiceScheduleWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, item ServiceSchedule, remoteAddr string) (ServiceSchedule, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = s.updateServiceScheduleTx(ctx, tx, principal.OrganizationID, serviceID, item)
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_schedule.update", "service_schedule", item.ID.String(), remoteAddr, map[string]any{"serviceId": serviceID}); err != nil {
+		return ServiceSchedule{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceSchedule{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) updateServiceScheduleTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, item ServiceSchedule) (ServiceSchedule, error) {
+	item.ComposeServiceID = serviceID
+	item, err := normalizeServiceSchedule(item, time.Now())
+	if err != nil {
+		return ServiceSchedule{}, err
+	}
 	var compose string
 	err = tx.QueryRow(ctx, `SELECT service.compose_yaml FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.id=$1 AND project.organization_id=$2 AND service.deletion_requested_at IS NULL FOR UPDATE OF service`, serviceID, organizationID).Scan(&compose)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -179,7 +239,7 @@ func (s *Store) UpdateServiceSchedule(ctx context.Context, organizationID, servi
 	if err != nil {
 		return ServiceSchedule{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func composeDeclaresService(compose, target string) bool {
@@ -217,8 +277,30 @@ func (s *Store) DeleteServiceSchedule(ctx context.Context, organizationID, servi
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteServiceScheduleTx(ctx, tx, organizationID, serviceID, scheduleID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteServiceScheduleWithAudit(ctx context.Context, principal Principal, serviceID, scheduleID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteServiceScheduleTx(ctx, tx, principal.OrganizationID, serviceID, scheduleID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_schedule.delete", "service_schedule", scheduleID.String(), remoteAddr, map[string]any{"serviceId": serviceID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteServiceScheduleTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, scheduleID uuid.UUID) error {
 	var found uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT schedule.id FROM service_schedules schedule JOIN compose_services service ON service.id=schedule.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE schedule.id=$1 AND service.id=$2 AND project.organization_id=$3 FOR UPDATE OF schedule`, scheduleID, serviceID, organizationID).Scan(&found)
+	err := tx.QueryRow(ctx, `SELECT schedule.id FROM service_schedules schedule JOIN compose_services service ON service.id=schedule.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE schedule.id=$1 AND service.id=$2 AND project.organization_id=$3 FOR UPDATE OF schedule`, scheduleID, serviceID, organizationID).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -228,13 +310,13 @@ func (s *Store) DeleteServiceSchedule(ctx context.Context, organizationID, servi
 	if _, err = tx.Exec(ctx, `UPDATE service_schedule_executions execution SET status='cancelled',error='schedule deleted',finished_at=now() FROM jobs job WHERE execution.schedule_id=$1 AND job.kind='run.service-schedule' AND job.payload->>'executionId'=execution.id::text AND job.status='pending'`, scheduleID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE jobs job SET status=CASE WHEN job.status='pending' THEN 'cancelled' ELSE job.status END,cancel_requested_at=COALESCE(cancel_requested_at,now()),finished_at=CASE WHEN job.status='pending' THEN now() ELSE finished_at END FROM service_schedule_executions execution WHERE execution.schedule_id=$1 AND job.kind='run.service-schedule' AND job.payload->>'executionId'=execution.id::text AND job.status IN ('pending','running')`, scheduleID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE jobs job SET status=CASE WHEN job.status='pending' THEN 'cancelled' ELSE job.status END,cancel_requested_at=COALESCE(job.cancel_requested_at,now()),finished_at=CASE WHEN job.status='pending' THEN now() ELSE job.finished_at END FROM service_schedule_executions execution WHERE execution.schedule_id=$1 AND job.kind='run.service-schedule' AND job.payload->>'executionId'=execution.id::text AND job.status IN ('pending','running')`, scheduleID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM service_schedules WHERE id=$1`, scheduleID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) QueueServiceScheduleExecution(ctx context.Context, organizationID, serviceID, scheduleID, actorID uuid.UUID) (ServiceScheduleExecution, error) {
@@ -243,10 +325,41 @@ func (s *Store) QueueServiceScheduleExecution(ctx context.Context, organizationI
 		return ServiceScheduleExecution{}, err
 	}
 	defer tx.Rollback(ctx)
+	execution, err := s.queueManualServiceScheduleExecutionTx(ctx, tx, organizationID, serviceID, scheduleID, actorID)
+	if err != nil {
+		return ServiceScheduleExecution{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceScheduleExecution{}, err
+	}
+	return execution, nil
+}
+
+func (s *Store) QueueServiceScheduleExecutionWithAudit(ctx context.Context, principal Principal, serviceID, scheduleID uuid.UUID, remoteAddr string) (ServiceScheduleExecution, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ServiceScheduleExecution{}, err
+	}
+	defer tx.Rollback(ctx)
+	execution, err := s.queueManualServiceScheduleExecutionTx(ctx, tx, principal.OrganizationID, serviceID, scheduleID, principal.UserID)
+	if err != nil {
+		return ServiceScheduleExecution{}, err
+	}
+	metadata := map[string]any{"scheduleId": scheduleID, "serviceId": serviceID}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_schedule.run", "service_schedule_execution", execution.ID.String(), remoteAddr, metadata); err != nil {
+		return ServiceScheduleExecution{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ServiceScheduleExecution{}, err
+	}
+	return execution, nil
+}
+
+func (s *Store) queueManualServiceScheduleExecutionTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, scheduleID, actorID uuid.UUID) (ServiceScheduleExecution, error) {
 	var item ServiceSchedule
 	var projectID, environmentID uuid.UUID
 	row := tx.QueryRow(ctx, `SELECT `+serviceScheduleColumns+`,project.id,environment.id FROM service_schedules schedule JOIN compose_services service ON service.id=schedule.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE schedule.id=$1 AND service.id=$2 AND project.organization_id=$3 AND service.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL AND service.desired_state='running' FOR UPDATE OF schedule,service`, scheduleID, serviceID, organizationID)
-	err = row.Scan(&item.ID, &item.ComposeServiceID, &item.Name, &item.Description, &item.CronExpression, &item.Timezone, &item.TargetService, &item.Shell, &item.Command, &item.TimeoutSeconds, &item.Enabled, &item.NextRunAt, &item.CreatedAt, &item.UpdatedAt, &projectID, &environmentID)
+	err := row.Scan(&item.ID, &item.ComposeServiceID, &item.Name, &item.Description, &item.CronExpression, &item.Timezone, &item.TargetService, &item.Shell, &item.Command, &item.TimeoutSeconds, &item.Enabled, &item.NextRunAt, &item.CreatedAt, &item.UpdatedAt, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var stopped bool
 		_ = tx.QueryRow(ctx, `SELECT service.desired_state='stopped' FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.id=$1 AND project.organization_id=$2`, serviceID, organizationID).Scan(&stopped)
@@ -268,7 +381,7 @@ func (s *Store) QueueServiceScheduleExecution(ctx context.Context, organizationI
 	if err != nil {
 		return ServiceScheduleExecution{}, err
 	}
-	return execution, tx.Commit(ctx)
+	return execution, nil
 }
 
 func queueServiceScheduleExecutionTx(ctx context.Context, tx pgx.Tx, item ServiceSchedule, trigger string, actor any) (ServiceScheduleExecution, error) {
@@ -367,9 +480,31 @@ func (s *Store) CancelServiceScheduleExecution(ctx context.Context, organization
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelServiceScheduleExecutionTx(ctx, tx, organizationID, serviceID, executionID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelServiceScheduleExecutionWithAudit(ctx context.Context, principal Principal, serviceID, executionID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelServiceScheduleExecutionTx(ctx, tx, principal.OrganizationID, serviceID, executionID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service_schedule.cancel", "service_schedule_execution", executionID.String(), remoteAddr, map[string]any{"serviceId": serviceID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelServiceScheduleExecutionTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, executionID uuid.UUID) error {
 	var jobID uuid.UUID
 	var status string
-	err = tx.QueryRow(ctx, `SELECT job.id,job.status FROM service_schedule_executions execution JOIN compose_services service ON service.id=execution.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id JOIN jobs job ON job.kind='run.service-schedule' AND job.payload->>'executionId'=execution.id::text WHERE execution.id=$1 AND execution.compose_service_id=$2 AND project.organization_id=$3 FOR UPDATE OF execution,job`, executionID, serviceID, organizationID).Scan(&jobID, &status)
+	err := tx.QueryRow(ctx, `SELECT job.id,job.status FROM service_schedule_executions execution JOIN compose_services service ON service.id=execution.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id JOIN jobs job ON job.kind='run.service-schedule' AND job.payload->>'executionId'=execution.id::text WHERE execution.id=$1 AND execution.compose_service_id=$2 AND project.organization_id=$3 FOR UPDATE OF execution,job`, executionID, serviceID, organizationID).Scan(&jobID, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -391,5 +526,5 @@ func (s *Store) CancelServiceScheduleExecution(ctx context.Context, organization
 	default:
 		return ErrNotCancellable
 	}
-	return tx.Commit(ctx)
+	return nil
 }

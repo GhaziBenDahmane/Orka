@@ -62,12 +62,11 @@ func (s *Server) createServiceSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateServiceSchedule(r.Context(), p.OrganizationID, input.schedule(serviceID))
+	item, err := s.Store.CreateServiceScheduleWithAudit(r.Context(), p, input.schedule(serviceID), r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_schedule.create", "service_schedule", item.ID.String(), r.RemoteAddr, map[string]any{"serviceId": serviceID})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -96,12 +95,11 @@ func (s *Server) updateServiceSchedule(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	request := input.schedule(serviceID)
 	request.ID = scheduleID
-	item, err := s.Store.UpdateServiceSchedule(r.Context(), p.OrganizationID, serviceID, request)
+	item, err := s.Store.UpdateServiceScheduleWithAudit(r.Context(), p, serviceID, request, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_schedule.update", "service_schedule", item.ID.String(), r.RemoteAddr, map[string]any{"serviceId": serviceID})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -111,11 +109,10 @@ func (s *Server) deleteServiceSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err := s.Store.DeleteServiceSchedule(r.Context(), p.OrganizationID, serviceID, scheduleID); err != nil {
+	if err := s.Store.DeleteServiceScheduleWithAudit(r.Context(), p, serviceID, scheduleID, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_schedule.delete", "service_schedule", scheduleID.String(), r.RemoteAddr, map[string]any{"serviceId": serviceID})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -125,12 +122,11 @@ func (s *Server) runServiceSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueServiceScheduleExecution(r.Context(), p.OrganizationID, serviceID, scheduleID, p.UserID)
+	item, err := s.Store.QueueServiceScheduleExecutionWithAudit(r.Context(), p, serviceID, scheduleID, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_schedule.run", "service_schedule_execution", item.ID.String(), r.RemoteAddr, map[string]any{"scheduleId": scheduleID, "serviceId": serviceID})
 	writeJSON(w, http.StatusAccepted, item)
 }
 
@@ -156,10 +152,9 @@ func (s *Server) cancelServiceScheduleExecution(w http.ResponseWriter, r *http.R
 		return
 	}
 	p := principal(r)
-	if err := s.Store.CancelServiceScheduleExecution(r.Context(), p.OrganizationID, serviceID, executionID); err != nil {
+	if err := s.Store.CancelServiceScheduleExecutionWithAudit(r.Context(), p, serviceID, executionID, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service_schedule.cancel", "service_schedule_execution", executionID.String(), r.RemoteAddr, map[string]any{"serviceId": serviceID})
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": executionID, "cancelRequested": true})
 }
