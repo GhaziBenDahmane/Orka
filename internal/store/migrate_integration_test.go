@@ -1097,3 +1097,27 @@ func TestMigrateUpgradeFrom093AddsSCIMResourceVersions(t *testing.T) {
 		t.Fatal("non-positive SCIM group revision was accepted")
 	}
 }
+
+func TestMigrateUpgradeFrom118PreservesSCIMResources(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "118_linked_database_finalizers.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, userID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SCIM tombstone migration',$2)`, organizationID, "scim-tombstone-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,'viewer','directory-user')`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, `SELECT deleted_at FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, organizationID, userID).Scan(&deletedAt); err != nil || deletedAt != nil {
+		t.Fatalf("existing SCIM resource deleted_at=%v err=%v", deletedAt, err)
+	}
+}

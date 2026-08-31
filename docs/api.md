@@ -216,7 +216,11 @@ and weak `meta.version` values together with `Location` and `ETag` headers.
 Successful SCIM user and group creates, replacements, patches, and deletes are recorded in
 the tenant audit log without copying profile fields or bearer credentials.
 Deactivation removes access but retains that binding, so identity providers can
-query and reactivate an inactive user. A tenant cannot PATCH a global user ID
+query and reactivate an inactive user. Deletion hides the SCIM resource and
+releases its external ID, but retains an internal tenant-scoped tombstone so a
+federated login cannot recreate access before the directory provisions the user
+again. A later SCIM create for the same canonical email clears that tombstone.
+A tenant cannot PATCH a global user ID
 that it does not own. Because email identities are shared across organizations,
 SCIM rejects `displayName` changes while the identity is visible in another
 organization; this prevents one tenant from rewriting another tenant's profile.

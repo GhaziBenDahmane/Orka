@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -275,16 +276,34 @@ func TestSCIMGroupRoleAndTenantIsolation(t *testing.T) {
 		t.Fatalf("SCIM delete retained %d interactive sessions: %v", remainingSessions, err)
 	}
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+inactiveID, token, http.MethodGet, nil, http.StatusNotFound)
-	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)`, orgID, inactiveID).Scan(&attached); err != nil || attached {
-		t.Fatalf("deleted inactive user retained SCIM binding = %v, err = %v", attached, err)
+	var tombstoned bool
+	if err = db.Pool.QueryRow(ctx, `SELECT deleted_at IS NOT NULL FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, orgID, inactiveID).Scan(&tombstoned); err != nil || !tombstoned {
+		t.Fatalf("deleted inactive user tombstone = %v, err = %v", tombstoned, err)
+	}
+	federatedProvider, err := db.GetOIDCProvider(ctx, manualProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.JITOIDCUser(ctx, federatedProvider, "deleted-scim-subject", inactiveUserName, "Deleted SCIM User"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("federated login after SCIM delete error=%v, want ErrNotFound", err)
+	}
+	recreated := doSCIMRequest(t, server.URL+"/scim/v2/Users", token, http.MethodPost, map[string]any{"userName": inactiveUserName, "displayName": "Recreated", "active": true}, http.StatusCreated)
+	if recreated["id"] != inactiveID {
+		t.Fatalf("SCIM recreate changed global identity: got=%v want=%s", recreated["id"], inactiveID)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT deleted_at IS NULL FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, orgID, inactiveID).Scan(&attached); err != nil || !attached {
+		t.Fatalf("SCIM recreate cleared tombstone = %v, err = %v", attached, err)
+	}
+	if loggedInID, loginErr := db.JITOIDCUser(ctx, federatedProvider, "deleted-scim-subject", inactiveUserName, "Recreated"); loginErr != nil || loggedInID != inactiveUUID {
+		t.Fatalf("federated login after SCIM recreate user=%s err=%v", loggedInID, loginErr)
 	}
 
 	// Organization owners remain outside SCIM deprovisioning authority.
 	doSCIMRequest(t, server.URL+"/scim/v2/Users/"+ownerID.String(), token, http.MethodDelete, nil, http.StatusConflict)
 
 	var scimAuditEvents int
-	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 14 {
-		t.Fatalf("SCIM audit event count=%d, want 14, err=%v", scimAuditEvents, err)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action IN ('scim.user.create','scim.user.replace','scim.user.patch','scim.user.delete','scim.group.create','scim.group.replace','scim.group.patch','scim.group.delete')`, orgID).Scan(&scimAuditEvents); err != nil || scimAuditEvents != 15 {
+		t.Fatalf("SCIM audit event count=%d, want 15, err=%v", scimAuditEvents, err)
 	}
 }
 

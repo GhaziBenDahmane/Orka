@@ -252,8 +252,10 @@ and canonical email before linking a global user. A concurrent claim cannot
 create a second membership for an identity already being linked, and disabled
 users or disabled identity mappings fail before membership or session creation.
 JIT also locks the user record shared with SCIM and treats a retained SCIM
-ownership record without a membership as authoritative deprovisioning; a later
-federated login cannot silently recreate access.
+ownership record without a membership as authoritative deprovisioning. SCIM
+deletes keep that record as an API-hidden tombstone until a later directory
+create explicitly restores it, so federated login cannot silently recreate
+access after either deactivation or deletion.
 
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a

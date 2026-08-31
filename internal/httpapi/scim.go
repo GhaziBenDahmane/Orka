@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -279,8 +280,9 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 		return
 	}
 	from := ` FROM users u
-		WHERE (EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1)
-			OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$1))`
+		WHERE NOT EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$1 AND d.deleted_at IS NOT NULL)
+			AND (EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$1)
+			OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$1 AND d.deleted_at IS NULL))`
 	args := []any{orgID}
 	if filter := r.URL.Query().Get("filter"); filter != "" {
 		match := regexp.MustCompile(`(?i)^(userName|externalId)\s+eq\s+"([^"]+)"$`).FindStringSubmatch(filter)
@@ -375,7 +377,7 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 	}
 	var userID uuid.UUID
 	var displayName string
-	err = tx.QueryRow(r.Context(), `SELECT id,display_name FROM users WHERE email=$1 AND disabled_at IS NULL`, email).Scan(&userID, &displayName)
+	err = tx.QueryRow(r.Context(), `SELECT id,display_name FROM users WHERE email=$1 AND disabled_at IS NULL FOR UPDATE`, email).Scan(&userID, &displayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		userID = uuid.New()
 		_, err = tx.Exec(r.Context(), `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!scim:"+uuid.NewString(), in.DisplayName)
@@ -394,7 +396,7 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 	var createdAt, updatedAt time.Time
 	var revision int64
 	err = tx.QueryRow(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,external_id) VALUES($1,$2,$3,$4)
-		ON CONFLICT(organization_id,user_id) DO UPDATE SET default_role=excluded.default_role,external_id=COALESCE(excluded.external_id,scim_user_defaults.external_id),updated_at=now(),revision=scim_user_defaults.revision+1
+		ON CONFLICT(organization_id,user_id) DO UPDATE SET default_role=excluded.default_role,external_id=COALESCE(excluded.external_id,scim_user_defaults.external_id),deleted_at=NULL,updated_at=now(),revision=scim_user_defaults.revision+1
 		RETURNING COALESCE(external_id,''),created_at,updated_at,revision`, orgID, userID, role, externalID).Scan(&storedExternalID, &createdAt, &updatedAt, &revision)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -447,9 +449,9 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			COALESCE((SELECT d.created_at FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2),(SELECT m.created_at FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$2),u.created_at),
 			COALESCE((SELECT d.updated_at FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2),(SELECT m.created_at FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$2),u.created_at),
 			COALESCE((SELECT d.revision FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2),1)
-			FROM users u WHERE u.id=$1 AND (
+			FROM users u WHERE u.id=$1 AND NOT EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2 AND d.deleted_at IS NOT NULL) AND (
 				EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=u.id AND m.organization_id=$2)
-				OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2))`, userID, orgID).Scan(&email, &name, &active, &externalID, &createdAt, &updatedAt, &revision)
+				OR EXISTS(SELECT 1 FROM scim_user_defaults d WHERE d.user_id=u.id AND d.organization_id=$2 AND d.deleted_at IS NULL))`, userID, orgID).Scan(&email, &name, &active, &externalID, &createdAt, &updatedAt, &revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			scimError(w, 404, "user not found")
 			return
@@ -468,13 +470,17 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer tx.Rollback(r.Context())
+		if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+			scimError(w, 500, "delete failed")
+			return
+		}
 		var currentRole *string
 		var revision int64
 		if err = tx.QueryRow(r.Context(), `SELECT
 			(SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2),
 			COALESCE((SELECT revision FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2),1)
-			FROM users u WHERE u.id=$2 AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
-				OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)) FOR UPDATE OF u`, orgID, userID).Scan(&currentRole, &revision); errors.Is(err, pgx.ErrNoRows) {
+			FROM users u WHERE u.id=$2 AND NOT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2 AND deleted_at IS NOT NULL) AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
+				OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2 AND deleted_at IS NULL)) FOR UPDATE OF u`, orgID, userID).Scan(&currentRole, &revision); errors.Is(err, pgx.ErrNoRows) {
 			scimError(w, 404, "user not found")
 			return
 		} else if err != nil {
@@ -489,8 +495,13 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			scimError(w, 409, "organization owners cannot be deprovisioned through SCIM")
 			return
 		}
+		deleteRole := role
+		if currentRole != nil {
+			deleteRole = *currentRole
+		}
 		if _, err = tx.Exec(r.Context(), `DELETE FROM scim_group_members gm USING scim_groups g WHERE gm.group_id=g.id AND g.organization_id=$1 AND gm.user_id=$2`, orgID, userID); err == nil {
-			_, err = tx.Exec(r.Context(), `DELETE FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2`, orgID, userID)
+			_, err = tx.Exec(r.Context(), `INSERT INTO scim_user_defaults(organization_id,user_id,default_role,deleted_at) VALUES($1,$2,$3,now())
+				ON CONFLICT(organization_id,user_id) DO UPDATE SET default_role=excluded.default_role,external_id=NULL,deleted_at=now(),updated_at=now(),revision=scim_user_defaults.revision+1`, orgID, userID, deleteRole)
 		}
 		if err == nil {
 			_, err = store.RevokeOrganizationMembershipSessionsTx(r.Context(), tx, orgID, userID)
@@ -548,6 +559,10 @@ func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, 
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
 	var currentEmail, currentDisplayName string
 	var currentRole *string
 	var currentActive, shared bool
@@ -558,8 +573,8 @@ func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, 
 		(EXISTS(SELECT 1 FROM memberships WHERE user_id=$2 AND organization_id<>$1)
 			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE user_id=$2 AND organization_id<>$1)),
 		COALESCE((SELECT revision FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2),1)
-		FROM users u WHERE u.id=$2 AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
-			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2))
+		FROM users u WHERE u.id=$2 AND NOT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2 AND deleted_at IS NOT NULL) AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
+			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2 AND deleted_at IS NULL))
 		FOR UPDATE OF u`, orgID, userID).Scan(&currentEmail, &currentDisplayName, &currentRole, &currentActive, &shared, &currentRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		scimError(w, http.StatusNotFound, "user not found")
@@ -663,6 +678,10 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+		scimError(w, 500, "patch failed")
+		return
+	}
 	var currentEmail string
 	var currentRole *string
 	var shared bool
@@ -672,8 +691,8 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 		(EXISTS(SELECT 1 FROM memberships WHERE user_id=$2 AND organization_id<>$1)
 			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE user_id=$2 AND organization_id<>$1)),
 		COALESCE((SELECT revision FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2),1)
-		FROM users u WHERE u.id=$2 AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
-			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2)
+		FROM users u WHERE u.id=$2 AND NOT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2 AND deleted_at IS NOT NULL) AND (EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)
+			OR EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2 AND deleted_at IS NULL)
 		) FOR UPDATE OF u`, orgID, userID).Scan(&currentEmail, &currentRole, &shared, &currentRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		scimError(w, 404, "user not found")
@@ -803,6 +822,15 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 	}
 	w.Header().Set("ETag", scimVersion(revision))
 	w.WriteHeader(204)
+}
+
+// lockSCIMOrganization preserves the organization -> user lock order shared
+// with federated JIT provisioning. Without it, a directory mutation can hold
+// the user row while JIT holds the organization row, causing a deadlock when
+// either transaction reaches its audit or membership write.
+func lockSCIMOrganization(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID) error {
+	var lockedOrganizationID uuid.UUID
+	return tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID)
 }
 
 func normalizeSCIMUserPatchOperations(input []scimUserPatchOperation) ([]scimUserPatchOperation, error) {
