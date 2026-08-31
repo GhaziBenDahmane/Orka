@@ -1765,8 +1765,8 @@ func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	if !slugPattern.MatchString(in.Key) || in.Version == "" || in.Name == "" {
-		writeError(w, 400, "invalid_template", "key, version and name are required")
+	if err := templates.ValidateTemplateMetadata(in.Key, in.Version, in.Name, in.Description); err != nil {
+		writeError(w, 400, "invalid_template", err.Error())
 		return
 	}
 	template, err := templates.ParseDokploy([]byte(in.TemplateTOML))

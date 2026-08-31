@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/deploy"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -41,26 +43,44 @@ var templateMetadataIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$
 
 func parseTemplateMetadata(data []byte) (metadata, error) {
 	var item metadata
+	if !utf8.Valid(data) {
+		return metadata{}, errors.New("meta.json must contain valid UTF-8")
+	}
 	if err := json.Unmarshal(data, &item); err != nil {
 		return metadata{}, fmt.Errorf("parse meta.json: %w", err)
 	}
-	item.ID = strings.TrimSpace(item.ID)
-	item.Name = strings.TrimSpace(item.Name)
-	item.Version = strings.TrimSpace(item.Version)
-	item.Description = strings.TrimSpace(item.Description)
-	if !templateMetadataIDPattern.MatchString(item.ID) {
-		return metadata{}, errors.New("meta.json id must be a lowercase template slug of at most 128 characters")
-	}
-	if item.Version == "" || len(item.Version) > 128 {
-		return metadata{}, errors.New("meta.json version must contain between 1 and 128 characters")
-	}
-	if item.Name == "" || len(item.Name) > 200 {
-		return metadata{}, errors.New("meta.json name must contain between 1 and 200 characters")
-	}
-	if len(item.Description) > 4096 {
-		return metadata{}, errors.New("meta.json description must not exceed 4096 characters")
+	if err := ValidateTemplateMetadata(item.ID, item.Version, item.Name, item.Description); err != nil {
+		return metadata{}, fmt.Errorf("meta.json %w", err)
 	}
 	return item, nil
+}
+
+// ValidateTemplateMetadata applies the same identity and display-text contract
+// to repository and API-created templates.
+func ValidateTemplateMetadata(id, version, name, description string) error {
+	if !templateMetadataIDPattern.MatchString(id) {
+		return errors.New("id must be a lowercase template slug of at most 128 characters")
+	}
+	if err := validateTemplateMetadataText("version", version, 128, false); err != nil {
+		return err
+	}
+	if err := validateTemplateMetadataText("name", name, 200, false); err != nil {
+		return err
+	}
+	return validateTemplateMetadataText("description", description, 4096, true)
+}
+
+func validateTemplateMetadataText(field, value string, maximum int, allowEmpty bool) error {
+	if (!allowEmpty && value == "") || value != strings.TrimSpace(value) || len(value) > maximum || !utf8.ValidString(value) || strings.IndexFunc(value, func(char rune) bool {
+		return unicode.IsControl(char) || unicode.In(char, unicode.Cf, unicode.Zl, unicode.Zp)
+	}) >= 0 {
+		requirement := "non-empty "
+		if allowEmpty {
+			requirement = ""
+		}
+		return fmt.Errorf("%s must be %strimmed UTF-8 text of at most %d bytes without control or formatting characters", field, requirement, maximum)
+	}
+	return nil
 }
 
 func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (ImportReport, error) {

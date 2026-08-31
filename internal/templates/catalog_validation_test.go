@@ -141,10 +141,18 @@ func TestTemplateMetadataRequiresStableIdentity(t *testing.T) {
 		`{"id":"path/escape","name":"Path","version":"1"}`,
 		`{"id":"missing-name","version":"1"}`,
 		`{"id":"missing-version","name":"Missing version"}`,
+		`{"id":"bad-version","name":"Bad version","version":"1\n2"}`,
+		`{"id":"bad-name","name":"Bad\u202ename","version":"1"}`,
+		`{"id":"bad-description","name":"Bad description","version":"1","description":"bad\u0000description"}`,
 	} {
 		if _, err := parseTemplateMetadata([]byte(metadata)); err == nil {
 			t.Errorf("invalid metadata accepted: %s", metadata)
 		}
+	}
+	invalidUTF8 := append([]byte(`{"id":"invalid-utf8","name":"`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`","version":"1"}`)...)
+	if _, err := parseTemplateMetadata(invalidUTF8); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("invalid UTF-8 metadata error=%v", err)
 	}
 }
 

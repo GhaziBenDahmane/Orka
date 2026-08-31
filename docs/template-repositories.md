@@ -24,6 +24,8 @@ blueprints/
 ```
 
 `meta.json` requires `id`, `name`, and `version`; `description` is optional.
+Metadata is bounded, valid UTF-8 and free of control or bidi-format characters
+before it can enter catalog identity, pagination, logs, or the console.
 `template.toml` defines generated or operator-supplied variables, environment
 mapping, domains, and managed files. `docker-compose.yml` remains the workload
 definition and passes through the same Swarm safety compiler as every other
