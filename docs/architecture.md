@@ -240,6 +240,13 @@ replay assertions are removed on the next hourly pass. Each pass deletes at
 most 10,000 rows of each kind in oldest-first index order to bound transaction
 size and lock pressure. Prometheus reports any remaining eligible backlog.
 
+Database utility image tags are resolved on the cluster that will execute the
+job. The controller accepts a remote resolution only when it is digest-pinned
+and its canonical repository matches the requested image; an already pinned
+request must also retain the exact digest. The resolved reference is validated
+again at the container execution boundary and recorded with backup, restore,
+and migration results.
+
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a
 partial unique index permits only one running operation per database, including

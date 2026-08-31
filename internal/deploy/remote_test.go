@@ -69,6 +69,30 @@ func TestValidateRemoteVolumeAndDatabaseTransferResults(t *testing.T) {
 	}
 }
 
+func TestValidateRemoteResolvedUtilityImageBindsRequestedIdentity(t *testing.T) {
+	digestA := "sha256:" + strings.Repeat("a", 64)
+	digestB := "sha256:" + strings.Repeat("b", 64)
+
+	resolved, err := validateRemoteResolvedUtilityImage("postgres:17", " docker.io/library/postgres@"+digestA+"\n")
+	if err != nil || resolved != "postgres@"+digestA {
+		t.Fatalf("canonical repository alias rejected: resolved=%q err=%v", resolved, err)
+	}
+	if _, err = validateRemoteResolvedUtilityImage("postgres:17", "docker.io/library/mysql@"+digestA); err == nil || !strings.Contains(err.Error(), "different repository") {
+		t.Fatalf("different repository accepted: %v", err)
+	}
+	if _, err = validateRemoteResolvedUtilityImage("postgres@"+digestA, "postgres@"+digestB); err == nil || !strings.Contains(err.Error(), "different digest") {
+		t.Fatalf("changed pinned digest accepted: %v", err)
+	}
+	if resolved, err = validateRemoteResolvedUtilityImage("postgres@"+digestA, "postgres@"+digestA); err != nil || resolved != "postgres@"+digestA {
+		t.Fatalf("matching pinned image rejected: resolved=%q err=%v", resolved, err)
+	}
+	for _, invalid := range []string{"postgres:17", "not an image", ""} {
+		if _, err = validateRemoteResolvedUtilityImage("postgres:17", invalid); err == nil {
+			t.Fatalf("invalid agent resolution %q accepted", invalid)
+		}
+	}
+}
+
 func TestValidateRemoteArtifactJobRequiresTrustedTransferMetadata(t *testing.T) {
 	if err := ValidateRemoteArtifactJob(validRemoteArtifactJob()); err != nil {
 		t.Fatalf("valid download rejected: %v", err)

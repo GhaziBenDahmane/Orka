@@ -118,11 +118,25 @@ func (s RemoteSwarm) ResolveUtilityImage(ctx context.Context, image string) (str
 	if err != nil {
 		return "", err
 	}
-	resolved = strings.TrimSpace(resolved)
-	if !ociref.IsDigestPinned(resolved) {
+	return validateRemoteResolvedUtilityImage(image, resolved)
+}
+
+func validateRemoteResolvedUtilityImage(requestedImage, resolvedImage string) (string, error) {
+	requested, err := ociref.Parse(requestedImage)
+	if err != nil {
+		return "", errors.New("invalid utility image")
+	}
+	resolved, err := ociref.Parse(strings.TrimSpace(resolvedImage))
+	if err != nil || resolved.Digest == "" {
 		return "", errors.New("agent returned a utility image without a sha256 digest")
 	}
-	return resolved, nil
+	if resolved.CanonicalRepository() != requested.CanonicalRepository() {
+		return "", errors.New("agent returned a utility image digest for a different repository")
+	}
+	if requested.Digest != "" && resolved.Digest != requested.Digest {
+		return "", errors.New("agent returned a utility image with a different digest")
+	}
+	return requested.Repository + "@" + resolved.Digest, nil
 }
 
 func (s RemoteSwarm) RunServiceCommand(ctx context.Context, stackName, targetService, shell, command string) (string, error) {
