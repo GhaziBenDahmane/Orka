@@ -261,8 +261,10 @@ DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
 ```
 
 The overlay disables the bundled PostgreSQL task, starts three controller
-replicas on three distinct ready, active manager nodes, publishes the mTLS
-agent API through Swarm ingress on port 8444, and
+replicas on three distinct ready, active manager nodes, and updates them one at
+a time with stop-first ordering so a three-manager cluster does not require a
+fourth placement slot. Two controllers remain available during each update.
+It publishes the mTLS agent API through Swarm ingress on port 8444 and
 requires every enabled or manually requested managed-database backup to use an
 S3-compatible destination. Startup fails if an older enabled policy still
 targets node-local storage. Configure and test remote backup destinations

@@ -32,6 +32,11 @@ services:
         max_replicas_per_node: 1
         preferences:
           - spread: node.id
+      update_config:
+        # With exactly three managers and one replica per node, start-first
+        # cannot place a fourth task. Stop one replica while the other two
+        # continue serving, then start its replacement on that manager.
+        order: stop-first
 
 secrets:
   dockyard_agent_ca_cert:

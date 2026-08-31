@@ -322,6 +322,9 @@ func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	if !slices.Contains(base.Services["dockyard"].Deploy.Placement.Constraints, "node.role == manager") || controller.Deploy.Placement.MaxReplicasPerNode != 1 || len(controller.Deploy.Placement.Preferences) != 1 || controller.Deploy.Placement.Preferences[0].Spread != "node.id" {
 		t.Fatalf("HA controllers are not distributed one per manager: %#v", controller.Deploy.Placement)
 	}
+	if controller.Deploy.UpdateConfig.Order != "stop-first" {
+		t.Fatalf("HA controller rollout order=%q, want stop-first so three managers can satisfy anti-affinity", controller.Deploy.UpdateConfig.Order)
+	}
 	if controller.Environment["DOCKYARD_REQUIRE_REMOTE_BACKUPS"] != "true" {
 		t.Fatal("HA deployment does not require remote backup storage")
 	}
