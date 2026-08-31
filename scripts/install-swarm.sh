@@ -151,7 +151,7 @@ remove_created_resources() {
 }
 
 cleanup() {
-  status=$?
+  status=${1:-$?}
   if [ "$status" -ne 0 ]; then
     if [ "$deployment_started" = true ] && [ "$stack_existed" = false ]; then
       echo "install-swarm: first installation failed; removing stack $stack and newly created resources" >&2
@@ -168,7 +168,10 @@ cleanup() {
   trap - EXIT HUP INT TERM
   exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'cleanup 129' HUP
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 validate_secret_file() {
   label=$1
