@@ -342,6 +342,15 @@ groups:
           summary: A Dockyard deployment-hook token expired
           description: Deploy token {{ $labels.token }} can no longer trigger service {{ $labels.service }} and should be revoked after its CI consumer is updated.
 
+      - alert: DockyardSourceCredentialRotationOverdue
+        expr: dockyard_source_credential_rotation_age_seconds > 15552000
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: A referenced Dockyard source credential is overdue for rotation
+          description: Source credential {{ $labels.credential }} ({{ $labels.kind }}) in organization {{ $labels.organization }} has not been rotated for more than 180 days; rotate it in place and verify its bound consumers.
+
       - alert: DockyardResourceFinalizerRequiresIntervention
         expr: dockyard_resource_finalizers{state=~"failed|missing"} > 0
         for: 5m

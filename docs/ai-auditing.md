@@ -336,6 +336,8 @@ The control-plane metrics endpoint exposes global run counts by status and
 per-organization ages for the latest completion, latest failure, and oldest
 running audit. Agent names and model names are deliberately excluded from
 labels so user-controlled values cannot create unbounded Prometheus series.
+Referenced source credentials also expose a secret-free rotation-age series;
+the supplied rules warn after 180 days even if the AI audit schedule is down.
 
 The supplied Prometheus rules warn when an audit fails, remains running for
 more than ten minutes, or an organization with an active auditor token has no
