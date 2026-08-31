@@ -16,6 +16,7 @@ test-install:
 	./scripts/ci/test-install-swarm.sh
 	./scripts/ci/test-install-agent.sh
 	./scripts/ci/test-install-ai-auditors.sh
+	./scripts/ci/test-ai-gateway-recovery.sh
 	bash scripts/ci/test-control-plane-recovery.sh
 
 test-keycloak-sso:

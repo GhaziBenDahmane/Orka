@@ -91,6 +91,10 @@ func main() {
 		err = verifyAIAuditorRuns(os.Args[2:], os.Stdin)
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
+	case "validate-volume-artifact-job":
+		err = validateVolumeArtifactJob(os.Args[2:])
+	case "local-volume-artifact":
+		err = runLocalVolumeArtifact(os.Args[2:], os.Stdin)
 	default:
 		fmt.Fprintln(os.Stderr, dockyardUsage)
 		os.Exit(2)
@@ -101,7 +105,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|validate-volume-artifact-job|volume-artifact|local-volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
@@ -282,6 +286,48 @@ func runVolumeArtifact(arguments []string) error {
 		return fmt.Errorf("read volume artifact job: %w", err)
 	}
 	result, err := volumeartifact.Run(context.Background(), job, *volumeRoot, *workRoot)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+func validateVolumeArtifactJob(arguments []string) error {
+	flags := flag.NewFlagSet("validate-volume-artifact-job", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jobFile := flags.String("job-file", "", "path to the volume artifact job")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || *jobFile == "" {
+		return errors.New("usage: dockyard validate-volume-artifact-job --job-file PATH")
+	}
+	job, err := volumeartifact.ReadJob(*jobFile)
+	if err != nil {
+		return fmt.Errorf("read volume artifact job: %w", err)
+	}
+	return volumeartifact.ValidateJob(job)
+}
+
+func runLocalVolumeArtifact(arguments []string, input io.Reader) error {
+	flags := flag.NewFlagSet("local-volume-artifact", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	mode := flags.String("mode", "", "backup or restore")
+	volumeRoot := flags.String("volume-root", "/volume", "mounted volume root")
+	artifact := flags.String("artifact", "", "absolute encrypted artifact path")
+	aad := flags.String("aad", "", "authenticated artifact context")
+	sha256Value := flags.String("sha256", "", "expected encrypted artifact SHA-256")
+	plaintextSHA256 := flags.String("plaintext-sha256", "", "expected plaintext archive SHA-256")
+	sizeBytes := flags.Int64("size-bytes", 0, "expected encrypted artifact size")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || *mode == "" || *artifact == "" || *aad == "" || !filepath.IsAbs(*volumeRoot) || !filepath.IsAbs(*artifact) {
+		return errors.New("usage: dockyard local-volume-artifact --mode backup|restore --artifact PATH --aad CONTEXT [--volume-root /volume] [--sha256 HEX --plaintext-sha256 HEX --size-bytes N] < BASE64_KEY")
+	}
+	keyData, err := io.ReadAll(io.LimitReader(input, 129))
+	if err != nil {
+		return fmt.Errorf("read volume encryption key: %w", err)
+	}
+	if len(keyData) > 128 || strings.ContainsAny(string(keyData), "\r\n") {
+		return errors.New("volume encryption key must be a single base64 value without line breaks")
+	}
+	job := volumeartifact.Job{Mode: strings.TrimSpace(*mode), EncryptionKey: string(keyData), EncryptionAAD: *aad, SHA256: strings.TrimSpace(*sha256Value), PlaintextSHA256: strings.TrimSpace(*plaintextSHA256), SizeBytes: *sizeBytes}
+	result, err := volumeartifact.RunLocal(job, filepath.Clean(*volumeRoot), filepath.Clean(*artifact))
 	if err != nil {
 		return err
 	}

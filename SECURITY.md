@@ -99,6 +99,11 @@ master-key fingerprint, and optional agent-CA fingerprint before destructive
 restore. The restore command also refuses to run while the controller service
 is active. These checks detect a mismatched recovery set; they do not replace
 encrypted, access-controlled off-site storage for the bundle and escrowed keys.
+The optional AI gateway has an equivalent quiesced recovery path:
+`scripts/backup-ai-gateway.sh` encrypts 9Router's node-local volume before a
+one-shot pinned Swarm helper uploads it, and `scripts/restore-ai-gateway.sh`
+requires signed metadata, exact image/node/volume identity, an offline gateway,
+and matching ciphertext/plaintext checksums before replacement.
 
 Recommended starting objectives are PostgreSQL point-in-time recovery with a
 15-minute RPO and a four-hour control-plane RTO. These are operator targets,

@@ -62,6 +62,12 @@ links for every item below.
   digests, including BarkTrace PostgreSQL's database dependency; both
   BarkTrace variants must resolve from the released
   `ghcr.io/barktrace/bark:0.31.0` tag.
+- Run the AI-gateway recovery conformance test. It must quiesce and resume the
+  9Router service around backup, keep presigned URLs and the encryption key out
+  of Docker arguments and signed metadata, reject a running-service restore,
+  reject mismatched keys and modified metadata, and leave a successful restore
+  offline until the AI installer verifies both independently authenticated
+  auditors.
 - Every release after the first boots the previous published image digest,
   creates authenticated and encrypted tenant state, deploys a live stack, and
   stops the old controller against its persistent PostgreSQL volume. The

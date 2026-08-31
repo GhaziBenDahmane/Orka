@@ -79,36 +79,7 @@ func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, err
 	defer os.RemoveAll(work)
 	encryptedPath := filepath.Join(work, "volume.tar.gz.enc")
 	if job.Mode == "backup" {
-		encrypted, createErr := os.OpenFile(encryptedPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if createErr != nil {
-			return result, createErr
-		}
-		plainHash := sha256.New()
-		archiveReader, archiveWriter := io.Pipe()
-		archiveDone := make(chan error, 1)
-		go func() {
-			archiveErr := WriteArchive(io.MultiWriter(archiveWriter, plainHash), volumeRoot)
-			_ = archiveWriter.CloseWithError(archiveErr)
-			archiveDone <- archiveErr
-		}()
-		err = box.EncryptStream(encrypted, archiveReader, job.EncryptionAAD)
-		if err != nil {
-			_ = archiveReader.CloseWithError(err)
-		}
-		archiveErr := <-archiveDone
-		if err == nil {
-			err = archiveErr
-		}
-		if syncErr := encrypted.Sync(); err == nil {
-			err = syncErr
-		}
-		if closeErr := encrypted.Close(); err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			result.PlaintextSHA256 = hex.EncodeToString(plainHash.Sum(nil))
-			result.SHA256, result.SizeBytes, err = hashFile(encryptedPath)
-		}
+		result, err = backupToFile(box, volumeRoot, encryptedPath, job.EncryptionAAD)
 		if err == nil {
 			err = transfer(ctx, http.MethodPut, job.TransferURL, encryptedPath, result.SizeBytes)
 		}
@@ -117,6 +88,86 @@ func Run(ctx context.Context, job Job, volumeRoot, workRoot string) (Result, err
 	if err = transfer(ctx, http.MethodGet, job.TransferURL, encryptedPath, job.SizeBytes); err != nil {
 		return result, err
 	}
+	return restoreFromFile(box, volumeRoot, encryptedPath, job)
+}
+
+// RunLocal reads or writes an authenticated encrypted artifact on a mounted
+// local path. It shares the archive and verification path used by remote
+// volume jobs so operator recovery tooling cannot drift to a weaker format.
+func RunLocal(job Job, volumeRoot, artifactPath string) (Result, error) {
+	if err := validateCryptographicJob(job); err != nil {
+		return Result{}, err
+	}
+	volumeRoot = filepath.Clean(volumeRoot)
+	artifactPath = filepath.Clean(artifactPath)
+	if !filepath.IsAbs(volumeRoot) || volumeRoot == string(filepath.Separator) {
+		return Result{}, errors.New("volume root must be an absolute non-root directory")
+	}
+	if !filepath.IsAbs(artifactPath) || artifactPath == string(filepath.Separator) {
+		return Result{}, errors.New("artifact path must be an absolute file path")
+	}
+	if relative, err := filepath.Rel(volumeRoot, artifactPath); err != nil || relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return Result{}, errors.New("artifact path must be outside the volume root")
+	}
+	key, _ := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
+	defer clear(key)
+	box, err := cryptox.New(key)
+	if err != nil {
+		return Result{}, err
+	}
+	if job.Mode == "backup" {
+		return backupToFile(box, volumeRoot, artifactPath, job.EncryptionAAD)
+	}
+	info, err := os.Lstat(artifactPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return Result{}, errors.New("restore artifact must be a regular file, not a symbolic link")
+	}
+	return restoreFromFile(box, volumeRoot, artifactPath, job)
+}
+
+func backupToFile(box *cryptox.Box, volumeRoot, encryptedPath, aad string) (result Result, err error) {
+	encrypted, err := os.OpenFile(encryptedPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return result, err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(encryptedPath)
+		}
+	}()
+	plainHash := sha256.New()
+	archiveReader, archiveWriter := io.Pipe()
+	archiveDone := make(chan error, 1)
+	go func() {
+		archiveErr := WriteArchive(io.MultiWriter(archiveWriter, plainHash), volumeRoot)
+		_ = archiveWriter.CloseWithError(archiveErr)
+		archiveDone <- archiveErr
+	}()
+	err = box.EncryptStream(encrypted, archiveReader, aad)
+	if err != nil {
+		_ = archiveReader.CloseWithError(err)
+	}
+	archiveErr := <-archiveDone
+	if err == nil {
+		err = archiveErr
+	}
+	if syncErr := encrypted.Sync(); err == nil {
+		err = syncErr
+	}
+	if closeErr := encrypted.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return result, err
+	}
+	result.PlaintextSHA256 = hex.EncodeToString(plainHash.Sum(nil))
+	result.SHA256, result.SizeBytes, err = hashFile(encryptedPath)
+	keep = err == nil
+	return result, err
+}
+
+func restoreFromFile(box *cryptox.Box, volumeRoot, encryptedPath string, job Job) (result Result, err error) {
 	result.SHA256, result.SizeBytes, err = hashFile(encryptedPath)
 	if err != nil || result.SHA256 != job.SHA256 || result.SizeBytes != job.SizeBytes {
 		return result, errors.New("encrypted volume artifact checksum or size mismatch")
@@ -149,6 +200,13 @@ func ValidateJob(job Job) error {
 	}
 	if _, err := netpolicy.ValidateHTTPURL(job.TransferURL, maxTransferURLBytes); err != nil {
 		return errors.New("volume artifact transfer URL must be HTTP(S) without credentials")
+	}
+	return validateCryptographicJob(job)
+}
+
+func validateCryptographicJob(job Job) error {
+	if job.Mode != "backup" && job.Mode != "restore" {
+		return errors.New("volume artifact mode must be backup or restore")
 	}
 	key, err := base64.RawStdEncoding.DecodeString(job.EncryptionKey)
 	if err != nil || len(key) != 32 || job.EncryptionAAD == "" || len(job.EncryptionAAD) > maxEncryptionAADBytes || strings.ContainsAny(job.EncryptionAAD, "\x00\r\n") {

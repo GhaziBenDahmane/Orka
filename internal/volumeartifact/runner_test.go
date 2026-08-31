@@ -63,6 +63,69 @@ func TestEncryptedBackupAndRestoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLocalEncryptedBackupAndRestoreRoundTrip(t *testing.T) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	encodedKey := base64.RawStdEncoding.EncodeToString(key)
+	volume := filepath.Join(t.TempDir(), "volume")
+	if err := os.MkdirAll(volume, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(volume, "state.db")
+	if err := os.WriteFile(state, []byte("gateway state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(t.TempDir(), "gateway.enc")
+	backup, err := RunLocal(Job{Mode: "backup", EncryptionKey: encodedKey, EncryptionAAD: "ai-gateway:test"}, volume, artifact)
+	if err != nil || backup.SizeBytes <= 0 {
+		t.Fatalf("backup=%+v err=%v", backup, err)
+	}
+	if err = os.WriteFile(state, []byte("changed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restoreJob := Job{Mode: "restore", EncryptionKey: encodedKey, EncryptionAAD: "ai-gateway:test", SHA256: backup.SHA256, PlaintextSHA256: backup.PlaintextSHA256, SizeBytes: backup.SizeBytes}
+	restored, err := RunLocal(restoreJob, volume, artifact)
+	if err != nil || restored != backup {
+		t.Fatalf("restore=%+v err=%v", restored, err)
+	}
+	data, err := os.ReadFile(state)
+	if err != nil || string(data) != "gateway state" {
+		t.Fatalf("state=%q err=%v", data, err)
+	}
+}
+
+func TestLocalRestoreRejectsSymlinkArtifact(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "target")
+	if err := os.WriteFile(target, []byte("artifact"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	job := Job{Mode: "restore", EncryptionKey: base64.RawStdEncoding.EncodeToString(make([]byte, 32)), EncryptionAAD: "ai-gateway:test", SHA256: strings.Repeat("a", 64), PlaintextSHA256: strings.Repeat("b", 64), SizeBytes: 8}
+	if _, err := RunLocal(job, t.TempDir(), link); err == nil || !strings.Contains(err.Error(), "not a symbolic link") {
+		t.Fatalf("symlink restore error=%v", err)
+	}
+}
+
+func TestLocalArtifactRejectsUnsafePathRelationships(t *testing.T) {
+	key := base64.RawStdEncoding.EncodeToString(make([]byte, 32))
+	volume := t.TempDir()
+	job := Job{Mode: "backup", EncryptionKey: key, EncryptionAAD: "ai-gateway:test"}
+	for _, artifact := range []string{"/", filepath.Join(volume, "artifact.enc")} {
+		if _, err := RunLocal(job, volume, artifact); err == nil {
+			t.Fatalf("unsafe artifact path %q accepted", artifact)
+		}
+	}
+	if _, err := RunLocal(job, "/", filepath.Join(t.TempDir(), "artifact.enc")); err == nil {
+		t.Fatal("filesystem root accepted as volume root")
+	}
+}
+
 func TestTransferEnforcesExpectedSizeAndCleansPartialDownloads(t *testing.T) {
 	tests := []struct {
 		name        string

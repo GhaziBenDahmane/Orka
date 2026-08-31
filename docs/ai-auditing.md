@@ -300,6 +300,53 @@ therefore requires `NINEROUTER_STORAGE_NODE_ID` and constrains the gateway to
 that exact node. A node outage remains visible as unavailability instead of
 starting 9Router against an unrelated empty volume; move or restore the volume
 explicitly before changing this value.
+
+### Back up and restore 9Router
+
+9Router configuration can contain provider credentials, so its node-local
+volume is backed up as an authenticated AES-GCM stream through a one-shot Swarm
+service on the storage node. Supply a short-lived presigned PUT URL in a
+mode-0600 file, a separately escrowed 32-byte base64 key, a non-secret durable
+object reference, and the same Ed25519 recovery-signing key used for control
+plane recovery:
+
+```sh
+openssl rand -base64 32 | tr -d '=\n' > /secure/dockyard/ai-backup-key
+chmod 0600 /secure/dockyard/ai-backup-key /secure/dockyard/ai-backup-put-url
+export DOCKYARD_AI_BACKUP_KEY_FILE=/secure/dockyard/ai-backup-key
+export DOCKYARD_AI_BACKUP_URL_FILE=/secure/dockyard/ai-backup-put-url
+export DOCKYARD_AI_BACKUP_OBJECT_REF=s3://recovery/orka/9router-2026-08-31.enc
+export DOCKYARD_RECOVERY_SIGNING_KEY_FILE=/secure/dockyard/recovery-signing-key.pem
+scripts/backup-ai-gateway.sh /secure/backups/9router-2026-08-31
+```
+
+The backup command verifies the deployed image and volume binding, stops the
+gateway, uploads the encrypted archive from its owning Swarm node, resumes the
+original replica count even after a failure, and writes only signed metadata
+locally. The presigned URL and encryption key exist only in a temporary Docker
+secret and are not included in the retained metadata.
+
+For a restore, generate a short-lived GET URL for the signed `objectRef`, scale
+the gateway to zero, and use the exact images and storage node recorded by the
+backup. Restore stays offline so the installer can perform the controlled
+restart and fresh dual-auditor verification:
+
+```sh
+docker service scale --detach=false dockyard-ai_9router=0
+export DOCKYARD_AI_RESTORE_URL_FILE=/secure/dockyard/ai-backup-get-url
+export DOCKYARD_AI_RESTORE_OBJECT_REF=s3://recovery/orka/9router-2026-08-31.enc
+export DOCKYARD_RECOVERY_VERIFY_KEY_FILE=/secure/dockyard/recovery-verify-key.pem
+export DOCKYARD_AI_RESTORE_CONFIRM=restore:dockyard-ai:9router
+scripts/restore-ai-gateway.sh /secure/backups/9router-2026-08-31
+scripts/install-ai-auditors.sh
+```
+
+Restore verifies the Ed25519 signature, encryption-key fingerprint, images,
+node and volume identity, encrypted and plaintext checksums, and full archive
+safety before atomically replacing top-level volume contents. Keep signed
+metadata and the encrypted object off-host, and escrow the encryption and
+verification keys separately.
+
 Auditor startup fails if a configured secret file is unreadable or empty, or
 if an inline value and its `_FILE` setting are both present. This prevents a
 stale environment value from overriding a rotated Docker secret and prevents
