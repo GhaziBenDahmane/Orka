@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,8 +44,6 @@ func TestAuthorizationMiddlewareArgumentsAreValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	validRoles := map[string]bool{"viewer": true, "developer": true, "admin": true, "owner": true}
-	validResources := map[string]bool{"project": true, "environment": true, "service": true, "database": true, "deployment": true, "backup": true, "restore": true, "migration": true, "webhook": true, "route": true, "volume_backup": true, "volume_restore": true}
 	ast.Inspect(parsed, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
@@ -69,17 +68,17 @@ func TestAuthorizationMiddlewareArgumentsAreValid(t *testing.T) {
 		switch middlewareSelector.Sel.Name {
 		case "requireRole":
 			role, literal := middlewareStringArgument(middleware, 0)
-			if !literal || !validRoles[role] {
+			if !literal || !validAuthorizationRole(role) {
 				t.Errorf("route %s has invalid requireRole minimum %q", pattern, role)
 			}
 		case "requireResourceRole":
 			role, roleLiteral := middlewareStringArgument(middleware, 0)
 			resource, resourceLiteral := middlewareStringArgument(middleware, 1)
 			parameter, parameterLiteral := middlewareStringArgument(middleware, 2)
-			if !roleLiteral || !validRoles[role] {
+			if !roleLiteral || !validAuthorizationRole(role) {
 				t.Errorf("route %s has invalid requireResourceRole minimum %q", pattern, role)
 			}
-			if !resourceLiteral || !validResources[resource] {
+			if !resourceLiteral || !validAuthorizationResource(resource) {
 				t.Errorf("route %s has invalid authorization resource %q", pattern, resource)
 			}
 			if !parameterLiteral || !strings.Contains(pattern, "{"+parameter+"}") {
@@ -88,6 +87,32 @@ func TestAuthorizationMiddlewareArgumentsAreValid(t *testing.T) {
 		}
 		return true
 	})
+}
+
+func TestAuthorizationMiddlewareRejectsInvalidConfiguration(t *testing.T) {
+	server := &Server{}
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	tests := map[string]func(){
+		"empty organization role":   func() { server.requireRole("", handler) },
+		"unknown organization role": func() { server.requireRole("superadmin", handler) },
+		"auditor organization role": func() { server.requireRole("auditor", handler) },
+		"empty resource role":       func() { server.requireResourceRole("", "service", "serviceID", handler) },
+		"unknown resource role":     func() { server.requireResourceRole("superadmin", "service", "serviceID", handler) },
+		"unknown resource type":     func() { server.requireResourceRole("viewer", "cluster", "clusterID", handler) },
+		"empty path parameter":      func() { server.requireResourceRole("viewer", "service", "", handler) },
+	}
+	for name, construct := range tests {
+		t.Run(name, func(t *testing.T) {
+			deferred := false
+			func() {
+				defer func() { deferred = recover() != nil }()
+				construct()
+			}()
+			if !deferred {
+				t.Fatal("invalid authorization middleware configuration did not panic")
+			}
+		})
+	}
 }
 
 func TestAgentRoutesRemainOnTheDedicatedMTLSHandler(t *testing.T) {

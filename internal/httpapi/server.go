@@ -528,6 +528,9 @@ func bearerToken(r *http.Request) (string, bool) {
 }
 
 func (s *Server) requireRole(minimum string, next http.Handler) http.Handler {
+	if !validAuthorizationRole(minimum) {
+		panic("invalid authorization minimum role: " + minimum)
+	}
 	return s.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := principal(r)
 		if roleRank(p.Role) < roleRank(minimum) {
@@ -539,6 +542,15 @@ func (s *Server) requireRole(minimum string, next http.Handler) http.Handler {
 }
 
 func (s *Server) requireResourceRole(minimum, resourceType, pathParameter string, next http.Handler) http.Handler {
+	if !validAuthorizationRole(minimum) {
+		panic("invalid resource authorization minimum role: " + minimum)
+	}
+	if !validAuthorizationResource(resourceType) {
+		panic("invalid authorization resource type: " + resourceType)
+	}
+	if pathParameter == "" {
+		panic("authorization path parameter is required")
+	}
 	return s.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(r.PathValue(pathParameter))
 		if err != nil {
@@ -560,6 +572,20 @@ func (s *Server) requireResourceRole(minimum, resourceType, pathParameter string
 func roleRank(role string) int {
 	return map[string]int{"viewer": 1, "developer": 2, "admin": 3, "owner": 4}[role]
 }
+
+func validAuthorizationRole(role string) bool {
+	return roleRank(role) > 0
+}
+
+func validAuthorizationResource(resourceType string) bool {
+	switch resourceType {
+	case "project", "environment", "service", "database", "deployment", "backup", "restore", "migration", "webhook", "route", "volume_backup", "volume_restore":
+		return true
+	default:
+		return false
+	}
+}
+
 func principal(r *http.Request) store.Principal {
 	return r.Context().Value(principalKey).(store.Principal)
 }
