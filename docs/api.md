@@ -534,6 +534,8 @@ commit desired-state changes, immutable snapshots, worker jobs, cancellation
 state, and operator audit evidence in one transaction. Audit persistence
 failure therefore cannot launch, stop, roll back, or cancel Swarm work without
 an attributable event; service-account requests remain separately attributed.
+Route creation, replacement, and deletion likewise commit with their audit
+event and any required edge-certificate reconciliation job.
 
 Service schedules accept standard five-field cron expressions (including
 ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`

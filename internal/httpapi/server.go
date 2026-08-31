@@ -2798,12 +2798,11 @@ func (s *Server) addRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err = s.Store.AddRoute(r.Context(), p.OrganizationID, item)
+	item, err = s.Store.AddRouteWithAudit(r.Context(), p, item, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "route.create", "route", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
 
@@ -2824,12 +2823,11 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err = s.Store.UpdateRoute(r.Context(), p.OrganizationID, item)
+	item, err = s.Store.UpdateRouteWithAudit(r.Context(), p, item, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "route.update", "route", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -2854,11 +2852,10 @@ func (s *Server) deleteRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteRoute(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteRouteWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "route.delete", "route", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

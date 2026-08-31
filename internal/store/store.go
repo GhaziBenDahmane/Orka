@@ -1860,15 +1860,45 @@ func (s *Store) ListComposeServices(ctx context.Context, organizationID, environ
 }
 
 func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route) (Route, error) {
-	if r.InternalPath == "" {
-		r.InternalPath = "/"
-	}
-	r.Enabled = !r.Disabled
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Route{}, err
 	}
 	defer tx.Rollback(ctx)
+	r, err = s.addRouteTx(ctx, tx, organizationID, r)
+	if err != nil {
+		return Route{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Route{}, err
+	}
+	return r, nil
+}
+
+func (s *Store) AddRouteWithAudit(ctx context.Context, principal Principal, r Route, remoteAddr string) (Route, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Route{}, err
+	}
+	defer tx.Rollback(ctx)
+	r, err = s.addRouteTx(ctx, tx, principal.OrganizationID, r)
+	if err != nil {
+		return Route{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "route.create", "route", r.ID.String(), remoteAddr, nil); err != nil {
+		return Route{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Route{}, err
+	}
+	return r, nil
+}
+
+func (s *Store) addRouteTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, r Route) (Route, error) {
+	if r.InternalPath == "" {
+		r.InternalPath = "/"
+	}
+	r.Enabled = !r.Disabled
 	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, r.ComposeServiceID)
 	if err != nil {
 		return Route{}, err
@@ -1895,7 +1925,7 @@ func (s *Store) AddRoute(ctx context.Context, organizationID uuid.UUID, r Route)
 			return Route{}, err
 		}
 	}
-	return r, tx.Commit(ctx)
+	return r, nil
 }
 
 func (s *Store) GetRoute(ctx context.Context, organizationID, id uuid.UUID) (Route, error) {
@@ -1909,18 +1939,48 @@ func (s *Store) GetRoute(ctx context.Context, organizationID, id uuid.UUID) (Rou
 }
 
 func (s *Store) UpdateRoute(ctx context.Context, organizationID uuid.UUID, item Route) (Route, error) {
-	if item.InternalPath == "" {
-		item.InternalPath = "/"
-	}
-	item.Enabled = !item.Disabled
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Route{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = s.updateRouteTx(ctx, tx, organizationID, item)
+	if err != nil {
+		return Route{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Route{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateRouteWithAudit(ctx context.Context, principal Principal, item Route, remoteAddr string) (Route, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Route{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = s.updateRouteTx(ctx, tx, principal.OrganizationID, item)
+	if err != nil {
+		return Route{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "route.update", "route", item.ID.String(), remoteAddr, nil); err != nil {
+		return Route{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Route{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) updateRouteTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, item Route) (Route, error) {
+	if item.InternalPath == "" {
+		item.InternalPath = "/"
+	}
+	item.Enabled = !item.Disabled
 	var serviceID uuid.UUID
 	var oldCertificateID *uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT r.compose_service_id,r.custom_certificate_id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, item.ID, organizationID).Scan(&serviceID, &oldCertificateID)
+	err := tx.QueryRow(ctx, `SELECT r.compose_service_id,r.custom_certificate_id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, item.ID, organizationID).Scan(&serviceID, &oldCertificateID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Route{}, ErrNotFound
 	}
@@ -1953,7 +2013,7 @@ func (s *Store) UpdateRoute(ctx context.Context, organizationID uuid.UUID, item 
 			return Route{}, err
 		}
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) error {
@@ -1962,9 +2022,31 @@ func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) e
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = s.deleteRouteTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteRouteWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.deleteRouteTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "route.delete", "route", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) deleteRouteTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	var serviceID uuid.UUID
 	var certificateID *uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT r.compose_service_id,r.custom_certificate_id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&serviceID, &certificateID)
+	err := tx.QueryRow(ctx, `SELECT r.compose_service_id,r.custom_certificate_id FROM routes r JOIN compose_services s ON s.id=r.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1 AND p.organization_id=$2`, id, organizationID).Scan(&serviceID, &certificateID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1990,7 +2072,7 @@ func (s *Store) DeleteRoute(ctx context.Context, organizationID, id uuid.UUID) e
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) QueueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string) (Deployment, error) {
