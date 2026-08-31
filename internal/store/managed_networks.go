@@ -54,6 +54,42 @@ func scanManagedNetwork(row pgx.Row) (ManagedNetwork, error) {
 const managedNetworkColumns = `id,organization_id,cluster_id,name,driver,internal,attachable,enable_ipv4,enable_ipv6,mtu,ipam,docker_id,status,last_error,deletion_requested_at,created_at,updated_at`
 
 func (s *Store) CreateManagedNetwork(ctx context.Context, item ManagedNetwork) (ManagedNetwork, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createManagedNetworkTx(ctx, tx, item)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ManagedNetwork{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) CreateManagedNetworkWithAudit(ctx context.Context, principal Principal, item ManagedNetwork, remoteAddr string) (ManagedNetwork, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createManagedNetworkTx(ctx, tx, item)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "network.create.queued", "managed_network", item.ID.String(), remoteAddr, map[string]any{"name": item.Name, "driver": item.Driver, "clusterId": item.ClusterID}); err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ManagedNetwork{}, err
+	}
+	return item, nil
+}
+
+func createManagedNetworkTx(ctx context.Context, tx pgx.Tx, item ManagedNetwork) (ManagedNetwork, error) {
 	item.ID = uuid.New()
 	item.Status = "provisioning"
 	if item.IPAM == nil {
@@ -63,11 +99,6 @@ func (s *Store) CreateManagedNetwork(ctx context.Context, item ManagedNetwork) (
 	if err != nil {
 		return ManagedNetwork{}, err
 	}
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return ManagedNetwork{}, err
-	}
-	defer tx.Rollback(ctx)
 	if item.ClusterID != nil {
 		var exists bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clusters WHERE id=$1 AND organization_id=$2 AND state IN ('active','draining') AND deletion_requested_at IS NULL)`, *item.ClusterID, item.OrganizationID).Scan(&exists); err != nil {
@@ -86,7 +117,7 @@ func (s *Store) CreateManagedNetwork(ctx context.Context, item ManagedNetwork) (
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) VALUES($1,'network.create',$2,$3,10)`, uuid.New(), payload, "network:"+item.ID.String()); err != nil {
 		return ManagedNetwork{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListManagedNetworks(ctx context.Context, organizationID uuid.UUID) ([]ManagedNetwork, error) {
@@ -120,8 +151,30 @@ func (s *Store) QueueManagedNetworkDeletion(ctx context.Context, organizationID,
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = queueManagedNetworkDeletionTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) QueueManagedNetworkDeletionWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = queueManagedNetworkDeletionTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "network.delete.queued", "managed_network", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func queueManagedNetworkDeletionTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	var deleting bool
-	err = tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM managed_networks WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&deleting)
+	err := tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM managed_networks WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -144,7 +197,7 @@ func (s *Store) QueueManagedNetworkDeletion(ctx context.Context, organizationID,
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) SELECT $1,'network.delete',$2,$3,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='network.delete' AND payload->>'networkId'=$4 AND status IN ('pending','running'))`, uuid.New(), payload, "network:"+id.String(), id.String()); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) RetryManagedNetworkProvisioning(ctx context.Context, organizationID, id uuid.UUID) (ManagedNetwork, error) {
@@ -153,9 +206,39 @@ func (s *Store) RetryManagedNetworkProvisioning(ctx context.Context, organizatio
 		return ManagedNetwork{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := retryManagedNetworkProvisioningTx(ctx, tx, organizationID, id)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ManagedNetwork{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) RetryManagedNetworkProvisioningWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) (ManagedNetwork, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := retryManagedNetworkProvisioningTx(ctx, tx, principal.OrganizationID, id)
+	if err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "network.create.retried", "managed_network", id.String(), remoteAddr, nil); err != nil {
+		return ManagedNetwork{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ManagedNetwork{}, err
+	}
+	return item, nil
+}
+
+func retryManagedNetworkProvisioningTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) (ManagedNetwork, error) {
 	var status string
 	var deleting bool
-	if err = tx.QueryRow(ctx, `SELECT status,deletion_requested_at IS NOT NULL FROM managed_networks WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&status, &deleting); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT status,deletion_requested_at IS NOT NULL FROM managed_networks WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&status, &deleting); errors.Is(err, pgx.ErrNoRows) {
 		return ManagedNetwork{}, ErrNotFound
 	} else if err != nil {
 		return ManagedNetwork{}, err
@@ -166,6 +249,7 @@ func (s *Store) RetryManagedNetworkProvisioning(ctx context.Context, organizatio
 	if status != "error" {
 		return ManagedNetwork{}, ErrBusy
 	}
+	var err error
 	var active bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='network.create' AND payload->>'networkId'=$1 AND status IN ('pending','running'))`, id.String()).Scan(&active); err != nil {
 		return ManagedNetwork{}, err
@@ -180,10 +264,7 @@ func (s *Store) RetryManagedNetworkProvisioning(ctx context.Context, organizatio
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) VALUES($1,'network.create',$2,$3,10)`, uuid.New(), payload, "network:"+id.String()); err != nil {
 		return ManagedNetwork{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return ManagedNetwork{}, err
-	}
-	return s.GetManagedNetwork(ctx, organizationID, id)
+	return scanManagedNetwork(tx.QueryRow(ctx, `SELECT `+managedNetworkColumns+` FROM managed_networks WHERE id=$1 AND organization_id=$2`, id, organizationID))
 }
 
 func (s *Store) ListServiceNetworks(ctx context.Context, organizationID, serviceID uuid.UUID) ([]ManagedNetwork, error) {
@@ -232,36 +313,62 @@ func (s *Store) ReplaceServiceNetworks(ctx context.Context, organizationID, serv
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	var clusterID *uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT e.cluster_id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND s.deletion_requested_at IS NULL FOR UPDATE OF s`, serviceID, organizationID).Scan(&clusterID); errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	} else if err != nil {
-		return nil, err
-	}
-	if len(networkIDs) > 0 {
-		var count int
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM managed_networks WHERE organization_id=$1 AND id=ANY($2::uuid[]) AND driver='overlay' AND status='ready' AND deletion_requested_at IS NULL AND cluster_id IS NOT DISTINCT FROM $3`, organizationID, networkIDs, clusterID).Scan(&count); err != nil {
-			return nil, err
-		}
-		if count != len(networkIDs) {
-			return nil, ErrNotFound
-		}
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM compose_service_networks WHERE compose_service_id=$1`, serviceID); err != nil {
-		return nil, err
-	}
-	if len(networkIDs) > 0 {
-		if _, err = tx.Exec(ctx, `INSERT INTO compose_service_networks(compose_service_id,network_id) SELECT $1,unnest($2::uuid[])`, serviceID, networkIDs); err != nil {
-			return nil, err
-		}
-	}
-	if _, err = tx.Exec(ctx, `UPDATE compose_services SET revision=revision+1,updated_at=now() WHERE id=$1`, serviceID); err != nil {
+	if err = replaceServiceNetworksTx(ctx, tx, organizationID, serviceID, networkIDs); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.ListServiceNetworks(ctx, organizationID, serviceID)
+}
+
+func (s *Store) ReplaceServiceNetworksWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, networkIDs []uuid.UUID, remoteAddr string) ([]ManagedNetwork, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err = replaceServiceNetworksTx(ctx, tx, principal.OrganizationID, serviceID, networkIDs); err != nil {
+		return nil, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service.networks.replace", "compose_service", serviceID.String(), remoteAddr, map[string]any{"count": len(networkIDs)}); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return s.ListServiceNetworks(ctx, principal.OrganizationID, serviceID)
+}
+
+func replaceServiceNetworksTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, networkIDs []uuid.UUID) error {
+	var clusterID *uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT e.cluster_id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND s.deletion_requested_at IS NULL FOR UPDATE OF s`, serviceID, organizationID).Scan(&clusterID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var err error
+	if len(networkIDs) > 0 {
+		var count int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM managed_networks WHERE organization_id=$1 AND id=ANY($2::uuid[]) AND driver='overlay' AND status='ready' AND deletion_requested_at IS NULL AND cluster_id IS NOT DISTINCT FROM $3`, organizationID, networkIDs, clusterID).Scan(&count); err != nil {
+			return err
+		}
+		if count != len(networkIDs) {
+			return ErrNotFound
+		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM compose_service_networks WHERE compose_service_id=$1`, serviceID); err != nil {
+		return err
+	}
+	if len(networkIDs) > 0 {
+		if _, err = tx.Exec(ctx, `INSERT INTO compose_service_networks(compose_service_id,network_id) SELECT $1,unnest($2::uuid[])`, serviceID, networkIDs); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE compose_services SET revision=revision+1,updated_at=now() WHERE id=$1`, serviceID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func prefixManagedNetworkColumns(alias string) string {

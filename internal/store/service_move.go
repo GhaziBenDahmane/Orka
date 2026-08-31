@@ -12,6 +12,14 @@ import (
 // stack name and Swarm placement remain stable, so moving across clusters is
 // deliberately rejected rather than silently copying stateful workloads.
 func (s *Store) MoveComposeService(ctx context.Context, organizationID, serviceID, targetEnvironmentID uuid.UUID) (ComposeService, error) {
+	return s.moveComposeService(ctx, organizationID, serviceID, targetEnvironmentID, nil, "")
+}
+
+func (s *Store) MoveComposeServiceWithAudit(ctx context.Context, principal Principal, serviceID, targetEnvironmentID uuid.UUID, remoteAddr string) (ComposeService, error) {
+	return s.moveComposeService(ctx, principal.OrganizationID, serviceID, targetEnvironmentID, &principal, remoteAddr)
+}
+
+func (s *Store) moveComposeService(ctx context.Context, organizationID, serviceID, targetEnvironmentID uuid.UUID, auditPrincipal *Principal, remoteAddr string) (ComposeService, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ComposeService{}, err
@@ -45,6 +53,11 @@ func (s *Store) MoveComposeService(ctx context.Context, organizationID, serviceI
 		return ComposeService{}, err
 	}
 	if sourceEnvironmentID == targetEnvironmentID {
+		if auditPrincipal != nil {
+			if err = appendPrincipalAudit(ctx, tx, *auditPrincipal, "service.move", "compose_service", serviceID.String(), remoteAddr, map[string]any{"environmentId": targetEnvironmentID}); err != nil {
+				return ComposeService{}, err
+			}
+		}
 		if err = tx.Commit(ctx); err != nil {
 			return ComposeService{}, err
 		}
@@ -141,6 +154,11 @@ func (s *Store) MoveComposeService(ctx context.Context, organizationID, serviceI
 		RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,desired_state,created_at,updated_at`, serviceID, targetEnvironmentID).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
 	if err != nil {
 		return ComposeService{}, err
+	}
+	if auditPrincipal != nil {
+		if err = appendPrincipalAudit(ctx, tx, *auditPrincipal, "service.move", "compose_service", serviceID.String(), remoteAddr, map[string]any{"environmentId": targetEnvironmentID}); err != nil {
+			return ComposeService{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return ComposeService{}, err

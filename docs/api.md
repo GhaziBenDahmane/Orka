@@ -548,6 +548,11 @@ previous revision and ciphertext instead of publishing an unattributed change.
 Individual variable upserts and deletions include their revision and
 secret-free variable names in that same atomic audit boundary; template-owned
 key provenance rolls back with the ciphertext.
+Tag creation, updates, deletion, and complete project/service assignment
+replacement are also atomic with their operator audit records. Managed-network
+provisioning, retry and deletion jobs, service network assignments, and service
+environment moves use the same boundary: failed audit persistence rolls back
+both the control-plane mutation and any queued network job.
 
 Service schedules accept standard five-field cron expressions (including
 ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`

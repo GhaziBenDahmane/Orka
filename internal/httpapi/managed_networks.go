@@ -70,12 +70,11 @@ func (s *Server) createManagedNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateManagedNetwork(r.Context(), store.ManagedNetwork{OrganizationID: p.OrganizationID, ClusterID: input.ClusterID, Name: input.Name, Driver: input.Driver, Internal: input.Internal, Attachable: attachable, EnableIPv4: enableIPv4, EnableIPv6: input.EnableIPv6, MTU: input.MTU, IPAM: input.IPAM})
+	item, err := s.Store.CreateManagedNetworkWithAudit(r.Context(), p, store.ManagedNetwork{ClusterID: input.ClusterID, Name: input.Name, Driver: input.Driver, Internal: input.Internal, Attachable: attachable, EnableIPv4: enableIPv4, EnableIPv6: input.EnableIPv6, MTU: input.MTU, IPAM: input.IPAM}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "network.create.queued", "managed_network", item.ID.String(), r.RemoteAddr, map[string]any{"name": item.Name, "driver": item.Driver, "clusterId": item.ClusterID})
 	writeJSON(w, http.StatusAccepted, item)
 }
 
@@ -94,11 +93,10 @@ func (s *Server) deleteManagedNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.QueueManagedNetworkDeletion(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.QueueManagedNetworkDeletionWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "network.delete.queued", "managed_network", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -109,12 +107,11 @@ func (s *Server) retryManagedNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.RetryManagedNetworkProvisioning(r.Context(), p.OrganizationID, id)
+	item, err := s.Store.RetryManagedNetworkProvisioningWithAudit(r.Context(), p, id, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "network.create.retried", "managed_network", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, item)
 }
 
@@ -175,12 +172,11 @@ func (s *Server) replaceServiceNetworks(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	items, err := s.Store.ReplaceServiceNetworks(r.Context(), p.OrganizationID, serviceID, input.NetworkIDs)
+	items, err := s.Store.ReplaceServiceNetworksWithAudit(r.Context(), p, serviceID, input.NetworkIDs, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.networks.replace", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"count": len(items)})
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 

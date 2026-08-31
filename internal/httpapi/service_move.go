@@ -34,7 +34,7 @@ func (s *Server) moveService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "developer access to the target environment is required")
 		return
 	}
-	item, err := s.Store.MoveComposeService(r.Context(), p.OrganizationID, serviceID, input.EnvironmentID)
+	item, err := s.Store.MoveComposeServiceWithAudit(r.Context(), p, serviceID, input.EnvironmentID, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "service_busy", "service has an operation in progress")
@@ -43,6 +43,5 @@ func (s *Server) moveService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.move", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"environmentId": input.EnvironmentID})
 	writeJSON(w, http.StatusOK, item)
 }
