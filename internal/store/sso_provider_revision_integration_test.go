@@ -170,6 +170,24 @@ func TestFederatedJITProvisioningSerializesSubjectsAndRejectsDisabledUsers(t *te
 			if err = pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, disabledID).Scan(&memberships); err != nil || memberships != 0 {
 				t.Fatalf("disabled user gained memberships=%d err=%v", memberships, err)
 			}
+
+			scimEmail := name + "-scim-" + organizationID.String() + "@example.test"
+			scimUserID, loginErr := test.login(ctx, name+"-scim-subject", scimEmail)
+			if loginErr != nil {
+				t.Fatal(loginErr)
+			}
+			if _, err = pool.Exec(ctx, `INSERT INTO scim_user_defaults(organization_id,user_id,default_role) VALUES($1,$2,'viewer') ON CONFLICT DO NOTHING`, organizationID, scimUserID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = pool.Exec(ctx, `DELETE FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, scimUserID); err != nil {
+				t.Fatal(err)
+			}
+			if _, loginErr = test.login(ctx, name+"-scim-subject", scimEmail); !errors.Is(loginErr, ErrNotFound) {
+				t.Fatalf("SCIM-deprovisioned user login error=%v, want ErrNotFound", loginErr)
+			}
+			if err = pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE organization_id=$1 AND user_id=$2`, organizationID, scimUserID).Scan(&memberships); err != nil || memberships != 0 {
+				t.Fatalf("SCIM-deprovisioned user regained memberships=%d err=%v", memberships, err)
+			}
 		})
 	}
 }

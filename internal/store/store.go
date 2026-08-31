@@ -4458,9 +4458,9 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 	}
 	var userID uuid.UUID
 	var userEnabled bool
-	err = tx.QueryRow(ctx, `SELECT identity.user_id,u.disabled_at IS NULL FROM external_identities identity JOIN users u ON u.id=identity.user_id WHERE identity.provider_id=$1 AND identity.subject=$2`, p.ID, subject).Scan(&userID, &userEnabled)
+	err = tx.QueryRow(ctx, `SELECT identity.user_id,u.disabled_at IS NULL FROM external_identities identity JOIN users u ON u.id=identity.user_id WHERE identity.provider_id=$1 AND identity.subject=$2 FOR UPDATE OF u`, p.ID, subject).Scan(&userID, &userEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id,disabled_at IS NULL FROM users WHERE email=$1`, email).Scan(&userID, &userEnabled)
+		err = tx.QueryRow(ctx, `SELECT id,disabled_at IS NULL FROM users WHERE email=$1 FOR UPDATE`, email).Scan(&userID, &userEnabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			userID = uuid.New()
 			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!oidc:"+uuid.NewString(), name)
@@ -4479,6 +4479,13 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 	} else if err != nil {
 		return uuid.Nil, err
 	} else if !userEnabled {
+		return uuid.Nil, ErrNotFound
+	}
+	var scimDeprovisioned bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2) AND NOT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)`, p.OrganizationID, userID).Scan(&scimDeprovisioned); err != nil {
+		return uuid.Nil, err
+	}
+	if scimDeprovisioned {
 		return uuid.Nil, ErrNotFound
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.OrganizationID, userID, p.DefaultRole)
@@ -4816,9 +4823,9 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 	}
 	var userID uuid.UUID
 	var userEnabled bool
-	err = tx.QueryRow(ctx, `SELECT identity.user_id,u.disabled_at IS NULL FROM saml_external_identities identity JOIN users u ON u.id=identity.user_id WHERE identity.provider_id=$1 AND identity.subject=$2`, p.ID, subject).Scan(&userID, &userEnabled)
+	err = tx.QueryRow(ctx, `SELECT identity.user_id,u.disabled_at IS NULL FROM saml_external_identities identity JOIN users u ON u.id=identity.user_id WHERE identity.provider_id=$1 AND identity.subject=$2 FOR UPDATE OF u`, p.ID, subject).Scan(&userID, &userEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `SELECT id,disabled_at IS NULL FROM users WHERE email=$1`, email).Scan(&userID, &userEnabled)
+		err = tx.QueryRow(ctx, `SELECT id,disabled_at IS NULL FROM users WHERE email=$1 FOR UPDATE`, email).Scan(&userID, &userEnabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			userID = uuid.New()
 			_, err = tx.Exec(ctx, `INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,$3,$4)`, userID, email, "!saml:"+uuid.NewString(), name)
@@ -4837,6 +4844,13 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 	} else if err != nil {
 		return uuid.Nil, err
 	} else if !userEnabled {
+		return uuid.Nil, ErrNotFound
+	}
+	var scimDeprovisioned bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM scim_user_defaults WHERE organization_id=$1 AND user_id=$2) AND NOT EXISTS(SELECT 1 FROM memberships WHERE organization_id=$1 AND user_id=$2)`, p.OrganizationID, userID).Scan(&scimDeprovisioned); err != nil {
+		return uuid.Nil, err
+	}
+	if scimDeprovisioned {
 		return uuid.Nil, ErrNotFound
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, p.OrganizationID, userID, p.DefaultRole)
