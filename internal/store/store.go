@@ -1004,8 +1004,30 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteProjectTx(ctx, tx, organizationID, projectID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteProjectWithAudit(ctx context.Context, principal Principal, projectID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteProjectTx(ctx, tx, principal.OrganizationID, projectID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "project.delete", "project", projectID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteProjectTx(ctx context.Context, tx pgx.Tx, organizationID, projectID uuid.UUID) error {
 	var deleting bool
-	err = tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM projects WHERE id=$1 AND organization_id=$2 FOR UPDATE`, projectID, organizationID).Scan(&deleting)
+	err := tx.QueryRow(ctx, `SELECT deletion_requested_at IS NOT NULL FROM projects WHERE id=$1 AND organization_id=$2 FOR UPDATE`, projectID, organizationID).Scan(&deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1113,7 +1135,7 @@ func (s *Store) DeleteProject(ctx context.Context, organizationID, projectID uui
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.project',$2,50 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.project' AND payload->>'projectId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, projectID.String()); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) CreateEnvironment(ctx context.Context, organizationID, projectID uuid.UUID, name, slug string) (Environment, error) {
@@ -1260,8 +1282,30 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteEnvironmentTx(ctx, tx, organizationID, environmentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteEnvironmentWithAudit(ctx context.Context, principal Principal, environmentID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteEnvironmentTx(ctx, tx, principal.OrganizationID, environmentID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "environment.delete", "environment", environmentID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteEnvironmentTx(ctx context.Context, tx pgx.Tx, organizationID, environmentID uuid.UUID) error {
 	var deleting bool
-	err = tx.QueryRow(ctx, `SELECT e.deletion_requested_at IS NOT NULL FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2 FOR UPDATE OF e`, environmentID, organizationID).Scan(&deleting)
+	err := tx.QueryRow(ctx, `SELECT e.deletion_requested_at IS NOT NULL FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2 FOR UPDATE OF e`, environmentID, organizationID).Scan(&deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -1333,7 +1377,7 @@ func (s *Store) DeleteEnvironment(ctx context.Context, organizationID, environme
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) SELECT $1,'delete.environment',$2,50 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.environment' AND payload->>'environmentId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, environmentID.String()); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func lockEnvironmentForServiceCreation(ctx context.Context, tx pgx.Tx, organizationID, environmentID uuid.UUID) (uuid.UUID, error) {

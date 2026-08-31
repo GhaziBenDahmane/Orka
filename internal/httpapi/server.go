@@ -1048,7 +1048,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteProject(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteProjectWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "project_busy", "cancel or wait for active deployments or an existing deletion")
 			return
@@ -1056,7 +1056,6 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "project.delete", "project", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -1171,7 +1170,7 @@ func (s *Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteEnvironment(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteEnvironmentWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "environment_busy", "cancel or wait for active deployments or an existing deletion")
 			return
@@ -1179,7 +1178,6 @@ func (s *Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "environment.delete", "environment", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 

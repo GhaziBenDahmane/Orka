@@ -563,7 +563,9 @@ automation is attributed separately from users.
 Project and environment deletion is asynchronous and cascades through service
 stack finalizers. Cascades lock every child database and service, reject active
 deployment or data work (including databases without a linked Compose service),
-and prevent concurrent child creation from escaping the deletion.
+and prevent concurrent child creation from escaping the deletion. Parent and
+child deletion markers, all finalizer jobs, and the operator audit event commit
+together; failed audit evidence rolls back the complete cascade request.
 Service deletion also serializes with revisions, source and uploaded-artifact
 changes, route creation, deployment-hook issuance, and provider-webhook
 creation; once deletion wins, those mutations return not found.
