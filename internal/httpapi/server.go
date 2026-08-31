@@ -3440,7 +3440,7 @@ func canonicalEmail(raw string) (string, string, bool) {
 
 func canonicalDisplayName(raw string) (string, bool) {
 	name := strings.TrimSpace(raw)
-	return name, len(name) <= 120
+	return name, len(name) <= 120 && utf8.ValidString(raw) && strings.IndexFunc(raw, unicode.IsControl) < 0
 }
 
 func validPublicOpaqueValue(value string, maxBytes int) bool {
@@ -3448,7 +3448,7 @@ func validPublicOpaqueValue(value string, maxBytes int) bool {
 }
 
 func validFederatedIdentifier(value string) bool {
-	return value != "" && len(value) <= 1024
+	return value != "" && len(value) <= 1024 && utf8.ValidString(value) && strings.IndexFunc(value, unicode.IsControl) < 0
 }
 
 var _ = fmt.Sprintf

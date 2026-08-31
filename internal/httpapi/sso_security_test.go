@@ -235,6 +235,11 @@ func TestCanonicalDisplayNameBoundsProvisionedProfiles(t *testing.T) {
 	if name, ok := canonicalDisplayName(strings.Repeat("a", 121)); ok || name != strings.Repeat("a", 121) {
 		t.Fatalf("oversized display name=%q valid=%t", name, ok)
 	}
+	for _, invalid := range []string{"line\nbreak", "hidden\u0085break", string([]byte{'n', 0xff})} {
+		if _, ok := canonicalDisplayName(invalid); ok {
+			t.Errorf("invalid display name %q was accepted", invalid)
+		}
+	}
 }
 
 func TestFederatedIdentityKeysAreBounded(t *testing.T) {
@@ -243,9 +248,9 @@ func TestFederatedIdentityKeysAreBounded(t *testing.T) {
 			t.Errorf("rejected valid federated identifier of length %d", len(valid))
 		}
 	}
-	for _, invalid := range []string{"", strings.Repeat("s", 1025)} {
+	for _, invalid := range []string{"", "subject\nother", "subject\u0085other", string([]byte{'s', 0xff}), strings.Repeat("s", 1025)} {
 		if validFederatedIdentifier(invalid) {
-			t.Errorf("accepted invalid federated identifier of length %d", len(invalid))
+			t.Errorf("accepted invalid federated identifier %q", invalid)
 		}
 	}
 }
