@@ -193,7 +193,9 @@ plain HTTP is accepted only for loopback development.
 name of at most 63 characters, and `DOCKYARD_SESSION_TTL` must be between five
 minutes and 30 days. Configuring more than one expected controller replica also
 fails closed unless verified PostgreSQL TLS and remote backup destinations are
-both mandatory. These checks run before database migrations or Docker operations.
+both mandatory. In that mode, plaintext HTTP object-storage destinations are
+rejected at creation, policy admission, manual backup admission, and startup.
+These checks run before database migrations or Docker operations.
 
 The equivalent manual commands are:
 

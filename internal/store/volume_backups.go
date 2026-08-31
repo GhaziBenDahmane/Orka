@@ -64,7 +64,7 @@ func (s *Store) UpsertVolumeBackupPolicy(ctx context.Context, organizationID, se
 		return VolumeBackupPolicy{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := upsertVolumeBackupPolicyTx(ctx, tx, organizationID, serviceID, volumeName, nodeID, destinationID, intervalSeconds, retentionCount, quiesce, enabled)
+	item, err := upsertVolumeBackupPolicyTx(ctx, tx, organizationID, serviceID, volumeName, nodeID, destinationID, intervalSeconds, retentionCount, quiesce, enabled, s.RequireRemoteBackups)
 	if err != nil {
 		return VolumeBackupPolicy{}, err
 	}
@@ -80,7 +80,7 @@ func (s *Store) UpsertVolumeBackupPolicyWithAudit(ctx context.Context, principal
 		return VolumeBackupPolicy{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := upsertVolumeBackupPolicyTx(ctx, tx, principal.OrganizationID, serviceID, volumeName, nodeID, destinationID, intervalSeconds, retentionCount, quiesce, enabled)
+	item, err := upsertVolumeBackupPolicyTx(ctx, tx, principal.OrganizationID, serviceID, volumeName, nodeID, destinationID, intervalSeconds, retentionCount, quiesce, enabled, s.RequireRemoteBackups)
 	if err != nil {
 		return VolumeBackupPolicy{}, err
 	}
@@ -94,13 +94,16 @@ func (s *Store) UpsertVolumeBackupPolicyWithAudit(ctx context.Context, principal
 	return item, nil
 }
 
-func upsertVolumeBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName, nodeID string, destinationID uuid.UUID, intervalSeconds, retentionCount int, quiesce, enabled bool) (VolumeBackupPolicy, error) {
+func upsertVolumeBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName, nodeID string, destinationID uuid.UUID, intervalSeconds, retentionCount int, quiesce, enabled, requireDestinationTLS bool) (VolumeBackupPolicy, error) {
 	var lockedID uuid.UUID
 	var composeYAML string
 	var err error
 	if err = tx.QueryRow(ctx, `SELECT s.id,s.compose_yaml FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2 AND EXISTS(SELECT 1 FROM backup_destinations d WHERE d.id=$3 AND d.organization_id=$2) FOR UPDATE OF s`, serviceID, organizationID, destinationID).Scan(&lockedID, &composeYAML); errors.Is(err, pgx.ErrNoRows) {
 		return VolumeBackupPolicy{}, ErrNotFound
 	} else if err != nil {
+		return VolumeBackupPolicy{}, err
+	}
+	if err = requireBackupDestination(ctx, tx, organizationID, destinationID, requireDestinationTLS); err != nil {
 		return VolumeBackupPolicy{}, err
 	}
 	volumes, err := mountedNamedVolumesFromCompose(composeYAML)
@@ -216,7 +219,7 @@ func (s *Store) QueueVolumeBackup(ctx context.Context, organizationID, serviceID
 		return VolumeBackup{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := queueVolumeBackupTx(ctx, tx, organizationID, serviceID, volumeName, actorID)
+	item, err := queueVolumeBackupTx(ctx, tx, organizationID, serviceID, volumeName, actorID, s.RequireRemoteBackups)
 	if err != nil {
 		return VolumeBackup{}, err
 	}
@@ -232,7 +235,7 @@ func (s *Store) QueueVolumeBackupWithAudit(ctx context.Context, principal Princi
 		return VolumeBackup{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := queueVolumeBackupTx(ctx, tx, principal.OrganizationID, serviceID, volumeName, principal.UserID)
+	item, err := queueVolumeBackupTx(ctx, tx, principal.OrganizationID, serviceID, volumeName, principal.UserID, s.RequireRemoteBackups)
 	if err != nil {
 		return VolumeBackup{}, err
 	}
@@ -246,7 +249,7 @@ func (s *Store) QueueVolumeBackupWithAudit(ctx context.Context, principal Princi
 	return item, nil
 }
 
-func queueVolumeBackupTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName string, actorID uuid.UUID) (VolumeBackup, error) {
+func queueVolumeBackupTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, volumeName string, actorID uuid.UUID, requireDestinationTLS bool) (VolumeBackup, error) {
 	var policyID, destinationID uuid.UUID
 	var nodeID string
 	var quiesce bool
@@ -258,6 +261,9 @@ func queueVolumeBackupTx(ctx context.Context, tx pgx.Tx, organizationID, service
 		return VolumeBackup{}, ErrNotFound
 	}
 	if err != nil {
+		return VolumeBackup{}, err
+	}
+	if err = requireBackupDestination(ctx, tx, organizationID, destinationID, requireDestinationTLS); err != nil {
 		return VolumeBackup{}, err
 	}
 	if deleting {

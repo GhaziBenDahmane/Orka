@@ -164,6 +164,15 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	}
 
 	db.RequireRemoteBackups = true
+	if _, err = db.CreateBackupDestination(ctx, BackupDestination{OrganizationID: orgID, Name: "plaintext", Endpoint: "http://objects.example.test", Bucket: "backups", EncryptedCredentials: "ciphertext"}); !errors.Is(err, ErrRemoteBackupTLSRequired) {
+		t.Fatalf("plaintext destination creation error=%v, want TLS required", err)
+	}
+	insecureUpdate := updated
+	insecureUpdate.Endpoint = "http://objects.example.test"
+	insecureUpdate.UseTLS = false
+	if _, err = db.UpdateBackupDestination(ctx, orgID, insecureUpdate); !errors.Is(err, ErrRemoteBackupTLSRequired) {
+		t.Fatalf("plaintext destination update error=%v, want TLS required", err)
+	}
 	if _, err = db.QueueDatabaseBackup(ctx, orgID, databaseID, userID, nil); !errors.Is(err, ErrRemoteBackupRequired) {
 		t.Fatalf("local backup error = %v, want remote backup required", err)
 	}
@@ -172,6 +181,18 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	}
 	if err = db.ValidateBackupConfiguration(ctx); err != nil {
 		t.Fatalf("valid remote backup configuration: %v", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_destinations SET use_tls=false,endpoint='http://objects.example.test' WHERE id=$1`, owned.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueDatabaseBackup(ctx, orgID, databaseID, userID, &owned.ID); !errors.Is(err, ErrRemoteBackupTLSRequired) {
+		t.Fatalf("plaintext manual backup error=%v, want TLS required", err)
+	}
+	if err = db.ValidateBackupConfiguration(ctx); !errors.Is(err, ErrRemoteBackupTLSRequired) {
+		t.Fatalf("existing plaintext policy error=%v, want TLS required", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_destinations SET use_tls=true,endpoint='https://objects.example.test' WHERE id=$1`, owned.ID); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = db.Pool.Exec(ctx, `UPDATE backup_policies SET destination_id=NULL WHERE database_instance_id=$1`, databaseID); err != nil {
 		t.Fatal(err)
@@ -196,7 +217,7 @@ func TestBackupDestinationTenantIsolationAndReferences(t *testing.T) {
 	if err = db.DeleteBackupDestination(ctx, orgID, foreign.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cross-tenant destination deletion error = %v, want not found", err)
 	}
-	disposable, err := db.CreateBackupDestination(ctx, BackupDestination{OrganizationID: orgID, Name: "disposable", Endpoint: "http://minio:9000", Bucket: "temporary", EncryptedCredentials: "ciphertext"})
+	disposable, err := db.CreateBackupDestination(ctx, BackupDestination{OrganizationID: orgID, Name: "disposable", Endpoint: "https://objects.example.test", Bucket: "temporary", UseTLS: true, EncryptedCredentials: "ciphertext"})
 	if err != nil {
 		t.Fatal(err)
 	}

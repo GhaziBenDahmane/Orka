@@ -1529,6 +1529,10 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "invalid_destination", "name, accessKey, and secretKey are required")
 		return
 	}
+	if s.Store.RequireRemoteBackups && !in.UseTLS {
+		writeError(w, http.StatusBadRequest, "remote_backup_tls_required", store.ErrRemoteBackupTLSRequired.Error())
+		return
+	}
 	client, err := backupstore.NewS3(backupstore.S3Config{Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, AccessKey: in.AccessKey, SecretKey: in.SecretKey, SessionToken: in.SessionToken, UseTLS: in.UseTLS, Transport: s.EgressTransport})
 	if err != nil {
 		writeError(w, 400, "invalid_destination", err.Error())
@@ -1569,6 +1573,10 @@ func (s *Server) updateBackupDestination(w http.ResponseWriter, r *http.Request)
 	name, validName := normalizedBackupDestinationName(in.Name)
 	if !validName || in.AccessKey == "" || in.SecretKey == "" {
 		writeError(w, http.StatusBadRequest, "invalid_destination", "name, accessKey, and secretKey are required")
+		return
+	}
+	if s.Store.RequireRemoteBackups && !in.UseTLS {
+		writeError(w, http.StatusBadRequest, "remote_backup_tls_required", store.ErrRemoteBackupTLSRequired.Error())
 		return
 	}
 	p := principal(r)
@@ -3325,6 +3333,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, store.ErrRemoteBackupRequired) {
 		writeError(w, http.StatusBadRequest, "remote_backup_required", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrRemoteBackupTLSRequired) {
+		writeError(w, http.StatusBadRequest, "remote_backup_tls_required", err.Error())
 		return
 	}
 	var pgErr *pgconn.PgError

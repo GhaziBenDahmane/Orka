@@ -2503,6 +2503,9 @@ func (w *Worker) s3(ctx context.Context, id uuid.UUID) (*backupstore.S3, error) 
 	if err != nil {
 		return nil, err
 	}
+	if w.Store.RequireRemoteBackups && !useTLS {
+		return nil, store.ErrRemoteBackupTLSRequired
+	}
 	plain, err := w.Box.DecryptResource(encrypted, "backup-destination", id.String(), "backup-destination")
 	if err != nil {
 		return nil, err

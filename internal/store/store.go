@@ -28,6 +28,7 @@ var ErrSSOProviderRequired = errors.New("an enabled SSO provider is required")
 var ErrNoCapacity = errors.New("no eligible cluster has the requested placement capacity")
 var ErrClusterUnavailable = errors.New("assigned remote cluster has no fresh heartbeat")
 var ErrRemoteBackupRequired = errors.New("a remote backup destination is required")
+var ErrRemoteBackupTLSRequired = errors.New("remote backup destinations must use TLS")
 var ErrLastOwner = errors.New("organization must retain an active owner")
 var ErrSCIMManaged = errors.New("membership is managed by SCIM")
 var ErrOwnerRequired = errors.New("organization owner role is required")
@@ -2906,7 +2907,7 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 		return DatabaseBackup{}, err
 	}
 	defer tx.Rollback(ctx)
-	backup, err := queueDatabaseBackupTx(ctx, tx, organizationID, databaseID, actorID, destinationID)
+	backup, err := queueDatabaseBackupTx(ctx, tx, organizationID, databaseID, actorID, destinationID, s.RequireRemoteBackups)
 	if err != nil {
 		return DatabaseBackup{}, err
 	}
@@ -2925,7 +2926,7 @@ func (s *Store) QueueDatabaseBackupWithAudit(ctx context.Context, principal Prin
 		return DatabaseBackup{}, err
 	}
 	defer tx.Rollback(ctx)
-	backup, err := queueDatabaseBackupTx(ctx, tx, principal.OrganizationID, databaseID, principal.UserID, destinationID)
+	backup, err := queueDatabaseBackupTx(ctx, tx, principal.OrganizationID, databaseID, principal.UserID, destinationID, s.RequireRemoteBackups)
 	if err != nil {
 		return DatabaseBackup{}, err
 	}
@@ -2938,7 +2939,7 @@ func (s *Store) QueueDatabaseBackupWithAudit(ctx context.Context, principal Prin
 	return backup, nil
 }
 
-func queueDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID, actorID uuid.UUID, destinationID *uuid.UUID) (DatabaseBackup, error) {
+func queueDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID, actorID uuid.UUID, destinationID *uuid.UUID, requireDestinationTLS bool) (DatabaseBackup, error) {
 	var lockedID uuid.UUID
 	var composeServiceID *uuid.UUID
 	var err error
@@ -2953,6 +2954,11 @@ func queueDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, datab
 	if err = requireDatabaseServiceRunning(ctx, tx, composeServiceID); err != nil {
 		return DatabaseBackup{}, err
 	}
+	if destinationID != nil {
+		if err = requireBackupDestination(ctx, tx, organizationID, *destinationID, requireDestinationTLS); err != nil {
+			return DatabaseBackup{}, err
+		}
+	}
 	var active bool
 	if err = tx.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM database_backups WHERE database_instance_id=$1 AND status IN ('queued','running'))
@@ -2961,15 +2967,6 @@ func queueDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, datab
 	}
 	if active {
 		return DatabaseBackup{}, ErrBusy
-	}
-	if destinationID != nil {
-		var destinationAllowed bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`, destinationID, organizationID).Scan(&destinationAllowed); err != nil {
-			return DatabaseBackup{}, err
-		}
-		if !destinationAllowed {
-			return DatabaseBackup{}, ErrNotFound
-		}
 	}
 	backup := DatabaseBackup{ID: uuid.New(), DatabaseInstanceID: databaseID, Status: "queued", Format: "native", DestinationID: destinationID}
 	if err = tx.QueryRow(ctx, `INSERT INTO database_backups(id,database_instance_id,status,format,actor_user_id,destination_id) VALUES($1,$2,'queued','native',$3,$4) RETURNING created_at`, backup.ID, databaseID, nullableUUID(actorID), destinationID).Scan(&backup.CreatedAt); err != nil {
@@ -2980,6 +2977,21 @@ func queueDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, datab
 		return DatabaseBackup{}, err
 	}
 	return backup, nil
+}
+
+func requireBackupDestination(ctx context.Context, tx pgx.Tx, organizationID, destinationID uuid.UUID, requireTLS bool) error {
+	var useTLS bool
+	err := tx.QueryRow(ctx, `SELECT use_tls FROM backup_destinations WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, destinationID, organizationID).Scan(&useTLS)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if requireTLS && !useTLS {
+		return ErrRemoteBackupTLSRequired
+	}
+	return nil
 }
 
 func (s *Store) ValidateBackupConfiguration(ctx context.Context) error {
@@ -2993,6 +3005,15 @@ func (s *Store) ValidateBackupConfiguration(ctx context.Context) error {
 	if count > 0 {
 		return fmt.Errorf("%w: %d enabled backup policies use node-local storage", ErrRemoteBackupRequired, count)
 	}
+	if err := s.Pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM backup_policies policy JOIN backup_destinations destination ON destination.id=policy.destination_id WHERE policy.enabled AND NOT destination.use_tls)
+		+(SELECT count(*) FROM volume_backup_policies policy JOIN backup_destinations destination ON destination.id=policy.destination_id WHERE policy.enabled AND NOT destination.use_tls)
+		+(SELECT count(*) FROM audit_archive_destinations archive JOIN backup_destinations destination ON destination.id=archive.backup_destination_id WHERE archive.enabled AND NOT destination.use_tls)`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return fmt.Errorf("%w: %d enabled policies use plaintext object storage", ErrRemoteBackupTLSRequired, count)
+	}
 	return nil
 }
 
@@ -3005,7 +3026,7 @@ func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, database
 		return BackupPolicy{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := upsertBackupPolicyTx(ctx, tx, organizationID, databaseID, intervalSeconds, retentionCount, enabled, verifyRestore, destinationID)
+	item, err := upsertBackupPolicyTx(ctx, tx, organizationID, databaseID, intervalSeconds, retentionCount, enabled, verifyRestore, destinationID, s.RequireRemoteBackups)
 	if err != nil {
 		return BackupPolicy{}, err
 	}
@@ -3024,7 +3045,7 @@ func (s *Store) UpsertBackupPolicyWithAudit(ctx context.Context, principal Princ
 		return BackupPolicy{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := upsertBackupPolicyTx(ctx, tx, principal.OrganizationID, databaseID, intervalSeconds, retentionCount, enabled, verifyRestore, destinationID)
+	item, err := upsertBackupPolicyTx(ctx, tx, principal.OrganizationID, databaseID, intervalSeconds, retentionCount, enabled, verifyRestore, destinationID, s.RequireRemoteBackups)
 	if err != nil {
 		return BackupPolicy{}, err
 	}
@@ -3038,7 +3059,7 @@ func (s *Store) UpsertBackupPolicyWithAudit(ctx context.Context, principal Princ
 	return item, nil
 }
 
-func upsertBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled, verifyRestore bool, destinationID *uuid.UUID) (BackupPolicy, error) {
+func upsertBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled, verifyRestore bool, destinationID *uuid.UUID, requireDestinationTLS bool) (BackupPolicy, error) {
 	var lockedID uuid.UUID
 	var composeServiceID *uuid.UUID
 	var err error
@@ -3051,12 +3072,8 @@ func upsertBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, databa
 		return BackupPolicy{}, err
 	}
 	if destinationID != nil {
-		var destinationAllowed bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM backup_destinations WHERE id=$1 AND organization_id=$2)`, *destinationID, organizationID).Scan(&destinationAllowed); err != nil {
+		if err = requireBackupDestination(ctx, tx, organizationID, *destinationID, requireDestinationTLS); err != nil {
 			return BackupPolicy{}, err
-		}
-		if !destinationAllowed {
-			return BackupPolicy{}, ErrNotFound
 		}
 	}
 	var item BackupPolicy
@@ -3126,6 +3143,9 @@ func deleteBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, databa
 }
 
 func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestination) (BackupDestination, error) {
+	if s.RequireRemoteBackups && !item.UseTLS {
+		return BackupDestination{}, ErrRemoteBackupTLSRequired
+	}
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
@@ -3134,6 +3154,9 @@ func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestinat
 }
 
 func (s *Store) CreateBackupDestinationWithAudit(ctx context.Context, principal Principal, item BackupDestination, remoteAddr string) (BackupDestination, error) {
+	if s.RequireRemoteBackups && !item.UseTLS {
+		return BackupDestination{}, ErrRemoteBackupTLSRequired
+	}
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
@@ -3156,6 +3179,9 @@ func (s *Store) CreateBackupDestinationWithAudit(ctx context.Context, principal 
 }
 
 func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid.UUID, item BackupDestination) (BackupDestination, error) {
+	if s.RequireRemoteBackups && !item.UseTLS {
+		return BackupDestination{}, ErrRemoteBackupTLSRequired
+	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return BackupDestination{}, err
@@ -3172,6 +3198,9 @@ func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid
 }
 
 func (s *Store) UpdateBackupDestinationWithAudit(ctx context.Context, principal Principal, item BackupDestination, remoteAddr string) (BackupDestination, error) {
+	if s.RequireRemoteBackups && !item.UseTLS {
+		return BackupDestination{}, ErrRemoteBackupTLSRequired
+	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return BackupDestination{}, err

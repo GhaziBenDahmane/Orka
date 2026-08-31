@@ -47,8 +47,27 @@ func TestVolumeBackupPolicyDeletionSerializesWithBackupAdmission(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
 
+	db.RequireRemoteBackups = true
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_destinations SET use_tls=false,endpoint='http://s3.example.test' WHERE id=$1`, destinationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.UpsertVolumeBackupPolicy(ctx, organizationID, serviceID, "uploads", "nodeabc123", destinationID, 3600, 7, true, true); !errors.Is(err, ErrRemoteBackupTLSRequired) {
+		t.Fatalf("plaintext volume policy error=%v, want TLS required", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_destinations SET use_tls=true,endpoint='https://s3.example.test' WHERE id=$1`, destinationID); err != nil {
+		t.Fatal(err)
+	}
 	policy, err := db.UpsertVolumeBackupPolicy(ctx, organizationID, serviceID, "uploads", "nodeabc123", destinationID, 3600, 7, true, true)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_destinations SET use_tls=false,endpoint='http://s3.example.test' WHERE id=$1`, destinationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueVolumeBackup(ctx, organizationID, serviceID, "uploads", userID); !errors.Is(err, ErrRemoteBackupTLSRequired) {
+		t.Fatalf("plaintext volume backup error=%v, want TLS required", err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE backup_destinations SET use_tls=true,endpoint='https://s3.example.test' WHERE id=$1`, destinationID); err != nil {
 		t.Fatal(err)
 	}
 	blocker, err := db.Pool.Begin(ctx)
