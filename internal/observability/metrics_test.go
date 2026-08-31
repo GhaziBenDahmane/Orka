@@ -120,7 +120,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	templatePending, templateRunning, templateFailed := uuid.New(), uuid.New(), uuid.New()
 	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
 	projectID, environmentID, serviceID, destinationID, volumePolicyID, missingVolumePolicyID, volumeBackupID, artifactDeletionID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	healthyDatabaseID, overdueDatabaseID, healthyDatabasePolicyID, overdueDatabasePolicyID, healthyDatabaseBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	healthyDatabaseID, overdueDatabaseID, disabledDatabaseID, unprotectedDatabaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	healthyDatabasePolicyID, overdueDatabasePolicyID, disabledDatabasePolicyID, healthyDatabaseBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	databaseDigest := "sha256:" + strings.Repeat("a", 64)
 	statements := []struct {
 		query string
@@ -150,8 +151,11 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO backup_artifact_deletions(id,destination_id,object_key,source_kind,source_id,created_at) VALUES($1,$2,'expired/object.enc','volume',$3,now()-interval '5 minutes')`, []any{artifactDeletionID, destinationID, volumeBackupID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Healthy backup','healthy-backup','postgres','17','encrypted')`, []any{healthyDatabaseID, environmentID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Overdue backup','overdue-backup','postgres','17','encrypted')`, []any{overdueDatabaseID, environmentID}},
-		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id) VALUES($1,$2,900,7,true,now()+interval '15 minutes',$3)`, []any{healthyDatabasePolicyID, healthyDatabaseID, destinationID}},
-		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id) VALUES($1,$2,900,7,true,now()+interval '15 minutes',$3)`, []any{overdueDatabasePolicyID, overdueDatabaseID, destinationID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'Disabled backup','disabled-backup','postgres','17','encrypted')`, []any{disabledDatabaseID, environmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials) VALUES($1,$2,'No backup policy','no-backup-policy','postgres','17','encrypted')`, []any{unprotectedDatabaseID, environmentID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore) VALUES($1,$2,900,7,true,now()+interval '15 minutes',$3,false)`, []any{healthyDatabasePolicyID, healthyDatabaseID, destinationID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore) VALUES($1,$2,900,7,true,now()+interval '15 minutes',$3,true)`, []any{overdueDatabasePolicyID, overdueDatabaseID, destinationID}},
+		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,destination_id,verify_restore) VALUES($1,$2,900,7,false,now()+interval '15 minutes',$3,true)`, []any{disabledDatabasePolicyID, disabledDatabaseID, destinationID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,started_at,finished_at) VALUES($1,$2,'succeeded','native',$3,now()-interval '21 minutes',now()-interval '20 minutes')`, []any{healthyDatabaseBackupID, healthyDatabaseID, destinationID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Matching','matching','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, databaseDigest}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Mismatch','mismatch','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("b", 64)}},
@@ -195,6 +199,11 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 			t.Errorf("missing metric family %s", metric)
 		}
 	}
+	for _, metric := range []string{"dockyard_database_backup_policy_status", "dockyard_database_restore_verification_enabled"} {
+		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
+			t.Errorf("missing database protection metric family %s", metric)
+		}
+	}
 	if !strings.Contains(recorder.Body.String(), "# HELP dockyard_database_utility_provenance_issues") {
 		t.Error("missing database utility provenance metric family")
 	}
@@ -209,6 +218,11 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_source_credential_rotation_age_seconds{organization="` + organizationA.String() + `",credential="` + sourceCredentialID.String() + `",kind="registry"}`,
 		`dockyard_backup_destination_credential_rotation_age_seconds{organization="` + organizationA.String() + `",destination="` + destinationID.String() + `"}`,
 		`dockyard_backup_destination_tls{organization="` + organizationA.String() + `",destination="` + destinationID.String() + `"} 0`,
+		`dockyard_database_backup_policy_status{database="` + healthyDatabaseID.String() + `",state="enabled"} 1`,
+		`dockyard_database_backup_policy_status{database="` + disabledDatabaseID.String() + `",state="disabled"} 1`,
+		`dockyard_database_backup_policy_status{database="` + unprotectedDatabaseID.String() + `",state="missing"} 1`,
+		`dockyard_database_restore_verification_enabled{database="` + healthyDatabaseID.String() + `"} 0`,
+		`dockyard_database_restore_verification_enabled{database="` + overdueDatabaseID.String() + `"} 1`,
 		`dockyard_database_backup_overdue{database="` + healthyDatabaseID.String() + `"} 0`,
 		`dockyard_database_backup_overdue{database="` + overdueDatabaseID.String() + `"} 1`,
 		`dockyard_resource_finalizers{organization="` + organizationA.String() + `",kind="cluster",state="failed"} 1`,
@@ -360,6 +374,24 @@ func TestPrometheusAlertsCoverVolumeRecovery(t *testing.T) {
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverDatabaseRecoveryPolicy(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardDatabaseBackupPolicyUnavailable",
+		`expr: dockyard_database_backup_policy_status{state=~"missing|disabled"} == 1`,
+		"alert: DockyardDatabaseRestoreVerificationDisabled",
+		"expr: dockyard_database_restore_verification_enabled == 0",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing database recovery-policy alert configuration %q", expected)
 		}
 	}
 }

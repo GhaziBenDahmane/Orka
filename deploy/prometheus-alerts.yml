@@ -168,6 +168,24 @@ groups:
           summary: A database backup is overdue
           description: Database {{ $labels.database }} has no successful encrypted backup within twice its configured interval.
 
+      - alert: DockyardDatabaseBackupPolicyUnavailable
+        expr: dockyard_database_backup_policy_status{state=~"missing|disabled"} == 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: A managed database has no active backup policy
+          description: Database {{ $labels.database }} has backup-policy state {{ $labels.state }}; configure and enable a retained remote backup policy.
+
+      - alert: DockyardDatabaseRestoreVerificationDisabled
+        expr: dockyard_database_restore_verification_enabled == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Automatic database restore verification is disabled
+          description: Database {{ $labels.database }} has scheduled backups but does not exercise them through isolated restore drills.
+
       - alert: DockyardBackupArtifactDeletionStalled
         expr: dockyard_backup_artifact_deletion_oldest_age_seconds > 900
         for: 15m

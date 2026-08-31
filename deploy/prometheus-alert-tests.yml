@@ -148,3 +148,40 @@ tests:
             exp_annotations:
               summary: A database backup is overdue
               description: Database database-id has no successful encrypted backup within twice its configured interval.
+
+  - name: database recovery policy gaps
+    interval: 1m
+    input_series:
+      - series: 'dockyard_database_backup_policy_status{database="missing-policy-id",state="missing"}'
+        values: '1x20'
+      - series: 'dockyard_database_backup_policy_status{database="disabled-policy-id",state="disabled"}'
+        values: '1x20'
+      - series: 'dockyard_database_restore_verification_enabled{database="unverified-id"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DockyardDatabaseBackupPolicyUnavailable
+        exp_alerts:
+          - exp_labels:
+              database: missing-policy-id
+              state: missing
+              severity: critical
+            exp_annotations:
+              summary: A managed database has no active backup policy
+              description: Database missing-policy-id has backup-policy state missing; configure and enable a retained remote backup policy.
+          - exp_labels:
+              database: disabled-policy-id
+              state: disabled
+              severity: critical
+            exp_annotations:
+              summary: A managed database has no active backup policy
+              description: Database disabled-policy-id has backup-policy state disabled; configure and enable a retained remote backup policy.
+      - eval_time: 16m
+        alertname: DockyardDatabaseRestoreVerificationDisabled
+        exp_alerts:
+          - exp_labels:
+              database: unverified-id
+              severity: warning
+            exp_annotations:
+              summary: Automatic database restore verification is disabled
+              description: Database unverified-id has scheduled backups but does not exercise them through isolated restore drills.
