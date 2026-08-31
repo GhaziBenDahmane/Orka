@@ -714,6 +714,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/ai/audit-runs/self:
+    get:
+      operationId: get_v1_ai_audit_runs_self
+      tags: [ai]
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/ai/audit-runs/{runID}:
     patch:
       operationId: patch_v1_ai_audit_runs_runID

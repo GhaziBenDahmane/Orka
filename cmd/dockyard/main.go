@@ -87,6 +87,8 @@ func main() {
 		err = validateAgentEndpoints(os.Args[2:])
 	case "validate-ai-auditor-config":
 		err = validateAIAuditorConfig(os.Args[2:])
+	case "verify-ai-auditor-runs":
+		err = verifyAIAuditorRuns(os.Args[2:], os.Stdin)
 	case "volume-artifact":
 		err = runVolumeArtifact(os.Args[2:])
 	default:
@@ -99,7 +101,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|validate-ai-auditor-config|verify-ai-auditor-runs|volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)

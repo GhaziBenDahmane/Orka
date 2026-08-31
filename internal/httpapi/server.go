@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /v1/service-accounts/{accountID}", s.requireRole("admin", http.HandlerFunc(s.deleteServiceAccount)))
 	mux.Handle("GET /v1/ai/audit-snapshot", s.requireAuditor(http.HandlerFunc(s.aiAuditSnapshot)))
 	mux.Handle("POST /v1/ai/audit-runs", s.requireAuditor(http.HandlerFunc(s.createAIAuditRun)))
+	mux.Handle("GET /v1/ai/audit-runs/self", s.requireAuditor(http.HandlerFunc(s.listOwnAIAuditRuns)))
 	mux.Handle("POST /v1/ai/audit-runs/{runID}/findings", s.requireAuditor(http.HandlerFunc(s.createAIAuditFinding)))
 	mux.Handle("PATCH /v1/ai/audit-runs/{runID}", s.requireAuditor(http.HandlerFunc(s.finishAIAuditRun)))
 	mux.Handle("GET /v1/ai/audit-runs", s.requireRole("admin", http.HandlerFunc(s.listAIAuditRuns)))

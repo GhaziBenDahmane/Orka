@@ -264,7 +264,15 @@ configuration, unsafe secret files, and a missing, drained, or unavailable
 9Router storage node before it mutates Swarm. It creates only absent secrets,
 requires explicit `DOCKYARD_REUSE_EXISTING_SECRETS=true` for rotation, deploys
 with registry credentials, and verifies all four services use the requested
-digests and remain converged for the configured stability window.
+digests and remain converged for the configured stability window. It then
+streams the auditor token over standard input to the immutable candidate image
+and waits for fresh completed `security-auditor` and `reliability-auditor` runs.
+The token is never placed in a process argument or environment variable. Set
+`DOCKYARD_AI_VERIFY_TIMEOUT` to a value from 1 through 3600 seconds when the
+default 15-minute model-run window is unsuitable. The installer fails closed
+if either named run does not complete; `DOCKYARD_INSTALL_SKIP_WAIT=true` is the
+explicit asynchronous deployment escape hatch and skips both convergence and
+run verification.
 
 Docker secrets are immutable. To rotate either credential, create a new
 versioned secret, update `DOCKYARD_AI_AUDITOR_TOKEN_SECRET` or

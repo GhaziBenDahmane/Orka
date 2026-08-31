@@ -25,7 +25,14 @@ case "$1 $2" in
   "manifest inspect")
     [ "${DOCKYARD_AI_INSTALL_TEST_UNAVAILABLE_IMAGE:-}" != "$3" ] || exit 1 ;;
   "run --rm")
-    case "$*" in *' validate-ai-auditor-config '*) ;; *) exit 1 ;; esac ;;
+    case "$*" in
+      *' validate-ai-auditor-config '*) ;;
+      *' verify-ai-auditor-runs '*)
+        read -r token || true
+        [ "$token" = 'auditor-token-value' ] || exit 1
+        [ "${DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY:-false}" != true ] || exit 1 ;;
+      *) exit 1 ;;
+    esac ;;
   "secret inspect")
     case " ${DOCKYARD_AI_INSTALL_TEST_EXISTING_SECRETS:-} " in *" $3 "*) exit 0 ;; *) exit 1 ;; esac ;;
   "secret create")
@@ -80,15 +87,23 @@ if grep -Eq '^(secret create|stack deploy)' "$DOCKYARD_AI_INSTALL_TEST_LOG"; the
 fi
 
 : >"$DOCKYARD_AI_INSTALL_TEST_LOG"
-"$root/scripts/install-ai-auditors.sh" | grep -q 'installed and remained converged'
+"$root/scripts/install-ai-auditors.sh" | grep -q 'completed both fresh audit runs'
 grep -Fqx "secret create dockyard_ai_auditor_token $DOCKYARD_AI_AUDITOR_TOKEN_FILE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -Fqx "secret create dockyard_ai_api_key $DOCKYARD_AI_API_KEY_FILE" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 grep -q '^stack deploy --prune --with-registry-auth ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
 for service in dockyard-ai_9router dockyard-ai_headroom dockyard-ai_security-auditor dockyard-ai_reliability-auditor; do
   grep -q "service inspect .* $service$" "$DOCKYARD_AI_INSTALL_TEST_LOG"
 done
+grep -q ' verify-ai-auditor-runs ' "$DOCKYARD_AI_INSTALL_TEST_LOG"
 if grep -Fq "$auditor_token" "$DOCKYARD_AI_INSTALL_TEST_LOG" || grep -Fq "$model_key" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
   echo 'AI credential leaked to Docker command log' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_AI_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_SKIP_WAIT=true "$root/scripts/install-ai-auditors.sh" | grep -q 'convergence wait was skipped'
+if grep -q ' verify-ai-auditor-runs ' "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
+  echo 'AI installer verified runs despite the explicit asynchronous escape hatch' >&2
   exit 1
 fi
 
@@ -140,3 +155,15 @@ if "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; 
   exit 1
 fi
 grep -q 'must contain one value without CR or LF characters' "$temporary/err"
+
+printf '%s' "$model_key" >"$temporary/secrets/model-key"
+: >"$DOCKYARD_AI_INSTALL_TEST_LOG"
+if DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY=true DOCKYARD_AI_VERIFY_TIMEOUT=1 "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'AI installer reported success after audit verification failed' >&2
+  exit 1
+fi
+grep -q 'both AI auditors did not complete a fresh run' "$temporary/err"
+if grep -Fq "$auditor_token" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
+  echo 'AI auditor token leaked while verifying runs' >&2
+  exit 1
+fi

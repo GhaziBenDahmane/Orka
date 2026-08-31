@@ -10,6 +10,7 @@ dry_run=${DOCKYARD_INSTALL_DRY_RUN:-false}
 skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
 wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
 stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
+audit_verify_timeout=${DOCKYARD_AI_VERIFY_TIMEOUT:-900}
 
 fail() {
   echo "install-ai-auditors: $*" >&2
@@ -28,6 +29,8 @@ case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be
 [ "$wait_timeout" -gt 0 ] || fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer"
 case "$stability_seconds" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_STABILITY_SECONDS must be a non-negative integer" ;; esac
 [ "$stability_seconds" -le "$wait_timeout" ] || fail "DOCKYARD_INSTALL_STABILITY_SECONDS must not exceed DOCKYARD_INSTALL_WAIT_TIMEOUT"
+case "$audit_verify_timeout" in ""|*[!0-9]*) fail "DOCKYARD_AI_VERIFY_TIMEOUT must be a positive integer" ;; esac
+[ "$audit_verify_timeout" -gt 0 ] && [ "$audit_verify_timeout" -le 3600 ] || fail "DOCKYARD_AI_VERIFY_TIMEOUT must be between 1 and 3600 seconds"
 
 for command in awk cmp date docker find grep sleep tr wc; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
@@ -117,6 +120,7 @@ create_secret() {
 create_secret "$token_secret" "$token_file"
 create_secret "$api_key_secret" "$api_key_file"
 
+deployment_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 docker stack deploy --prune --with-registry-auth -c "$root/deploy/ai-auditors.yml" "$stack" || fail "could not submit AI auditor stack $stack"
 deployment_started=true
 if [ "$skip_wait" = true ]; then
@@ -163,4 +167,8 @@ EOF
   fi
   sleep 2
 done
-echo "AI auditor stack $stack installed and remained converged for ${stability_seconds}s; verify both named audit runs in the Orka console."
+docker run --rm -i --network host --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" verify-ai-auditor-runs \
+  --control-plane-url "$DOCKYARD_CONTROL_PLANE_URL" --since "$deployment_started_at" \
+  --timeout "${audit_verify_timeout}s" <"$token_file" || fail "both AI auditors did not complete a fresh run within ${audit_verify_timeout}s"
+echo "AI auditor stack $stack installed, remained converged for ${stability_seconds}s, and completed both fresh audit runs."

@@ -2084,6 +2084,15 @@ func queueAIAuditFailureNotifications(ctx context.Context, tx pgx.Tx, organizati
 
 func (s *Store) ListAIAuditRuns(ctx context.Context, organizationID uuid.UUID) ([]AIAuditRun, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,service_account_id,agent_name,agent_version,model,status,scope,summary,started_at,completed_at FROM ai_audit_runs WHERE organization_id=$1 ORDER BY started_at DESC LIMIT 200`, organizationID)
+	return scanAIAuditRuns(rows, err)
+}
+
+func (s *Store) ListOwnAIAuditRuns(ctx context.Context, organizationID, serviceAccountID uuid.UUID) ([]AIAuditRun, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,service_account_id,agent_name,agent_version,model,status,scope,summary,started_at,completed_at FROM ai_audit_runs WHERE organization_id=$1 AND service_account_id=$2 ORDER BY started_at DESC LIMIT 200`, organizationID, serviceAccountID)
+	return scanAIAuditRuns(rows, err)
+}
+
+func scanAIAuditRuns(rows pgx.Rows, err error) ([]AIAuditRun, error) {
 	if err != nil {
 		return nil, err
 	}

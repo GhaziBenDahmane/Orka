@@ -193,6 +193,23 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if status != "completed" || !strings.Contains(summary, "Conformance audit completed") || !strings.Contains(summary, "Deterministic baseline:") {
 		t.Fatalf("audit run status=%q summary=%q", status, summary)
 	}
+	request, err = http.NewRequestWithContext(ctx, http.MethodGet, platform.URL+"/v1/ai/audit-runs/self", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+auditorToken)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ownRuns struct {
+		Items []store.AIAuditRun `json:"items"`
+	}
+	err = json.NewDecoder(response.Body).Decode(&ownRuns)
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || len(ownRuns.Items) != 1 || ownRuns.Items[0].ID != runID || ownRuns.Items[0].Status != "completed" {
+		t.Fatalf("auditor own-run status=%d runs=%#v err=%v", response.StatusCode, ownRuns.Items, err)
+	}
 	rows, err := db.Pool.Query(ctx, `SELECT title FROM ai_audit_findings WHERE run_id=$1`, runID)
 	if err != nil {
 		t.Fatal(err)
@@ -323,6 +340,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"durableRunCompleted":            true,
 		"lifecycleAudited":               true,
 		"auditorLeastPrivilege":          true,
+		"auditorOwnRunVerification":      true,
 		"findingTriageAudited":           true,
 		"findingTriageAtomic":            true,
 		"criticalFindingNotified":        true,

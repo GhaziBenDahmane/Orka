@@ -210,6 +210,14 @@ func TestServiceAccountAuthenticationAndRotation(t *testing.T) {
 	if err = json.Unmarshal(data, &auditRun); err != nil || auditRun.ID == uuid.Nil {
 		t.Fatalf("audit run response=%s err=%v", data, err)
 	}
+	response, data = do(http.MethodGet, "/v1/ai/audit-runs/self", auditor.Token, nil)
+	if response.StatusCode != http.StatusOK || !bytes.Contains(data, []byte(auditRun.ID.String())) || !bytes.Contains(data, []byte(`"agentName":"test-auditor"`)) {
+		t.Fatalf("auditor own runs status=%d body=%s", response.StatusCode, data)
+	}
+	response, _ = do(http.MethodGet, "/v1/ai/audit-runs/self", newToken, nil)
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-auditor own runs status=%d, want 403", response.StatusCode)
+	}
 	response, _ = do(http.MethodPost, "/v1/ai/audit-runs/"+auditRun.ID.String()+"/findings", auditor.Token, []byte(`{"severity":"high","category":"security","title":"Invalid evidence","description":"must be an object","evidence":[]}`))
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("non-object audit evidence status=%d, want 400", response.StatusCode)

@@ -174,6 +174,16 @@ func (s *Server) listAIAuditRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
+
+func (s *Server) listOwnAIAuditRuns(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	items, err := s.Store.ListOwnAIAuditRuns(r.Context(), p.OrganizationID, *p.ServiceAccountID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
 func (s *Server) listAIAuditFindings(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("runID"))
 	if err != nil {
