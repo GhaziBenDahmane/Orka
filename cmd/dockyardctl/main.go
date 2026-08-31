@@ -541,6 +541,18 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodGet, "/v1/databases/" + args[1], nil, nil
+	case "link-database":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPost, "/v1/services/" + args[1] + "/databases", input, err
+	case "rotate-linked-database-credentials":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/databases/" + args[1] + "/credentials", input, err
 	case "backup-policy":
 		if err := require(2); err != nil {
 			return "", "", nil, err
