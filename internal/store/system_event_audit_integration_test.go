@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -216,7 +217,7 @@ func TestTemplateRepositoryPublicationCommitsWithSystemAudit(t *testing.T) {
 	if err != nil || claimed.SyncAttemptID == nil {
 		t.Fatalf("claimed repository=%#v err=%v", claimed, err)
 	}
-	oldTemplate := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/redis", Version: "1", Name: "Old Redis", ComposeYAML: "services: {}", Source: "github", SourcePath: "blueprints/redis", Checksum: "old"}
+	oldTemplate := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/redis", Version: "1", Name: "Old Redis", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/redis", Checksum: "old"}
 	if err = db.ReplaceRepositoryTemplatesForSync(ctx, claimed, []Template{oldTemplate}); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestTemplateRepositoryPublicationCommitsWithSystemAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := map[string]any{"imported": 1, "scheduled": true}
-	newTemplate := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/postgres", Version: "1", Name: "New Postgres", ComposeYAML: "services: {}", Source: "github", SourcePath: "blueprints/postgres", Checksum: "new"}
+	newTemplate := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/postgres", Version: "1", Name: "New Postgres", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/postgres", Checksum: "new"}
 	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, claimed, []Template{newTemplate}, "scheduler", metadata); err == nil {
 		t.Fatal("template catalog published without audit evidence")
 	}

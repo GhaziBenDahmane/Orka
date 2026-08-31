@@ -70,8 +70,11 @@ production catalog, provide its PEM or base64 Ed25519 public key and enable
 `catalog.manifest.sig` before importing any entry and records the signer
 fingerprint in every imported template's provenance. A failed or tampered sync
 leaves the previously imported versions intact. Valid snapshots are reconciled
-in one database transaction, including removal of catalog versions no longer
-published by the repository; existing services retain their copied provenance.
+in one database transaction with successful sync state and its system audit
+event, including removal of catalog versions no longer published by the
+repository. If publication or audit evidence fails, the prior catalog and the
+running attempt remain unchanged for safe retry. Existing services retain their
+copied provenance.
 Changing the pinned signer or signature requirement atomically fences any
 in-flight sync, withdraws entries verified under the previous trust policy, and
 queues a fresh sync. Changing the private-repository credential also fences the

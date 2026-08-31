@@ -38,17 +38,14 @@ func TestTemplateRepositorySyncTakeoverFencesStaleAttempt(t *testing.T) {
 		t.Fatalf("replacement attempt=%#v stale=%#v err=%v", replacementAttempt, staleAttempt, err)
 	}
 	item := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/current", Version: "1", Name: "Current", ComposeYAML: "services: {}", Config: json.RawMessage(`{}`), Source: "github", SourcePath: "blueprints/current", Checksum: "current"}
-	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); !errors.Is(err, ErrBusy) {
-		t.Fatalf("stale attempt replaced catalog: %v", err)
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, staleAttempt, []Template{item}, "scheduler", map[string]any{"imported": 1}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("stale attempt published catalog: %v", err)
 	}
-	if err = db.ReplaceRepositoryTemplatesForSync(ctx, replacementAttempt, []Template{item}); err != nil {
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, replacementAttempt, []Template{item}, "scheduler", map[string]any{"imported": 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.FinishTemplateRepositorySync(ctx, staleAttempt, "failed", "stale"); !errors.Is(err, ErrBusy) {
 		t.Fatalf("stale attempt finalized replacement state: %v", err)
-	}
-	if err = db.FinishTemplateRepositorySync(ctx, replacementAttempt, "succeeded", ""); err != nil {
-		t.Fatal(err)
 	}
 	loaded, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
 	if err != nil || loaded.LastSyncStatus != "succeeded" || loaded.SyncStartedAt != nil || loaded.SyncAttemptID != nil {
@@ -84,7 +81,7 @@ func TestTemplateRepositorySignerRotationWithdrawsAndFencesCatalog(t *testing.T)
 	if err = db.UpdateTemplateRepositorySettings(ctx, organizationID, repository.ID, "new-key", true, nil, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); !errors.Is(err, ErrBusy) {
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, staleAttempt, []Template{item}, "scheduler", map[string]any{"imported": 1}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("old signer attempt published after rotation: %v", err)
 	}
 	if err = db.FinishTemplateRepositorySync(ctx, staleAttempt, "succeeded", ""); !errors.Is(err, ErrBusy) {
@@ -144,7 +141,7 @@ func TestTemplateRepositoryCredentialRotationFencesButRetainsCatalog(t *testing.
 	if err = db.UpdateTemplateRepositorySettings(ctx, organizationID, repository.ID, "", false, &newCredentialID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.ReplaceRepositoryTemplatesForSync(ctx, staleAttempt, []Template{item}); !errors.Is(err, ErrBusy) {
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, staleAttempt, []Template{item}, "scheduler", map[string]any{"imported": 1}); !errors.Is(err, ErrBusy) {
 		t.Fatalf("old credential attempt published after rotation: %v", err)
 	}
 	items, err := db.ListTemplates(ctx, organizationID)
