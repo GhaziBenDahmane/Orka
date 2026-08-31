@@ -339,6 +339,7 @@ type AIAuditSourceCredentialPosture struct {
 	StatusReferences             int64     `json:"statusReferences"`
 	TemplateRepositoryReferences int64     `json:"templateRepositoryReferences"`
 	CreatedAt                    time.Time `json:"createdAt"`
+	LastRotatedAt                time.Time `json:"lastRotatedAt"`
 }
 
 type AIAuditLogPosture struct {
@@ -1478,7 +1479,8 @@ func (s *Store) loadAIAuditSourceCredentialPosture(ctx context.Context, organiza
 			COALESCE(application.registry_references,0),
 			COALESCE(application.status_references,0),
 			COALESCE(catalog.references,0),
-			credential.created_at
+			credential.created_at,
+			credential.updated_at
 		FROM source_credentials credential
 		LEFT JOIN application_references application ON application.credential_id=credential.id
 		LEFT JOIN catalog_references catalog ON catalog.credential_id=credential.id
@@ -1490,7 +1492,7 @@ func (s *Store) loadAIAuditSourceCredentialPosture(ctx context.Context, organiza
 	defer rows.Close()
 	for rows.Next() {
 		var item AIAuditSourceCredentialPosture
-		if err = rows.Scan(&item.ID, &item.Kind, &item.GitReferences, &item.RegistryReferences, &item.StatusReferences, &item.TemplateRepositoryReferences, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.Kind, &item.GitReferences, &item.RegistryReferences, &item.StatusReferences, &item.TemplateRepositoryReferences, &item.CreatedAt, &item.LastRotatedAt); err != nil {
 			return err
 		}
 		*posture = append(*posture, item)

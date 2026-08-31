@@ -192,7 +192,8 @@ keys make it a privileged service.
   mandatory SSO, invalid or soon-expiring SAML trust, stale cluster heartbeats,
   missing or mutable active-agent images, expiring agent certificates,
   expiring service-account and deployment-hook credentials, stale SCIM credentials,
-  unrevoked expired deployment hooks, abandoned source credentials, agent identities signed
+  unrevoked expired deployment hooks, abandoned source credentials, referenced source
+  credentials not rotated for more than 180 days, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues or
   stale running-job lease heartbeats, unclaimed remote commands, expired remote
   command leases that are not recovering,

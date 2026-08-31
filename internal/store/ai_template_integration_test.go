@@ -40,11 +40,11 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Other AI test',$2)`, otherOrganizationID, "other-ai-"+otherOrganizationID.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret,created_at) VALUES
-		($1,$2,'registry','target-orphan-secret-name','registry.target-secret.example','target-secret-user','target-source-credential-secret',now()-interval '45 days'),
-		($3,$2,'git-ssh','target-app-git-secret-name','target-source-secret.example','target-git-user','target-app-git-secret',now()-interval '1 year'),
-		($4,$2,'registry','target-app-registry-secret-name','target-registry-secret.example','target-registry-user','target-app-registry-secret',now()-interval '1 year'),
-		($5,$6,'git','other-orphan-secret-name','git.other-secret.example','other-secret-user','other-source-credential-secret',now()-interval '1 year')`, orphanCredentialID, organizationID, applicationGitCredentialID, registryCredentialID, otherCredentialID, otherOrganizationID); err != nil {
+	if _, err = pool.Exec(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at) VALUES
+		($1,$2,'registry','target-orphan-secret-name','registry.target-secret.example','target-secret-user','target-source-credential-secret',now()-interval '45 days',now()-interval '45 days'),
+		($3,$2,'git-ssh','target-app-git-secret-name','target-source-secret.example','target-git-user','target-app-git-secret',now()-interval '1 year',now()-interval '200 days'),
+		($4,$2,'registry','target-app-registry-secret-name','target-registry-secret.example','target-registry-user','target-app-registry-secret',now()-interval '1 year',now()-interval '100 days'),
+		($5,$6,'git','other-orphan-secret-name','git.other-secret.example','other-secret-user','other-source-credential-secret',now()-interval '1 year',now()-interval '1 year')`, orphanCredentialID, organizationID, applicationGitCredentialID, registryCredentialID, otherCredentialID, otherOrganizationID); err != nil {
 		t.Fatal(err)
 	}
 	scimTokenCreatedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
@@ -443,7 +443,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	for _, item := range snapshot.SourceCredentials {
 		credentialPosture[item.ID] = item
 	}
-	if len(credentialPosture) != 4 || credentialPosture[credentialID].Kind != "git" || credentialPosture[credentialID].TemplateRepositoryReferences != 1 || credentialPosture[credentialID].StatusReferences != 1 || credentialPosture[applicationGitCredentialID].Kind != "git-ssh" || credentialPosture[applicationGitCredentialID].GitReferences != 1 || credentialPosture[registryCredentialID].Kind != "registry" || credentialPosture[registryCredentialID].RegistryReferences != 1 || credentialPosture[orphanCredentialID].Kind != "registry" || credentialPosture[orphanCredentialID].GitReferences+credentialPosture[orphanCredentialID].RegistryReferences+credentialPosture[orphanCredentialID].StatusReferences+credentialPosture[orphanCredentialID].TemplateRepositoryReferences != 0 {
+	if len(credentialPosture) != 4 || credentialPosture[credentialID].Kind != "git" || credentialPosture[credentialID].TemplateRepositoryReferences != 1 || credentialPosture[credentialID].StatusReferences != 1 || time.Since(credentialPosture[credentialID].LastRotatedAt) > time.Minute || credentialPosture[applicationGitCredentialID].Kind != "git-ssh" || credentialPosture[applicationGitCredentialID].GitReferences != 1 || time.Since(credentialPosture[applicationGitCredentialID].LastRotatedAt) < 199*24*time.Hour || credentialPosture[registryCredentialID].Kind != "registry" || credentialPosture[registryCredentialID].RegistryReferences != 1 || credentialPosture[orphanCredentialID].Kind != "registry" || credentialPosture[orphanCredentialID].GitReferences+credentialPosture[orphanCredentialID].RegistryReferences+credentialPosture[orphanCredentialID].StatusReferences+credentialPosture[orphanCredentialID].TemplateRepositoryReferences != 0 {
 		t.Fatalf("source credential posture=%#v", snapshot.SourceCredentials)
 	}
 	if len(snapshot.ResourcePolicies) != 1 || snapshot.ResourcePolicies[0].ScopeID != organizationID || !snapshot.ResourcePolicies[0].Maintenance || snapshot.ResourcePolicies[0].CurrentProjects != 1 || snapshot.ResourcePolicies[0].CurrentEnvironments != 1 || snapshot.ResourcePolicies[0].CurrentServices != 1 || snapshot.ResourcePolicies[0].CurrentDatabases != 1 {

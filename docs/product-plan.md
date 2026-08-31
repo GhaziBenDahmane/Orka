@@ -162,7 +162,9 @@ durable provider build-status callbacks implemented.
 - Encrypted HTTPS Git tokens, pinned-host SSH deploy keys, and OCI registry
   credentials are implemented. Write-only secret rotation preserves workload,
   status-callback, and template-catalog bindings and is fenced against active
-  deployments or catalog synchronization.
+  deployments or catalog synchronization. The redacted AI posture records only
+  credential class, reference counts, and rotation age; the deterministic
+  auditor flags referenced credentials left unchanged for more than 180 days.
 - Private build-registry authentication is forwarded to local and remote Swarm
   managers with `--with-registry-auth`; remote credentials remain inside the
   encrypted command envelope.
