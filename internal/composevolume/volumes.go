@@ -18,6 +18,12 @@ func Names(source string) ([]string, error) {
 	if err := yaml.Unmarshal([]byte(source), &document); err != nil {
 		return nil, fmt.Errorf("parse compose yaml: %w", err)
 	}
+	return NamesFromDocument(document)
+}
+
+// NamesFromDocument extracts mounted named volumes from an already parsed
+// Compose document.
+func NamesFromDocument(document map[string]any) ([]string, error) {
 	services, ok := document["services"].(map[string]any)
 	if !ok {
 		return nil, errors.New("compose document must define services")
@@ -30,7 +36,7 @@ func Names(source string) ([]string, error) {
 	for _, rawService := range services {
 		service, valid := rawService.(map[string]any)
 		if !valid {
-			continue
+			return nil, errors.New("compose services must be objects")
 		}
 		rawVolumes := service["volumes"]
 		if rawVolumes == nil {
