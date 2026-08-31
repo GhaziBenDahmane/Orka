@@ -315,6 +315,9 @@ asserts `email_verified=true`; omission fails closed. The signed
 `preferred_username` fallback is reserved for providers such as tenant-scoped
 Entra issuers that omit `email`. OIDC and SAML provider allowlists contain only
 normalized DNS domain names, preventing malformed or URL-shaped trust entries.
+Provider names, OIDC client identifiers, SAML attribute selectors, and decoded
+SSO endpoint paths reject invalid UTF-8 and Unicode control or formatting
+characters before they become durable authentication configuration.
 
 Template-generated environment values and managed-file contents are encrypted
 at rest. Stored Compose and immutable deployment snapshots contain only opaque

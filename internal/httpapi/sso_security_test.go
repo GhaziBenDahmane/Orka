@@ -59,6 +59,7 @@ func TestNormalizedOIDCIssuer(t *testing.T) {
 		"//login.example.test", "https:///missing-host", "https://" + strings.Repeat("a", maxOIDCIssuerBytes),
 		"https://bad_label.example.test", "https://-bad.example.test", "https://login.example.test:",
 		"https://login.example.test:0", "https://login.example.test:65536", "https://[not-an-ip]",
+		"https://login.example.test/tenant\u202e", "https://login.example.test/tenant%0aother",
 	} {
 		if _, err = normalizedOIDCIssuer(invalid); err == nil {
 			t.Errorf("accepted unsafe issuer %q", invalid)
@@ -90,7 +91,12 @@ func TestOIDCProviderFieldsAreBounded(t *testing.T) {
 		{"", "client", "secret"},
 		{strings.Repeat("n", maxSSOProviderName+1), "client", "secret"},
 		{"provider\u0085name", "client", "secret"},
+		{"provider\u202ename", "client", "secret"},
 		{"workforce", strings.Repeat("c", maxOIDCClientIDBytes+1), "secret"},
+		{"workforce", " client", "secret"},
+		{"workforce", "client\u0085id", "secret"},
+		{"workforce", "client\u202eid", "secret"},
+		{"workforce", string([]byte{'c', 0xff}), "secret"},
 		{"workforce", "client", strings.Repeat("s", maxOIDCSecretBytes+1)},
 	} {
 		if validOIDCProviderFields(input.name, input.clientID, input.secret) {
@@ -106,10 +112,14 @@ func TestSAMLProviderFieldsAreBounded(t *testing.T) {
 	for _, input := range []struct{ name, metadata, emailAttribute, nameAttribute string }{
 		{strings.Repeat("n", maxSSOProviderName+1), "<metadata/>", "email", "name"},
 		{"provider\u0085name", "<metadata/>", "email", "name"},
+		{"provider\u202ename", "<metadata/>", "email", "name"},
 		{"workforce", strings.Repeat("x", maxSAMLMetadataBytes+1), "email", "name"},
 		{"workforce", "<metadata/>", strings.Repeat("e", maxSAMLAttributeBytes+1), "name"},
 		{"workforce", "<metadata/>", " email", "name"},
 		{"workforce", "<metadata/>", "email", "name\nclaim"},
+		{"workforce", "<metadata/>", "email\u0085claim", "name"},
+		{"workforce", "<metadata/>", "email", "name\u202eclaim"},
+		{"workforce", "<metadata/>", string([]byte{'e', 0xff}), "name"},
 	} {
 		if validSAMLProviderFields(input.name, input.metadata, input.emailAttribute, input.nameAttribute) {
 			t.Errorf("accepted invalid SAML provider fields: %#v", input)

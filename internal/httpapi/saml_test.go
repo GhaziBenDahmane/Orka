@@ -81,6 +81,7 @@ func TestValidateSAMLRedirectEndpoint(t *testing.T) {
 		"https://user@login.example.test/saml/sso", "https://login.example.test/saml/sso#fragment",
 		"https://bad_label.example.test/saml/sso", "https://login.example.test:/saml/sso",
 		"https://login.example.test:0/saml/sso", "https://login.example.test:65536/saml/sso",
+		"https://login.example.test/saml/\u202esso", "https://login.example.test/saml%0asso",
 	} {
 		if err := validateSAMLRedirectEndpoint(endpoint); err == nil {
 			t.Errorf("accepted unsafe endpoint %q", endpoint)

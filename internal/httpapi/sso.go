@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
@@ -380,7 +382,7 @@ func normalizedOIDCIssuer(raw string) (string, error) {
 		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
 	}
 	issuer, err := url.Parse(raw)
-	if err != nil || issuer.Scheme != "https" || !validSSOURLHost(issuer) || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || issuer.Opaque != "" {
+	if err != nil || issuer.Scheme != "https" || !validSSOURLHost(issuer) || !validSSOURLCharacters(raw, issuer) || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || issuer.Opaque != "" {
 		return "", errors.New("OIDC issuer must be an absolute HTTPS URL without credentials, query, or fragment")
 	}
 	issuer.Path = strings.TrimRight(issuer.Path, "/")
@@ -417,7 +419,8 @@ func normalizeOIDCScopes(scopes []string) ([]string, error) {
 }
 
 func validOIDCProviderFields(name, clientID, clientSecret string) bool {
-	return validDisplayLabel(name, maxSSOProviderName) && clientID != "" && len(clientID) <= maxOIDCClientIDBytes && len(clientSecret) <= maxOIDCSecretBytes
+	return validDisplayLabel(name, maxSSOProviderName) && validSSOConfigurationText(name, maxSSOProviderName) &&
+		validSSOConfigurationText(clientID, maxOIDCClientIDBytes) && len(clientSecret) <= maxOIDCSecretBytes
 }
 
 func validateOIDCProviderEndpoints(provider *oidc.Provider) error {
@@ -434,8 +437,9 @@ func validateOIDCProviderEndpoints(provider *oidc.Provider) error {
 		"token_endpoint":         metadata.TokenEndpoint,
 		"jwks_uri":               metadata.JWKSURI,
 	} {
-		endpoint, err := url.Parse(strings.TrimSpace(raw))
-		if err != nil || endpoint.Scheme != "https" || !validSSOURLHost(endpoint) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
+		raw = strings.TrimSpace(raw)
+		endpoint, err := url.Parse(raw)
+		if err != nil || endpoint.Scheme != "https" || !validSSOURLHost(endpoint) || !validSSOURLCharacters(raw, endpoint) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
 			return errors.New(name + " must be an absolute HTTPS URL")
 		}
 	}
@@ -467,6 +471,27 @@ func validSSOURLHost(endpoint *url.URL) bool {
 		}
 	}
 	return true
+}
+
+func validSSOConfigurationText(value string, maxBytes int) bool {
+	return value != "" && len(value) <= maxBytes && value == strings.TrimSpace(value) && utf8.ValidString(value) &&
+		strings.IndexFunc(value, func(character rune) bool {
+			return unicode.IsControl(character) || unicode.Is(unicode.Cf, character)
+		}) < 0
+}
+
+func validSSOURLCharacters(raw string, endpoint *url.URL) bool {
+	if !validSSOText(raw) || !validSSOText(endpoint.Path) {
+		return false
+	}
+	query, err := url.QueryUnescape(endpoint.RawQuery)
+	return err == nil && validSSOText(query)
+}
+
+func validSSOText(value string) bool {
+	return utf8.ValidString(value) && strings.IndexFunc(value, func(character rune) bool {
+		return unicode.IsControl(character) || unicode.Is(unicode.Cf, character)
+	}) < 0
 }
 
 func (s *Server) oidcHTTPClient() *http.Client {

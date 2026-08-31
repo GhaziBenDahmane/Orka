@@ -181,20 +181,12 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func validSAMLProviderFields(name, metadataXML, emailAttribute, nameAttribute string) bool {
-	return validDisplayLabel(name, maxSSOProviderName) && len(metadataXML) > 0 && len(metadataXML) <= maxSAMLMetadataBytes &&
+	return validDisplayLabel(name, maxSSOProviderName) && validSSOConfigurationText(name, maxSSOProviderName) && len(metadataXML) > 0 && len(metadataXML) <= maxSAMLMetadataBytes &&
 		validSAMLAttributeName(emailAttribute) && validSAMLAttributeName(nameAttribute)
 }
 
 func validSAMLAttributeName(value string) bool {
-	if len(value) == 0 || len(value) > maxSAMLAttributeBytes || strings.TrimSpace(value) != value {
-		return false
-	}
-	for _, character := range value {
-		if character < 0x20 || character == 0x7f {
-			return false
-		}
-	}
-	return true
+	return validSSOConfigurationText(value, maxSAMLAttributeBytes)
 }
 
 func (s *Server) deleteSAMLProvider(w http.ResponseWriter, r *http.Request) {
@@ -584,8 +576,9 @@ func (s *Server) samlServiceProvider(ctx context.Context, rawID string) (store.S
 }
 
 func validateSAMLRedirectEndpoint(raw string) error {
-	endpoint, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || endpoint.Scheme != "https" || !validSSOURLHost(endpoint) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
+	raw = strings.TrimSpace(raw)
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.Scheme != "https" || !validSSOURLHost(endpoint) || !validSSOURLCharacters(raw, endpoint) || endpoint.User != nil || endpoint.Fragment != "" || endpoint.Opaque != "" {
 		return errors.New("identity-provider metadata must advertise an absolute HTTPS HTTP-Redirect SSO endpoint")
 	}
 	return nil
