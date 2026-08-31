@@ -123,7 +123,9 @@ controller or agent compromise.
 Production controller, agent, builder, database-tool, and release images are
 required to use immutable digests where the platform owns the image choice.
 Git credentials are host-bound, SSH requires pinned known-host entries, and
-submodules remain same-origin. Remote template catalogs can require a pinned
+write-only rotation preserves stable references while active deployments and
+catalog synchronizations fence credential changes; submodules remain
+same-origin. Remote template catalogs can require a pinned
 Ed25519 signer and are replaced transactionally only after archive and
 signature validation. Private catalog downloads refuse redirects rather than
 risk forwarding a GitHub token to a substituted host. Releases produce

@@ -877,11 +877,13 @@ function CustomTLSCertificatePanel({ flash, setError }: { flash: (s: string) => 
 }
 
 function Settings({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {
+  const emptyCredential = { kind: "git", name: "", server: "", username: "", secret: "", privateKey: "", knownHosts: "" };
   const [credentials, setCredentials] = useState<SourceCredential[]>([]);
+  const [editingCredential, setEditingCredential] = useState("");
   const [destinations, setDestinations] = useState<BackupDestination[]>([]);
   const [oidc, setOIDC] = useState<OIDCProvider[]>([]);
   const [saml, setSAML] = useState<SAMLProvider[]>([]);
-  const [credential, setCredential] = useState({ kind: "git", name: "", server: "", username: "", secret: "", privateKey: "", knownHosts: "" });
+  const [credential, setCredential] = useState(emptyCredential);
   const emptyDestination = { name: "", endpoint: "https://", region: "", bucket: "", prefix: "", useTls: true, accessKey: "", secretKey: "", sessionToken: "" };
   const [destination, setDestination] = useState(emptyDestination);
   const [oidcInput, setOIDCInput] = useState({ name: "", issuer: "https://", clientId: "", clientSecret: "", domains: "", scopes: "openid,email,profile", defaultRole: "developer" });
@@ -905,14 +907,15 @@ function Settings({ flash, setError }: { flash: (s: string) => void; setError: (
 
   return <div className="settings-grid">
     <CustomTLSCertificatePanel flash={flash} setError={setError} />
-    <section className="card settings-card"><p className="eyebrow">Build access</p><h2>Source credentials</h2><form onSubmit={event => { event.preventDefault(); void run(() => api.createSourceCredential(credential), "Credential encrypted and saved"); }}>
-      <label>Kind<select value={credential.kind} onChange={e => setCredential({ ...credential, kind: e.target.value })}><option value="git">Git HTTPS</option><option value="git-ssh">Git SSH deploy key</option><option value="registry">Container registry</option></select></label>
-      <label>Name<input value={credential.name} onChange={e => setCredential({ ...credential, name: e.target.value })} required /></label>
-      <label>Server<input placeholder="github.com" value={credential.server} onChange={e => setCredential({ ...credential, server: e.target.value })} required /></label>
-      <label>Username<input value={credential.username} onChange={e => setCredential({ ...credential, username: e.target.value })} required /></label>
+    <section className="card settings-card"><p className="eyebrow">Build access</p><h2>Source credentials</h2><form onSubmit={event => { event.preventDefault(); void run(async () => { if (editingCredential) await api.rotateSourceCredential(editingCredential, credential); else await api.createSourceCredential(credential); setEditingCredential(""); setCredential(emptyCredential); }, editingCredential ? "Credential rotated without changing bindings" : "Credential encrypted and saved"); }}>
+      <label>Kind<select disabled={Boolean(editingCredential)} value={credential.kind} onChange={e => setCredential({ ...credential, kind: e.target.value })}><option value="git">Git HTTPS</option><option value="git-ssh">Git SSH deploy key</option><option value="registry">Container registry</option></select></label>
+      <label>Name<input disabled={Boolean(editingCredential)} value={credential.name} onChange={e => setCredential({ ...credential, name: e.target.value })} required /></label>
+      <label>Server<input disabled={Boolean(editingCredential)} placeholder="github.com" value={credential.server} onChange={e => setCredential({ ...credential, server: e.target.value })} required /></label>
+      <label>Username<input disabled={Boolean(editingCredential)} value={credential.username} onChange={e => setCredential({ ...credential, username: e.target.value })} required /></label>
       {credential.kind === "git-ssh" ? <><label>Private key PEM<textarea className="compact-code" value={credential.privateKey} onChange={e => setCredential({ ...credential, privateKey: e.target.value })} required /></label><label>Pinned known_hosts entry<textarea className="compact-code" value={credential.knownHosts} onChange={e => setCredential({ ...credential, knownHosts: e.target.value })} required /></label></> : <label>Token or password<input type="password" value={credential.secret} onChange={e => setCredential({ ...credential, secret: e.target.value })} required /></label>}
-      <button className="primary" disabled={busy}>Add credential</button>
-    </form><AdminItems items={credentials.map(x => ({ id: x.id, title: x.name, detail: `${x.kind} · ${x.username}@${x.server}` }))} action="Remove" onAction={id => run(() => api.deleteSourceCredential(id), "Credential removed")} /></section>
+      {editingCredential && <p className="muted">Identity and server stay fixed so existing workload and catalog bindings remain valid.</p>}
+      <button className="primary" disabled={busy}>{editingCredential ? "Rotate credential" : "Add credential"}</button>{editingCredential && <button type="button" onClick={() => { setEditingCredential(""); setCredential(emptyCredential); }}>Cancel rotation</button>}
+    </form><AdminItems items={credentials.map(x => ({ id: x.id, title: x.name, detail: `${x.kind} · ${x.username}@${x.server}` }))} action="Remove" onEdit={id => { const item = credentials.find(value => value.id === id); if (item) { setEditingCredential(id); setCredential({ kind: item.kind, name: item.name, server: item.server, username: item.username, secret: "", privateKey: "", knownHosts: "" }); } }} onAction={id => run(() => api.deleteSourceCredential(id), "Credential removed")} /></section>
 
     <section className="card settings-card"><p className="eyebrow">Off-site storage</p><h2>Backup destinations</h2><form onSubmit={event => { event.preventDefault(); void run(async () => { if (editingDestination) await api.updateBackupDestination(editingDestination, destination); else await api.createBackupDestination(destination); setEditingDestination(""); setDestination(emptyDestination); }, editingDestination ? "Backup destination verified and credentials rotated" : "Backup destination verified and saved"); }}>
       <label>Name<input value={destination.name} onChange={e => setDestination({ ...destination, name: e.target.value })} required /></label>

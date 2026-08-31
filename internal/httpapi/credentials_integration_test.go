@@ -106,6 +106,32 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 	if _, err = box.DecryptResource(encrypted, "source-credential", uuid.NewString(), "source-credential"); err == nil {
 		t.Fatal("source credential ciphertext was accepted for another credential")
 	}
+	originalEncrypted := encrypted
+	rotateBody := []byte(`{"secret":"rotated-never-return-this"}`)
+	req, _ = http.NewRequest(http.MethodPut, server.URL+"/v1/source-credentials/"+item.ID.String(), bytes.NewReader(rotateBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || bytes.Contains(data, []byte("rotated-never-return-this")) || bytes.Contains(data, []byte("encryptedSecret")) {
+		t.Fatalf("credential rotation status=%d leaked secret material: %s", response.StatusCode, data)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_secret FROM source_credentials WHERE id=$1`, item.ID).Scan(&encrypted); err != nil {
+		t.Fatal(err)
+	}
+	plain, err = box.Decrypt(encrypted, cryptox.ResourceContext("source-credential", item.ID.String()))
+	if err != nil || string(plain) != "rotated-never-return-this" || encrypted == originalEncrypted {
+		t.Fatalf("rotated secret was not replaced safely: changed=%v plaintext=%q err=%v", encrypted != originalEncrypted, plain, err)
+	}
+	var rotationAudits int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action='source_credential.rotate' AND resource_id=$3`, orgID, userID, item.ID.String()).Scan(&rotationAudits); err != nil || rotationAudits != 1 {
+		t.Fatalf("credential rotation audit events=%d err=%v", rotationAudits, err)
+	}
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

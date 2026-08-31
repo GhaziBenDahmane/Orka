@@ -57,6 +57,8 @@ func TestActiveDeploymentFencesMutableExecutionInputs(t *testing.T) {
 	assertActive("route basic-auth update", err)
 	assertActive("route basic-auth deletion", db.DeleteRouteBasicAuthUser(ctx, organizationID, serviceID, routeAuthID))
 	assertActive("route deletion", db.DeleteRoute(ctx, organizationID, routeID))
+	_, err = db.RotateSourceCredential(ctx, organizationID, credentialID, "rotated-ciphertext")
+	assertActive("credential rotation", err)
 	assertActive("credential deletion", db.DeleteSourceCredential(ctx, organizationID, credentialID))
 
 	if err = db.CancelDeployment(ctx, organizationID, deployment.ID); err != nil {
@@ -64,6 +66,9 @@ func TestActiveDeploymentFencesMutableExecutionInputs(t *testing.T) {
 	}
 	if err = db.DeleteRoute(ctx, organizationID, routeID); err != nil {
 		t.Fatalf("route deletion after cancellation: %v", err)
+	}
+	if _, err = db.RotateSourceCredential(ctx, organizationID, credentialID, "rotated-ciphertext"); err != nil {
+		t.Fatalf("credential rotation after cancellation: %v", err)
 	}
 	if err = db.DeleteSourceCredential(ctx, organizationID, credentialID); err != nil {
 		t.Fatalf("credential deletion after cancellation: %v", err)

@@ -229,6 +229,7 @@ export const api = {
   cancelAgentUpgrade: (clusterId: string, commandId: string) => request<{ status: string }>(`/v1/clusters/${clusterId}/agent-upgrades/${commandId}`, { method: "DELETE" }),
   sourceCredentials: () => request<Envelope<SourceCredential>>("/v1/source-credentials"),
   createSourceCredential: (body: { kind: string; name: string; server: string; username: string; secret?: string; privateKey?: string; knownHosts?: string }) => request<SourceCredential>("/v1/source-credentials", { method: "POST", body: JSON.stringify(body) }),
+  rotateSourceCredential: (id: string, body: { secret?: string; privateKey?: string; knownHosts?: string }) => request<SourceCredential>(`/v1/source-credentials/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteSourceCredential: (id: string) => request<void>(`/v1/source-credentials/${id}`, { method: "DELETE" }),
   backupDestinations: () => request<Envelope<BackupDestination>>("/v1/backup-destinations"),
   createBackupDestination: (body: { name: string; endpoint: string; region: string; bucket: string; prefix: string; useTls: boolean; accessKey: string; secretKey: string; sessionToken?: string }) => request<BackupDestination>("/v1/backup-destinations", { method: "POST", body: JSON.stringify(body) }),

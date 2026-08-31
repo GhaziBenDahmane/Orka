@@ -127,7 +127,8 @@ enrollment details.
 | POST | `/v1/auth/saml/{providerID}/acs` | Verify an assertion and create a session |
 | GET/POST | `/v1/scim/tokens` | Inventory token metadata or create a one-time-visible, 1–365 day SCIM bearer token |
 | DELETE | `/v1/scim/tokens/{id}` | Revoke a tenant-scoped SCIM bearer token |
-| GET/POST/DELETE | `/v1/source-credentials…` | Manage encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
+| GET/POST | `/v1/source-credentials` | List or create encrypted HTTPS Git, SSH deploy-key, and OCI registry credentials |
+| PUT/DELETE | `/v1/source-credentials/{id}` | Rotate write-only secret material in place or remove a credential |
 | GET/POST | `/v1/custom-tls-certificates` | List secret-free certificate metadata or upload an encrypted certificate chain and private key |
 | PUT/DELETE | `/v1/custom-tls-certificates/{id}` | Rotate with an optimistic revision or delete an unattached custom certificate |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |

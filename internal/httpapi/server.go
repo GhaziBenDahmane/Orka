@@ -143,6 +143,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /v1/policy", s.requireRole("admin", http.HandlerFunc(s.putOrganizationPolicy)))
 	mux.Handle("GET /v1/source-credentials", s.requireRole("developer", http.HandlerFunc(s.listSourceCredentials)))
 	mux.Handle("POST /v1/source-credentials", s.requireRole("admin", http.HandlerFunc(s.createSourceCredential)))
+	mux.Handle("PUT /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.rotateSourceCredential)))
 	mux.Handle("DELETE /v1/source-credentials/{credentialID}", s.requireRole("admin", http.HandlerFunc(s.deleteSourceCredential)))
 	mux.Handle("GET /v1/custom-tls-certificates", s.requireRole("viewer", http.HandlerFunc(s.listCustomTLSCertificates)))
 	mux.Handle("POST /v1/custom-tls-certificates", s.requireRole("admin", http.HandlerFunc(s.createCustomTLSCertificate)))
@@ -2580,16 +2581,24 @@ func (s *Server) redactApplicationBuildConfig(source *store.ApplicationSource) e
 	return nil
 }
 
+type sourceCredentialSecretInput struct {
+	Secret     string `json:"secret"`
+	PrivateKey string `json:"privateKey"`
+	KnownHosts string `json:"knownHosts"`
+}
+
+type sourceCredentialInput struct {
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Server     string `json:"server"`
+	Username   string `json:"username"`
+	Secret     string `json:"secret"`
+	PrivateKey string `json:"privateKey"`
+	KnownHosts string `json:"knownHosts"`
+}
+
 func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Kind       string `json:"kind"`
-		Name       string `json:"name"`
-		Server     string `json:"server"`
-		Username   string `json:"username"`
-		Secret     string `json:"secret"`
-		PrivateKey string `json:"privateKey"`
-		KnownHosts string `json:"knownHosts"`
-	}
+	var in sourceCredentialInput
 	if !decode(w, r, &in) {
 		return
 	}
@@ -2602,31 +2611,9 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	in.Server = normalizedServer
-	secret := in.Secret
-	if in.Kind == "git-ssh" {
-		if len(in.PrivateKey) > 64<<10 || len(in.KnownHosts) > 1<<20 || strings.TrimSpace(in.KnownHosts) == "" {
-			writeError(w, 400, "invalid_credential", "SSH private key and pinned known-hosts entries are required")
-			return
-		}
-		if _, err := ssh.ParsePrivateKey([]byte(in.PrivateKey)); err != nil {
-			writeError(w, 400, "invalid_credential", "SSH private key is invalid or encrypted")
-			return
-		}
-		if !validKnownHosts(in.Server, in.KnownHosts) {
-			writeError(w, 400, "invalid_credential", "known-hosts must contain a valid pinned key for the credential server")
-			return
-		}
-		encoded, _ := json.Marshal(map[string]string{"privateKey": in.PrivateKey, "knownHosts": in.KnownHosts})
-		secret = string(encoded)
-	}
-	invalidSecret := secret == ""
-	if in.Kind == "git-ssh" {
-		invalidSecret = invalidSecret || len(secret) > maxSourceCredentialSSHMaterialBytes
-	} else {
-		invalidSecret = invalidSecret || len(secret) > maxSourceCredentialSecretBytes || strings.ContainsAny(secret, "\x00\r\n")
-	}
-	if invalidSecret {
-		writeError(w, 400, "invalid_credential", "credential secret is required")
+	secret, validationErr := validateSourceCredentialSecret(in.Kind, in.Server, sourceCredentialSecretInput{Secret: in.Secret, PrivateKey: in.PrivateKey, KnownHosts: in.KnownHosts})
+	if validationErr != nil {
+		writeError(w, 400, "invalid_credential", validationErr.Error())
 		return
 	}
 	credentialID := uuid.New()
@@ -2643,6 +2630,68 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Store.Audit(r.Context(), &p, "source_credential.create", "source_credential", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "server": item.Server})
 	writeJSON(w, 201, item)
+}
+
+func validateSourceCredentialSecret(kind, server string, in sourceCredentialSecretInput) (string, error) {
+	secret := in.Secret
+	if kind == "git-ssh" {
+		if len(in.PrivateKey) > 64<<10 || len(in.KnownHosts) > 1<<20 || strings.TrimSpace(in.KnownHosts) == "" {
+			return "", errors.New("SSH private key and pinned known-hosts entries are required")
+		}
+		if _, err := ssh.ParsePrivateKey([]byte(in.PrivateKey)); err != nil {
+			return "", errors.New("SSH private key is invalid or encrypted")
+		}
+		if !validKnownHosts(server, in.KnownHosts) {
+			return "", errors.New("known-hosts must contain a valid pinned key for the credential server")
+		}
+		encoded, _ := json.Marshal(map[string]string{"privateKey": in.PrivateKey, "knownHosts": in.KnownHosts})
+		secret = string(encoded)
+	}
+	invalidSecret := secret == ""
+	if kind == "git-ssh" {
+		invalidSecret = invalidSecret || len(secret) > maxSourceCredentialSSHMaterialBytes
+	} else {
+		invalidSecret = invalidSecret || len(secret) > maxSourceCredentialSecretBytes || strings.ContainsAny(secret, "\x00\r\n")
+	}
+	if invalidSecret {
+		return "", errors.New("credential secret is required")
+	}
+	return secret, nil
+}
+
+func (s *Server) rotateSourceCredential(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("credentialID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid credential id")
+		return
+	}
+	var in sourceCredentialSecretInput
+	if !decode(w, r, &in) {
+		return
+	}
+	p := principal(r)
+	current, err := s.Store.GetSourceCredential(r.Context(), p.OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	secret, validationErr := validateSourceCredentialSecret(current.Kind, current.Server, in)
+	if validationErr != nil {
+		writeError(w, 400, "invalid_credential", validationErr.Error())
+		return
+	}
+	encrypted, err := s.Box.Encrypt([]byte(secret), cryptox.ResourceContext("source-credential", id.String()))
+	if err != nil {
+		s.writeInternalError(w, r, 500, "encryption_failed", "source credential could not be encrypted", err)
+		return
+	}
+	item, err := s.Store.RotateSourceCredential(r.Context(), p.OrganizationID, id, encrypted)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	s.Store.Audit(r.Context(), &p, "source_credential.rotate", "source_credential", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "server": item.Server})
+	writeJSON(w, 200, item)
 }
 
 func validKnownHosts(server, contents string) bool {

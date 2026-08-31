@@ -84,8 +84,17 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if _, err = db.ClaimDueTemplateRepository(ctx); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("running repository was claimed twice: %v", err)
 	}
+	if _, err = db.RotateSourceCredential(ctx, organizationID, credentialID, "rotated-ciphertext"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("credential rotation raced active catalog sync: %v", err)
+	}
 	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
 		t.Fatal(err)
+	}
+	if _, err = db.RotateSourceCredential(ctx, organizationID, credentialID, "rotated-ciphertext"); err != nil {
+		t.Fatalf("credential rotation after catalog sync: %v", err)
+	}
+	if _, err = db.RotateSourceCredential(ctx, otherOrganizationID, credentialID, "cross-tenant-ciphertext"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant credential rotation accepted: %v", err)
 	}
 	loaded, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
 	if err != nil || loaded.NextSyncAt == nil || !loaded.NextSyncAt.After(time.Now()) || loaded.LastSyncStatus != "succeeded" || loaded.SyncStartedAt != nil {

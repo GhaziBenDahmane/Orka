@@ -1397,6 +1397,40 @@ func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id u
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RotateSourceCredential(ctx context.Context, organizationID, id uuid.UUID, encryptedSecret string) (SourceCredential, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SourceCredential{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
+		return SourceCredential{}, err
+	}
+	var item SourceCredential
+	err = tx.QueryRow(ctx, `UPDATE source_credentials SET encrypted_secret=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at`, id, organizationID, encryptedSecret).Scan(&item.ID, &item.OrganizationID, &item.Kind, &item.Name, &item.Server, &item.Username, &item.EncryptedSecret, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SourceCredential{}, ErrNotFound
+	}
+	if err != nil {
+		return SourceCredential{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func lockSourceCredentialConsumers(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	rows, err := tx.Query(ctx, `SELECT service.id FROM application_sources source JOIN compose_services service ON service.id=source.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE project.organization_id=$2 AND (source.git_credential_id=$1 OR source.registry_credential_id=$1 OR source.status_credential_id=$1) ORDER BY service.id FOR UPDATE OF service`, id, organizationID)
 	if err != nil {
 		return err
@@ -1438,14 +1472,7 @@ func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id u
 	if err = repositories.Err(); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) GetComposeService(ctx context.Context, organizationID, id uuid.UUID) (ComposeService, []Route, error) {

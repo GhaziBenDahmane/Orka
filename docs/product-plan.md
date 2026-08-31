@@ -160,7 +160,9 @@ durable provider build-status callbacks implemented.
   warnings; legacy perpetual tokens receive a ninety-day migration deadline.
 
 - Encrypted HTTPS Git tokens, pinned-host SSH deploy keys, and OCI registry
-  credentials are implemented.
+  credentials are implemented. Write-only secret rotation preserves workload,
+  status-callback, and template-catalog bindings and is fenced against active
+  deployments or catalog synchronization.
 - Private build-registry authentication is forwarded to local and remote Swarm
   managers with `--with-registry-auth`; remote credentials remain inside the
   encrypted command envelope.

@@ -452,6 +452,21 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		return http.MethodGet, "/v1/services/" + args[1] + "/logs", nil, nil
 	case "database-engines":
 		return http.MethodGet, "/v1/database-engines", nil, require(1)
+	case "source-credentials":
+		return http.MethodGet, "/v1/source-credentials", nil, require(1)
+	case "create-source-credential":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/source-credentials", 2)
+	case "rotate-source-credential":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		input, err := parseJSONArgument(args[2], stdin)
+		return http.MethodPut, "/v1/source-credentials/" + args[1], input, err
+	case "delete-source-credential":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodDelete, "/v1/source-credentials/" + args[1], nil, nil
 	case "custom-tls-certificates":
 		return http.MethodGet, "/v1/custom-tls-certificates", nil, require(1)
 	case "create-custom-tls-certificate":

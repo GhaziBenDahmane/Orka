@@ -165,6 +165,11 @@ Federated catalogs have dedicated `template-repositories`,
 `sync-template-repository ID`, webhook rotation/disable, and deletion commands.
 Creation and settings JSON can be read from standard input with `-`.
 
+Build credentials have dedicated `source-credentials`,
+`create-source-credential JSON`, `rotate-source-credential ID JSON`, and
+`delete-source-credential ID` commands. Use `-` for secret-bearing JSON so
+tokens and SSH key material do not enter shell history.
+
 AI operations have dedicated service-account, audit-run, current-finding, and
 finding-triage CLI commands. `dockyard ai-auditor --once` performs one
 fail-fast end-to-end audit to validate model and platform credentials before

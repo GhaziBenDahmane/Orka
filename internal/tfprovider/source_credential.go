@@ -48,9 +48,9 @@ func (r *sourceCredentialResource) Schema(_ context.Context, _ resource.SchemaRe
 		"name":        schema.StringAttribute{Required: true, PlanModifiers: replace},
 		"server":      schema.StringAttribute{Required: true, PlanModifiers: replace},
 		"username":    schema.StringAttribute{Required: true, PlanModifiers: replace},
-		"secret":      schema.StringAttribute{Optional: true, Sensitive: true, PlanModifiers: replace, Description: "HTTPS token, password, or registry secret."},
-		"private_key": schema.StringAttribute{Optional: true, Sensitive: true, PlanModifiers: replace, Description: "PEM private key for git-ssh credentials."},
-		"known_hosts": schema.StringAttribute{Optional: true, Sensitive: true, PlanModifiers: replace, Description: "Pinned known_hosts entries for git-ssh credentials."},
+		"secret":      schema.StringAttribute{Optional: true, Sensitive: true, Description: "HTTPS token, password, or registry secret. Changes rotate the credential in place."},
+		"private_key": schema.StringAttribute{Optional: true, Sensitive: true, Description: "PEM private key for git-ssh credentials. Changes rotate the credential in place."},
+		"known_hosts": schema.StringAttribute{Optional: true, Sensitive: true, Description: "Pinned known_hosts entries for git-ssh credentials. Changes rotate the credential in place."},
 	}}
 }
 
@@ -98,7 +98,21 @@ func (r *sourceCredentialResource) Read(ctx context.Context, request resource.Re
 	response.State.RemoveResource(ctx)
 }
 
-func (r *sourceCredentialResource) Update(context.Context, resource.UpdateRequest, *resource.UpdateResponse) {
+func (r *sourceCredentialResource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
+	var plan sourceCredentialModel
+	response.Diagnostics.Append(request.Plan.Get(ctx, &plan)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+	item, err := call[sourceCredentialResponse](ctx, r.client, http.MethodPut, "/v1/source-credentials/"+plan.ID.ValueString(), map[string]string{
+		"secret": plan.Secret.ValueString(), "privateKey": plan.PrivateKey.ValueString(), "knownHosts": plan.KnownHosts.ValueString(),
+	})
+	if err != nil {
+		response.Diagnostics.AddError("Unable to rotate source credential", err.Error())
+		return
+	}
+	setSourceCredential(&plan, item)
+	response.Diagnostics.Append(response.State.Set(ctx, &plan)...)
 }
 
 func (r *sourceCredentialResource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {

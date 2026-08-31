@@ -100,7 +100,9 @@ referenced. Endpoint, region, bucket, prefix, and TLS changes are rejected once
 stored backup or audit artifacts depend on that location.
 Source credentials similarly retain secret material only in sensitive state;
 use `secret` for Git HTTPS and registry credentials, or `private_key` plus
-`known_hosts` for host-pinned SSH credentials.
+`known_hosts` for host-pinned SSH credentials. Changing those write-only fields
+rotates the encrypted material in place without replacing workload, status, or
+template-repository bindings; identity fields remain replacement-only.
 Custom TLS certificate chains and keys are also write-only API values retained
 as sensitive Terraform state. Use an encrypted remote state backend. Updating
 either PEM value performs an optimistic, revision-fenced rotation; destruction
