@@ -191,16 +191,15 @@ func (s *Server) enableOIDCProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) discoverOIDC(w http.ResponseWriter, r *http.Request) {
-	email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 || parts[1] == "" {
+	_, domain, validEmail := canonicalEmail(r.URL.Query().Get("email"))
+	if !validEmail {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(domain), 60) {
 		return
 	}
-	providers, err := s.Store.DiscoverOIDC(r.Context(), parts[1])
+	providers, err := s.Store.DiscoverOIDC(r.Context(), domain)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -259,7 +258,7 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	stateValue, code := r.URL.Query().Get("state"), r.URL.Query().Get("code")
-	if stateValue == "" || code == "" {
+	if !validPublicOpaqueValue(stateValue, maxPublicCredentialBytes) || !validPublicOpaqueValue(code, maxAuthorizationCodeBytes) {
 		writeError(w, 400, "invalid_callback", "state and code are required")
 		return
 	}

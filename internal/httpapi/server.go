@@ -74,6 +74,11 @@ const (
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
+const (
+	maxPublicCredentialBytes  = 512
+	maxAuthorizationCodeBytes = 16 << 10
+)
+
 func (s *Server) Handler() http.Handler {
 	if s.Metrics == nil {
 		s.Metrics = observability.NewMetrics()
@@ -3114,7 +3119,7 @@ func (s *Server) revokeDeployToken(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deployWebhook(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
-	if token == "" {
+	if !validPublicOpaqueValue(token, maxPublicCredentialBytes) {
 		writeError(w, 404, "not_found", "deployment token not found")
 		return
 	}
@@ -3402,6 +3407,10 @@ func canonicalEmail(raw string) (string, string, bool) {
 func canonicalDisplayName(raw string) (string, bool) {
 	name := strings.TrimSpace(raw)
 	return name, len(name) <= 120
+}
+
+func validPublicOpaqueValue(value string, maxBytes int) bool {
+	return value != "" && len(value) <= maxBytes && value == strings.TrimSpace(value) && !strings.ContainsAny(value, "\x00\r\n")
 }
 
 func validFederatedIdentifier(value string) bool {

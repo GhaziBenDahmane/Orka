@@ -339,16 +339,15 @@ func (s *Server) cancelSAMLCertificateRotation(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) discoverSAML(w http.ResponseWriter, r *http.Request) {
-	email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 || parts[1] == "" {
+	_, domain, validEmail := canonicalEmail(r.URL.Query().Get("email"))
+	if !validEmail {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(domain), 60) {
 		return
 	}
-	providers, err := s.Store.DiscoverSAML(r.Context(), parts[1])
+	providers, err := s.Store.DiscoverSAML(r.Context(), domain)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -439,9 +438,6 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid provider id")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-callback-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-callback-provider", cryptox.Digest(providerID.String()), 60) {
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
 	if err = r.ParseForm(); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -455,6 +451,13 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 	relayState := r.Form.Get("RelayState")
 	if r.Form.Get("SAMLResponse") == "" {
 		writeError(w, 400, "invalid_callback", "SAMLResponse is required")
+		return
+	}
+	if relayState != "" && !validPublicOpaqueValue(relayState, maxPublicCredentialBytes) {
+		writeError(w, 400, "invalid_state", "RelayState is invalid")
+		return
+	}
+	if !s.allowAuthenticationAttempt(w, r, "sso-callback-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-callback-provider", cryptox.Digest(providerID.String()), 60) {
 		return
 	}
 	provider, sp, err := s.samlServiceProvider(r.Context(), providerID.String())

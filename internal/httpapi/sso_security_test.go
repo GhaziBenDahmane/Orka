@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -126,6 +127,89 @@ func TestCanonicalEmailIsSharedAcrossIdentityProviders(t *testing.T) {
 			t.Errorf("accepted non-canonical email %q as %q domain %q", invalid, email, domain)
 		}
 	}
+}
+
+func TestSSODiscoveryRejectsMalformedEmailBeforeStoreAccess(t *testing.T) {
+	server := &Server{}
+	for _, handler := range []struct {
+		name string
+		path string
+		fn   http.HandlerFunc
+	}{
+		{name: "oidc", path: "/v1/auth/sso/discover", fn: server.discoverOIDC},
+		{name: "saml", path: "/v1/auth/saml/discover", fn: server.discoverSAML},
+	} {
+		for _, email := range []string{"Display Name <user@example.test>", "user@example.test@attacker.test", strings.Repeat("a", 321)} {
+			t.Run(handler.name+"/length-"+fmt.Sprint(len(email)), func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				request := httptest.NewRequest(http.MethodGet, handler.path+"?"+url.Values{"email": {email}}.Encode(), nil)
+				handler.fn(recorder, request)
+				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_email"`) {
+					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestOversizedPublicCredentialsFailBeforeStoreAccess(t *testing.T) {
+	server := &Server{}
+	oversized := strings.Repeat("x", maxPublicCredentialBytes+1)
+
+	t.Run("deploy token", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/hooks/deploy/oversized", nil)
+		request.SetPathValue("token", oversized)
+		server.deployWebhook(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("agent enrollment token", func(t *testing.T) {
+		server := &Server{AgentCACertificate: []byte("configured"), AgentCAKey: []byte("configured")}
+		body, err := json.Marshal(map[string]string{"token": oversized, "csr": "unused"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/agent/enroll", strings.NewReader(string(body)))
+		request.Header.Set("Content-Type", "application/json")
+		server.enrollClusterAgent(recorder, request)
+		if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), `"code":"invalid_enrollment_token"`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("oidc state", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		query := url.Values{"state": {oversized}, "code": {"code"}}
+		server.callbackOIDC(recorder, httptest.NewRequest(http.MethodGet, "/v1/auth/sso/callback?"+query.Encode(), nil))
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_callback"`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("oidc authorization code", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		query := url.Values{"state": {"state"}, "code": {strings.Repeat("c", maxAuthorizationCodeBytes+1)}}
+		server.callbackOIDC(recorder, httptest.NewRequest(http.MethodGet, "/v1/auth/sso/callback?"+query.Encode(), nil))
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_callback"`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("saml relay state", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		body := url.Values{"SAMLResponse": {"unused"}, "RelayState": {oversized}}.Encode()
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/saml/provider/acs", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.SetPathValue("providerID", "f47ac10b-58cc-4372-a567-0e02b2c3d479")
+		server.callbackSAML(recorder, request)
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_state"`) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
 }
 
 func TestCanonicalDisplayNameBoundsProvisionedProfiles(t *testing.T) {

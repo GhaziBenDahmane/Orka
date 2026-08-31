@@ -461,6 +461,10 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimSpace(input.Token)
+	if !validPublicOpaqueValue(token, maxPublicCredentialBytes) {
+		writeError(w, http.StatusUnauthorized, "invalid_enrollment_token", "enrollment token is invalid, expired, or already used")
+		return
+	}
 	if !s.allowAuthenticationAttempt(w, r, "agent-enroll-client", authenticationClientKey(r), 120) || !s.allowAuthenticationAttempt(w, r, "agent-enroll-token", cryptox.Digest(token), 20) {
 		return
 	}
