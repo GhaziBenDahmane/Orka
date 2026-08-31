@@ -51,9 +51,6 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 	}))
 	defer idp.Close()
 	issuer = idp.URL
-	previousTransport := http.DefaultTransport
-	http.DefaultTransport = idp.Client().Transport
-	t.Cleanup(func() { http.DefaultTransport = previousTransport })
 
 	organizationID, providerID := uuid.New(), uuid.New()
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'OIDC API',$2)`, organizationID, "oidc-api-"+organizationID.String()); err != nil {
@@ -70,7 +67,7 @@ func TestOIDCStartPersistsNonceAndPKCE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer((&Server{Store: db, Box: box, PublicURL: "https://dockyard.example.test", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
+	server := httptest.NewServer((&Server{Store: db, Box: box, PublicURL: "https://dockyard.example.test", OIDCHTTPClient: idp.Client(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}).Handler())
 	defer server.Close()
 	response, err := http.Get(server.URL + "/v1/auth/sso/" + providerID.String() + "/start")
 	if err != nil {

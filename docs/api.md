@@ -103,7 +103,7 @@ enrollment details.
 | GET/POST | `/v1/invitations` | List invitations or create a one-time, 1–30 day organization invitation |
 | GET/DELETE | `/v1/invitations/{invitationID}` | Inspect or revoke an organization invitation |
 | POST | `/v1/invitations/accept` | Publicly consume an invitation token and create or attach an identity |
-| GET/PUT | `/v1/sso/settings` | Read or enforce organization-wide SSO |
+| GET/PUT | `/v1/sso/settings` | Read organization-wide SSO settings (admin) or change enforcement (owner) |
 | GET/POST | `/v1/service-accounts` | List or create scoped automation identities |
 | POST | `/v1/service-accounts/{id}/rotate` | Revoke old tokens and issue a replacement |
 | DELETE | `/v1/service-accounts/{id}` | Disable an automation identity |
@@ -117,19 +117,19 @@ enrollment details.
 | GET/PUT | `/v1/policy` | Organization maintenance mode and quotas |
 | GET/PUT | `/v1/projects/{id}/policy` | Project maintenance mode and quotas |
 | GET/PUT | `/v1/environments/{id}/policy` | Environment maintenance mode and quotas |
-| GET/POST | `/v1/sso/oidc-providers` | List or configure OIDC providers |
-| PUT | `/v1/sso/oidc-providers/{id}` | Update discovery settings and optionally rotate the encrypted client secret |
-| POST | `/v1/sso/oidc-providers/{id}/enable` | Re-enable a disabled OIDC provider |
-| DELETE | `/v1/sso/oidc-providers/{id}` | Disable an OIDC provider unless mandatory SSO depends on it as the final provider |
+| GET/POST | `/v1/sso/oidc-providers` | List OIDC providers (admin) or configure one (owner) |
+| PUT | `/v1/sso/oidc-providers/{id}` | Owner-only update of discovery settings and optional encrypted client-secret rotation |
+| POST | `/v1/sso/oidc-providers/{id}/enable` | Owner-only re-enable of a disabled OIDC provider |
+| DELETE | `/v1/sso/oidc-providers/{id}` | Owner-only disable unless mandatory SSO depends on it as the final provider |
 | GET | `/v1/auth/sso/discover?email=…` | Discover providers by email domain |
 | GET | `/v1/auth/sso/{providerID}/start` | Start Authorization Code + PKCE |
 | GET | `/v1/auth/sso/callback` | Verify the ID token and create a session |
-| GET/POST | `/v1/sso/saml-providers` | List or configure SAML identity providers |
-| PUT | `/v1/sso/saml-providers/{id}` | Refresh IdP metadata and mappings while preserving the SP key and entity ID |
-| POST | `/v1/sso/saml-providers/{id}/enable` | Re-enable a disabled SAML provider |
-| DELETE | `/v1/sso/saml-providers/{id}` | Disable a SAML provider unless mandatory SSO depends on it as the final provider |
-| POST/DELETE | `/v1/sso/saml-providers/{id}/certificate-rotation` | Publish or cancel a pending SP signing certificate |
-| POST | `/v1/sso/saml-providers/{id}/certificate-rotation/promote` | Promote the published certificate after the IdP imports it |
+| GET/POST | `/v1/sso/saml-providers` | List SAML providers (admin) or configure one (owner) |
+| PUT | `/v1/sso/saml-providers/{id}` | Owner-only refresh of IdP metadata and mappings while preserving the SP key and entity ID |
+| POST | `/v1/sso/saml-providers/{id}/enable` | Owner-only re-enable of a disabled SAML provider |
+| DELETE | `/v1/sso/saml-providers/{id}` | Owner-only disable unless mandatory SSO depends on it as the final provider |
+| POST/DELETE | `/v1/sso/saml-providers/{id}/certificate-rotation` | Owner-only publish or cancellation of a pending SP signing certificate |
+| POST | `/v1/sso/saml-providers/{id}/certificate-rotation/promote` | Owner-only promotion after the IdP imports the replacement certificate |
 | GET | `/v1/auth/saml/discover?email=…` | Discover SAML providers by email domain |
 | GET | `/v1/auth/saml/{providerID}/metadata` | Download signed-request SP metadata |
 | GET | `/v1/auth/saml/{providerID}/start` | Start SP-initiated SAML login |
