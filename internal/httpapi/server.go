@@ -2281,12 +2281,11 @@ func (s *Server) updateService(w http.ResponseWriter, r *http.Request) {
 		value := ""
 		encrypted = &value
 	}
-	item, err := s.Store.UpdateComposeServiceConfiguration(r.Context(), p.OrganizationID, id, in.ComposeYAML, encrypted)
+	item, err := s.Store.UpdateComposeServiceConfigurationWithAudit(r.Context(), p, id, in.ComposeYAML, encrypted, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"revision": item.Revision})
 	writeJSON(w, 200, item)
 }
 
@@ -2420,12 +2419,11 @@ func (s *Server) upsertSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_source_credential", err.Error())
 		return
 	}
-	item, err := s.Store.UpsertApplicationSource(r.Context(), p.OrganizationID, store.ApplicationSource{ComposeServiceID: id, SourceType: in.SourceType, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildType: in.BuildType, BuilderImage: in.BuilderImage, OutputDirectory: in.OutputDirectory, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext})
+	item, err := s.Store.UpsertApplicationSourceWithAudit(r.Context(), p, store.ApplicationSource{ComposeServiceID: id, SourceType: in.SourceType, RepositoryURL: in.RepositoryURL, GitRef: in.GitRef, ContextDirectory: in.ContextDirectory, Dockerfile: in.Dockerfile, BuildType: in.BuildType, BuilderImage: in.BuilderImage, OutputDirectory: in.OutputDirectory, BuildTarget: in.BuildTarget, EnableSubmodules: in.EnableSubmodules, HasBuildArguments: len(buildConfig.Arguments) > 0, HasBuildSecrets: len(buildConfig.Secrets) > 0, EncryptedBuildConfig: encryptedBuildConfig, TargetService: in.TargetService, RegistryImage: in.RegistryImage, GitCredentialID: in.GitCredentialID, RegistryCredentialID: in.RegistryCredentialID, StatusProvider: in.StatusProvider, StatusCredentialID: in.StatusCredentialID, StatusContext: in.StatusContext}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "source.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"sourceType": in.SourceType, "repository": in.RepositoryURL, "ref": in.GitRef})
 	writeJSON(w, 200, item)
 }
 
@@ -2534,12 +2532,11 @@ func (s *Server) upsertArtifactSource(w http.ResponseWriter, r *http.Request) {
 	}
 	digest := sha256.Sum256(archive)
 	p := principal(r)
-	item, err := s.Store.UpsertApplicationArtifact(r.Context(), p.OrganizationID, store.ApplicationArtifact{ComposeServiceID: id, EncryptedArchive: encrypted, Filename: filename, SHA256: hex.EncodeToString(digest[:]), CompressedSize: int64(len(archive))})
+	item, err := s.Store.UpsertApplicationArtifactWithAudit(r.Context(), p, store.ApplicationArtifact{ComposeServiceID: id, EncryptedArchive: encrypted, Filename: filename, SHA256: hex.EncodeToString(digest[:]), CompressedSize: int64(len(archive))}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "source.artifact.update", "compose_service", id.String(), r.RemoteAddr, map[string]any{"filename": filename, "sha256": item.SHA256, "compressedSize": item.CompressedSize})
 	writeJSON(w, 200, item)
 }
 

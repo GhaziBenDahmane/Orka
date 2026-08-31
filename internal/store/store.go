@@ -1476,6 +1476,43 @@ func (s *Store) updateComposeService(ctx context.Context, organizationID, id uui
 		return ComposeService{}, err
 	}
 	defer tx.Rollback(ctx)
+	service, err := s.updateComposeServiceTx(ctx, tx, organizationID, id, composeYAML, replaceEnvironment, encryptedEnv)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	service.Tags, err = s.ListServiceTags(ctx, organizationID, id)
+	return service, err
+}
+
+func (s *Store) UpdateComposeServiceConfigurationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, composeYAML string, encryptedEnv *string, remoteAddr string) (ComposeService, error) {
+	replaceEnvironment := encryptedEnv != nil
+	environment := ""
+	if encryptedEnv != nil {
+		environment = *encryptedEnv
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	defer tx.Rollback(ctx)
+	service, err := s.updateComposeServiceTx(ctx, tx, principal.OrganizationID, id, composeYAML, replaceEnvironment, environment)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service.update", "compose_service", id.String(), remoteAddr, map[string]any{"revision": service.Revision}); err != nil {
+		return ComposeService{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	service.Tags, err = s.ListServiceTags(ctx, principal.OrganizationID, id)
+	return service, err
+}
+
+func (s *Store) updateComposeServiceTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, composeYAML string, replaceEnvironment bool, encryptedEnv string) (ComposeService, error) {
 	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, id)
 	if err != nil {
 		return ComposeService{}, err
@@ -1505,22 +1542,49 @@ func (s *Store) updateComposeService(ctx context.Context, organizationID, id uui
 			return ComposeService{}, err
 		}
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return ComposeService{}, err
-	}
-	service.Tags, err = s.ListServiceTags(ctx, organizationID, id)
-	return service, err
+	return service, nil
 }
 
 func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid.UUID, source ApplicationSource) (ApplicationSource, error) {
-	if source.SourceType == "" {
-		source.SourceType = "git"
-	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ApplicationSource{}, err
 	}
 	defer tx.Rollback(ctx)
+	source, err = s.upsertApplicationSourceTx(ctx, tx, organizationID, source)
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ApplicationSource{}, err
+	}
+	return source, nil
+}
+
+func (s *Store) UpsertApplicationSourceWithAudit(ctx context.Context, principal Principal, source ApplicationSource, remoteAddr string) (ApplicationSource, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	defer tx.Rollback(ctx)
+	source, err = s.upsertApplicationSourceTx(ctx, tx, principal.OrganizationID, source)
+	if err != nil {
+		return ApplicationSource{}, err
+	}
+	metadata := map[string]any{"sourceType": source.SourceType, "repository": source.RepositoryURL, "ref": source.GitRef}
+	if err = appendPrincipalAudit(ctx, tx, principal, "source.update", "compose_service", source.ComposeServiceID.String(), remoteAddr, metadata); err != nil {
+		return ApplicationSource{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ApplicationSource{}, err
+	}
+	return source, nil
+}
+
+func (s *Store) upsertApplicationSourceTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, source ApplicationSource) (ApplicationSource, error) {
+	if source.SourceType == "" {
+		source.SourceType = "git"
+	}
 	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, source.ComposeServiceID)
 	if err != nil {
 		return ApplicationSource{}, err
@@ -1545,7 +1609,7 @@ func (s *Store) UpsertApplicationSource(ctx context.Context, organizationID uuid
 	if err != nil {
 		return ApplicationSource{}, err
 	}
-	return source, tx.Commit(ctx)
+	return source, nil
 }
 
 func (s *Store) GetApplicationSource(ctx context.Context, organizationID, serviceID uuid.UUID) (ApplicationSource, error) {
@@ -1573,6 +1637,37 @@ func (s *Store) UpsertApplicationArtifact(ctx context.Context, organizationID uu
 		return ApplicationArtifact{}, err
 	}
 	defer tx.Rollback(ctx)
+	artifact, err = s.upsertApplicationArtifactTx(ctx, tx, organizationID, artifact)
+	if err != nil {
+		return ApplicationArtifact{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ApplicationArtifact{}, err
+	}
+	return artifact, nil
+}
+
+func (s *Store) UpsertApplicationArtifactWithAudit(ctx context.Context, principal Principal, artifact ApplicationArtifact, remoteAddr string) (ApplicationArtifact, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ApplicationArtifact{}, err
+	}
+	defer tx.Rollback(ctx)
+	artifact, err = s.upsertApplicationArtifactTx(ctx, tx, principal.OrganizationID, artifact)
+	if err != nil {
+		return ApplicationArtifact{}, err
+	}
+	metadata := map[string]any{"filename": artifact.Filename, "sha256": artifact.SHA256, "compressedSize": artifact.CompressedSize}
+	if err = appendPrincipalAudit(ctx, tx, principal, "source.artifact.update", "compose_service", artifact.ComposeServiceID.String(), remoteAddr, metadata); err != nil {
+		return ApplicationArtifact{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ApplicationArtifact{}, err
+	}
+	return artifact, nil
+}
+
+func (s *Store) upsertApplicationArtifactTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, artifact ApplicationArtifact) (ApplicationArtifact, error) {
 	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, artifact.ComposeServiceID)
 	if err != nil {
 		return ApplicationArtifact{}, err
@@ -1593,7 +1688,7 @@ func (s *Store) UpsertApplicationArtifact(ctx context.Context, organizationID uu
 		return ApplicationArtifact{}, err
 	}
 	artifact.EncryptedArchive = ""
-	return artifact, tx.Commit(ctx)
+	return artifact, nil
 }
 
 func (s *Store) ApplicationArtifactExists(ctx context.Context, organizationID, serviceID uuid.UUID) (bool, error) {
