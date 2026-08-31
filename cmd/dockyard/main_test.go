@@ -47,6 +47,28 @@ func TestValidateEgressPolicyCommand(t *testing.T) {
 	}
 }
 
+func TestValidateEdgeSubnetCommand(t *testing.T) {
+	for _, cidr := range []string{"10.255.250.0/24", "172.20.0.0/16", "192.168.42.0/28"} {
+		if err := validateEdgeSubnet([]string{"--cidr", cidr}); err != nil {
+			t.Errorf("CIDR %q rejected: %v", cidr, err)
+		}
+	}
+	for _, arguments := range [][]string{
+		nil,
+		{"--cidr", "0.0.0.0/0"},
+		{"--cidr", "10.0.0.0/8"},
+		{"--cidr", "10.20.0.1/24"},
+		{"--cidr", "192.0.2.0/24"},
+		{"--cidr", "fd00::/64"},
+		{"--cidr", "192.168.42.0/29"},
+		{"--cidr", "10.20.0.0/24", "unexpected"},
+	} {
+		if err := validateEdgeSubnet(arguments); err == nil {
+			t.Errorf("arguments %q were accepted", arguments)
+		}
+	}
+}
+
 func TestValidateDatabaseURLCommand(t *testing.T) {
 	if err := validateDatabaseURL(nil, strings.NewReader("postgres://dockyard:secret@postgres:5432/dockyard?sslmode=disable\n")); err != nil {
 		t.Fatal(err)

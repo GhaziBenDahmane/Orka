@@ -9,6 +9,7 @@ DOCKYARD_EDGE_PROXY_SERVICE_NAME=${stack}_traefik
 export DOCKYARD_SWARM_SERVICE_NAME DOCKYARD_EDGE_PROXY_SERVICE_NAME
 network=${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}
 edge_control_network=${DOCKYARD_EDGE_CONTROL_NETWORK:-${stack}-edge-control}
+edge_subnet=${DOCKYARD_EDGE_SUBNET:-10.255.250.0/24}
 db_password_secret=${DOCKYARD_DB_PASSWORD_SECRET:-dockyard_db_password}
 database_url_secret=${DOCKYARD_DATABASE_URL_SECRET:-dockyard_database_url}
 master_key_secret=${DOCKYARD_MASTER_KEY_SECRET:-dockyard_master_key}
@@ -98,7 +99,8 @@ TRAEFIK_IMAGE=${TRAEFIK_IMAGE:-}
 export DOCKYARD_HOST ACME_EMAIL DOCKYARD_IMAGE POSTGRES_IMAGE TRAEFIK_IMAGE DOCKYARD_DB_PASSWORD_SECRET DOCKYARD_DATABASE_URL_SECRET DOCKYARD_MASTER_KEY_SECRET DOCKYARD_METRICS_TOKEN_SECRET
 DOCKYARD_TRAEFIK_NETWORK=$network
 DOCKYARD_EDGE_CONTROL_NETWORK=$edge_control_network
-export DOCKYARD_TRAEFIK_NETWORK DOCKYARD_EDGE_CONTROL_NETWORK
+DOCKYARD_EDGE_SUBNET=$edge_subnet
+export DOCKYARD_TRAEFIK_NETWORK DOCKYARD_EDGE_CONTROL_NETWORK DOCKYARD_EDGE_SUBNET
 export DOCKYARD_EGRESS_PRIVATE_CIDRS="$egress_private_cidrs"
 export DOCKYARD_AGENT_CA_CERT_SECRET DOCKYARD_AGENT_CA_KEY_SECRET DOCKYARD_AGENT_SERVER_CERT_SECRET DOCKYARD_AGENT_SERVER_KEY_SECRET DOCKYARD_AGENT_PREVIOUS_CA_CERT_SECRET
 "$root/scripts/ci/check-image-digests.sh" controller
@@ -241,6 +243,7 @@ fi
 if [ -n "$egress_private_cidrs" ]; then
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
 fi
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-edge-subnet --cidr "$edge_subnet" >/dev/null || fail "DOCKYARD_EDGE_SUBNET must be a canonical private IPv4 CIDR between /16 and /28"
 
 existing=""
 while IFS= read -r spec; do

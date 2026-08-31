@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -76,6 +77,8 @@ func main() {
 		err = validateProductionCertification(os.Args[2:])
 	case "validate-egress-policy":
 		err = validateEgressPolicy(os.Args[2:])
+	case "validate-edge-subnet":
+		err = validateEdgeSubnet(os.Args[2:])
 	case "validate-database-url":
 		err = validateDatabaseURL(os.Args[2:], os.Stdin)
 	case "validate-bundled-database-credentials":
@@ -94,7 +97,7 @@ func main() {
 	}
 }
 
-const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|volume-artifact>"
+const dockyardUsage = "usage: dockyard <serve|agent|ai-auditor|import-dokploy-templates|validate-dokploy-templates|sign-template-catalog|migrate-dokploy|migrate-dokploy-data|verify-dokploy-import|rotate-master-key|validate-production-certification|validate-egress-policy|validate-edge-subnet|validate-database-url|validate-bundled-database-credentials|validate-agent-endpoints|volume-artifact>"
 
 func validateEgressPolicy(arguments []string) error {
 	flags := flag.NewFlagSet("validate-egress-policy", flag.ContinueOnError)
@@ -108,6 +111,22 @@ func validateEgressPolicy(arguments []string) error {
 	_, err := netpolicy.ParseAllowedCIDRs(*cidrs)
 	if err != nil {
 		return fmt.Errorf("validate egress policy: %w", err)
+	}
+	return nil
+}
+
+func validateEdgeSubnet(arguments []string) error {
+	flags := flag.NewFlagSet("validate-edge-subnet", flag.ContinueOnError)
+	cidr := flags.String("cidr", "", "private IPv4 CIDR for the edge control network")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*cidr) == "" {
+		return errors.New("usage: dockyard validate-edge-subnet --cidr CIDR")
+	}
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(*cidr))
+	if err != nil || prefix != prefix.Masked() || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() || prefix.Bits() < 16 || prefix.Bits() > 28 {
+		return errors.New("edge subnet must be a canonical private IPv4 CIDR between /16 and /28")
 	}
 	return nil
 }

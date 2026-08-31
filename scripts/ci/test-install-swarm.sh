@@ -27,6 +27,11 @@ case "$1 $2" in
         [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_CREDENTIALS:-false}" != true ] &&
           [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
       *validate-database-url*) [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
+      *validate-edge-subnet*)
+        case "$*" in
+          *' --cidr 10.255.250.0/24'|*' --cidr 10.40.0.0/24') ;;
+          *) exit 1 ;;
+        esac ;;
       *not-a-cidr*) exit 1 ;;
     esac ;;
   "secret inspect")
@@ -90,6 +95,7 @@ for image in "$DOCKYARD_IMAGE" "$POSTGRES_IMAGE" "$TRAEFIK_IMAGE"; do
   grep -Fqx "manifest inspect $image" "$DOCKYARD_INSTALL_TEST_LOG"
 done
 grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-bundled-database-credentials$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard .* validate-edge-subnet --cidr 10.255.250.0/24$' "$DOCKYARD_INSTALL_TEST_LOG"
 if grep -q 'postgres://dockyard:correct%20horse' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'database URL leaked to Docker command log' >&2
   exit 1
@@ -98,6 +104,25 @@ if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TE
   echo 'dry-run mutated Docker state' >&2
   exit 1
 fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_EDGE_SUBNET='10.40.0.0/24' DOCKYARD_INSTALL_DRY_RUN=true \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q 'validate-edge-subnet --cidr 10.40.0.0/24$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+for unsafe_subnet in '0.0.0.0/0' '10.0.0.0/8' '10.20.0.1/24' '192.0.2.0/24' 'fd00::/64' '192.168.42.0/29'; do
+  : >"$DOCKYARD_INSTALL_TEST_LOG"
+  if DOCKYARD_EDGE_SUBNET="$unsafe_subnet" \
+    "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+    echo "installer accepted unsafe edge subnet: $unsafe_subnet" >&2
+    exit 1
+  fi
+  grep -q 'DOCKYARD_EDGE_SUBNET must be a canonical private IPv4 CIDR between /16 and /28' "$temporary/err"
+  if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+    echo "unsafe edge subnet mutated Docker state: $unsafe_subnet" >&2
+    exit 1
+  fi
+done
 
 ln -s "$temporary/secrets/metrics-token" "$temporary/secrets/metrics-token-link"
 : >"$DOCKYARD_INSTALL_TEST_LOG"

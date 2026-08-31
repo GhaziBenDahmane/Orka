@@ -211,11 +211,14 @@ DOCKYARD_HOST=dockyard.example.com ACME_EMAIL=ops@example.com \
 The controller is not attached to the tenant routing network selected by
 `DOCKYARD_TRAEFIK_NETWORK` (default `dockyard-public`). The installer creates
 or safely reuses that attachable encrypted overlay, and the stack passes the
-same name to both Dockyard and Traefik. The stack creates a
-dedicated encrypted `dockyard-edge-control` network between Traefik and the
-controller, using `DOCKYARD_EDGE_SUBNET` (default `10.255.250.0/24`) as both
+same name to both Dockyard and Traefik. The stack creates a dedicated encrypted
+`<DOCKYARD_STACK_NAME>-edge-control` network between Traefik and the controller,
+using `DOCKYARD_EDGE_SUBNET` (default `10.255.250.0/24`) as both
 its IPAM subnet and trusted-proxy CIDR. Choose a non-overlapping subnet before
-deployment when that default conflicts with existing infrastructure. AI
+deployment when that default conflicts with existing infrastructure. The
+installer accepts only a canonical RFC 1918 IPv4 network between `/16` and
+`/28`; this prevents the trusted-proxy boundary from accidentally covering the
+public Internet or an impractically broad internal range. AI
 auditors reach the controller through its public HTTPS URL rather than joining
 the tenant routing network.
 
