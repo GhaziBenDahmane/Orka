@@ -29,7 +29,7 @@ func (s *Server) cancelDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CancelDatabaseBackup(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.CancelDatabaseBackupWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrNotCancellable) {
 			writeError(w, http.StatusConflict, "not_cancellable", err.Error())
 			return
@@ -37,7 +37,6 @@ func (s *Server) cancelDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database_backup.cancel", "database_backup", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancellation_requested"})
 }
 
@@ -62,7 +61,7 @@ func (s *Server) cancelDatabaseRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CancelDatabaseRestore(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.CancelDatabaseRestoreWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrNotCancellable) {
 			writeError(w, http.StatusConflict, "not_cancellable", err.Error())
 			return
@@ -70,6 +69,5 @@ func (s *Server) cancelDatabaseRestore(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database_restore.cancel", "database_restore", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancellation_requested"})
 }

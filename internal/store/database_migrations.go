@@ -101,9 +101,31 @@ func (s *Store) CancelDatabaseMigration(ctx context.Context, organizationID, id 
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelDatabaseMigrationTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelDatabaseMigrationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelDatabaseMigrationTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database_migration.cancel", "database_migration", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelDatabaseMigrationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	var resourceStatus, jobStatus string
 	var jobID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT m.status,j.status,j.id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='migrate.database' AND j.payload->>'migrationId'=m.id::text WHERE m.id=$1 AND p.organization_id=$2 FOR UPDATE OF m,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
+	err := tx.QueryRow(ctx, `SELECT m.status,j.status,j.id FROM database_migrations m JOIN database_instances d ON d.id=m.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='migrate.database' AND j.payload->>'migrationId'=m.id::text WHERE m.id=$1 AND p.organization_id=$2 FOR UPDATE OF m,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -128,5 +150,5 @@ func (s *Store) CancelDatabaseMigration(ctx context.Context, organizationID, id 
 	default:
 		return ErrNotCancellable
 	}
-	return tx.Commit(ctx)
+	return nil
 }

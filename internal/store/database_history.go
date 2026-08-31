@@ -31,9 +31,31 @@ func (s *Store) CancelDatabaseBackup(ctx context.Context, organizationID, id uui
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelDatabaseBackupTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelDatabaseBackupWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelDatabaseBackupTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database_backup.cancel", "database_backup", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	var resourceStatus, jobStatus string
 	var jobID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT b.status,j.status,j.id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='backup.database' AND j.payload->>'backupId'=b.id::text WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF b,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
+	err := tx.QueryRow(ctx, `SELECT b.status,j.status,j.id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='backup.database' AND j.payload->>'backupId'=b.id::text WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF b,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -43,7 +65,7 @@ func (s *Store) CancelDatabaseBackup(ctx context.Context, organizationID, id uui
 	if err = cancelDatabaseJob(ctx, tx, "database_backups", id, jobID, resourceStatus, jobStatus); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) ListDatabaseRestores(ctx context.Context, organizationID, databaseInstanceID uuid.UUID) ([]DatabaseRestore, error) {
@@ -69,9 +91,31 @@ func (s *Store) CancelDatabaseRestore(ctx context.Context, organizationID, id uu
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelDatabaseRestoreTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelDatabaseRestoreWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelDatabaseRestoreTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database_restore.cancel", "database_restore", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelDatabaseRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	var resourceStatus, jobStatus string
 	var jobID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT r.status,j.status,j.id FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='restore.database' AND j.payload->>'restoreId'=r.id::text WHERE r.id=$1 AND p.organization_id=$2 FOR UPDATE OF r,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
+	err := tx.QueryRow(ctx, `SELECT r.status,j.status,j.id FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id JOIN jobs j ON j.kind='restore.database' AND j.payload->>'restoreId'=r.id::text WHERE r.id=$1 AND p.organization_id=$2 FOR UPDATE OF r,j`, id, organizationID).Scan(&resourceStatus, &jobStatus, &jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -81,7 +125,7 @@ func (s *Store) CancelDatabaseRestore(ctx context.Context, organizationID, id uu
 	if err = cancelDatabaseJob(ctx, tx, "database_restores", id, jobID, resourceStatus, jobStatus); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func cancelDatabaseJob(ctx context.Context, tx pgx.Tx, table string, resourceID, jobID uuid.UUID, resourceStatus, jobStatus string) error {

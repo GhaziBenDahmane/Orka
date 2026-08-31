@@ -43,7 +43,7 @@ func (s *Server) cancelDatabaseMigration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CancelDatabaseMigration(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.CancelDatabaseMigrationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrNotCancellable) {
 			writeError(w, http.StatusConflict, "not_cancellable", err.Error())
 			return
@@ -51,6 +51,5 @@ func (s *Server) cancelDatabaseMigration(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database_migration.cancel", "database_migration", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancellation_requested"})
 }

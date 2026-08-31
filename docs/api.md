@@ -685,6 +685,11 @@ authenticated context and is never returned by the API.
 | GET | `/v1/database-migrations/{id}` | Inspect a Dokploy native data transfer |
 | POST | `/v1/database-migrations/{id}/cancel` | Request transfer cancellation |
 
+Queued database backup, restore, and migration cancellation updates the
+operation record, worker job, cancellation timestamp, and operator audit event
+in one transaction. Failed audit evidence leaves both the operation and its job
+cancellable.
+
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model. Database
