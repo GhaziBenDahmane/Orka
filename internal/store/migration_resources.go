@@ -78,3 +78,21 @@ func (s *Store) ListMigrationResourcesPage(ctx context.Context, organizationID u
 	}
 	return items, hasMore, nil
 }
+
+func (s *Store) RecordDokployVerificationWithAudit(ctx context.Context, principal Principal, sourceOrganizationID string, requireOperational bool, verified, acknowledged, blocked int, ready bool, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = appendPrincipalAudit(ctx, tx, principal, "dokploy_migration.verify", "dokploy_migration", sourceOrganizationID, remoteAddr, map[string]any{
+		"requireOperational": requireOperational,
+		"verified":           verified,
+		"acknowledged":       acknowledged,
+		"blocked":            blocked,
+		"ready":              ready,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

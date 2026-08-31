@@ -13,6 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var ErrDokployManifestNotFound = errors.New("no persisted Dokploy parity manifest was found; run a non-dry-run import first")
+var ErrDokployManifestOutdated = errors.New("persisted Dokploy parity manifest predates core-resource tracking; rerun the import")
+
 type DokployVerification struct {
 	Ready                bool                       `json:"ready"`
 	TargetOrganizationID uuid.UUID                  `json:"targetOrganizationId"`
@@ -42,14 +45,14 @@ func VerifyDokployImport(ctx context.Context, destination *store.Store, targetOr
 		return report, err
 	}
 	if len(resources) == 0 {
-		return report, errors.New("no persisted Dokploy parity manifest was found; run a non-dry-run import first")
+		return report, ErrDokployManifestNotFound
 	}
 	coreKinds := map[string]bool{}
 	for _, resource := range resources {
 		coreKinds[resource.SourceKind] = true
 	}
 	if !coreKinds["project"] || !coreKinds["environment"] {
-		return report, errors.New("persisted Dokploy parity manifest predates core-resource tracking; rerun the import")
+		return report, ErrDokployManifestOutdated
 	}
 	acknowledged := make(map[string]bool, len(acknowledgements))
 	for _, value := range acknowledgements {

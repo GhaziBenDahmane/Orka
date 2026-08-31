@@ -147,7 +147,7 @@ func TestOpenAPIDocumentsMigrationResourcePagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(specification)
-	for _, expected := range []string{"#/components/schemas/MigrationResourcePage", "name: sourceOrganizationId", "default: 250", "maximum: 500"} {
+	for _, expected := range []string{"#/components/schemas/MigrationResourcePage", "#/components/schemas/DokployVerification", "/v1/migration-resources/verify:", "name: sourceOrganizationId", "default: 250", "maximum: 500"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("OpenAPI is missing %q", expected)
 		}

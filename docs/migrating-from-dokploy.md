@@ -260,6 +260,13 @@ resources are reflected; manifests created before core-resource tracking are
 rejected. This verifier proves Dockyard-side mapping and recorded operation
 completion, not application-level correctness or DNS behavior.
 
+Organization administrators can run the same verifier from the Governance
+console. The API equivalent is `POST /v1/migration-resources/verify`; it
+defaults to operational verification, accepts only explicit `kind:source-id`
+acknowledgements, returns every check even when `ready` is false, and appends
+the aggregate result to the tenant audit log without storing acknowledgement
+text.
+
 Keep Dokploy running until every reported resource has a documented mapping,
 then perform a maintenance-window dry run, database backup, final import,
 database transfer, DNS cutover, and application-level validation. The

@@ -2661,6 +2661,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/migration-resources/verify:
+    post:
+      operationId: post_v1_migration_resources_verify
+      tags: [migration-resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sourceOrganizationId]
+              properties:
+                sourceOrganizationId: {type: string, minLength: 1, maxLength: 255}
+                requireOperational: {type: boolean, default: true}
+                acknowledgements:
+                  type: array
+                  maxItems: 1000
+                  items: {type: string, maxLength: 1024, pattern: '^[^:]+:.+$'}
+      responses:
+        '2XX':
+          description: Fail-closed verification report. A successful response may still have ready=false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DokployVerification'
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/networks:
     get:
       operationId: get_v1_networks
@@ -5506,6 +5537,28 @@ components:
               metadata: {type: object, additionalProperties: true}
               updatedAt: {type: string, format: date-time}
         nextCursor: {type: string}
+    DokployVerification:
+      type: object
+      required: [ready, targetOrganizationId, sourceOrganizationId, checkedAt, verified, acknowledged, blocked, checks]
+      properties:
+        ready: {type: boolean}
+        targetOrganizationId: {type: string, format: uuid}
+        sourceOrganizationId: {type: string}
+        checkedAt: {type: string, format: date-time}
+        verified: {type: integer, minimum: 0}
+        acknowledged: {type: integer, minimum: 0}
+        blocked: {type: integer, minimum: 0}
+        checks:
+          type: array
+          items:
+            type: object
+            required: [sourceKind, sourceId, status]
+            properties:
+              sourceKind: {type: string}
+              sourceId: {type: string}
+              targetId: {type: string, format: uuid}
+              status: {type: string, enum: [verified, acknowledged, blocked]}
+              reason: {type: string}
     SCIMResource:
       type: object
       additionalProperties: true

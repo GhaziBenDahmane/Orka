@@ -154,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/notification-endpoints", s.requireRole("admin", http.HandlerFunc(s.createNotificationEndpoint)))
 	mux.Handle("DELETE /v1/notification-endpoints/{endpointID}", s.requireRole("admin", http.HandlerFunc(s.deleteNotificationEndpoint)))
 	mux.Handle("GET /v1/migration-resources", s.requireRole("admin", http.HandlerFunc(s.listMigrationResources)))
+	mux.Handle("POST /v1/migration-resources/verify", s.requireRole("admin", http.HandlerFunc(s.verifyDokployMigration)))
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))
 	mux.Handle("GET /v1/clusters", s.requireRole("admin", http.HandlerFunc(s.listClusters)))
 	mux.Handle("GET /v1/agent-upgrades", s.requireRole("admin", http.HandlerFunc(s.listAgentUpgrades)))

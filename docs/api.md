@@ -145,6 +145,7 @@ enrollment details.
 | PUT/DELETE | `/v1/custom-tls-certificates/{id}` | Rotate with an optimistic revision or delete an unattached custom certificate |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
 | GET | `/v1/migration-resources?sourceOrganizationId=…&limit=…&cursor=…` | Page through persisted, secret-safe Dokploy parity records with an opaque stable cursor |
+| POST | `/v1/migration-resources/verify` | Run and audit fail-closed mapping or operational Dokploy cutover verification with per-resource acknowledgements |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
 | PATCH | `/v1/clusters/{id}` | Activate, drain, or disable a cluster |
 | POST | `/v1/clusters/{id}/enrollment-tokens` | Issue a 15-minute one-time agent token |

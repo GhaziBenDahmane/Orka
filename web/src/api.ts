@@ -45,6 +45,8 @@ export type Database = { id: string; environmentId: string; composeServiceId: st
 export type DatabaseEngine = { name: string; defaultVersion: string; source: "built-in" | "external"; artifactDigest?: string; backupCapable: boolean; backupExtension: string };
 export type DatabaseMigration = { id: string; databaseInstanceId: string; sourceKind: string; sourceId: string; sourceEngine: string; sourceVersion: string; sourceHost: string; status: string; sizeBytes?: number; sha256?: string; output?: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type MigrationResource = { sourceOrganizationId: string; sourceKind: string; sourceId: string; targetId?: string; status: "imported" | "skipped"; reason?: string; metadata: Record<string, unknown>; updatedAt: string };
+export type DokployVerificationCheck = { sourceKind: string; sourceId: string; targetId?: string; status: "verified" | "acknowledged" | "blocked"; reason?: string };
+export type DokployVerification = { ready: boolean; targetOrganizationId: string; sourceOrganizationId: string; checkedAt: string; verified: number; acknowledged: number; blocked: number; checks: DokployVerificationCheck[] };
 export type DatabaseBackup = { id: string; databaseInstanceId: string; status: string; format: string; sizeBytes?: number; sha256?: string; encrypted: boolean; destinationId?: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type DatabaseRestore = { id: string; databaseBackupId: string; status: string; kind: string; error?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type BackupPolicy = { id: string; databaseInstanceId: string; intervalSeconds: number; retentionCount: number; enabled: boolean; verifyRestore: boolean; destinationId?: string };
@@ -270,6 +272,7 @@ export const api = {
   updateMemberRole: (userId: string, role: Role) => request<OrganizationMember>(`/v1/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
   deleteMember: (userId: string) => request<void>(`/v1/members/${userId}`, { method: "DELETE" }),
   migrationResources: (sourceOrganizationId = "", cursor = "") => { const query = new URLSearchParams({ limit: "500" }); if (sourceOrganizationId) query.set("sourceOrganizationId", sourceOrganizationId); if (cursor) query.set("cursor", cursor); return request<PaginatedEnvelope<MigrationResource>>(`/v1/migration-resources?${query}`); },
+  verifyDokployMigration: (body: { sourceOrganizationId: string; requireOperational: boolean; acknowledgements: string[] }) => request<DokployVerification>("/v1/migration-resources/verify", { method: "POST", body: JSON.stringify(body) }),
   invitations: () => request<Envelope<OrganizationInvitation>>("/v1/invitations"),
   createInvitation: (email: string, role: Role, expiresInDays: number) => request<{ invitation: OrganizationInvitation; token: string; acceptUrl: string }>("/v1/invitations", { method: "POST", body: JSON.stringify({ email, role, expiresInDays }) }),
   revokeInvitation: (id: string) => request<void>(`/v1/invitations/${id}`, { method: "DELETE" }),
