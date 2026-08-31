@@ -251,17 +251,9 @@ func validateProductionCertification(arguments []string) error {
 	if *verifyEvidence {
 		policy := &netpolicy.Policy{}
 		client := &http.Client{
-			Transport: policy.Transport(),
-			Timeout:   2 * time.Minute,
-			CheckRedirect: func(request *http.Request, previous []*http.Request) error {
-				if len(previous) >= 5 {
-					return errors.New("too many production evidence redirects")
-				}
-				if request.URL.Scheme != "https" || request.URL.User != nil {
-					return errors.New("production evidence redirects must remain credential-free HTTPS URLs")
-				}
-				return nil
-			},
+			Transport:     policy.Transport(),
+			Timeout:       2 * time.Minute,
+			CheckRedirect: releaseevidence.CheckProductionEvidenceRedirect,
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()

@@ -42,8 +42,9 @@ workflow downloads every referenced artifact through the private-network
 egress guard and verifies its bytes against the declared SHA-256. Each download
 is limited to 64 MiB. Evidence URLs must be stable, credential-free HTTPS URLs
 with no query string or fragment. Redirects must remain credential-free HTTPS
-destinations. Every referenced artifact includes its lowercase SHA-256 so later
-reviewers can detect replacement.
+destinations under the same canonical URL rules: no query, fragment, encoded
+path, dot segment, or duplicate path separator. Every referenced artifact
+includes its lowercase SHA-256 so later reviewers can detect replacement.
 
 ```json
 {

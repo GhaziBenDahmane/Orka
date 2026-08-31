@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"regexp"
 	"strings"
 	"time"
@@ -148,9 +149,8 @@ func validateProductionGate(name string, gate ProductionGate, certifiedAt time.T
 		if err := boundedText(fmt.Sprintf("gate %s evidence %d name", name, index), record.Name, 200); err != nil {
 			return err
 		}
-		parsed, err := url.Parse(record.URL)
-		if err != nil || record.URL != strings.TrimSpace(record.URL) || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" || parsed.RawPath != "" || len(record.URL) > 2048 || !netpolicy.ValidURLHost(parsed) {
-			return fmt.Errorf("gate %q evidence %d URL must be a canonical credential-free HTTPS URL with a valid host and port and without query or fragment", name, index)
+		if err := ValidateProductionEvidenceURL(record.URL); err != nil {
+			return fmt.Errorf("gate %q evidence %d URL: %w", name, index, err)
 		}
 		if !hashPattern.MatchString(record.SHA256) {
 			return fmt.Errorf("gate %q evidence %d sha256 must be 64 lowercase hexadecimal characters", name, index)
@@ -159,6 +159,31 @@ func validateProductionGate(name string, gate ProductionGate, certifiedAt time.T
 			return fmt.Errorf("gate %q contains duplicate evidence URL %q", name, record.URL)
 		}
 		seen[record.URL] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateProductionEvidenceURL applies the same strict URL contract to
+// submitted records and every redirect followed while downloading them.
+func ValidateProductionEvidenceURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || raw != strings.TrimSpace(raw) || len(raw) > 2048 || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.Opaque != "" || parsed.RawPath != "" || !netpolicy.ValidURLHost(parsed) || (parsed.Path != "" && (pathpkg.Clean(parsed.Path) != parsed.Path || strings.Contains(parsed.Path, "//"))) {
+		return errors.New("must be a canonical credential-free HTTPS URL with a valid host and port and without query or fragment")
+	}
+	return nil
+}
+
+// CheckProductionEvidenceRedirect rejects destinations that would not have
+// been accepted as an original signed evidence URL.
+func CheckProductionEvidenceRedirect(request *http.Request, previous []*http.Request) error {
+	if len(previous) >= 5 {
+		return errors.New("too many production evidence redirects")
+	}
+	if request == nil || request.URL == nil {
+		return errors.New("production evidence redirect has no destination")
+	}
+	if err := ValidateProductionEvidenceURL(request.URL.String()); err != nil {
+		return fmt.Errorf("production evidence redirect URL %w", err)
 	}
 	return nil
 }
@@ -181,6 +206,9 @@ func verifyProductionEvidence(ctx context.Context, certification ProductionCerti
 			return fmt.Errorf("required production gate %q is missing", gateName)
 		}
 		for index, record := range gate.Evidence {
+			if err := ValidateProductionEvidenceURL(record.URL); err != nil {
+				return fmt.Errorf("fetch gate %q evidence %d URL: %w", gateName, index, err)
+			}
 			request, err := http.NewRequestWithContext(ctx, http.MethodGet, record.URL, nil)
 			if err != nil {
 				return fmt.Errorf("fetch gate %q evidence %d: %w", gateName, index, err)

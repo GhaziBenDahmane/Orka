@@ -94,6 +94,62 @@ func TestVerifyProductionEvidenceRejectsInvalidArtifact(t *testing.T) {
 	}
 }
 
+func TestVerifyProductionEvidenceRejectsUnsafeURLBeforeTransport(t *testing.T) {
+	certification := validCertification(time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC))
+	gate := certification.Gates[requiredProductionGates[0]]
+	gate.Evidence[0].URL = "http://evidence.example.test/report.json"
+	certification.Gates[requiredProductionGates[0]] = gate
+	requests := 0
+	client := &http.Client{Transport: productionEvidenceRoundTripper(func(request *http.Request) (*http.Response, error) {
+		requests++
+		return nil, fmt.Errorf("unexpected request to %s", request.URL)
+	})}
+	if err := verifyProductionEvidence(context.Background(), certification, client, 1024); err == nil || !strings.Contains(err.Error(), "canonical credential-free HTTPS") {
+		t.Fatalf("unsafe URL error=%v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("unsafe evidence URL reached transport %d time(s)", requests)
+	}
+}
+
+func TestCheckProductionEvidenceRedirect(t *testing.T) {
+	valid, err := http.NewRequest(http.MethodGet, "https://evidence.example.test/releases/report.json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckProductionEvidenceRedirect(valid, make([]*http.Request, 4)); err != nil {
+		t.Fatalf("valid redirect: %v", err)
+	}
+	if err = CheckProductionEvidenceRedirect(valid, make([]*http.Request, 5)); err == nil || !strings.Contains(err.Error(), "too many") {
+		t.Fatalf("redirect limit error=%v", err)
+	}
+
+	for _, raw := range []string{
+		"http://evidence.example.test/report.json",
+		"https://token@evidence.example.test/report.json",
+		"https://evidence.example.test/report.json?download=1",
+		"https://evidence.example.test/report.json?",
+		"https://evidence.example.test/report.json#section",
+		"https://evidence.example.test/releases/../report.json",
+		"https://evidence.example.test/releases//report.json",
+		"https://evidence.example.test/releases%2freport.json",
+		"https://evidence.example.test:65536/report.json",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			request, requestErr := http.NewRequest(http.MethodGet, raw, nil)
+			if requestErr != nil {
+				return
+			}
+			if redirectErr := CheckProductionEvidenceRedirect(request, nil); redirectErr == nil {
+				t.Fatal("accepted unsafe production evidence redirect")
+			}
+		})
+	}
+	if err = CheckProductionEvidenceRedirect(nil, nil); err == nil {
+		t.Fatal("accepted redirect without a destination")
+	}
+}
+
 func TestProductionCertificationValidation(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	valid := validCertification(now)
@@ -143,6 +199,16 @@ func TestProductionCertificationValidation(t *testing.T) {
 		{"encoded URL path", func(c *ProductionCertification) {
 			gate := c.Gates[requiredProductionGates[0]]
 			gate.Evidence[0].URL = "https://evidence.example.test/reports%2fhidden.json"
+			c.Gates[requiredProductionGates[0]] = gate
+		}, "canonical"},
+		{"empty query URL", func(c *ProductionCertification) {
+			gate := c.Gates[requiredProductionGates[0]]
+			gate.Evidence[0].URL = "https://evidence.example.test/report.json?"
+			c.Gates[requiredProductionGates[0]] = gate
+		}, "canonical"},
+		{"dot segment URL", func(c *ProductionCertification) {
+			gate := c.Gates[requiredProductionGates[0]]
+			gate.Evidence[0].URL = "https://evidence.example.test/releases/../report.json"
 			c.Gates[requiredProductionGates[0]] = gate
 		}, "canonical"},
 		{"invalid hash", func(c *ProductionCertification) {
