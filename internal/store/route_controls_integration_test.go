@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,6 +17,18 @@ func TestRouteBasicAuthUserNeverSerializesPasswordHash(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "secret-hash") || strings.Contains(string(encoded), "password") {
 		t.Fatalf("serialized basic-auth user leaked password hash: %s", encoded)
+	}
+}
+
+func TestRouteBasicAuthOptionalPasswordValidation(t *testing.T) {
+	if err := validateRouteBasicAuth("operator", "", false); err != nil {
+		t.Fatalf("omitted rotation password: %v", err)
+	}
+	if err := validateRouteBasicAuth("operator", strings.Repeat("x", 73), false); !errors.Is(err, ErrInvalidRouteBasicAuth) {
+		t.Fatalf("oversized rotation password error=%v", err)
+	}
+	if err := validateRouteBasicAuth("operator", string([]byte{0xff}), false); !errors.Is(err, ErrInvalidRouteBasicAuth) {
+		t.Fatalf("invalid UTF-8 rotation password error=%v", err)
 	}
 }
 

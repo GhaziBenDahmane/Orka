@@ -36,12 +36,11 @@ func (s *Server) createRouteBasicAuthUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateRouteBasicAuthUser(r.Context(), p.OrganizationID, serviceID, input.Username, input.Password)
+	item, err := s.Store.CreateRouteBasicAuthUserWithAudit(r.Context(), p, serviceID, input.Username, input.Password, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "route_basic_auth.create", "service", serviceID.String(), r.RemoteAddr, map[string]any{"username": item.Username})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -57,12 +56,11 @@ func (s *Server) updateRouteBasicAuthUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpdateRouteBasicAuthUser(r.Context(), p.OrganizationID, serviceID, userID, input.Username, input.Password)
+	item, err := s.Store.UpdateRouteBasicAuthUserWithAudit(r.Context(), p, serviceID, userID, input.Username, input.Password, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "route_basic_auth.update", "service", serviceID.String(), r.RemoteAddr, map[string]any{"username": item.Username})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -74,10 +72,9 @@ func (s *Server) deleteRouteBasicAuthUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	if err := s.Store.DeleteRouteBasicAuthUser(r.Context(), p.OrganizationID, serviceID, userID); err != nil {
+	if err := s.Store.DeleteRouteBasicAuthUserWithAudit(r.Context(), p, serviceID, userID, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "route_basic_auth.delete", "service", serviceID.String(), r.RemoteAddr, map[string]any{"userId": userID})
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -543,7 +543,9 @@ Route basic-auth passwords are 1–72 UTF-8 bytes, accepted only on create or
 explicit rotation, bcrypt-hashed at cost 12, and never returned. Compiled Traefik labels remove
 the inbound `Authorization` header before proxying. Route and credential
 mutations are fenced while a deployment is active, and take effect only after
-the next deployment.
+the next deployment. Credential creation, rotation/rename, and deletion commit
+atomically with audit evidence; passwords and password hashes are excluded from
+that evidence.
 
 Organization owners and administrators manage scoped grants. A project grant
 is inherited by all of its environments, while a more privileged environment

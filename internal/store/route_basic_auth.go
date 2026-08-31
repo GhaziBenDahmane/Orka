@@ -25,7 +25,7 @@ func validateRouteBasicAuth(username, password string, passwordRequired bool) er
 	if username != strings.TrimSpace(username) || username == "" || len(username) > 128 || !utf8.ValidString(username) || strings.ContainsAny(username, ",:\r\n\x00") {
 		return errors.Join(ErrInvalidRouteBasicAuth, errors.New("username must be 1-128 UTF-8 characters without comma, colon, or control separators"))
 	}
-	if passwordRequired && (password == "" || len(password) > 72 || !utf8.ValidString(password) || strings.ContainsRune(password, 0)) {
+	if (passwordRequired || password != "") && (password == "" || len(password) > 72 || !utf8.ValidString(password) || strings.ContainsRune(password, 0)) {
 		return errors.Join(ErrInvalidRouteBasicAuth, errors.New("password must be 1-72 valid UTF-8 bytes"))
 	}
 	return nil
@@ -67,26 +67,19 @@ func (s *Store) CreateRouteBasicAuthUser(ctx context.Context, organizationID, se
 		return RouteBasicAuthUser{}, err
 	}
 	defer tx.Rollback(ctx)
-	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID)
-	if err != nil {
-		return RouteBasicAuthUser{}, err
-	}
-	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
-		return RouteBasicAuthUser{}, err
-	}
-	if err = ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
-		return RouteBasicAuthUser{}, err
-	}
-	item := RouteBasicAuthUser{ID: uuid.New(), ComposeServiceID: serviceID, Username: username, PasswordHash: string(hash)}
-	item, err = scanRouteBasicAuthUser(tx.QueryRow(ctx, `INSERT INTO route_basic_auth_users(id,compose_service_id,username,password_hash) VALUES($1,$2,$3,$4) RETURNING id,compose_service_id,username,password_hash,created_at,updated_at`, item.ID, serviceID, username, item.PasswordHash))
+	item, err := s.createRouteBasicAuthUserTx(ctx, tx, organizationID, serviceID, username, string(hash))
 	if err != nil {
 		return RouteBasicAuthUser{}, err
 	}
 	return item, tx.Commit(ctx)
 }
 
-func (s *Store) UpdateRouteBasicAuthUser(ctx context.Context, organizationID, serviceID, id uuid.UUID, username, password string) (RouteBasicAuthUser, error) {
-	if err := validateRouteBasicAuth(username, password, false); err != nil {
+func (s *Store) CreateRouteBasicAuthUserWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, username, password, remoteAddr string) (RouteBasicAuthUser, error) {
+	if err := validateRouteBasicAuth(username, password, true); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
 		return RouteBasicAuthUser{}, err
 	}
 	tx, err := s.Pool.Begin(ctx)
@@ -94,6 +87,87 @@ func (s *Store) UpdateRouteBasicAuthUser(ctx context.Context, organizationID, se
 		return RouteBasicAuthUser{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := s.createRouteBasicAuthUserTx(ctx, tx, principal.OrganizationID, serviceID, username, string(hash))
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "route_basic_auth.create", "service", serviceID.String(), remoteAddr, map[string]any{"username": item.Username}); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) createRouteBasicAuthUserTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, username, passwordHash string) (RouteBasicAuthUser, error) {
+	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID)
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	if err := ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	item := RouteBasicAuthUser{ID: uuid.New(), ComposeServiceID: serviceID, Username: username, PasswordHash: passwordHash}
+	item, err = scanRouteBasicAuthUser(tx.QueryRow(ctx, `INSERT INTO route_basic_auth_users(id,compose_service_id,username,password_hash) VALUES($1,$2,$3,$4) RETURNING id,compose_service_id,username,password_hash,created_at,updated_at`, item.ID, serviceID, username, item.PasswordHash))
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpdateRouteBasicAuthUser(ctx context.Context, organizationID, serviceID, id uuid.UUID, username, password string) (RouteBasicAuthUser, error) {
+	if err := validateRouteBasicAuth(username, password, false); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	passwordHash := ""
+	if password != "" {
+		encoded, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+		if err != nil {
+			return RouteBasicAuthUser{}, err
+		}
+		passwordHash = string(encoded)
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := s.updateRouteBasicAuthUserTx(ctx, tx, organizationID, serviceID, id, username, passwordHash)
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) UpdateRouteBasicAuthUserWithAudit(ctx context.Context, principal Principal, serviceID, id uuid.UUID, username, password, remoteAddr string) (RouteBasicAuthUser, error) {
+	if err := validateRouteBasicAuth(username, password, false); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	passwordHash := ""
+	if password != "" {
+		encoded, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+		if err != nil {
+			return RouteBasicAuthUser{}, err
+		}
+		passwordHash = string(encoded)
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := s.updateRouteBasicAuthUserTx(ctx, tx, principal.OrganizationID, serviceID, id, username, passwordHash)
+	if err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "route_basic_auth.update", "service", serviceID.String(), remoteAddr, map[string]any{"username": item.Username}); err != nil {
+		return RouteBasicAuthUser{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) updateRouteBasicAuthUserTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, id uuid.UUID, username, passwordHash string) (RouteBasicAuthUser, error) {
 	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID)
 	if err != nil {
 		return RouteBasicAuthUser{}, err
@@ -112,18 +186,14 @@ func (s *Store) UpdateRouteBasicAuthUser(ctx context.Context, organizationID, se
 	if err != nil {
 		return RouteBasicAuthUser{}, err
 	}
-	if password != "" {
-		encoded, hashErr := bcrypt.GenerateFromPassword([]byte(password), 12)
-		if hashErr != nil {
-			return RouteBasicAuthUser{}, hashErr
-		}
-		hash = string(encoded)
+	if passwordHash != "" {
+		hash = passwordHash
 	}
 	item, err := scanRouteBasicAuthUser(tx.QueryRow(ctx, `UPDATE route_basic_auth_users SET username=$3,password_hash=$4,updated_at=now() WHERE id=$1 AND compose_service_id=$2 RETURNING id,compose_service_id,username,password_hash,created_at,updated_at`, id, serviceID, username, hash))
 	if err != nil {
 		return RouteBasicAuthUser{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) DeleteRouteBasicAuthUser(ctx context.Context, organizationID, serviceID, id uuid.UUID) error {
@@ -132,10 +202,32 @@ func (s *Store) DeleteRouteBasicAuthUser(ctx context.Context, organizationID, se
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, _, err = lockActiveServiceForMutation(ctx, tx, organizationID, serviceID); err != nil {
+	if err = s.deleteRouteBasicAuthUserTx(ctx, tx, organizationID, serviceID, id); err != nil {
 		return err
 	}
-	if err = ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteRouteBasicAuthUserWithAudit(ctx context.Context, principal Principal, serviceID, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.deleteRouteBasicAuthUserTx(ctx, tx, principal.OrganizationID, serviceID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "route_basic_auth.delete", "service", serviceID.String(), remoteAddr, map[string]any{"userId": id}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) deleteRouteBasicAuthUserTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, id uuid.UUID) error {
+	if _, _, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID); err != nil {
+		return err
+	}
+	if err := ensureNoActiveDeploymentTx(ctx, tx, serviceID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM route_basic_auth_users WHERE id=$1 AND compose_service_id=$2`, id, serviceID)
@@ -145,5 +237,5 @@ func (s *Store) DeleteRouteBasicAuthUser(ctx context.Context, organizationID, se
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
