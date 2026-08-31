@@ -22,6 +22,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/s3utils"
 )
 
 type S3Config struct {
@@ -43,7 +44,7 @@ var s3RegionPattern = regexp.MustCompile(`^[A-Za-z0-9._-]*$`)
 const (
 	maxS3EndpointBytes     = 2048
 	maxS3RegionBytes       = 128
-	maxS3BucketBytes       = 255
+	maxS3BucketBytes       = 63
 	maxS3PrefixBytes       = 1024
 	maxS3AccessKeyBytes    = 1024
 	maxS3SecretKeyBytes    = 16 << 10
@@ -62,7 +63,7 @@ func NewS3(config S3Config) (*S3, error) {
 	if config.UseTLS && parsed.Scheme != "https" || !config.UseTLS && parsed.Scheme != "http" {
 		return nil, errors.New("S3 endpoint scheme does not match useTls")
 	}
-	if len(config.Region) > maxS3RegionBytes || !s3RegionPattern.MatchString(config.Region) || len(config.Bucket) == 0 || len(config.Bucket) > maxS3BucketBytes || config.Bucket != strings.TrimSpace(config.Bucket) || len(config.Prefix) > maxS3PrefixBytes || unsafeS3Text(config.Prefix) || strings.Contains(config.Prefix, "..") || strings.Contains(config.Prefix, "\\") || len(config.AccessKey) == 0 || len(config.AccessKey) > maxS3AccessKeyBytes || len(config.SecretKey) == 0 || len(config.SecretKey) > maxS3SecretKeyBytes || len(config.SessionToken) > maxS3SessionTokenBytes || strings.ContainsAny(config.AccessKey+config.SecretKey+config.SessionToken, "\x00\r\n") {
+	if len(config.Region) > maxS3RegionBytes || !s3RegionPattern.MatchString(config.Region) || s3utils.CheckValidBucketName(config.Bucket) != nil || len(config.Bucket) > maxS3BucketBytes || config.Bucket != strings.TrimSpace(config.Bucket) || len(config.Prefix) > maxS3PrefixBytes || unsafeS3Text(config.Prefix) || strings.Contains(config.Prefix, "..") || strings.Contains(config.Prefix, "\\") || len(config.AccessKey) == 0 || len(config.AccessKey) > maxS3AccessKeyBytes || len(config.SecretKey) == 0 || len(config.SecretKey) > maxS3SecretKeyBytes || len(config.SessionToken) > maxS3SessionTokenBytes || strings.ContainsAny(config.AccessKey+config.SecretKey+config.SessionToken, "\x00\r\n") {
 		return nil, errors.New("invalid or oversized S3 destination configuration")
 	}
 	prefix := strings.Trim(strings.TrimSpace(config.Prefix), "/")
