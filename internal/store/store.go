@@ -946,7 +946,7 @@ func (s *Store) createProjectTx(ctx context.Context, tx pgx.Tx, organizationID u
 }
 
 func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]Project, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,description,created_at FROM projects WHERE organization_id=$1 ORDER BY name`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,name,slug,description,created_at FROM projects WHERE organization_id=$1 AND deletion_requested_at IS NULL ORDER BY name`, organizationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1286,7 +1286,7 @@ func (s *Store) createEnvironmentWithPlacementTx(ctx context.Context, tx pgx.Tx,
 }
 
 func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID uuid.UUID) ([]Environment, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.minimum_nano_cpus,e.minimum_memory_bytes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.project_id=$1 AND p.organization_id=$2 ORDER BY e.name`, projectID, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT e.id,e.project_id,e.cluster_id,e.placement_selector,e.minimum_nodes,e.minimum_nano_cpus,e.minimum_memory_bytes,e.name,e.slug,e.created_at FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.project_id=$1 AND p.organization_id=$2 AND p.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL ORDER BY e.name`, projectID, organizationID)
 	if err != nil {
 		return nil, err
 	}

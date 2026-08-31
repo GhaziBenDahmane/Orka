@@ -108,6 +108,13 @@ func TestParentDeletionFencesChildOperationsAndCreation(t *testing.T) {
 	if _, _, err = db.CreateTemplateService(ctx, organizationID, lateService, nil, TemplateInstance{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("template creation in deleting environment error=%v, want ErrNotFound", err)
 	}
+	activeEnvironments, err := db.ListEnvironments(ctx, organizationID, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activeEnvironments) != 0 {
+		t.Fatalf("deleting environment remained in active inventory: %#v", activeEnvironments)
+	}
 
 	secondEnvironment, err := db.CreateEnvironment(ctx, organizationID, projectID, "Staging", "staging")
 	if err != nil {
@@ -159,6 +166,20 @@ func TestParentDeletionFencesChildOperationsAndCreation(t *testing.T) {
 	}
 	if !projectDeleting || !firstEnvironmentDeleting || !secondEnvironmentDeleting || !serviceDeleting {
 		t.Fatalf("deletion flags project=%v firstEnvironment=%v secondEnvironment=%v service=%v", projectDeleting, firstEnvironmentDeleting, secondEnvironmentDeleting, serviceDeleting)
+	}
+	projects, err := db.ListProjects(ctx, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("deleting project remained in active inventory: %#v", projects)
+	}
+	environments, err := db.ListEnvironments(ctx, organizationID, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(environments) != 0 {
+		t.Fatalf("environments under deleting project remained in active inventory: %#v", environments)
 	}
 }
 
