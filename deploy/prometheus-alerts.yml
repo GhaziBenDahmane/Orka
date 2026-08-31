@@ -159,6 +159,15 @@ groups:
           summary: No successful Dockyard database backup in 24 hours
           description: Review backup policies, queue health, and remote storage availability.
 
+      - alert: DockyardBackupArtifactIntegrityInvalid
+        expr: max without (instance) (dockyard_backup_artifact_integrity_issues) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Dockyard backup recovery metadata is invalid
+          description: Dockyard has {{ $value }} successful {{ $labels.kind }} backup record(s) without complete restore metadata; do not rely on them and create a fresh verified recovery point.
+
       - alert: DockyardDatabaseBackupOverdue
         expr: max without (instance) (dockyard_database_backup_overdue) == 1
         for: 15m

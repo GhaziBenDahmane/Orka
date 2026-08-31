@@ -153,6 +153,34 @@ tests:
               summary: A database backup is overdue
               description: Database database-id has no successful encrypted backup within twice its configured interval.
 
+  - name: invalid backup artifact metadata
+    interval: 1m
+    input_series:
+      - series: 'dockyard_backup_artifact_integrity_issues{instance="10.0.0.1:8080",kind="database"}'
+        values: '2x10'
+      - series: 'dockyard_backup_artifact_integrity_issues{instance="10.0.0.2:8080",kind="database"}'
+        values: '2x10'
+      - series: 'dockyard_backup_artifact_integrity_issues{instance="10.0.0.1:8080",kind="volume"}'
+        values: '1x10'
+      - series: 'dockyard_backup_artifact_integrity_issues{instance="10.0.0.2:8080",kind="volume"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DockyardBackupArtifactIntegrityInvalid
+        exp_alerts:
+          - exp_labels:
+              kind: database
+              severity: critical
+            exp_annotations:
+              summary: Dockyard backup recovery metadata is invalid
+              description: Dockyard has 2 successful database backup record(s) without complete restore metadata; do not rely on them and create a fresh verified recovery point.
+          - exp_labels:
+              kind: volume
+              severity: critical
+            exp_annotations:
+              summary: Dockyard backup recovery metadata is invalid
+              description: Dockyard has 1 successful volume backup record(s) without complete restore metadata; do not rely on them and create a fresh verified recovery point.
+
   - name: database recovery policy gaps
     interval: 1m
     input_series:

@@ -152,6 +152,10 @@ links for every item below.
   prevention of cross-tenant finding mutation, and durable notification for a
   new critical finding. The release attaches
   `ai-audit-conformance.json`.
+- `make check-alerts` must prove that malformed successful database and
+  named-volume backup rows trigger the critical
+  `DockyardBackupArtifactIntegrityInvalid` alert. Multiple controller scrape
+  targets must collapse to one alert per backup kind.
 - `make test-notification-conformance` drives encrypted provider records and
   durable jobs through signed webhook and Slack-compatible delivery,
   PagerDuty, Opsgenie, and authenticated implicit-TLS SMTP. It proves retry
