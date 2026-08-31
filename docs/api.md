@@ -859,3 +859,9 @@ metrics expose counts by engine/state, active age by database, latest terminal
 duration, and the age of the latest failure. Together, backup age and drill
 duration are the measured inputs for deployment-specific RPO and RTO
 objectives.
+
+For Compose services, Prometheus reports whether the mounted named-volume
+inventory is parseable and the backup-policy state of every mounted named
+volume. The supplied rules page when a mounted volume has no policy or a
+disabled policy, and warn when an invalid Compose definition prevents the
+coverage calculation.

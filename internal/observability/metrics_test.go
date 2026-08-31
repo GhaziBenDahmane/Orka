@@ -119,7 +119,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	samlProvider := uuid.New()
 	templatePending, templateRunning, templateFailed := uuid.New(), uuid.New(), uuid.New()
 	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
-	projectID, environmentID, serviceID, destinationID, volumePolicyID, missingVolumePolicyID, volumeBackupID, artifactDeletionID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, malformedServiceID, destinationID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	volumePolicyID, missingVolumePolicyID, disabledVolumePolicyID, volumeBackupID, artifactDeletionID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	healthyDatabaseID, overdueDatabaseID, disabledDatabaseID, unprotectedDatabaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	healthyDatabasePolicyID, overdueDatabasePolicyID, disabledDatabasePolicyID, healthyDatabaseBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	databaseDigest := "sha256:" + strings.Repeat("a", 64)
@@ -137,13 +138,15 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,last_sync_status) VALUES($1,$2,'Failed catalog','failed','https://github.com/acme/failed','main','failed')`, []any{templateFailed, organizationA}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Metrics project','metrics-project')`, []any{projectID, organizationA}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Metrics environment','metrics-environment')`, []any{environmentID, projectID}},
-		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Metrics service','metrics-service',$3,'services: {}')`, []any{serviceID, environmentID, "metrics-" + serviceID.String()}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Metrics service','metrics-service',$3,$4)`, []any{serviceID, environmentID, "metrics-" + serviceID.String(), "services:\n  app:\n    image: example/app:1\n    volumes: [uploads:/uploads, cache:/cache, disabled:/disabled, scratch:/scratch]\nvolumes:\n  uploads: {}\n  cache: {}\n  disabled: {}\n  scratch: {}\n"}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Malformed service','malformed-service',$3,'services: []')`, []any{malformedServiceID, environmentID, "malformed-" + malformedServiceID.String()}},
 		{`INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,expires_at) VALUES($1,$2,$3,'metrics-deploy-hook',now()+interval '1 day')`, []any{deployTokenID, serviceID, []byte("metrics-deploy-token-" + deployTokenID.String())}},
 		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at) VALUES($1,$2,'registry','Metrics registry','registry.example.test','builder','encrypted',now()-interval '1 year',now()-interval '181 days')`, []any{sourceCredentialID, organizationA}},
 		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://example.test/metrics.git','app','registry.example.test/metrics/app',$2)`, []any{serviceID, sourceCredentialID}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials,created_at,updated_at) VALUES($1,$2,'Metrics destination','http://s3.example.test','backups',false,'encrypted',now()-interval '1 year',now()-interval '181 days')`, []any{destinationID, organizationA}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'uploads',$3,3600,7,true,true,now()+interval '1 hour')`, []any{volumePolicyID, serviceID, destinationID}},
 		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'cache',$3,3600,7,true,true,now()+interval '1 hour')`, []any{missingVolumePolicyID, serviceID, destinationID}},
+		{`INSERT INTO volume_backup_policies(id,compose_service_id,volume_name,destination_id,interval_seconds,retention_count,quiesce,enabled,next_run_at) VALUES($1,$2,'disabled',$3,3600,7,true,false,now()+interval '1 hour')`, []any{disabledVolumePolicyID, serviceID, destinationID}},
 		{`INSERT INTO volume_backups(id,volume_backup_policy_id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,started_at,finished_at) VALUES($1,$2,$3,'uploads','nodeabc123',$4,true,'succeeded','volume.enc',42,$5,$6,'encrypted',now()-interval '2 hours',now()-interval '1 hour')`, []any{volumeBackupID, volumePolicyID, serviceID, destinationID, strings.Repeat("a", 64), strings.Repeat("b", 64)}},
 		{`INSERT INTO volume_restores(id,volume_backup_id,status,started_at,finished_at) VALUES($1,$2,'succeeded',now()-interval '30 minutes',now()-interval '29 minutes')`, []any{uuid.New(), volumeBackupID}},
 		{`INSERT INTO volume_restores(id,volume_backup_id,target_storage_node_id,offline,status,error,started_at,finished_at) VALUES($1,$2,'nodeabc123',true,'failed','simulated offline failure',now()-interval '20 minutes',now()-interval '19 minutes')`, []any{uuid.New(), volumeBackupID}},
@@ -204,6 +207,11 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 			t.Errorf("missing database protection metric family %s", metric)
 		}
 	}
+	for _, metric := range []string{"dockyard_volume_backup_policy_inventory_valid", "dockyard_volume_backup_policy_status"} {
+		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
+			t.Errorf("missing volume protection metric family %s", metric)
+		}
+	}
 	if !strings.Contains(recorder.Body.String(), "# HELP dockyard_database_utility_provenance_issues") {
 		t.Error("missing database utility provenance metric family")
 	}
@@ -225,6 +233,11 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_database_restore_verification_enabled{database="` + overdueDatabaseID.String() + `"} 1`,
 		`dockyard_database_backup_overdue{database="` + healthyDatabaseID.String() + `"} 0`,
 		`dockyard_database_backup_overdue{database="` + overdueDatabaseID.String() + `"} 1`,
+		`dockyard_volume_backup_policy_inventory_valid{service="` + serviceID.String() + `"} 1`,
+		`dockyard_volume_backup_policy_inventory_valid{service="` + malformedServiceID.String() + `"} 0`,
+		`dockyard_volume_backup_policy_status{service="` + serviceID.String() + `",volume="uploads",state="enabled"} 1`,
+		`dockyard_volume_backup_policy_status{service="` + serviceID.String() + `",volume="disabled",state="disabled"} 1`,
+		`dockyard_volume_backup_policy_status{service="` + serviceID.String() + `",volume="scratch",state="missing"} 1`,
 		`dockyard_resource_finalizers{organization="` + organizationA.String() + `",kind="cluster",state="failed"} 1`,
 		`dockyard_resource_finalizer_oldest_age_seconds{organization="` + organizationA.String() + `",kind="cluster"}`,
 		`dockyard_managed_networks{organization="` + organizationA.String() + `",scope="local",driver="overlay",status="error"} 1`,
@@ -360,6 +373,10 @@ func TestPrometheusAlertsCoverVolumeRecovery(t *testing.T) {
 	}
 	text := string(contents)
 	for _, expected := range []string{
+		"alert: DockyardVolumeBackupPolicyUnavailable",
+		`expr: dockyard_volume_backup_policy_status{state=~"missing|disabled"} == 1`,
+		"alert: DockyardVolumeBackupPolicyInventoryInvalid",
+		"expr: dockyard_volume_backup_policy_inventory_valid == 0",
 		"alert: DockyardVolumeBackupOverdue",
 		"expr: dockyard_volume_backup_overdue == 1",
 		"alert: DockyardVolumeRestoreRehearsalOverdue",

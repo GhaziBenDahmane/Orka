@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/bendahma/dokploy-go/internal/composevolume"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/jackc/pgx/v5"
 )
@@ -321,6 +322,9 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 		}
 		rows.Close()
 	}
+	if err := renderVolumeBackupPolicyMetrics(ctx, w, db); err != nil {
+		return err
+	}
 	if err := renderSAMLCertificateMetrics(ctx, w, db); err != nil {
 		return err
 	}
@@ -335,6 +339,65 @@ func (m *Metrics) renderDatabase(ctx context.Context, w io.Writer, db Queryer) e
 	fmt.Fprintln(w, "# TYPE dockyard_job_stale_leases gauge")
 	fmt.Fprintf(w, "dockyard_job_stale_leases %g\n", stale)
 	return nil
+}
+
+func renderVolumeBackupPolicyMetrics(ctx context.Context, w io.Writer, db Queryer) error {
+	type policyKey struct{ service, volume string }
+	policies := make(map[policyKey]bool)
+	rows, err := db.Query(ctx, `SELECT policy.compose_service_id::text,policy.volume_name,policy.enabled FROM volume_backup_policies policy JOIN compose_services service ON service.id=policy.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var service, volume string
+		var enabled bool
+		if err = rows.Scan(&service, &volume, &enabled); err != nil {
+			rows.Close()
+			return err
+		}
+		policies[policyKey{service: service, volume: volume}] = enabled
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	fmt.Fprintln(w, "# HELP dockyard_volume_backup_policy_inventory_valid Whether mounted named-volume protection can be evaluated from the service Compose definition.")
+	fmt.Fprintln(w, "# TYPE dockyard_volume_backup_policy_inventory_valid gauge")
+	fmt.Fprintln(w, "# HELP dockyard_volume_backup_policy_status Configured backup-policy state for each mounted named volume.")
+	fmt.Fprintln(w, "# TYPE dockyard_volume_backup_policy_status gauge")
+	rows, err = db.Query(ctx, `SELECT service.id::text,service.compose_yaml FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.deletion_requested_at IS NULL AND environment.deletion_requested_at IS NULL AND project.deletion_requested_at IS NULL ORDER BY service.id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var service, composeYAML string
+		if err = rows.Scan(&service, &composeYAML); err != nil {
+			return err
+		}
+		volumes, parseErr := composevolume.Names(composeYAML)
+		valid := 1
+		if parseErr != nil {
+			valid = 0
+		}
+		fmt.Fprintf(w, "dockyard_volume_backup_policy_inventory_valid%s %d\n", labels([]string{"service"}, []string{service}), valid)
+		if parseErr != nil {
+			continue
+		}
+		for _, volume := range volumes {
+			state := "missing"
+			if enabled, exists := policies[policyKey{service: service, volume: volume}]; exists {
+				state = "disabled"
+				if enabled {
+					state = "enabled"
+				}
+			}
+			fmt.Fprintf(w, "dockyard_volume_backup_policy_status%s 1\n", labels([]string{"service", "volume", "state"}, []string{service, volume, state}))
+		}
+	}
+	return rows.Err()
 }
 
 func (m *Metrics) renderDatabaseDriverMetrics(ctx context.Context, w io.Writer, db Queryer) error {

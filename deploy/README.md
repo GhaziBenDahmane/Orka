@@ -357,7 +357,8 @@ including interrupted rollouts.
 The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, missing or disabled
 database backup policies, disabled restore verification, fleet-wide stale backups,
-per-database overdue backups, overdue
+per-database overdue backups, missing or disabled named-volume policies, invalid
+volume-policy inventory, overdue
 restore drills, stalled durable artifact deletion, stalled or failed Dokploy
 database migrations, and maintenance mode left enabled. They also detect
 missing remote-cluster heartbeats, stalled agent upgrades, missed

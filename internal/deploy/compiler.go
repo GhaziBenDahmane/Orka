@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bendahma/dokploy-go/internal/composevolume"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
@@ -376,54 +377,7 @@ func HasNamedVolumes(source string) (bool, error) {
 // mounted by at least one service. Safe-mode Compose forbids external volumes
 // and custom names, so Docker resolves each key to <stack>_<key>.
 func NamedVolumes(source string) ([]string, error) {
-	var doc map[string]any
-	if err := yaml.Unmarshal([]byte(source), &doc); err != nil {
-		return nil, fmt.Errorf("parse compose yaml: %w", err)
-	}
-	services, ok := stringMap(doc["services"])
-	if !ok {
-		return nil, errors.New("compose document must define services")
-	}
-	declared, ok := stringMap(doc["volumes"])
-	if doc["volumes"] != nil && !ok {
-		return nil, errors.New("compose volumes must be an object")
-	}
-	used := map[string]bool{}
-	for _, rawService := range services {
-		service, valid := stringMap(rawService)
-		if !valid {
-			continue
-		}
-		volumes, err := safeServiceVolumes(service["volumes"])
-		if err != nil {
-			return nil, err
-		}
-		for _, rawVolume := range volumes {
-			var source string
-			if spec, valid := stringMap(rawVolume); valid {
-				kind, _ := spec["type"].(string)
-				source, _ = spec["source"].(string)
-				if kind != "volume" {
-					continue
-				}
-			} else if text, valid := rawVolume.(string); valid {
-				parts := strings.SplitN(text, ":", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				source = parts[0]
-			}
-			if _, exists := declared[source]; source != "" && exists {
-				used[source] = true
-			}
-		}
-	}
-	names := make([]string, 0, len(used))
-	for name := range used {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
+	return composevolume.Names(source)
 }
 
 func StackVolumeName(stackName, volumeName string) (string, error) {

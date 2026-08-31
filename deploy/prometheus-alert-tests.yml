@@ -185,3 +185,42 @@ tests:
             exp_annotations:
               summary: Automatic database restore verification is disabled
               description: Database unverified-id has scheduled backups but does not exercise them through isolated restore drills.
+
+  - name: named-volume recovery policy gaps
+    interval: 1m
+    input_series:
+      - series: 'dockyard_volume_backup_policy_status{service="service-id",volume="uploads",state="missing"}'
+        values: '1x20'
+      - series: 'dockyard_volume_backup_policy_status{service="service-id",volume="cache",state="disabled"}'
+        values: '1x20'
+      - series: 'dockyard_volume_backup_policy_inventory_valid{service="malformed-service-id"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: DockyardVolumeBackupPolicyUnavailable
+        exp_alerts:
+          - exp_labels:
+              service: service-id
+              volume: uploads
+              state: missing
+              severity: critical
+            exp_annotations:
+              summary: A mounted named volume has no active backup policy
+              description: Service service-id volume uploads has backup-policy state missing; configure and enable an encrypted retained backup policy.
+          - exp_labels:
+              service: service-id
+              volume: cache
+              state: disabled
+              severity: critical
+            exp_annotations:
+              summary: A mounted named volume has no active backup policy
+              description: Service service-id volume cache has backup-policy state disabled; configure and enable an encrypted retained backup policy.
+      - eval_time: 16m
+        alertname: DockyardVolumeBackupPolicyInventoryInvalid
+        exp_alerts:
+          - exp_labels:
+              service: malformed-service-id
+              severity: warning
+            exp_annotations:
+              summary: Named-volume backup coverage cannot be evaluated
+              description: Service malformed-service-id has an invalid Compose volume definition; fix it before relying on backup-policy coverage alerts.
