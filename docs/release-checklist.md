@@ -291,7 +291,9 @@ links for every item below.
   `notification-conformance.json`, `migration-conformance.json`,
   `upgrade-conformance.json`, and
   `release-soak-evidence.json`; the same files
-  remain available as a workflow artifact. Upgrade evidence records the
+  remain available as a workflow artifact. AI gateway recovery evidence runs
+  the orchestration failure cases and also executes an authenticated encrypted
+  configuration backup/restore with the exact candidate image. Upgrade evidence records the
   previous immutable image and the authentication, migration, secret,
   resource-count, queue-recovery, and reconciliation assertions. Soak evidence
   records the exact promoted digest, measured duration, observation count,

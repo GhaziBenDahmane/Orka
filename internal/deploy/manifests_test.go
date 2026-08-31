@@ -405,6 +405,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	for _, recoveryEvidenceContract := range []string{
 		"ai-gateway-recovery-conformance.json ai-gateway-recovery-conformance.log",
 		`aiGatewayRecoveryConformanceEvidence:"ai-gateway-recovery-conformance.json"`,
+		`.candidateEncryptedRoundTripVerified and .candidateRestoredConfigurationVerified`,
 		`.postRestoreDualAuditorVerification == "production-required"`,
 	} {
 		if !strings.Contains(workflow, recoveryEvidenceContract) {
