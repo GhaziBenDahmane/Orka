@@ -67,7 +67,9 @@ links for every item below.
   of Docker arguments and signed metadata, reject a running-service restore,
   reject mismatched keys and modified metadata, and leave a successful restore
   offline until the AI installer verifies both independently authenticated
-  auditors.
+  auditors. The release gate invokes the manifest verifier from the exact
+  candidate image against both valid and post-signing-modified metadata; a
+  source-only test or mocked Docker invocation cannot satisfy promotion.
 - Every release after the first boots the previous published image digest,
   creates authenticated and encrypted tenant state, deploys a live stack, and
   stops the old controller against its persistent PostgreSQL volume. The

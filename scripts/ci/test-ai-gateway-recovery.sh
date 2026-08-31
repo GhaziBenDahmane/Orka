@@ -10,6 +10,8 @@ evidence_file="${DOCKYARD_AI_GATEWAY_RECOVERY_EVIDENCE:-$temporary/ai-gateway-re
 for command in git go jq openssl; do
   command -v "$command" >/dev/null || { echo "$command is required for AI gateway recovery conformance" >&2; exit 1; }
 done
+real_go="$(command -v go)"
+real_docker="$(command -v docker || true)"
 
 mkdir -p "$temporary/bin" "$temporary/output"
 openssl genpkey -algorithm ED25519 -out "$temporary/signing-key.pem" >/dev/null 2>&1
@@ -99,6 +101,53 @@ if grep -Fq 'upload-secret' "$bundle/manifest.json" || grep -Fq "$(<"$DOCKYARD_A
 fi
 grep -q '^service scale --detach=false dockyard-ai_9router=0$' "$ORKA_AI_RECOVERY_TEST_LOG"
 grep -q '^service scale --detach=false dockyard-ai_9router=1$' "$ORKA_AI_RECOVERY_TEST_LOG"
+
+verify_manifest() {
+  local manifest_path="$1"
+  shift
+  "$@" verify-ai-gateway-recovery-manifest \
+    --manifest "$manifest_path" --signature "$bundle/manifest.sig" \
+    --public-key-file "$DOCKYARD_RECOVERY_VERIFY_KEY_FILE" --encryption-key-file "$DOCKYARD_AI_BACKUP_KEY_FILE" \
+    --stack dockyard-ai --service dockyard-ai_9router --volume dockyard-ai_nine-router-data \
+    --storage-node "$NINEROUTER_STORAGE_NODE_ID" --router-image "$NINEROUTER_IMAGE" \
+    --helper-image "$DOCKYARD_IMAGE" --object-ref "$DOCKYARD_AI_BACKUP_OBJECT_REF"
+}
+
+verified_manifest="$(cd "$root" && verify_manifest "$bundle/manifest.json" "$real_go" run ./cmd/dockyard)"
+jq -e --argjson verified "$verified_manifest" '. == $verified' "$bundle/manifest.json" >/dev/null
+
+candidate_manifest_verifier_verified=false
+candidate_tampered_manifest_rejected=false
+if [ -n "${DOCKYARD_AI_GATEWAY_RECOVERY_DOCKYARD_IMAGE:-}" ]; then
+  [ -n "$real_docker" ] || { echo 'docker is required to verify the candidate recovery command' >&2; exit 1; }
+  candidate_verifier() {
+    local candidate_manifest="$1"
+    "$real_docker" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+      --mount "type=bind,src=$candidate_manifest,dst=/input/manifest.json,readonly" \
+      --mount "type=bind,src=$bundle/manifest.sig,dst=/input/manifest.sig,readonly" \
+      --mount "type=bind,src=$DOCKYARD_RECOVERY_VERIFY_KEY_FILE,dst=/input/verify-key.pem,readonly" \
+      --mount "type=bind,src=$DOCKYARD_AI_BACKUP_KEY_FILE,dst=/input/encryption-key,readonly" \
+      --entrypoint /usr/local/bin/dockyard "$DOCKYARD_AI_GATEWAY_RECOVERY_DOCKYARD_IMAGE" \
+      verify-ai-gateway-recovery-manifest \
+      --manifest /input/manifest.json --signature /input/manifest.sig \
+      --public-key-file /input/verify-key.pem --encryption-key-file /input/encryption-key \
+      --stack dockyard-ai --service dockyard-ai_9router --volume dockyard-ai_nine-router-data \
+      --storage-node "$NINEROUTER_STORAGE_NODE_ID" --router-image "$NINEROUTER_IMAGE" \
+      --helper-image "$DOCKYARD_IMAGE" --object-ref "$DOCKYARD_AI_BACKUP_OBJECT_REF"
+  }
+  candidate_verified_manifest="$(candidate_verifier "$bundle/manifest.json")"
+  jq -e --argjson verified "$candidate_verified_manifest" '. == $verified' "$bundle/manifest.json" >/dev/null
+  candidate_manifest_verifier_verified=true
+
+  cp "$bundle/manifest.json" "$temporary/candidate-tampered-manifest.json"
+  jq '.sizeBytes += 1' "$temporary/candidate-tampered-manifest.json" >"$temporary/candidate-tampered-manifest.tmp"
+  mv "$temporary/candidate-tampered-manifest.tmp" "$temporary/candidate-tampered-manifest.json"
+  if candidate_verifier "$temporary/candidate-tampered-manifest.json" >"$temporary/out" 2>"$temporary/err"; then
+    echo 'candidate recovery verifier accepted a manifest modified after signing' >&2
+    exit 1
+  fi
+  candidate_tampered_manifest_rejected=true
+fi
 
 : >"$ORKA_AI_RECOVERY_TEST_LOG"
 if ORKA_AI_RECOVERY_TEST_SECRET_RM_FAIL_ALWAYS=true "$root/scripts/backup-ai-gateway.sh" "$temporary/output/failed-secret-cleanup" >"$temporary/out" 2>"$temporary/err"; then
@@ -201,6 +250,8 @@ jq -n \
   --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg dockyardImage "$DOCKYARD_IMAGE" \
   --arg nineRouterImage "$NINEROUTER_IMAGE" \
+  --argjson candidateManifestVerifierVerified "$candidate_manifest_verifier_verified" \
+  --argjson candidateTamperedManifestRejected "$candidate_tampered_manifest_rejected" \
   '{
     status:"passed",
     sourceCommit:$sourceCommit,
@@ -224,6 +275,8 @@ jq -n \
     redirectsRejected:true,
     responseHeaderTimeoutEnforced:true,
     singleSnapshotMetadataVerified:true,
+    candidateManifestVerifierVerified:$candidateManifestVerifierVerified,
+    candidateTamperedManifestRejected:$candidateTamperedManifestRejected,
     restoreConfirmationRequired:true,
     runningServiceRestoreRejected:true,
     wrongEncryptionKeyRejected:true,
@@ -246,6 +299,8 @@ jq -e '
   .permanentCleanupFailureRejected and .permanentSecretCleanupFailureRejected and
   .proxyEnvironmentIgnored and .redirectsRejected and .responseHeaderTimeoutEnforced and
   .singleSnapshotMetadataVerified and
+  ((.candidateManifestVerifierVerified and .candidateTamperedManifestRejected) or
+   ((.candidateManifestVerifierVerified | not) and (.candidateTamperedManifestRejected | not))) and
   .restoreConfirmationRequired and .runningServiceRestoreRejected and
   .wrongEncryptionKeyRejected and .restoreLeftOffline and
   .backupMountReadOnly and .nodePinned and
