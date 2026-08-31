@@ -9,7 +9,7 @@ links for every item below.
 - Review `docs/threat-model.md` against the release diff. New trust boundaries,
   privileged integrations, or secret flows require controls and evidence in
   that document before promotion.
-- Release publication is blocked on the complete reusable CI, ten-engine
+- Release publication is blocked on the complete reusable CI, eleven-engine
   database recovery, real Keycloak SSO, disposable three-manager Swarm HA,
   joined deployment lifecycle, drift reconciliation, real-mTLS agent
   certificate rotation, AI audit lifecycle, durable notification-provider
@@ -207,8 +207,8 @@ links for every item below.
   without replacing policy or backup references.
   On a Swarm manager, `make test-database-recovery`
   exercises the exact engine-specific readiness, backup, and restore commands
-  against PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
-  ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON
+  against PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, Redis, Valkey,
+  libSQL, ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON
   record per engine. Every case mounts the driver's production data path on a
   named volume, removes and recreates the database container after restore,
   and reads the restored application data again without reseeding it. Evidence
@@ -288,7 +288,7 @@ links for every item below.
   `production-certification.sigstore.json`,
   `image-digest.txt`,
   `image-platforms.json`, per-architecture `trivy-amd64.json` and
-  `trivy-arm64.json`, a downloadable `sbom.spdx.json`, ten-engine
+  `trivy-arm64.json`, a downloadable `sbom.spdx.json`, eleven-engine
   `database-recovery-evidence.json`,
   `volume-recovery-conformance.json`,
   `control-plane-recovery-conformance.json`,

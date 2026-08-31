@@ -62,6 +62,7 @@ func NewRegistry() *Registry {
 	r := &Registry{drivers: map[string]Driver{}}
 	for _, d := range []Driver{
 		simpleDriver{name: "postgres", version: "17", image: "postgres", port: 5432, userKey: "POSTGRES_USER", passwordKey: "POSTGRES_PASSWORD", databaseKey: "POSTGRES_DB", dataPath: "/var/lib/postgresql/data", scheme: "postgres"},
+		simpleDriver{name: "timescaledb", version: "2.29.2-pg17", image: "timescale/timescaledb", port: 5432, userKey: "POSTGRES_USER", passwordKey: "POSTGRES_PASSWORD", databaseKey: "POSTGRES_DB", dataPath: "/var/lib/postgresql/data", scheme: "postgres"},
 		simpleDriver{name: "mysql", version: "8.4", image: "mysql", port: 3306, userKey: "MYSQL_USER", passwordKey: "MYSQL_PASSWORD", databaseKey: "MYSQL_DATABASE", rootPasswordKey: "MYSQL_ROOT_PASSWORD", dataPath: "/var/lib/mysql", scheme: "mysql"},
 		simpleDriver{name: "mariadb", version: "11.8", image: "mariadb", port: 3306, userKey: "MARIADB_USER", passwordKey: "MARIADB_PASSWORD", databaseKey: "MARIADB_DATABASE", rootPasswordKey: "MARIADB_ROOT_PASSWORD", dataPath: "/var/lib/mysql", scheme: "mysql"},
 		simpleDriver{name: "mongo", version: "8", image: "mongo", port: 27017, userKey: "MONGO_INITDB_ROOT_USERNAME", passwordKey: "MONGO_INITDB_ROOT_PASSWORD", databaseKey: "MONGO_INITDB_DATABASE", dataPath: "/data/db", scheme: "mongodb"},
@@ -133,10 +134,10 @@ func (r *Registry) Backup(engine, version, host string, credentials map[string]s
 		return BackupPlan{}, err
 	}
 	switch engine {
-	case "postgres":
+	case "postgres", "timescaledb":
 		command := []string{"pg_dump", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "--format=custom", "--file", "/backup/" + filename}
 		command = append(command, nativePortArguments(engine, credentials)...)
-		return BackupPlan{Image: "postgres:" + version, Command: command, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
+		return BackupPlan{Image: postgresUtilityImage(engine, version), Command: command, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
 	case "mysql":
 		command := []string{"mysqldump", "--host", host, "--user", credentials["username"], "--single-transaction", "--routines", "--events", "--no-tablespaces", "--result-file=/backup/" + filename}
 		command = append(command, nativePortArguments(engine, credentials)...)
@@ -180,7 +181,14 @@ func (r *Registry) Restore(engine, version, host string, credentials map[string]
 	}
 	switch engine {
 	case "postgres":
-		return RestorePlan{Image: "postgres:" + version, Command: []string{"pg_restore", "--clean", "--if-exists", "--no-owner", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "/backup/" + filename}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
+		return RestorePlan{Image: postgresUtilityImage(engine, version), Command: []string{"pg_restore", "--clean", "--if-exists", "--no-owner", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"], "/backup/" + filename}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}, Extension: "dump"}, nil
+	case "timescaledb":
+		environment := map[string]string{
+			"PGPASSWORD": credentials["password"], "DOCKYARD_PG_HOST": host,
+			"DOCKYARD_PG_USER": credentials["username"], "DOCKYARD_PG_DATABASE": credentials["database"],
+			"DOCKYARD_PG_PORT": nativePort(credentials, 5432), "DOCKYARD_PG_DUMP": filename,
+		}
+		return RestorePlan{Image: postgresUtilityImage(engine, version), Command: []string{"sh", "-eu", "-c", timescaleRestoreScript}, Environment: environment, Extension: "dump"}, nil
 	case "mysql":
 		return RestorePlan{Image: "mysql:" + version, Command: []string{"mysql", "--host", host, "--user", credentials["username"], "--database", credentials["database"], "--execute", "source /backup/" + filename}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}, Extension: "sql"}, nil
 	case "mariadb":
@@ -217,7 +225,7 @@ func (r *Registry) BackupExtension(engine string) (string, bool) {
 		return driver.BackupExtension()
 	}
 	switch engine {
-	case "postgres":
+	case "postgres", "timescaledb":
 		return "dump", true
 	case "mysql", "mariadb":
 		return "sql", true
@@ -244,8 +252,8 @@ func (r *Registry) Readiness(engine, version, host string, credentials map[strin
 		return BackupPlan{}, errors.New("invalid database readiness parameters")
 	}
 	switch engine {
-	case "postgres":
-		return BackupPlan{Image: "postgres:" + version, Command: []string{"pg_isready", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"]}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}}, nil
+	case "postgres", "timescaledb":
+		return BackupPlan{Image: postgresUtilityImage(engine, version), Command: []string{"pg_isready", "--host", host, "--username", credentials["username"], "--dbname", credentials["database"]}, Environment: map[string]string{"PGPASSWORD": credentials["password"]}}, nil
 	case "mysql":
 		return BackupPlan{Image: "mysql:" + version, Command: []string{"mysqladmin", "--host", host, "--user", credentials["username"], "ping", "--silent"}, Environment: map[string]string{"MYSQL_PWD": credentials["password"]}}, nil
 	case "mariadb":
@@ -298,11 +306,32 @@ func nativePortArguments(engine string, credentials map[string]string) []string 
 	if credentials["port"] == "" {
 		return nil
 	}
-	if engine == "postgres" || engine == "mongo" {
+	if engine == "postgres" || engine == "timescaledb" || engine == "mongo" {
 		return []string{"--port", credentials["port"]}
 	}
 	return []string{"--port=" + credentials["port"]}
 }
+
+func postgresUtilityImage(engine, version string) string {
+	if engine == "timescaledb" {
+		return "timescale/timescaledb:" + version
+	}
+	return "postgres:" + version
+}
+
+const timescaleRestoreScript = `
+run_psql() {
+  psql --host "$DOCKYARD_PG_HOST" --port "$DOCKYARD_PG_PORT" --username "$DOCKYARD_PG_USER" --dbname "$DOCKYARD_PG_DATABASE" --set ON_ERROR_STOP=1 --command "$1"
+}
+finish_restore() {
+  run_psql 'SELECT timescaledb_post_restore();'
+}
+run_psql 'SELECT timescaledb_pre_restore();'
+trap finish_restore EXIT
+pg_restore --clean --if-exists --no-owner --host "$DOCKYARD_PG_HOST" --port "$DOCKYARD_PG_PORT" --username "$DOCKYARD_PG_USER" --dbname "$DOCKYARD_PG_DATABASE" "/backup/$DOCKYARD_PG_DUMP"
+finish_restore
+trap - EXIT
+`
 
 func nativePort(credentials map[string]string, fallback int) string {
 	if credentials["port"] != "" {

@@ -47,7 +47,7 @@ func TestClickHouseUsesTestedImageVersion(t *testing.T) {
 
 func TestRegistryRendersAllDrivers(t *testing.T) {
 	registry := NewRegistry()
-	if len(registry.Names()) < 10 {
+	if len(registry.Names()) < 11 {
 		t.Fatalf("expected broad driver catalog, got %v", registry.Names())
 	}
 	for _, engine := range registry.Names() {
@@ -82,7 +82,7 @@ func TestRegistryEngineMetadataIsSortedAndComplete(t *testing.T) {
 func TestNativeBackupAndRestorePlans(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "clickhouse", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"postgres", "timescaledb", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "clickhouse", "qdrant", "meilisearch"} {
 		extension, ok := registry.BackupExtension(engine)
 		if !ok {
 			t.Fatalf("%s should support backups", engine)
@@ -159,9 +159,9 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 	for _, tc := range []struct {
 		engine string
 		want   string
-	}{{"postgres", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"libsql", "DOCKYARD_LIBSQL_PORT=16379"}, {"clickhouse", "DOCKYARD_CLICKHOUSE_PORT=19000"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}, {"meilisearch", "DOCKYARD_MEILI_PORT=16379"}} {
+	}{{"postgres", "--port 15432"}, {"timescaledb", "--port 15432"}, {"mysql", "--port=13306"}, {"mariadb", "--port=13306"}, {"mongo", "--port 17017"}, {"redis", "-p 16379"}, {"valkey", "-p 16379"}, {"libsql", "DOCKYARD_LIBSQL_PORT=16379"}, {"clickhouse", "DOCKYARD_CLICKHOUSE_PORT=19000"}, {"qdrant", "DOCKYARD_QDRANT_PORT=16379"}, {"meilisearch", "DOCKYARD_MEILI_PORT=16379"}} {
 		port := "13306"
-		if tc.engine == "postgres" {
+		if tc.engine == "postgres" || tc.engine == "timescaledb" {
 			port = "15432"
 		} else if tc.engine == "mongo" {
 			port = "17017"
@@ -187,6 +187,29 @@ func TestNativeBackupPlansUseExplicitSourcePorts(t *testing.T) {
 		if !strings.Contains(got, tc.want) {
 			t.Fatalf("%s command %q does not contain %q", tc.engine, got, tc.want)
 		}
+	}
+}
+
+func TestTimescaleDBUsesReleasedImageAndRestoreLifecycle(t *testing.T) {
+	registry := NewRegistry()
+	result, err := registry.Render("timescaledb", Request{Name: "metrics"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Version != "2.29.2-pg17" || !strings.Contains(result.ComposeYAML, "timescale/timescaledb:2.29.2-pg17") {
+		t.Fatalf("TimescaleDB image is not pinned to the tested release: version=%q compose=%q", result.Version, result.ComposeYAML)
+	}
+	credentials := map[string]string{"username": "dockyard", "password": "secret", "database": "app"}
+	restore, err := registry.Restore("timescaledb", result.Version, "metrics", credentials, "123e4567-e89b-12d3-a456-426614174000.dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(restore.Command, " ")
+	if restore.Image != "timescale/timescaledb:2.29.2-pg17" || !strings.Contains(joined, "timescaledb_pre_restore") || !strings.Contains(joined, "timescaledb_post_restore") {
+		t.Fatalf("TimescaleDB restore lifecycle is incomplete: %#v", restore)
+	}
+	if strings.Contains(joined, credentials["password"]) {
+		t.Fatal("TimescaleDB restore exposes its password in process arguments")
 	}
 }
 
@@ -258,7 +281,7 @@ func TestStoredConfigRemovesPasswords(t *testing.T) {
 func TestDatabaseReadinessPlansDoNotExposePasswords(t *testing.T) {
 	registry := NewRegistry()
 	credentials := map[string]string{"username": "app", "password": "very-secret", "database": "app"}
-	for _, engine := range []string{"postgres", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "clickhouse", "qdrant", "meilisearch"} {
+	for _, engine := range []string{"postgres", "timescaledb", "mysql", "mariadb", "mongo", "redis", "valkey", "libsql", "clickhouse", "qdrant", "meilisearch"} {
 		plan, err := registry.Readiness(engine, "17", "verify", credentials)
 		if err != nil {
 			t.Fatalf("%s readiness: %v", engine, err)

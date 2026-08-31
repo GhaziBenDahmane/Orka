@@ -578,9 +578,9 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t evidence_files < <(find recovery-evidence -type f -name 'recovery-*.json' -print | sort)
-          test "${#evidence_files[@]}" -eq 10
+          test "${#evidence_files[@]}" -eq 11
           jq -s 'sort_by(.engine)' "${evidence_files[@]}" > database-recovery-evidence.json
-          jq -e --arg sourceCommit "$GITHUB_SHA" 'length == 10 and ([.[].engine] | unique | length) == 10 and all(.[]; .status == "passed" and .sourceCommit == $sourceCommit and .dataVerified == true and .restartVerified == true and .replacementVerified == true and .persistentVolumeVerified == true and .imageIdentityVerified == true and .replacementImageId == .serverImage.id and all(.serverImage,.backupImage,.restoreImage; (.id | test("^sha256:[a-f0-9]{64}$")) and (.digest | test("@sha256:[a-f0-9]{64}$"))) and .artifactBytes > 0 and .rpoSeconds >= 0 and .rtoSeconds >= 0)' database-recovery-evidence.json >/dev/null
+          jq -e --arg sourceCommit "$GITHUB_SHA" 'length == 11 and ([.[].engine] | unique | length) == 11 and all(.[]; .status == "passed" and .sourceCommit == $sourceCommit and .dataVerified == true and .restartVerified == true and .replacementVerified == true and .persistentVolumeVerified == true and .imageIdentityVerified == true and .replacementImageId == .serverImage.id and all(.serverImage,.backupImage,.restoreImage; (.id | test("^sha256:[a-f0-9]{64}$")) and (.digest | test("@sha256:[a-f0-9]{64}$"))) and .artifactBytes > 0 and .rpoSeconds >= 0 and .rtoSeconds >= 0)' database-recovery-evidence.json >/dev/null
           cp conformance-evidence/sso-keycloak-evidence.json .
           cp conformance-evidence/swarm-ha-conformance.json .
           cp conformance-evidence/control-plane-recovery-conformance.json .

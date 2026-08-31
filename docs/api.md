@@ -810,8 +810,8 @@ optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.
 The digest is present for external executables; their filesystem paths are
 never exposed. The legacy `items` and `backupCapable` name lists remain available for
 API compatibility. Verified engine-specific
-backup/restore is currently available for PostgreSQL, MySQL, MariaDB, MongoDB,
-Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch.
+backup/restore is currently available for PostgreSQL, TimescaleDB, MySQL,
+MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse, Qdrant, and Meilisearch.
 Pass `destinationId` to a backup request or backup policy to upload through an
 S3-compatible multipart client. Destination endpoints must be HTTP(S) origins
 with valid DNS/IP hosts and TCP ports; credentials, paths, queries, and

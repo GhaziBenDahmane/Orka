@@ -100,8 +100,8 @@ recovery evidence remains.
   or rotated after instantiation retain explicit operator ownership and survive
   later template upgrades, while untouched template-owned keys follow the new
   catalog revision.
-- PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
-  Qdrant, and Meilisearch provisioning definitions.
+- PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
+  ClickHouse, Qdrant, and Meilisearch provisioning definitions.
 - Every Compose workload with a named volume, including managed databases and
   stateful catalog templates, is durably assigned to one Swarm node on first
   deployment. Existing stacks are discovered only when
@@ -112,8 +112,8 @@ recovery evidence remains.
   ready node and restore retained named-volume backups directly onto that node
   while the application remains offline; restore jobs snapshot the target so
   concurrent lifecycle changes cannot redirect recovered data.
-- PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
-  Qdrant, and Meilisearch engine-specific backup/restore, streaming checksums,
+- PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL,
+  ClickHouse, Qdrant, and Meilisearch engine-specific backup/restore, streaming checksums,
   interval policies, retention, and opt-in isolated restore drills.
 - S3-compatible multipart storage with encrypted destination credentials and
   client-side, per-backup envelope encryption for local and remote artifacts.
@@ -126,7 +126,7 @@ recovery evidence remains.
 - Scheduled drill failure notifications, overdue alerts, and per-database
   recovery-duration metrics are implemented. An opt-in real-engine conformance
   suite verifies seeded application data and emits RPO/RTO evidence for all
-  ten backup-capable engines. Production RPO/RTO values still require drills
+  eleven backup-capable engines. Production RPO/RTO values still require drills
   on production-equivalent storage and publication for each deployment.
 
 Exit gate: automated restore verification and documented RPO/RTO for every

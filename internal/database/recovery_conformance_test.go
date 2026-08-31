@@ -42,6 +42,7 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 	}
 	cases := []recoveryCase{
 		postgresRecovery(),
+		timescaleRecovery(),
 		mysqlRecovery("mysql", "8.4"),
 		mysqlRecovery("mariadb", "11.8"),
 		mongoRecovery(),
@@ -63,7 +64,7 @@ func TestNativeDatabaseRecoveryConformance(t *testing.T) {
 func TestRecoveryConformanceUsesRenderedDatabaseDataPaths(t *testing.T) {
 	registry := database.NewRegistry()
 	versions := map[string]string{
-		"postgres": "17", "mysql": "8.4", "mariadb": "11.8", "mongo": "8",
+		"postgres": "17", "timescaledb": "2.29.2-pg17", "mysql": "8.4", "mariadb": "11.8", "mongo": "8",
 		"redis": "8", "valkey": "8", "libsql": "v0.24.33",
 		"clickhouse": "25.8-alpine", "qdrant": "v1.15", "meilisearch": "v1.20",
 	}
@@ -177,6 +178,17 @@ func postgresRecovery() recoveryCase {
 		clearCommand: []string{"psql", "--username", "dockyard", "--dbname", "app", "--command", "DROP TABLE recovery_probe;"},
 		readCommand:  []string{"psql", "--username", "dockyard", "--dbname", "app", "--tuples-only", "--no-align", "--command", "SELECT value FROM recovery_probe;"},
 		want:         "dockyard-recovery-ok",
+	}
+}
+
+func timescaleRecovery() recoveryCase {
+	return recoveryCase{
+		engine: "timescaledb", version: "2.29.2-pg17", image: "timescale/timescaledb",
+		serverEnv:    map[string]string{"POSTGRES_USER": "dockyard", "POSTGRES_PASSWORD": "recovery-secret", "POSTGRES_DB": "app"},
+		seedCommand:  []string{"psql", "--username", "dockyard", "--dbname", "app", "--set", "ON_ERROR_STOP=1", "--command", "CREATE EXTENSION IF NOT EXISTS timescaledb; CREATE TABLE recovery_probe(observed_at timestamptz NOT NULL, value text NOT NULL); SELECT create_hypertable('recovery_probe','observed_at'); INSERT INTO recovery_probe VALUES (now(),'dockyard-recovery-ok');"},
+		clearCommand: []string{"psql", "--username", "dockyard", "--dbname", "app", "--set", "ON_ERROR_STOP=1", "--command", "DROP TABLE recovery_probe;"},
+		readCommand:  []string{"psql", "--username", "dockyard", "--dbname", "app", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1", "--command", "SELECT value || CASE WHEN EXISTS(SELECT 1 FROM timescaledb_information.hypertables WHERE hypertable_name='recovery_probe') THEN '|hypertable-ok' ELSE '|hypertable-missing' END FROM recovery_probe;"},
+		want:         "dockyard-recovery-ok|hypertable-ok",
 	}
 }
 
@@ -344,7 +356,7 @@ func inspectRecoveryImage(t *testing.T, ctx context.Context, reference string) r
 
 func recoveryDataPath(engine string) string {
 	switch engine {
-	case "postgres":
+	case "postgres", "timescaledb":
 		return "/var/lib/postgresql/data"
 	case "mysql", "mariadb":
 		return "/var/lib/mysql"
