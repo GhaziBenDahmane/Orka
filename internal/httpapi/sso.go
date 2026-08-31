@@ -16,6 +16,7 @@ import (
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/bendahma/dokploy-go/internal/netpolicy"
 	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
@@ -451,13 +452,19 @@ func validSSOURLHost(endpoint *url.URL) bool {
 func (s *Server) oidcHTTPClient() *http.Client {
 	client := s.OIDCHTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: oidcRequestTimeout}
+		client = &http.Client{Timeout: oidcRequestTimeout, Transport: s.EgressTransport}
 	}
 	secured := *client
+	if secured.Transport == nil {
+		secured.Transport = s.EgressTransport
+	}
+	if secured.Transport == nil {
+		secured.Transport = (&netpolicy.Policy{}).Transport()
+	}
 	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("OIDC redirects are disabled")
 	}
-	secured.Transport = oidcResponseLimitTransport{base: client.Transport}
+	secured.Transport = oidcResponseLimitTransport{base: secured.Transport}
 	return &secured
 }
 

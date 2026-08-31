@@ -170,6 +170,26 @@ func TestOIDCClientBoundsProviderResponses(t *testing.T) {
 	}
 }
 
+func TestOIDCClientFailsClosedWithoutConfiguredEgressTransport(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer provider.Close()
+
+	if _, err := (&Server{}).oidcHTTPClient().Get(provider.URL); err == nil || !strings.Contains(err.Error(), "egress policy blocks") {
+		t.Fatalf("loopback OIDC request error=%v", err)
+	}
+
+	response, err := (&Server{EgressTransport: provider.Client().Transport}).oidcHTTPClient().Get(provider.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("status=%d", response.StatusCode)
+	}
+}
+
 func TestValidateOIDCProviderEndpoints(t *testing.T) {
 	var issuer string
 	providerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
