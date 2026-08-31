@@ -372,7 +372,7 @@ func (s *Server) upgradeClusterAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "encryption_failed", "upgrade command cannot be encrypted")
 		return
 	}
-	command, err := s.Store.EnqueueAgentUpgrade(r.Context(), clusterID, commandID, encrypted, input.Image)
+	command, err := s.Store.EnqueueAgentUpgradeWithAudit(r.Context(), p, clusterID, commandID, encrypted, input.Image, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "agent_upgrade_running", "an agent upgrade is already pending or being verified")
@@ -381,7 +381,6 @@ func (s *Server) upgradeClusterAgent(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.agent.upgrade", "cluster", clusterID.String(), r.RemoteAddr, map[string]any{"image": input.Image, "commandId": commandID})
 	writeJSON(w, http.StatusAccepted, command)
 }
 
@@ -438,7 +437,7 @@ func (s *Server) cancelAgentUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CancelPendingAgentUpgrade(r.Context(), p.OrganizationID, clusterID, commandID); err != nil {
+	if err = s.Store.CancelPendingAgentUpgradeWithAudit(r.Context(), p, clusterID, commandID, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrNotCancellable) {
 			writeError(w, http.StatusConflict, "not_cancellable", "an agent upgrade can only be cancelled before execution starts")
 			return
@@ -446,7 +445,6 @@ func (s *Server) cancelAgentUpgrade(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "cluster.agent.upgrade.cancel", "cluster_command", commandID.String(), r.RemoteAddr, map[string]any{"clusterId": clusterID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 

@@ -281,7 +281,9 @@ managed cluster converged before retiring the previous CA. See
 Remote environments select a cluster with `clusterId` when they are created.
 Application deploy, removal, logs, and node operations use encrypted-at-rest
 commands claimed by the outbound agent. Expiring leases are retried and every
-renewal/completion is fenced by a per-attempt UUID.
+renewal/completion is fenced by a per-attempt UUID. Digest-pinned agent-upgrade
+queueing and pre-execution cancellation commit with their operator audit events;
+an evidence failure leaves no command or preserves the pending command.
 Cluster responses also expose the last `capabilities` heartbeat document.
 Protocol version 1 proves Compose-on-Swarm support and, when configured, the
 observed Traefik edge service, public network, dynamic file-provider path, and

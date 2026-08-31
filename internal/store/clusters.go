@@ -352,16 +352,41 @@ func (s *Store) enqueueClusterCommand(ctx context.Context, clusterID, commandID 
 }
 
 func (s *Store) EnqueueAgentUpgrade(ctx context.Context, clusterID, commandID uuid.UUID, encryptedPayload, targetImage string) (ClusterCommand, error) {
-	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: "agent.upgrade", TargetImage: targetImage, Status: "pending"}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return ClusterCommand{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := enqueueAgentUpgradeTx(ctx, tx, uuid.Nil, clusterID, commandID, encryptedPayload, targetImage)
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) EnqueueAgentUpgradeWithAudit(ctx context.Context, principal Principal, clusterID, commandID uuid.UUID, encryptedPayload, targetImage, remoteAddr string) (ClusterCommand, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := enqueueAgentUpgradeTx(ctx, tx, principal.OrganizationID, clusterID, commandID, encryptedPayload, targetImage)
+	if err != nil {
+		return ClusterCommand{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "cluster.agent.upgrade", "cluster", clusterID.String(), remoteAddr, map[string]any{"image": targetImage, "commandId": commandID}); err != nil {
+		return ClusterCommand{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func enqueueAgentUpgradeTx(ctx context.Context, tx pgx.Tx, organizationID, clusterID, commandID uuid.UUID, encryptedPayload, targetImage string) (ClusterCommand, error) {
+	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: "agent.upgrade", TargetImage: targetImage, Status: "pending"}
+	var err error
 	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
 		return ClusterCommand{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,target_image) SELECT $1,c.id,'agent.upgrade',$3,$4 FROM clusters c WHERE c.id=$2 AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' RETURNING created_at`, commandID, clusterID, encryptedPayload, targetImage).Scan(&item.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,target_image) SELECT $1,c.id,'agent.upgrade',$3,$4 FROM clusters c WHERE c.id=$2 AND ($5::uuid='00000000-0000-0000-0000-000000000000' OR c.organization_id=$5) AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' RETURNING created_at`, commandID, clusterID, encryptedPayload, targetImage, organizationID).Scan(&item.CreatedAt)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return ClusterCommand{}, ErrBusy
@@ -372,7 +397,7 @@ func (s *Store) EnqueueAgentUpgrade(ctx context.Context, clusterID, commandID uu
 	if err != nil {
 		return ClusterCommand{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func clusterCommandUnavailableError(ctx context.Context, db policyQueryer, clusterID uuid.UUID, kind string) error {
@@ -454,8 +479,30 @@ func (s *Store) CancelPendingAgentUpgrade(ctx context.Context, organizationID, c
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelPendingAgentUpgradeTx(ctx, tx, organizationID, clusterID, commandID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelPendingAgentUpgradeWithAudit(ctx context.Context, principal Principal, clusterID, commandID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelPendingAgentUpgradeTx(ctx, tx, principal.OrganizationID, clusterID, commandID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "cluster.agent.upgrade.cancel", "cluster_command", commandID.String(), remoteAddr, map[string]any{"clusterId": clusterID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelPendingAgentUpgradeTx(ctx context.Context, tx pgx.Tx, organizationID, clusterID, commandID uuid.UUID) error {
 	var status string
-	err = tx.QueryRow(ctx, `SELECT command.status FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE command.id=$1 AND command.cluster_id=$2 AND cluster.organization_id=$3 AND command.kind='agent.upgrade' FOR UPDATE OF command`, commandID, clusterID, organizationID).Scan(&status)
+	err := tx.QueryRow(ctx, `SELECT command.status FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE command.id=$1 AND command.cluster_id=$2 AND cluster.organization_id=$3 AND command.kind='agent.upgrade' FOR UPDATE OF command`, commandID, clusterID, organizationID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -468,7 +515,7 @@ func (s *Store) CancelPendingAgentUpgrade(ctx context.Context, organizationID, c
 	if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='cancelled',last_error='cancelled by user',finished_at=now() WHERE id=$1`, commandID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) CancelClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID) error {
