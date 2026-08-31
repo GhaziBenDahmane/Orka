@@ -20,11 +20,19 @@ func TestSourceCredentialMutationCommitsWithAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateSourceCredential(ctx, SourceCredential{ID: credentialID, OrganizationID: organizationID, Kind: "registry", Name: "registry", Server: "registry.example.test", Username: "robot", EncryptedSecret: "original-ciphertext"}); err != nil {
+	invalidPrincipal := Principal{OrganizationID: organizationID, UserID: uuid.New()}
+	principal := Principal{OrganizationID: organizationID, UserID: userID}
+	credential := SourceCredential{ID: credentialID, Kind: "registry", Name: "registry", Server: "registry.example.test", Username: "robot", EncryptedSecret: "original-ciphertext"}
+	if _, err := db.CreateSourceCredentialWithAudit(ctx, invalidPrincipal, credential, "127.0.0.1:1234"); err == nil {
+		t.Fatal("credential creation succeeded without a valid audit actor")
+	}
+	if _, err := db.GetSourceCredential(ctx, organizationID, credentialID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed audit did not roll back credential creation: %v", err)
+	}
+	if _, err := db.CreateSourceCredentialWithAudit(ctx, principal, credential, "127.0.0.1:1234"); err != nil {
 		t.Fatal(err)
 	}
 
-	invalidPrincipal := Principal{OrganizationID: organizationID, UserID: uuid.New()}
 	if _, err := db.RotateSourceCredentialWithAudit(ctx, invalidPrincipal, credentialID, "unaudited-ciphertext", "127.0.0.1:1234"); err == nil {
 		t.Fatal("credential rotation succeeded without a valid audit actor")
 	}
@@ -33,7 +41,6 @@ func TestSourceCredentialMutationCommitsWithAudit(t *testing.T) {
 		t.Fatalf("failed audit did not roll back rotation: credential=%#v err=%v", stored, err)
 	}
 
-	principal := Principal{OrganizationID: organizationID, UserID: userID}
 	rotated, err := db.RotateSourceCredentialWithAudit(ctx, principal, credentialID, "rotated-ciphertext", "127.0.0.1:1234")
 	if err != nil || rotated.EncryptedSecret != "rotated-ciphertext" {
 		t.Fatalf("audited rotation=%#v err=%v", rotated, err)
@@ -51,7 +58,7 @@ func TestSourceCredentialMutationCommitsWithAudit(t *testing.T) {
 		t.Fatalf("deleted credential lookup error=%v, want not found", err)
 	}
 	var auditCount int
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND resource_id=$3 AND action IN ('source_credential.rotate','source_credential.delete')`, organizationID, userID, credentialID.String()).Scan(&auditCount); err != nil || auditCount != 2 {
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND resource_id=$3 AND action IN ('source_credential.create','source_credential.rotate','source_credential.delete')`, organizationID, userID, credentialID.String()).Scan(&auditCount); err != nil || auditCount != 3 {
 		t.Fatalf("credential mutation audit count=%d err=%v", auditCount, err)
 	}
 

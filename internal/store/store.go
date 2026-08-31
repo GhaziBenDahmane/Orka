@@ -1374,6 +1374,28 @@ func (s *Store) CreateSourceCredential(ctx context.Context, item SourceCredentia
 	return item, err
 }
 
+func (s *Store) CreateSourceCredentialWithAudit(ctx context.Context, principal Principal, item SourceCredential, remoteAddr string) (SourceCredential, error) {
+	if item.ID == uuid.Nil {
+		item.ID = uuid.New()
+	}
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SourceCredential{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, `INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Kind, item.Name, item.Server, item.Username, item.EncryptedSecret).Scan(&item.CreatedAt, &item.UpdatedAt); err != nil {
+		return SourceCredential{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "source_credential.create", "source_credential", item.ID.String(), remoteAddr, map[string]any{"kind": item.Kind, "server": item.Server}); err != nil {
+		return SourceCredential{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return SourceCredential{}, err
+	}
+	return item, nil
+}
+
 func (s *Store) ListSourceCredentials(ctx context.Context, organizationID uuid.UUID) ([]SourceCredential, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,kind,name,server,username,created_at,updated_at FROM source_credentials WHERE organization_id=$1 ORDER BY kind,name`, organizationID)
 	if err != nil {
@@ -2281,6 +2303,28 @@ func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestinat
 	}
 	err := s.Pool.QueryRow(ctx, `INSERT INTO backup_destinations(id,organization_id,name,endpoint,region,bucket,prefix,use_tls,encrypted_credentials) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Endpoint, item.Region, item.Bucket, item.Prefix, item.UseTLS, item.EncryptedCredentials).Scan(&item.CreatedAt, &item.UpdatedAt)
 	return item, err
+}
+
+func (s *Store) CreateBackupDestinationWithAudit(ctx context.Context, principal Principal, item BackupDestination, remoteAddr string) (BackupDestination, error) {
+	if item.ID == uuid.Nil {
+		item.ID = uuid.New()
+	}
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return BackupDestination{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, `INSERT INTO backup_destinations(id,organization_id,name,endpoint,region,bucket,prefix,use_tls,encrypted_credentials) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Endpoint, item.Region, item.Bucket, item.Prefix, item.UseTLS, item.EncryptedCredentials).Scan(&item.CreatedAt, &item.UpdatedAt); err != nil {
+		return BackupDestination{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "backup_destination.create", "backup_destination", item.ID.String(), remoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket}); err != nil {
+		return BackupDestination{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return BackupDestination{}, err
+	}
+	return item, nil
 }
 
 func (s *Store) UpdateBackupDestination(ctx context.Context, organizationID uuid.UUID, item BackupDestination) (BackupDestination, error) {

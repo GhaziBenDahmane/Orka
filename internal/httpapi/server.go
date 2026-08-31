@@ -1540,12 +1540,11 @@ func (s *Server) createBackupDestination(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateBackupDestination(r.Context(), store.BackupDestination{ID: destinationID, OrganizationID: p.OrganizationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted})
+	item, err := s.Store.CreateBackupDestinationWithAudit(r.Context(), p, store.BackupDestination{ID: destinationID, Name: name, Endpoint: in.Endpoint, Region: in.Region, Bucket: in.Bucket, Prefix: in.Prefix, UseTLS: in.UseTLS, EncryptedCredentials: encrypted}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "backup_destination.create", "backup_destination", item.ID.String(), r.RemoteAddr, map[string]any{"endpoint": item.Endpoint, "bucket": item.Bucket})
 	writeJSON(w, 201, item)
 }
 
@@ -2625,12 +2624,11 @@ func (s *Server) createSourceCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateSourceCredential(r.Context(), store.SourceCredential{ID: credentialID, OrganizationID: p.OrganizationID, Kind: in.Kind, Name: in.Name, Server: in.Server, Username: in.Username, EncryptedSecret: encrypted})
+	item, err := s.Store.CreateSourceCredentialWithAudit(r.Context(), p, store.SourceCredential{ID: credentialID, Kind: in.Kind, Name: in.Name, Server: in.Server, Username: in.Username, EncryptedSecret: encrypted}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "source_credential.create", "source_credential", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "server": item.Server})
 	writeJSON(w, 201, item)
 }
 
