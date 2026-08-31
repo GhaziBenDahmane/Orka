@@ -52,9 +52,10 @@ links for every item below.
   verifier from the exact amd64 candidate digest against valid and modified
   signed metadata, including a matching agent CA certificate/private-key
   escrow pair, before accepting `control-plane-recovery-conformance.json`.
-- Built-in 9Router, PostgreSQL, Redis, authenticated libSQL, BarkTrace SQLite,
-  and BarkTrace PostgreSQL templates deploy through the public API and remain
-  healthy across
+- Every built-in template—9Router, PostgreSQL, TimescaleDB, MySQL, MariaDB,
+  MongoDB, Redis, Valkey, authenticated libSQL, ClickHouse, Qdrant,
+  Meilisearch, BarkTrace SQLite, and BarkTrace PostgreSQL—deploys through the
+  public API and remains healthy across
   a forced Swarm task replacement. The 9Router check covers deployment and
   replica convergence without requiring provider configuration or testing its
   product behavior. The data services also accept authenticated

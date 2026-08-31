@@ -6,7 +6,7 @@ project="dockyard-template-smoke"
 port="${DOCKYARD_TEMPLATE_SMOKE_PORT:-18081}"
 evidence_file="${DOCKYARD_TEMPLATE_EVIDENCE:-template-conformance.json}"
 barktrace_version="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}"
-template_selection="${DOCKYARD_TEMPLATE_SMOKE_TEMPLATES:-9router postgres redis libsql barktrace-sqlite barktrace-postgres}"
+template_selection="${DOCKYARD_TEMPLATE_SMOKE_TEMPLATES:-9router postgres timescaledb mysql mariadb mongo redis valkey libsql clickhouse qdrant meilisearch barktrace-sqlite barktrace-postgres}"
 read -r -a template_keys <<<"$template_selection"
 if (( ${#template_keys[@]} == 0 )); then
   echo "DOCKYARD_TEMPLATE_SMOKE_TEMPLATES must select at least one template" >&2
@@ -15,7 +15,7 @@ fi
 declare -A selected_templates=()
 for template_key in "${template_keys[@]}"; do
   case "$template_key" in
-    9router|postgres|redis|libsql|barktrace-sqlite|barktrace-postgres) ;;
+    9router|postgres|timescaledb|mysql|mariadb|mongo|redis|valkey|libsql|clickhouse|qdrant|meilisearch|barktrace-sqlite|barktrace-postgres) ;;
     *) echo "unsupported template smoke target: $template_key" >&2; exit 1 ;;
   esac
   if [[ -n "${selected_templates[$template_key]:-}" ]]; then
@@ -109,6 +109,52 @@ for attempt in range(60):
 '
 }
 
+http_database_probe() {
+  local stack="$1" service_name="$2" engine="$3" mode="$4" secret="$5"
+  docker run --rm --network "${stack}_default" \
+    --env PROBE_HOST="$service_name" --env PROBE_ENGINE="$engine" \
+    --env PROBE_MODE="$mode" --env PROBE_SECRET="$secret" \
+    --env STATE_MARKER="$state_marker" \
+    python:3.13-alpine python3 -c '
+import json, os, time, urllib.request
+engine, mode, host = os.environ["PROBE_ENGINE"], os.environ["PROBE_MODE"], os.environ["PROBE_HOST"]
+secret, marker = os.environ["PROBE_SECRET"], os.environ["STATE_MARKER"]
+if engine == "qdrant":
+    base = "http://%s:6333" % host
+    headers = {"api-key": secret, "content-type": "application/json"}
+    def request(method, path, value=None):
+        data = json.dumps(value).encode() if value is not None else None
+        with urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=headers, method=method), timeout=30) as response: return json.load(response)
+    if mode == "seed":
+        request("PUT", "/collections/dockyard_template_smoke", {"vectors": {"size": 4, "distance": "Cosine"}})
+        request("PUT", "/collections/dockyard_template_smoke/points?wait=true", {"points": [{"id": 1, "vector": [1, 0, 0, 0], "payload": {"value": marker}}]})
+    else:
+        print(request("GET", "/collections/dockyard_template_smoke/points/1")["result"]["payload"]["value"])
+elif engine == "meilisearch":
+    base = "http://%s:7700" % host
+    headers = {"authorization": "Bearer " + secret, "content-type": "application/json"}
+    def request(method, path, value=None):
+        data = json.dumps(value).encode() if value is not None else None
+        with urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=headers, method=method), timeout=30) as response:
+            body = response.read()
+            return json.loads(body) if body else None
+    def wait(task):
+        for _ in range(150):
+            state = request("GET", "/tasks/%s" % task["taskUid"])
+            if state["status"] == "succeeded": return
+            if state["status"] in ("failed", "canceled"): raise RuntimeError(state)
+            time.sleep(0.2)
+        raise RuntimeError("Meilisearch task timed out")
+    if mode == "seed":
+        wait(request("POST", "/indexes", {"uid": "dockyard_template_smoke", "primaryKey": "id"}))
+        wait(request("POST", "/indexes/dockyard_template_smoke/documents", [{"id": 1, "value": marker}]))
+    else:
+        print(request("GET", "/indexes/dockyard_template_smoke/documents/1")["value"])
+else:
+    raise RuntimeError("unsupported HTTP database probe")
+'
+}
+
 seed_product_state() {
   local template_key="$1" service_name="$2" stack="$3" container_id postgres_id
   container_id="$(service_container "$service_name")"
@@ -122,11 +168,42 @@ seed_product_state() {
         --command 'CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id integer PRIMARY KEY, value text NOT NULL)' \
         --command "INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'$state_marker') ON CONFLICT(id) DO UPDATE SET value=excluded.value" >/dev/null
       ;;
+    timescaledb)
+      docker exec --env PGPASSWORD=template-smoke-timescaledb "$container_id" \
+        psql --username smoke --dbname smoke --set ON_ERROR_STOP=1 \
+        --command 'CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id integer PRIMARY KEY, value text NOT NULL)' \
+        --command "INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'$state_marker') ON CONFLICT(id) DO UPDATE SET value=excluded.value" >/dev/null
+      ;;
+    mysql)
+      docker exec --env MYSQL_PWD=template-smoke-mysql "$container_id" mysql --user=smoke --database=smoke \
+        --execute="CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'$state_marker') ON DUPLICATE KEY UPDATE value=VALUES(value)" >/dev/null
+      ;;
+    mariadb)
+      docker exec --env MYSQL_PWD=template-smoke-mariadb "$container_id" mariadb --user=smoke --database=smoke \
+        --execute="CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO dockyard_template_smoke(id,value) VALUES (1,'$state_marker') ON DUPLICATE KEY UPDATE value=VALUES(value)" >/dev/null
+      ;;
+    mongo)
+      docker exec --env MONGO_INITDB_ROOT_USERNAME=smoke --env MONGO_INITDB_ROOT_PASSWORD=template-smoke-mongo --env STATE_MARKER="$state_marker" "$container_id" \
+        mongosh --quiet --nodb --eval 'const u=encodeURIComponent(process.env.MONGO_INITDB_ROOT_USERNAME),p=encodeURIComponent(process.env.MONGO_INITDB_ROOT_PASSWORD); const c=new Mongo("mongodb://"+u+":"+p+"@127.0.0.1:27017/admin"); c.getDB("smoke").dockyard_template_smoke.updateOne({_id:1},{$set:{value:process.env.STATE_MARKER}},{upsert:true})' >/dev/null
+      ;;
     redis)
       docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis SET dockyard:template:smoke "$state_marker" >/dev/null
       ;;
+    valkey)
+      docker exec "$container_id" valkey-cli --no-auth-warning -a template-smoke-valkey SET dockyard:template:smoke "$state_marker" >/dev/null
+      ;;
     libsql)
       libsql_request "$stack" "$service_name" "$(jq -cn --arg marker "$state_marker" '["CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id INTEGER PRIMARY KEY, value TEXT NOT NULL)","INSERT OR REPLACE INTO dockyard_template_smoke(id,value) VALUES (1,\""+$marker+"\")"]')" >/dev/null
+      ;;
+    clickhouse)
+      docker exec "$container_id" clickhouse-client --user smoke --password template-smoke-clickhouse --database smoke --multiquery \
+        --query "CREATE TABLE IF NOT EXISTS dockyard_template_smoke (id UInt64,value String) ENGINE=MergeTree ORDER BY id; INSERT INTO dockyard_template_smoke VALUES (1,'$state_marker')" >/dev/null
+      ;;
+    qdrant)
+      http_database_probe "$stack" "$service_name" qdrant seed template-smoke-qdrant
+      ;;
+    meilisearch)
+      http_database_probe "$stack" "$service_name" meilisearch seed template-smoke-meilisearch-key
       ;;
     barktrace-sqlite)
       docker exec "$container_id" /app/barktrace healthcheck
@@ -159,12 +236,41 @@ verify_product_state() {
       value="$(docker exec --env PGPASSWORD=template-smoke-postgres "$container_id" psql --username smoke --dbname smoke --tuples-only --no-align --set ON_ERROR_STOP=1 --command 'SELECT value FROM dockyard_template_smoke WHERE id=1')"
       test "$value" = "$state_marker"
       ;;
+    timescaledb)
+      value="$(docker exec --env PGPASSWORD=template-smoke-timescaledb "$container_id" psql --username smoke --dbname smoke --tuples-only --no-align --set ON_ERROR_STOP=1 --command 'SELECT value FROM dockyard_template_smoke WHERE id=1')"
+      test "$value" = "$state_marker"
+      ;;
+    mysql)
+      value="$(docker exec --env MYSQL_PWD=template-smoke-mysql "$container_id" mysql --user=smoke --database=smoke --batch --skip-column-names --execute='SELECT value FROM dockyard_template_smoke WHERE id=1')"
+      test "$value" = "$state_marker"
+      ;;
+    mariadb)
+      value="$(docker exec --env MYSQL_PWD=template-smoke-mariadb "$container_id" mariadb --user=smoke --database=smoke --batch --skip-column-names --execute='SELECT value FROM dockyard_template_smoke WHERE id=1')"
+      test "$value" = "$state_marker"
+      ;;
+    mongo)
+      value="$(docker exec --env MONGO_INITDB_ROOT_USERNAME=smoke --env MONGO_INITDB_ROOT_PASSWORD=template-smoke-mongo "$container_id" mongosh --quiet --nodb --eval 'const u=encodeURIComponent(process.env.MONGO_INITDB_ROOT_USERNAME),p=encodeURIComponent(process.env.MONGO_INITDB_ROOT_PASSWORD); const c=new Mongo("mongodb://"+u+":"+p+"@127.0.0.1:27017/admin"); print(c.getDB("smoke").dockyard_template_smoke.findOne({_id:1}).value)')"
+      test "$value" = "$state_marker"
+      ;;
     redis)
       test "$(docker exec "$container_id" redis-cli --no-auth-warning -a template-smoke-redis GET dockyard:template:smoke)" = "$state_marker"
+      ;;
+    valkey)
+      test "$(docker exec "$container_id" valkey-cli --no-auth-warning -a template-smoke-valkey GET dockyard:template:smoke)" = "$state_marker"
       ;;
     libsql)
       value="$(libsql_request "$stack" "$service_name" '["SELECT value FROM dockyard_template_smoke WHERE id=1"]' | jq -er '.[0].results.rows[0][0]')"
       test "$value" = "$state_marker"
+      ;;
+    clickhouse)
+      value="$(docker exec "$container_id" clickhouse-client --user smoke --password template-smoke-clickhouse --database smoke --query 'SELECT value FROM dockyard_template_smoke WHERE id=1')"
+      test "$value" = "$state_marker"
+      ;;
+    qdrant)
+      test "$(http_database_probe "$stack" "$service_name" qdrant verify template-smoke-qdrant)" = "$state_marker"
+      ;;
+    meilisearch)
+      test "$(http_database_probe "$stack" "$service_name" meilisearch verify template-smoke-meilisearch-key)" = "$state_marker"
       ;;
     barktrace-sqlite)
       docker exec "$container_id" /app/barktrace healthcheck
@@ -226,11 +332,35 @@ for template_key in "${template_keys[@]}"; do
     postgres)
       variables='{"postgres_user":"smoke","postgres_password":"template-smoke-postgres","postgres_database":"smoke"}'
       ;;
+    timescaledb)
+      variables='{"postgres_user":"smoke","postgres_password":"template-smoke-timescaledb","postgres_database":"smoke"}'
+      ;;
+    mysql)
+      variables='{"mysql_user":"smoke","mysql_password":"template-smoke-mysql","mysql_root_password":"template-smoke-mysql-root","mysql_database":"smoke"}'
+      ;;
+    mariadb)
+      variables='{"mariadb_user":"smoke","mariadb_password":"template-smoke-mariadb","mariadb_root_password":"template-smoke-mariadb-root","mariadb_database":"smoke"}'
+      ;;
+    mongo)
+      variables='{"mongo_user":"smoke","mongo_password":"template-smoke-mongo","mongo_database":"smoke"}'
+      ;;
     redis)
       variables='{"redis_password":"template-smoke-redis"}'
       ;;
+    valkey)
+      variables='{"valkey_password":"template-smoke-valkey"}'
+      ;;
     libsql)
       variables='{"libsql_user":"smoke","libsql_password":"template-smoke-libsql"}'
+      ;;
+    clickhouse)
+      variables='{"clickhouse_user":"smoke","clickhouse_password":"template-smoke-clickhouse","clickhouse_database":"smoke"}'
+      ;;
+    qdrant)
+      variables='{"qdrant_api_key":"template-smoke-qdrant"}'
+      ;;
+    meilisearch)
+      variables='{"meilisearch_master_key":"template-smoke-meilisearch-key"}'
       ;;
     barktrace-sqlite)
       variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"$barktrace_version\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"

@@ -118,6 +118,9 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(raw)
+	if !strings.Contains(script, `9router postgres timescaledb mysql mariadb mongo redis valkey libsql clickhouse qdrant meilisearch barktrace-sqlite barktrace-postgres`) {
+		t.Fatal("default template smoke selection does not cover the complete built-in catalog")
+	}
 	verifyStart := strings.Index(script, "verify_product_state() {")
 	if verifyStart < 0 {
 		t.Fatal("template smoke state verifier function is missing")
@@ -158,6 +161,20 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 	if !strings.Contains(script, `libsql_password":"template-smoke-libsql`) || !strings.Contains(verifyBody, `SELECT value FROM dockyard_template_smoke WHERE id=1`) {
 		t.Fatal("libSQL template smoke must authenticate and verify persisted application data")
 	}
+	for template, verifier := range map[string]string{
+		"timescaledb": `PGPASSWORD=template-smoke-timescaledb`,
+		"mysql":       `MYSQL_PWD=template-smoke-mysql`,
+		"mariadb":     `MYSQL_PWD=template-smoke-mariadb`,
+		"mongo":       `dockyard_template_smoke.findOne`,
+		"valkey":      `valkey-cli --no-auth-warning`,
+		"clickhouse":  `clickhouse-client --user smoke`,
+		"qdrant":      `qdrant verify template-smoke-qdrant`,
+		"meilisearch": `meilisearch verify template-smoke-meilisearch-key`,
+	} {
+		if !strings.Contains(verifyBody, verifier) {
+			t.Fatalf("%s template smoke lacks a read-only persisted-state verifier", template)
+		}
+	}
 	for _, evidence := range []string{"stateSeededBeforeRestart", "postRestartReadOnly", "dependencyRestartVerified", "sqliteFileIdentityVerified"} {
 		if !strings.Contains(loop, evidence) {
 			t.Fatalf("template conformance evidence is missing %s", evidence)
@@ -175,8 +192,8 @@ func TestTemplateSmokeVerifiesPersistedStateWithoutReseeding(t *testing.T) {
 	if !strings.Contains(string(releaseWorkflow), `.dependencyImages | length == 1 and .[0].service == "postgres"`) {
 		t.Fatal("release promotion does not require the BarkTrace PostgreSQL dependency image")
 	}
-	if !strings.Contains(string(releaseWorkflow), `.productCount == 6`) || !strings.Contains(string(releaseWorkflow), `["9router","barktrace-postgres","barktrace-sqlite","libsql","postgres","redis"]`) {
-		t.Fatal("release promotion does not require the authenticated libSQL template smoke evidence")
+	if !strings.Contains(string(releaseWorkflow), `.productCount == 14`) || !strings.Contains(string(releaseWorkflow), `["9router","barktrace-postgres","barktrace-sqlite","clickhouse","libsql","mariadb","meilisearch","mongo","mysql","postgres","qdrant","redis","timescaledb","valkey"]`) {
+		t.Fatal("release promotion does not require every built-in template smoke result")
 	}
 }
 

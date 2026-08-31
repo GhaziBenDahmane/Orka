@@ -92,12 +92,12 @@ for that identity.
 Run `make web` after changing files under `web/`.
 
 Run `make test-templates` to start an isolated controller and instantiate the
-built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace PostgreSQL
-products through the API. The test deploys them to Docker Swarm, verifies
-replica convergence and immutable image resolution, then forces task
-replacement. Stateful products additionally prove application data survives;
-9Router only has its deployment lifecycle tested and requires no provider
-credentials. For a bounded local run, set `DOCKYARD_TEMPLATE_SMOKE_TEMPLATES`
+built-in 9Router, database, and BarkTrace products through the API. The test
+deploys all fourteen templates to Docker Swarm, verifies replica convergence
+and immutable image resolution, then forces task replacement. Stateful
+products additionally prove application data survives; 9Router only has its
+deployment lifecycle tested and requires no provider credentials. For a
+bounded local run, set `DOCKYARD_TEMPLATE_SMOKE_TEMPLATES`
 to a space-separated subset, for example
 `barktrace-sqlite barktrace-postgres`; release CI leaves it unset and always
 executes the complete five-product gate.
