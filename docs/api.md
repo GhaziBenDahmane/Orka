@@ -662,7 +662,10 @@ catalog.
 Template previews execute the same variable resolution, mount conversion, and
 safe-Compose validation as creation, but omit secret environment values,
 commands, and inline file contents. Template instantiation is atomic: the Compose service, routes, and provenance
-record either commit together or are all rolled back. Service detail responses
+record and operator audit evidence either commit together or are all rolled
+back. Template import and in-place upgrades also commit with their audit
+evidence, including every Compose, environment, route, and provenance change.
+Service detail responses
 include redacted template key, version, checksum, base-domain provenance, and a
 Compose-drift flag. They also include the tenant-scoped latest Swarm
 `reconciliation` state, check timestamp, consecutive failure count, diagnostic

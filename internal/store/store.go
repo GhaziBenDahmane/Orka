@@ -3114,8 +3114,38 @@ func (s *Store) ListDatabases(ctx context.Context, organizationID, environmentID
 }
 
 func (s *Store) CreateTemplate(ctx context.Context, item Template) (Template, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Template{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createTemplateTx(ctx, tx, item)
+	if err != nil {
+		return Template{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateTemplateWithAudit(ctx context.Context, principal Principal, item Template, remoteAddr string) (Template, error) {
+	item.OrganizationID = &principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Template{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createTemplateTx(ctx, tx, item)
+	if err != nil {
+		return Template{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template.import", "template", item.ID.String(), remoteAddr, nil); err != nil {
+		return Template{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createTemplateTx(ctx context.Context, tx pgx.Tx, item Template) (Template, error) {
 	item.ID = uuid.New()
-	err := s.Pool.QueryRow(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING created_at`, item.ID, item.OrganizationID, item.RepositoryID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum).Scan(&item.CreatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING created_at`, item.ID, item.OrganizationID, item.RepositoryID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum).Scan(&item.CreatedAt)
 	return item, err
 }
 
@@ -3256,6 +3286,37 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 		return ComposeService{}, nil, err
 	}
 	defer tx.Rollback(ctx)
+	service, routes, err = s.createTemplateServiceTx(ctx, tx, organizationID, service, routes, instance)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	return service, routes, tx.Commit(ctx)
+}
+
+func (s *Store) CreateTemplateServiceWithAudit(ctx context.Context, principal Principal, service ComposeService, routes []Route, instance TemplateInstance, remoteAddr string) (ComposeService, []Route, error) {
+	if instance.ManagedEnvironmentKeys == nil {
+		instance.ManagedEnvironmentKeys = []string{}
+	}
+	instance.EnvironmentOwnershipRecorded = true
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	service, routes, err = s.createTemplateServiceTx(ctx, tx, principal.OrganizationID, service, routes, instance)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template.instantiate", "compose_service", service.ID.String(), remoteAddr, map[string]any{"templateId": instance.TemplateID}); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, nil, err
+	}
+	return service, routes, nil
+}
+
+func (s *Store) createTemplateServiceTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, service ComposeService, routes []Route, instance TemplateInstance) (ComposeService, []Route, error) {
 	projectID, err := lockEnvironmentForServiceCreation(ctx, tx, organizationID, service.EnvironmentID)
 	if err != nil {
 		return ComposeService{}, nil, err
@@ -3292,9 +3353,6 @@ func (s *Store) CreateTemplateService(ctx context.Context, organizationID uuid.U
 	if err = tx.QueryRow(ctx, `INSERT INTO template_instances(compose_service_id,template_id,template_key,template_version,template_checksum,applied_compose_checksum,base_domain,encrypted_variables,encrypted_overrides,managed_environment_keys,environment_ownership_recorded) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING created_at,updated_at`, instance.ComposeServiceID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.BaseDomain, instance.EncryptedVariables, instance.EncryptedOverrides, instance.ManagedEnvironmentKeys, instance.EnvironmentOwnershipRecorded).Scan(&instance.CreatedAt, &instance.UpdatedAt); err != nil {
 		return ComposeService{}, nil, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return ComposeService{}, nil, err
-	}
 	return service, routes, nil
 }
 
@@ -3317,25 +3375,59 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 		return ComposeService{}, nil, err
 	}
 	defer tx.Rollback(ctx)
+	service, routes, err = s.upgradeTemplateServiceTx(ctx, tx, organizationID, expectedRevision, service, routes, instance)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, nil, err
+	}
+	return service, routes, nil
+}
+
+func (s *Store) UpgradeTemplateServiceWithAudit(ctx context.Context, principal Principal, expectedRevision int64, service ComposeService, routes []Route, instance TemplateInstance, remoteAddr string, metadata any) (ComposeService, []Route, error) {
+	if instance.ManagedEnvironmentKeys == nil {
+		instance.ManagedEnvironmentKeys = []string{}
+	}
+	instance.EnvironmentOwnershipRecorded = true
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	defer tx.Rollback(ctx)
+	service, routes, err = s.upgradeTemplateServiceTx(ctx, tx, principal.OrganizationID, expectedRevision, service, routes, instance)
+	if err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template.upgrade", "compose_service", service.ID.String(), remoteAddr, metadata); err != nil {
+		return ComposeService{}, nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, nil, err
+	}
+	return service, routes, nil
+}
+
+func (s *Store) upgradeTemplateServiceTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, expectedRevision int64, service ComposeService, routes []Route, instance TemplateInstance) (ComposeService, []Route, error) {
 	var projectID, environmentID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s,t`, service.ID, organizationID).Scan(&projectID, &environmentID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id JOIN template_instances t ON t.compose_service_id=s.id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s,t`, service.ID, organizationID).Scan(&projectID, &environmentID); errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrNotFound
 	} else if err != nil {
 		return ComposeService{}, nil, err
 	}
-	if err = s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
+	if err := s.enforcePolicy(ctx, tx, organizationID, &projectID, &environmentID, "deployment"); err != nil {
 		return ComposeService{}, nil, err
 	}
-	if err = ensureNoActiveDeploymentTx(ctx, tx, service.ID); err != nil {
+	if err := ensureNoActiveDeploymentTx(ctx, tx, service.ID); err != nil {
 		return ComposeService{}, nil, err
 	}
-	if err = ensureProtectedVolumesDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
+	if err := ensureProtectedVolumesDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
 		return ComposeService{}, nil, err
 	}
-	if err = ensureScheduledTargetsDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
+	if err := ensureScheduledTargetsDeclared(ctx, tx, service.ID, service.ComposeYAML); err != nil {
 		return ComposeService{}, nil, err
 	}
-	err = tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 AND deletion_requested_at IS NULL RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,desired_state,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
+	err := tx.QueryRow(ctx, `UPDATE compose_services SET compose_yaml=$3,encrypted_env=$4,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 AND deletion_requested_at IS NULL RETURNING id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,encrypted_env,revision,desired_state,created_at,updated_at`, service.ID, expectedRevision, service.ComposeYAML, service.EncryptedEnv).Scan(&service.ID, &service.EnvironmentID, &service.Name, &service.Slug, &service.StackName, &service.StorageNodeID, &service.ComposeYAML, &service.EncryptedEnv, &service.Revision, &service.DesiredState, &service.CreatedAt, &service.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ComposeService{}, nil, ErrBusy
 	}
@@ -3357,9 +3449,6 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE template_instances SET template_id=$2,template_key=$3,template_version=$4,template_checksum=$5,applied_compose_checksum=$6,encrypted_variables=$7,encrypted_overrides=$8,managed_environment_keys=$9,environment_ownership_recorded=$10,updated_at=now() WHERE compose_service_id=$1`, service.ID, instance.TemplateID, instance.TemplateKey, instance.TemplateVersion, instance.TemplateChecksum, instance.AppliedComposeChecksum, instance.EncryptedVariables, instance.EncryptedOverrides, instance.ManagedEnvironmentKeys, instance.EnvironmentOwnershipRecorded); err != nil {
-		return ComposeService{}, nil, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return ComposeService{}, nil, err
 	}
 	return service, routes, nil

@@ -1809,12 +1809,11 @@ func (s *Server) importDokployTemplate(w http.ResponseWriter, r *http.Request) {
 	config, _ := json.Marshal(map[string]string{"templateToml": in.TemplateTOML, "safetyClass": safetyClass, "safetyReason": safetyReason})
 	sum := sha256.Sum256(append([]byte(in.TemplateTOML), []byte(in.ComposeYAML)...))
 	p := principal(r)
-	item, err := s.Store.CreateTemplate(r.Context(), store.Template{OrganizationID: &p.OrganizationID, Key: in.Key, Version: in.Version, Name: in.Name, Description: in.Description, ComposeYAML: in.ComposeYAML, Config: config, Source: "dokploy", Checksum: hex.EncodeToString(sum[:])})
+	item, err := s.Store.CreateTemplateWithAudit(r.Context(), p, store.Template{Key: in.Key, Version: in.Version, Name: in.Name, Description: in.Description, ComposeYAML: in.ComposeYAML, Config: config, Source: "dokploy", Checksum: hex.EncodeToString(sum[:])}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template.import", "template", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
 
@@ -1958,12 +1957,11 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	templateRef := item.ID
-	service, routes, err := s.Store.CreateTemplateService(r.Context(), p.OrganizationID, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides, ManagedEnvironmentKeys: environmentKeys(instance.Environment)})
+	service, routes, err := s.Store.CreateTemplateServiceWithAudit(r.Context(), p, store.ComposeService{ID: serviceID, EnvironmentID: in.EnvironmentID, Name: in.Name, Slug: in.Slug, StackName: "tpl-" + in.Slug + "-" + shortID, ComposeYAML: instance.ComposeYAML, EncryptedEnv: encryptedEnv}, routes, store.TemplateInstance{TemplateID: &templateRef, TemplateKey: item.Key, TemplateVersion: item.Version, TemplateChecksum: item.Checksum, AppliedComposeChecksum: hex.EncodeToString(composeSum[:]), BaseDomain: in.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides, ManagedEnvironmentKeys: environmentKeys(instance.Environment)}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template.instantiate", "compose_service", service.ID.String(), r.RemoteAddr, map[string]any{"templateId": templateID})
 	writeJSON(w, 201, map[string]any{"service": service, "routes": routes})
 }
 
@@ -2175,7 +2173,7 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 	upgradedSum := sha256.Sum256([]byte(upgraded.ComposeYAML))
 	targetRef := target.ID
 	service.ComposeYAML, service.EncryptedEnv = upgraded.ComposeYAML, encryptedEnvironment
-	service, routes, err = s.Store.UpgradeTemplateService(r.Context(), p.OrganizationID, service.Revision, service, routes, store.TemplateInstance{TemplateID: &targetRef, TemplateKey: target.Key, TemplateVersion: target.Version, TemplateChecksum: target.Checksum, AppliedComposeChecksum: hex.EncodeToString(upgradedSum[:]), BaseDomain: provenance.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides, ManagedEnvironmentKeys: newManagedEnvironmentKeys})
+	service, routes, err = s.Store.UpgradeTemplateServiceWithAudit(r.Context(), p, service.Revision, service, routes, store.TemplateInstance{TemplateID: &targetRef, TemplateKey: target.Key, TemplateVersion: target.Version, TemplateChecksum: target.Checksum, AppliedComposeChecksum: hex.EncodeToString(upgradedSum[:]), BaseDomain: provenance.BaseDomain, EncryptedVariables: encryptedVariables, EncryptedOverrides: encryptedOverrides, ManagedEnvironmentKeys: newManagedEnvironmentKeys}, r.RemoteAddr, map[string]any{"fromTemplateId": provenance.TemplateID, "toTemplateId": target.ID, "fromVersion": provenance.TemplateVersion, "toVersion": target.Version, "replacedDrift": in.AllowDrift})
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, 409, "concurrent_update", "service changed while the template upgrade was prepared")
@@ -2184,7 +2182,6 @@ func (s *Server) upgradeTemplateService(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template.upgrade", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"fromTemplateId": provenance.TemplateID, "toTemplateId": target.ID, "fromVersion": provenance.TemplateVersion, "toVersion": target.Version, "replacedDrift": in.AllowDrift})
 	writeJSON(w, 200, map[string]any{"service": service, "routes": routes})
 }
 
