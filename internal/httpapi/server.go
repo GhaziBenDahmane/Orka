@@ -2689,7 +2689,7 @@ func (s *Server) rotateSourceCredential(w http.ResponseWriter, r *http.Request) 
 		s.writeInternalError(w, r, 500, "encryption_failed", "source credential could not be encrypted", err)
 		return
 	}
-	item, err := s.Store.RotateSourceCredential(r.Context(), p.OrganizationID, id, encrypted)
+	item, err := s.Store.RotateSourceCredentialWithAudit(r.Context(), p, id, encrypted, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "resource_busy", "wait for active deployments or template synchronization before rotating this credential")
@@ -2698,7 +2698,6 @@ func (s *Server) rotateSourceCredential(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "source_credential.rotate", "source_credential", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "server": item.Server})
 	writeJSON(w, 200, item)
 }
 
@@ -2760,7 +2759,7 @@ func (s *Server) deleteSourceCredential(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteSourceCredential(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteSourceCredentialWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "resource_busy", "wait for template synchronization to finish before deleting this credential")
 			return
@@ -2768,7 +2767,6 @@ func (s *Server) deleteSourceCredential(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "source_credential.delete", "source_credential", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
 

@@ -154,7 +154,9 @@ credential referenced by a queued or running deployment returns
 `deployment_active`; a credential used by an active template-repository
 synchronization returns `resource_busy`. In either case the credential remains
 unchanged and the operator can retry after the operation reaches a terminal
-state.
+state. Successful rotation and deletion commit atomically with their audit
+event, including service-account attribution; an audit failure rolls back the
+secret mutation.
 | GET/POST/PUT/PATCH/DELETE | `/scim/v2/Users…` | SCIM 2.0 user provisioning |
 | GET/POST/PUT/PATCH/DELETE | `/scim/v2/Groups…` | SCIM groups and group-to-role mapping |
 | GET | `/scim/v2/Schemas…`, `/scim/v2/ResourceTypes…` | Public SCIM schema and resource-type discovery |

@@ -1397,7 +1397,29 @@ func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id u
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err = lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
+	if err = deleteSourceCredentialTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteSourceCredentialWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteSourceCredentialTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "source_credential.delete", "source_credential", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteSourceCredentialTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
+	if err := lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
@@ -1407,7 +1429,7 @@ func (s *Store) DeleteSourceCredential(ctx context.Context, organizationID, id u
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) RotateSourceCredential(ctx context.Context, organizationID, id uuid.UUID, encryptedSecret string) (SourceCredential, error) {
@@ -1416,18 +1438,45 @@ func (s *Store) RotateSourceCredential(ctx context.Context, organizationID, id u
 		return SourceCredential{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err = lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
-		return SourceCredential{}, err
-	}
-	var item SourceCredential
-	err = tx.QueryRow(ctx, `UPDATE source_credentials SET encrypted_secret=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at`, id, organizationID, encryptedSecret).Scan(&item.ID, &item.OrganizationID, &item.Kind, &item.Name, &item.Server, &item.Username, &item.EncryptedSecret, &item.CreatedAt, &item.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return SourceCredential{}, ErrNotFound
-	}
+	item, err := rotateSourceCredentialTx(ctx, tx, organizationID, id, encryptedSecret)
 	if err != nil {
 		return SourceCredential{}, err
 	}
-	return item, tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return SourceCredential{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) RotateSourceCredentialWithAudit(ctx context.Context, principal Principal, id uuid.UUID, encryptedSecret, remoteAddr string) (SourceCredential, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SourceCredential{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := rotateSourceCredentialTx(ctx, tx, principal.OrganizationID, id, encryptedSecret)
+	if err != nil {
+		return SourceCredential{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "source_credential.rotate", "source_credential", item.ID.String(), remoteAddr, map[string]any{"kind": item.Kind, "server": item.Server}); err != nil {
+		return SourceCredential{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return SourceCredential{}, err
+	}
+	return item, nil
+}
+
+func rotateSourceCredentialTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, encryptedSecret string) (SourceCredential, error) {
+	if err := lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
+		return SourceCredential{}, err
+	}
+	var item SourceCredential
+	err := tx.QueryRow(ctx, `UPDATE source_credentials SET encrypted_secret=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at`, id, organizationID, encryptedSecret).Scan(&item.ID, &item.OrganizationID, &item.Kind, &item.Name, &item.Server, &item.Username, &item.EncryptedSecret, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SourceCredential{}, ErrNotFound
+	}
+	return item, err
 }
 
 func lockSourceCredentialConsumers(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {

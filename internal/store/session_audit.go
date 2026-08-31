@@ -163,6 +163,10 @@ func appendPrincipalAudit(ctx context.Context, tx pgx.Tx, principal Principal, a
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)`, principal.OrganizationID, principal.UserID, action, resourceType, resourceID, remoteAddr, auditMetadata)
+	var serviceAccountID any
+	if principal.ServiceAccountID != nil {
+		serviceAccountID = *principal.ServiceAccountID
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, principal.OrganizationID, nullableUUID(principal.UserID), serviceAccountID, action, resourceType, resourceID, remoteAddr, auditMetadata)
 	return err
 }
