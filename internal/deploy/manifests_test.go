@@ -450,3 +450,26 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 		t.Fatal("release workflow does not safely resume an exact existing version tag or reject a mismatched tag")
 	}
 }
+
+func TestControlPlaneRestoreUsesAuthenticatedPrivateSnapshots(t *testing.T) {
+	contents, err := os.ReadFile("../../scripts/restore-control-plane.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(contents)
+	for _, required := range []string{
+		"verify-control-plane-recovery-manifest",
+		"--network none --read-only --cap-drop ALL --security-opt no-new-privileges",
+		`cp -P -- "$bundle/database.dump" "$temporary/database.dump"`,
+		`sha256sum "$temporary/database.dump"`,
+		`pg_restore --list <"$temporary/database.dump"`,
+		`--exit-on-error <"$temporary/database.dump"`,
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("control-plane restore is missing snapshot invariant %q", required)
+		}
+	}
+	if strings.Contains(script, `pg_restore --list <"$bundle/database.dump"`) || strings.Contains(script, `--exit-on-error <"$bundle/database.dump"`) {
+		t.Fatal("control-plane restore consumes the mutable bundle dump after verification")
+	}
+}

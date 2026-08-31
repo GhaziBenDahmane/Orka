@@ -522,21 +522,28 @@ export DOCKYARD_RESTORE_CONFIRM='restore:dockyard'
 export DOCKYARD_IMAGE='ghcr.io/example/dockyard@sha256:...'
 export DOCKYARD_MASTER_KEY_FILE=/secure/escrow/dockyard-master-key
 export DOCKYARD_RECOVERY_VERIFY_KEY_FILE=/secure/escrow/dockyard-recovery-verify-key.pem
+export DOCKYARD_RECOVERY_WORK_DIR=/var/lib/dockyard-recovery
 scripts/restore-control-plane.sh /secure/backups/dockyard-2026-08-28
 docker service scale dockyard_dockyard=1
 ```
 
-The restore rejects unsigned manifests and verifies the signature with the
-independently supplied Ed25519 public key before trusting any bundle metadata.
-The current authenticated bundle format is version 2; create a fresh bundle
-before upgrading from a version that produced unsigned format-1 bundles. It
-then creates a separate staging database, restores the complete
-dump in one transaction, and verifies its migration version. Only then does it
+The restore rejects unsigned manifests and uses the exact recorded controller
+image, isolated without network access, to strictly decode and verify one
+signed in-memory metadata snapshot with the independently supplied Ed25519
+public key and master-key fingerprint. The current authenticated bundle format
+is version 2; create a fresh bundle before upgrading from a version that
+produced unsigned format-1 bundles. It copies the dump to a private temporary
+file, verifies that snapshot against the signed size and checksum, then creates
+a separate staging database, restores the complete snapshot in one transaction,
+and verifies its migration version. Only then does it
 atomically rename the current database aside and the validated staging database
 into place. It prints the retained previous database name; keep that rollback
 copy until the exact image recorded in the manifest starts successfully, login
 and representative secret decryption work, and a managed-database restore drill
-passes. Drop the retained database explicitly after validation. To roll back,
+passes. `DOCKYARD_RECOVERY_WORK_DIR` defaults to `TMPDIR` or `/var/tmp`; place it
+on trusted storage with free space for at least one full dump snapshot. The
+private workspace is removed on success or failure. Drop the retained database
+explicitly after validation. To roll back,
 stop every controller again, drop the failed restored database, and rename the
 printed previous database back to `dockyard`. Deployments
 using external PostgreSQL should use the provider's consistent snapshot/PITR

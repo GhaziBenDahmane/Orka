@@ -45,7 +45,10 @@ links for every item below.
   rolls back to the last successful immutable snapshot on the live Swarm. The
   smoke test then backs up the control plane, rejects active-controller,
   modified-dump, and wrong-key restores, deletes live data, restores the dump,
-  and verifies the authenticated workload state after restart.
+  and verifies the authenticated workload state after restart. Restore metadata
+  must be strictly verified as one signed snapshot by the recorded controller
+  image, and the staged database must consume the same private dump snapshot
+  whose signed checksum and size were validated.
 - Built-in 9Router, PostgreSQL, Redis, BarkTrace SQLite, and BarkTrace
   PostgreSQL templates deploy through the public API and remain healthy across
   a forced Swarm task replacement. The 9Router check covers deployment and

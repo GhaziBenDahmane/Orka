@@ -146,6 +146,11 @@ docker service inspect "${stack_name}_web" --format '{{.Spec.TaskTemplate.Contai
 # the bundled production stack. The backup intentionally excludes the master
 # key and records only its fingerprint.
 controller_image_id="$(docker image inspect "$project-dockyard" --format '{{.Id}}')"
+# Compose-built images have a local config digest but no pullable repository
+# digest. The restore script accepts this explicit runtime alias only after
+# proving its local image ID equals the signed DOCKYARD_IMAGE suffix.
+export DOCKYARD_RECOVERY_VERIFIER_IMAGE="$project-dockyard"
+export DOCKYARD_RECOVERY_WORK_DIR="$recovery_root"
 if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
   DOCKYARD_CONTROLLER_CONTAINER="$project-dockyard-1" \

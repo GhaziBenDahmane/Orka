@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+
 if [ "$#" -ne 1 ]; then
   echo "usage: $0 RECOVERY_BUNDLE_DIRECTORY" >&2
   exit 2
@@ -25,7 +27,7 @@ esac
 case "$database_user" in
   ""|-*|*[!A-Za-z0-9_]*) echo "invalid DOCKYARD_POSTGRES_USER" >&2; exit 1 ;;
 esac
-for command in awk base64 docker find grep jq mktemp openssl sha256sum tr wc; do
+for command in awk base64 cp docker find grep jq mktemp openssl sha256sum tr wc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -50,6 +52,32 @@ if [ -z "$master_key" ]; then
   echo "DOCKYARD_MASTER_KEY or DOCKYARD_MASTER_KEY_FILE is required for recovery-set verification" >&2
   exit 1
 fi
+umask 077
+work_root=${DOCKYARD_RECOVERY_WORK_DIR:-${TMPDIR:-/var/tmp}}
+work_root=$(CDPATH= cd -- "$work_root" && pwd -P) || {
+  echo "DOCKYARD_RECOVERY_WORK_DIR must name an existing writable directory" >&2
+  exit 1
+}
+temporary=$(mktemp -d "$work_root/.dockyard-restore.XXXXXX") || {
+  echo "could not create a private recovery workspace in DOCKYARD_RECOVERY_WORK_DIR" >&2
+  exit 1
+}
+staging_database=""
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -n "$staging_database" ]; then
+    docker exec --user postgres "$postgres_container" dropdb --username "$database_user" --maintenance-db postgres --if-exists --force "$staging_database" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$temporary"
+  trap - EXIT HUP INT TERM
+  exit "$status"
+}
+trap cleanup EXIT HUP INT TERM
+if ! printf '%s' "$master_key" | base64 -d >"$temporary/master-key.bin" 2>/dev/null || [ "$(wc -c <"$temporary/master-key.bin" | tr -d ' ')" -ne 32 ]; then
+  echo "DOCKYARD_MASTER_KEY must be a base64-encoded 32-byte key" >&2
+  exit 1
+fi
+unset master_key DOCKYARD_MASTER_KEY
 if [ ! -f "$bundle/manifest.json" ] || [ ! -f "$bundle/manifest.sig" ] || [ ! -f "$bundle/database.dump" ] || [ -L "$bundle/manifest.json" ] || [ -L "$bundle/manifest.sig" ] || [ -L "$bundle/database.dump" ]; then
   echo "recovery bundle must contain regular manifest.json, manifest.sig, and database.dump files" >&2
   exit 1
@@ -75,6 +103,11 @@ if ! openssl pkeyutl -verify -rawin -pubin -inkey "$verify_key" -in "$bundle/man
   exit 1
 fi
 recovery_signing_key_sha256=$(openssl pkey -pubin -in "$verify_key" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+
+if ! "$root/scripts/ci/validate-image-reference.sh" "$image" >/dev/null; then
+  echo "DOCKYARD_IMAGE must be pinned by sha256 digest" >&2
+  exit 1
+fi
 
 controller_service=${DOCKYARD_CONTROLLER_SERVICE:-${stack}_dockyard}
 case "$controller_service" in
@@ -111,15 +144,50 @@ case "$postgres_container" in
   -*|*[!A-Za-z0-9_.-]*) echo "invalid PostgreSQL container name or ID" >&2; exit 1 ;;
 esac
 
-format_version=$(jq -er '.formatVersion' "$bundle/manifest.json")
-expected_database=$(jq -er '.database' "$bundle/manifest.json")
-expected_image=$(jq -er '.controllerImage' "$bundle/manifest.json")
-expected_dump_sha256=$(jq -er '.databaseSha256' "$bundle/manifest.json")
-expected_dump_bytes=$(jq -er '.databaseBytes' "$bundle/manifest.json")
-expected_master_sha256=$(jq -er '.masterKeySha256' "$bundle/manifest.json")
-expected_agent_ca_sha256=$(jq -er '.agentCaSha256' "$bundle/manifest.json")
-expected_schema_version=$(jq -er '.schemaVersion' "$bundle/manifest.json")
-expected_recovery_signing_key_sha256=$(jq -er '.recoverySigningKeySha256 | select(test("^[a-f0-9]{64}$"))' "$bundle/manifest.json")
+canonical_file() {
+  directory=$(CDPATH= cd -- "$(dirname "$1")" && pwd -P) || { echo "cannot resolve recovery input path" >&2; exit 1; }
+  printf '%s/%s' "$directory" "$(basename "$1")"
+}
+manifest_file=$(canonical_file "$bundle/manifest.json")
+signature_file=$(canonical_file "$bundle/manifest.sig")
+verify_key=$(canonical_file "$verify_key")
+master_key_snapshot=$(canonical_file "$temporary/master-key.bin")
+for recovery_path in "$manifest_file" "$signature_file" "$verify_key" "$master_key_snapshot"; do
+  case "$recovery_path" in *,*) echo "recovery input paths must not contain commas" >&2; exit 1 ;; esac
+done
+verifier_image=${DOCKYARD_RECOVERY_VERIFIER_IMAGE:-$image}
+if [ "$verifier_image" != "$image" ]; then
+  verifier_image_id=$(docker image inspect "$verifier_image" --format '{{.Id}}' 2>/dev/null) || {
+    echo "DOCKYARD_RECOVERY_VERIFIER_IMAGE is unavailable" >&2
+    exit 1
+  }
+  [ "${image##*@}" = "$verifier_image_id" ] || {
+    echo "DOCKYARD_RECOVERY_VERIFIER_IMAGE does not match DOCKYARD_IMAGE" >&2
+    exit 1
+  }
+fi
+verified_manifest=$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --mount "type=bind,src=$manifest_file,dst=/input/manifest.json,readonly" \
+  --mount "type=bind,src=$signature_file,dst=/input/manifest.sig,readonly" \
+  --mount "type=bind,src=$verify_key,dst=/input/verify-key.pem,readonly" \
+  --mount "type=bind,src=$master_key_snapshot,dst=/input/master-key.bin,readonly" \
+  --entrypoint /usr/local/bin/dockyard "$verifier_image" verify-control-plane-recovery-manifest \
+  --manifest /input/manifest.json --signature /input/manifest.sig \
+  --public-key-file /input/verify-key.pem --master-key-file /input/master-key.bin \
+  --stack "$stack" --database "$database" --controller-image "$image") || {
+    echo "recovery bundle manifest verification failed" >&2
+    exit 1
+  }
+
+format_version=$(printf '%s' "$verified_manifest" | jq -er '.formatVersion')
+expected_database=$(printf '%s' "$verified_manifest" | jq -er '.database')
+expected_image=$(printf '%s' "$verified_manifest" | jq -er '.controllerImage')
+expected_dump_sha256=$(printf '%s' "$verified_manifest" | jq -er '.databaseSha256')
+expected_dump_bytes=$(printf '%s' "$verified_manifest" | jq -er '.databaseBytes')
+expected_master_sha256=$(printf '%s' "$verified_manifest" | jq -er '.masterKeySha256')
+expected_agent_ca_sha256=$(printf '%s' "$verified_manifest" | jq -er '.agentCaSha256')
+expected_schema_version=$(printf '%s' "$verified_manifest" | jq -er '.schemaVersion')
+expected_recovery_signing_key_sha256=$(printf '%s' "$verified_manifest" | jq -er '.recoverySigningKeySha256 | select(test("^[a-f0-9]{64}$"))')
 if [ "$format_version" != "2" ] || [ "$expected_database" != "$database" ]; then
   echo "recovery bundle format or database does not match" >&2
   exit 1
@@ -132,31 +200,20 @@ if [ "$expected_image" != "$image" ]; then
   echo "DOCKYARD_IMAGE does not match the recovery bundle" >&2
   exit 1
 fi
-actual_dump_sha256=$(sha256sum "$bundle/database.dump" | awk '{print $1}')
-actual_dump_bytes=$(wc -c <"$bundle/database.dump" | tr -d ' ')
+cp -P -- "$bundle/database.dump" "$temporary/database.dump"
+if [ ! -f "$temporary/database.dump" ] || [ -L "$temporary/database.dump" ]; then
+  echo "could not create a private database dump snapshot" >&2
+  exit 1
+fi
+chmod 0600 "$temporary/database.dump"
+actual_dump_sha256=$(sha256sum "$temporary/database.dump" | awk '{print $1}')
+actual_dump_bytes=$(wc -c <"$temporary/database.dump" | tr -d ' ')
 if [ "$actual_dump_bytes" -eq 0 ] || [ "$actual_dump_sha256" != "$expected_dump_sha256" ] || [ "$actual_dump_bytes" != "$expected_dump_bytes" ]; then
   echo "database dump checksum or size does not match the manifest" >&2
   exit 1
 fi
 
-temporary=$(mktemp -d)
-staging_database=""
-cleanup() {
-  status=$?
-  if [ "$status" -ne 0 ] && [ -n "$staging_database" ]; then
-    docker exec --user postgres "$postgres_container" dropdb --username "$database_user" --maintenance-db postgres --if-exists --force "$staging_database" >/dev/null 2>&1 || true
-  fi
-  rm -rf -- "$temporary"
-  trap - EXIT HUP INT TERM
-  exit "$status"
-}
-trap cleanup EXIT HUP INT TERM
-if ! printf '%s' "$master_key" | base64 -d >"$temporary/master-key.bin" 2>/dev/null || [ "$(wc -c <"$temporary/master-key.bin" | tr -d ' ')" -ne 32 ]; then
-  echo "DOCKYARD_MASTER_KEY must be a base64-encoded 32-byte key" >&2
-  exit 1
-fi
 actual_master_sha256=$(sha256sum "$temporary/master-key.bin" | awk '{print $1}')
-rm -f -- "$temporary/master-key.bin"
 if [ "$actual_master_sha256" != "$expected_master_sha256" ]; then
   echo "master key does not match the recovery bundle" >&2
   exit 1
@@ -179,11 +236,11 @@ if [ -n "$expected_agent_ca_sha256" ]; then
   fi
 fi
 
-docker exec --interactive --user postgres "$postgres_container" pg_restore --list <"$bundle/database.dump" >/dev/null
+docker exec --interactive --user postgres "$postgres_container" pg_restore --list <"$temporary/database.dump" >/dev/null
 staging_database="dockyard_restore_$$"
 previous_database="dockyard_previous_$$"
 docker exec --user postgres "$postgres_container" createdb --username "$database_user" --owner "$database_user" "$staging_database"
-docker exec --interactive --user postgres "$postgres_container" pg_restore --username "$database_user" --dbname "$staging_database" --no-owner --no-privileges --single-transaction --exit-on-error <"$bundle/database.dump"
+docker exec --interactive --user postgres "$postgres_container" pg_restore --username "$database_user" --dbname "$staging_database" --no-owner --no-privileges --single-transaction --exit-on-error <"$temporary/database.dump"
 actual_schema_version=$(docker exec --user postgres "$postgres_container" psql --username "$database_user" --dbname "$staging_database" --tuples-only --no-align --command "SELECT COALESCE(max(version),'') FROM schema_migrations")
 actual_schema_version=$(printf '%s' "$actual_schema_version" | tr -d '\r\n')
 if [ "$actual_schema_version" != "$expected_schema_version" ]; then
