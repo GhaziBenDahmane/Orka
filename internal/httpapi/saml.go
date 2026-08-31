@@ -267,7 +267,7 @@ func (s *Server) beginSAMLCertificateRotation(w http.ResponseWriter, r *http.Req
 		s.writeInternalError(w, r, http.StatusInternalServerError, "encryption_failed", "SAML signing key could not be encrypted", err)
 		return
 	}
-	if err = s.Store.BeginSAMLCertificateRotation(r.Context(), p.OrganizationID, id, string(certificatePEM), encryptedKey, notAfter); err != nil {
+	if err = s.Store.BeginSAMLCertificateRotationWithAudit(r.Context(), p, id, string(certificatePEM), encryptedKey, notAfter, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -280,7 +280,6 @@ func (s *Server) beginSAMLCertificateRotation(w http.ResponseWriter, r *http.Req
 	if parseErr == nil {
 		setSAMLCertificateStatus(&provider, metadata, time.Now())
 	}
-	s.Store.Audit(r.Context(), &p, "sso.saml.certificate_rotation.begin", "saml_provider", id.String(), r.RemoteAddr, map[string]any{"notAfter": notAfter})
 	writeJSON(w, http.StatusCreated, provider)
 }
 
@@ -318,11 +317,10 @@ func (s *Server) promoteSAMLCertificateRotation(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, "invalid_saml_certificate", "the pending SAML certificate and private key do not match")
 		return
 	}
-	if err = s.Store.PromoteSAMLCertificateRotation(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.PromoteSAMLCertificateRotationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.saml.certificate_rotation.promote", "saml_provider", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -333,11 +331,10 @@ func (s *Server) cancelSAMLCertificateRotation(w http.ResponseWriter, r *http.Re
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CancelSAMLCertificateRotation(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.CancelSAMLCertificateRotationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.saml.certificate_rotation.cancel", "saml_provider", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

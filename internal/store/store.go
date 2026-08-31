@@ -3508,12 +3508,39 @@ func (s *Store) ListSAMLProviders(ctx context.Context, organizationID uuid.UUID)
 }
 
 func (s *Store) BeginSAMLCertificateRotation(ctx context.Context, organizationID, id uuid.UUID, certificatePEM, encryptedPrivateKey string, notAfter time.Time) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET pending_certificate_pem=$3,pending_encrypted_private_key=$4,pending_certificate_not_after=$5,pending_certificate_created_at=now() WHERE id=$1 AND organization_id=$2 AND enabled AND pending_certificate_pem IS NULL`, id, organizationID, certificatePEM, encryptedPrivateKey, notAfter)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = beginSAMLCertificateRotationTx(ctx, tx, organizationID, id, certificatePEM, encryptedPrivateKey, notAfter); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) BeginSAMLCertificateRotationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, certificatePEM, encryptedPrivateKey string, notAfter time.Time, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = beginSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id, certificatePEM, encryptedPrivateKey, notAfter); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.certificate_rotation.begin", "saml_provider", id.String(), remoteAddr, map[string]any{"notAfter": notAfter}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func beginSAMLCertificateRotationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, certificatePEM, encryptedPrivateKey string, notAfter time.Time) error {
+	tag, err := tx.Exec(ctx, `UPDATE saml_providers SET pending_certificate_pem=$3,pending_encrypted_private_key=$4,pending_certificate_not_after=$5,pending_certificate_created_at=now() WHERE id=$1 AND organization_id=$2 AND enabled AND pending_certificate_pem IS NULL`, id, organizationID, certificatePEM, encryptedPrivateKey, notAfter)
 	if err != nil || tag.RowsAffected() > 0 {
 		return err
 	}
 	var pending bool
-	if err = s.Pool.QueryRow(ctx, `SELECT pending_certificate_pem IS NOT NULL FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&pending); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, `SELECT pending_certificate_pem IS NOT NULL FROM saml_providers WHERE id=$1 AND organization_id=$2`, id, organizationID).Scan(&pending); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
@@ -3531,6 +3558,28 @@ func (s *Store) PromoteSAMLCertificateRotation(ctx context.Context, organization
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = promoteSAMLCertificateRotationTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) PromoteSAMLCertificateRotationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = promoteSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.certificate_rotation.promote", "saml_provider", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func promoteSAMLCertificateRotationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	tag, err := tx.Exec(ctx, `UPDATE saml_providers SET certificate_pem=pending_certificate_pem,encrypted_private_key=pending_encrypted_private_key,pending_certificate_pem=NULL,pending_encrypted_private_key=NULL,pending_certificate_not_after=NULL,pending_certificate_created_at=NULL WHERE id=$1 AND organization_id=$2 AND pending_certificate_pem IS NOT NULL`, id, organizationID)
 	if err != nil {
 		return err
@@ -3541,11 +3590,38 @@ func (s *Store) PromoteSAMLCertificateRotation(ctx context.Context, organization
 	if _, err = tx.Exec(ctx, `DELETE FROM saml_states WHERE provider_id=$1`, id); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) CancelSAMLCertificateRotation(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE saml_providers SET pending_certificate_pem=NULL,pending_encrypted_private_key=NULL,pending_certificate_not_after=NULL,pending_certificate_created_at=NULL WHERE id=$1 AND organization_id=$2 AND pending_certificate_pem IS NOT NULL`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelSAMLCertificateRotationTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelSAMLCertificateRotationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.certificate_rotation.cancel", "saml_provider", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelSAMLCertificateRotationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE saml_providers SET pending_certificate_pem=NULL,pending_encrypted_private_key=NULL,pending_certificate_not_after=NULL,pending_certificate_created_at=NULL WHERE id=$1 AND organization_id=$2 AND pending_certificate_pem IS NOT NULL`, id, organizationID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}

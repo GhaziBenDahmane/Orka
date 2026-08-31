@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -183,8 +184,56 @@ func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE provider_id=$1`, provider.ID).Scan(&stateCount); err != nil || stateCount != 0 {
 		t.Fatalf("successful SAML update retained login state: count=%d err=%v", stateCount, err)
 	}
+	rotationExpiry := time.Now().Add(365 * 24 * time.Hour).UTC()
+	if err = db.BeginSAMLCertificateRotationWithAudit(ctx, invalidPrincipal, provider.ID, "replacement-certificate", "replacement-key", rotationExpiry, "127.0.0.1:1234"); err == nil {
+		t.Fatal("SAML certificate rotation began without a valid audit actor")
+	}
+	stored, err = db.GetOrganizationSAMLProvider(ctx, organizationID, provider.ID)
+	if err != nil || stored.PendingCertificatePEM != "" || stored.PendingEncryptedPrivateKey != "" {
+		t.Fatalf("failed audit did not roll back pending SAML certificate: provider=%#v err=%v", stored, err)
+	}
+	if err = db.BeginSAMLCertificateRotationWithAudit(ctx, principal, provider.ID, "replacement-certificate", "replacement-key", rotationExpiry, "127.0.0.1:1234"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CancelSAMLCertificateRotationWithAudit(ctx, invalidPrincipal, provider.ID, "127.0.0.1:1234"); err == nil {
+		t.Fatal("SAML certificate cancellation succeeded without a valid audit actor")
+	}
+	stored, err = db.GetOrganizationSAMLProvider(ctx, organizationID, provider.ID)
+	if err != nil || stored.PendingCertificatePEM != "replacement-certificate" || stored.PendingEncryptedPrivateKey != "replacement-key" {
+		t.Fatalf("failed audit did not roll back SAML certificate cancellation: provider=%#v err=%v", stored, err)
+	}
+	if err = db.CancelSAMLCertificateRotationWithAudit(ctx, principal, provider.ID, "127.0.0.1:1234"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.BeginSAMLCertificateRotationWithAudit(ctx, principal, provider.ID, "replacement-certificate", "replacement-key", rotationExpiry, "127.0.0.1:1234"); err != nil {
+		t.Fatal(err)
+	}
+	promotionStateHash := []byte("pending-saml-promotion-state")
+	if err = db.CreateSAMLState(ctx, promotionStateHash, provider.ID, "promotion-request-id"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.PromoteSAMLCertificateRotationWithAudit(ctx, invalidPrincipal, provider.ID, "127.0.0.1:1234"); err == nil {
+		t.Fatal("SAML certificate promotion succeeded without a valid audit actor")
+	}
+	stored, err = db.GetOrganizationSAMLProvider(ctx, organizationID, provider.ID)
+	if err != nil || stored.CertificatePEM != "certificate" || stored.EncryptedPrivateKey != "original-key" || stored.PendingCertificatePEM != "replacement-certificate" || stored.PendingEncryptedPrivateKey != "replacement-key" {
+		t.Fatalf("failed audit did not roll back SAML certificate promotion: provider=%#v err=%v", stored, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE token_hash=$1 AND provider_id=$2`, promotionStateHash, provider.ID).Scan(&stateCount); err != nil || stateCount != 1 {
+		t.Fatalf("failed promotion audit did not restore SAML state: count=%d err=%v", stateCount, err)
+	}
+	if err = db.PromoteSAMLCertificateRotationWithAudit(ctx, principal, provider.ID, "127.0.0.1:1234"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = db.GetOrganizationSAMLProvider(ctx, organizationID, provider.ID)
+	if err != nil || stored.CertificatePEM != "replacement-certificate" || stored.EncryptedPrivateKey != "replacement-key" || stored.PendingCertificatePEM != "" || stored.PendingEncryptedPrivateKey != "" {
+		t.Fatalf("audited SAML certificate promotion=%#v err=%v", stored, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE provider_id=$1`, provider.ID).Scan(&stateCount); err != nil || stateCount != 0 {
+		t.Fatalf("successful SAML promotion retained login state: count=%d err=%v", stateCount, err)
+	}
 	var auditCount int
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND resource_id=$3 AND action IN ('sso.saml.create','sso.saml.update')`, organizationID, userID, provider.ID.String()).Scan(&auditCount); err != nil || auditCount != 2 {
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND resource_id=$3 AND action LIKE 'sso.saml.%'`, organizationID, userID, provider.ID.String()).Scan(&auditCount); err != nil || auditCount != 6 {
 		t.Fatalf("SAML provider mutation audit count=%d err=%v", auditCount, err)
 	}
 }

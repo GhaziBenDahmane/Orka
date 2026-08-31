@@ -409,8 +409,10 @@ encrypted replacement key and adds only its signing certificate to the public
 SP metadata while authentication requests continue using the active key. After
 the IdP has refreshed that metadata, promote the replacement by sending the
 provider name as `confirm`. Promotion atomically switches the key, removes the
-pending certificate, and invalidates in-flight SAML requests. A pending rotation
-can instead be cancelled without changing the active key.
+pending certificate, and invalidates in-flight SAML requests. Starting,
+promoting, and cancelling a rotation each commit atomically with their audit
+event, so an audit failure rolls back the certificate transition. A pending
+rotation can instead be cancelled without changing the active key.
 Mandatory SSO can only be enabled after an OIDC or SAML provider is active.
 Once enabled, local-password sessions cannot access that organization except
 for its owner break-glass account.
