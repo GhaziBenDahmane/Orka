@@ -118,8 +118,10 @@ in Dockyard, and are retained only in Terraform's sensitive state on refresh.
 `dockyard_service` Compose document. It owns only the management binding, not
 the service or database container. Connection details and the utility version
 rotate in place; the password is write-only and retained only in sensitive
-Terraform state. Destroy queues an artifact-cleaning unlink finalizer and never
-stops or deletes the owning Compose stack.
+Terraform state. `database` and `username` are optional for password-only
+Redis, Valkey, Qdrant, and Meilisearch targets. Destroy queues an
+artifact-cleaning unlink finalizer and never stops or deletes the owning
+Compose stack.
 
 `dockyard_template_repository` manages a namespaced, Dokploy-compatible GitHub
 catalog. Repository identity and location fields are replacement-oriented;

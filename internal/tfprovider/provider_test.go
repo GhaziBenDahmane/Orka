@@ -172,6 +172,12 @@ func TestLinkedDatabasePasswordIsSensitive(t *testing.T) {
 	if !ok || !password.Sensitive || !password.Required {
 		t.Fatalf("password schema = %#v", response.Schema.Attributes["password"])
 	}
+	for _, name := range []string{"database", "username"} {
+		attribute, ok := response.Schema.Attributes[name].(resourceschema.StringAttribute)
+		if !ok || !attribute.Optional || attribute.Required {
+			t.Fatalf("%s schema = %#v", name, response.Schema.Attributes[name])
+		}
+	}
 }
 
 func TestSAMLProviderMetadataIsSensitiveAndRetained(t *testing.T) {

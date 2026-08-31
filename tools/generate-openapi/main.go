@@ -187,25 +187,25 @@ paths:
     LinkedDatabaseCreateInput:
       type: object
       additionalProperties: false
-      required: [name, engine, connectionServiceName, database, username, password]
+      required: [name, engine, connectionServiceName, password]
       properties:
         name: {type: string, minLength: 1, maxLength: 120}
         engine: {type: string, minLength: 1, maxLength: 64}
         version: {type: string, maxLength: 128}
         connectionServiceName: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$'}
-        database: {type: string, minLength: 1, maxLength: 8192}
-        username: {type: string, minLength: 1, maxLength: 8192}
+        database: {type: string, maxLength: 8192, description: Required by engines with named databases.}
+        username: {type: string, maxLength: 8192, description: Required by engines with user identities.}
         password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}
         port: {type: integer, minimum: 0, maximum: 65535}
     LinkedDatabaseCredentialsInput:
       type: object
       additionalProperties: false
-      required: [connectionServiceName, database, username, password]
+      required: [connectionServiceName, password]
       properties:
         version: {type: string, maxLength: 128}
         connectionServiceName: {type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,62}$'}
-        database: {type: string, minLength: 1, maxLength: 8192}
-        username: {type: string, minLength: 1, maxLength: 8192}
+        database: {type: string, maxLength: 8192, description: Required by engines with named databases.}
+        username: {type: string, maxLength: 8192, description: Required by engines with user identities.}
         password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}
         port: {type: integer, minimum: 0, maximum: 65535}
     DatabaseInstance:

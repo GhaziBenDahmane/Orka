@@ -807,11 +807,14 @@ caller-supplied node identity constraints. This fails unavailable after node
 loss instead of silently starting against a new, empty local volume; restoring
 or deliberately relocating that volume remains an explicit operator recovery
 action.
-Compose workloads can register PostgreSQL, MySQL, MariaDB, or MongoDB services
-as first-class database targets through `POST /v1/services/{id}/databases`.
-The request names the Compose service and supplies its database, username,
-password, and optional port. Dockyard validates both backup and restore plans
-against the exact service revision before encrypting the credentials. Use
+Compose workloads can register any backup-capable built-in or trusted external
+database engine as a first-class target through
+`POST /v1/services/{id}/databases`. The request names the Compose service and
+supplies its password and optional port. Database and username are required for
+PostgreSQL, TimescaleDB, MySQL, MariaDB, MongoDB, libSQL, and ClickHouse, but
+are intentionally omitted for Redis, Valkey, Qdrant, and Meilisearch. Dockyard
+validates both backup and restore plans against the exact service revision
+before encrypting the credentials. Use
 `PUT /v1/databases/{id}/credentials` to rotate the write-only connection data;
 rotation is rejected while a backup, restore, or migration is active. Removing
 the database record cannot remove its owning Compose stack. Explicit unlinking

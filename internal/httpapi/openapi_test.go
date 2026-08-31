@@ -162,6 +162,8 @@ func TestOpenAPIDocumentsComposeLinkedDatabaseContract(t *testing.T) {
 		"#/components/schemas/LinkedDatabaseCreateInput",
 		"#/components/schemas/LinkedDatabaseCredentialsInput",
 		"#/components/schemas/DatabaseInstance",
+		"required: [name, engine, connectionServiceName, password]",
+		"required: [connectionServiceName, password]",
 		"password: {type: string, minLength: 1, maxLength: 8192, writeOnly: true}",
 	} {
 		if !strings.Contains(text, expected) {
