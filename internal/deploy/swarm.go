@@ -1046,11 +1046,11 @@ func (s Swarm) ResolveUtilityImage(ctx context.Context, image string) (string, e
 	}
 	for _, candidate := range repoDigests {
 		resolved, parseErr := ociref.Parse(candidate)
-		if parseErr == nil && resolved.Digest != "" {
+		if parseErr == nil && resolved.Digest != "" && resolved.CanonicalRepository() == reference.CanonicalRepository() {
 			return reference.Repository + "@" + resolved.Digest, nil
 		}
 	}
-	return "", errors.New("pulled utility image has no sha256 repository digest")
+	return "", errors.New("pulled utility image has no matching sha256 repository digest")
 }
 
 func (s Swarm) RunContainerJob(ctx context.Context, network, image, mountSource string, environment map[string]string, command []string) (string, error) {

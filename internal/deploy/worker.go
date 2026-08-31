@@ -1411,7 +1411,9 @@ func resolveUtilityPlan(ctx context.Context, scheduler Scheduler, plan database.
 	if !ok {
 		return plan, errors.New("scheduler does not support utility image resolution")
 	}
-	resolved, err := resolver.ResolveUtilityImage(ctx, plan.Image)
+	resolveCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	resolved, err := resolver.ResolveUtilityImage(resolveCtx, plan.Image)
 	if err != nil {
 		return plan, err
 	}

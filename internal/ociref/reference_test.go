@@ -50,6 +50,22 @@ func TestRepositoryAndDigestClassification(t *testing.T) {
 	}
 }
 
+func TestCanonicalRepositoryNormalizesDockerHubAliases(t *testing.T) {
+	for _, raw := range []string{"postgres:17", "library/postgres:17", "docker.io/postgres:17", "docker.io/library/postgres:17", "index.docker.io/library/postgres:17", "registry-1.docker.io/library/postgres:17"} {
+		reference, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		if got := reference.CanonicalRepository(); got != "docker.io/library/postgres" {
+			t.Errorf("canonical repository for %q = %q", raw, got)
+		}
+	}
+	reference, err := Parse("registry.example.test/team/postgres:17")
+	if err != nil || reference.CanonicalRepository() != "registry.example.test/team/postgres" {
+		t.Fatalf("private canonical repository=%q err=%v", reference.CanonicalRepository(), err)
+	}
+}
+
 func TestNormalizeRegistryAuthority(t *testing.T) {
 	for raw, want := range map[string]string{
 		"registry.example.test":      "registry.example.test",

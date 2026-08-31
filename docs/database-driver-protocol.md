@@ -56,7 +56,9 @@ that tag once, inspects the resulting repository digest, and returns a
 `repository@sha256:...` identity before any utility command is queued. Local
 and remote execution boundaries reject mutable images; encrypted agent
 commands for readiness, backup, restore, and migration therefore carry only
-the resolved digest. Successful backup, restore, and migration records expose
+the resolved digest. Resolution is bounded to ten minutes and rejects digest
+aliases belonging to a different canonical repository. Successful backup,
+restore, and migration records expose
 the exact utility image identities as recovery evidence. Images without a
 repository digest fail closed. Image names and artifact extensions are
 validated before resolution. Plans are limited to 128 non-empty

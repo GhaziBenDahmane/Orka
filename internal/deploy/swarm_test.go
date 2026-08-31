@@ -548,7 +548,7 @@ func TestResolveUtilityImagePullsTagAndReturnsRequestedRepositoryDigest(t *testi
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "` + logPath + `"
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
-  printf '["mirror.example.test/library/postgres@sha256:` + digest + `"]\n'
+  printf '["registry.example.test/data/postgres@sha256:` + digest + `"]\n'
 fi
 `
 	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
@@ -565,6 +565,22 @@ fi
 	calls, err := os.ReadFile(logPath)
 	if err != nil || !strings.Contains(string(calls), "pull registry.example.test/data/postgres:17") || !strings.Contains(string(calls), "image inspect --format") {
 		t.Fatalf("calls=%q err=%v", calls, err)
+	}
+}
+
+func TestResolveUtilityImageRejectsDigestForAnotherRepository(t *testing.T) {
+	directory := t.TempDir()
+	docker := filepath.Join(directory, "docker")
+	script := `#!/bin/sh
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+  printf '["registry.example.test/other/postgres@sha256:` + strings.Repeat("b", 64) + `"]\n'
+fi
+`
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Swarm{DockerBin: docker}).ResolveUtilityImage(context.Background(), "registry.example.test/data/postgres:17"); err == nil || !strings.Contains(err.Error(), "no matching") {
+		t.Fatalf("unrelated repository digest accepted: %v", err)
 	}
 }
 

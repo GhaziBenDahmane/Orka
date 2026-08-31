@@ -59,6 +59,21 @@ func IsDigestPinned(raw string) bool {
 	return err == nil && reference.Digest != ""
 }
 
+// CanonicalRepository returns a comparison key for a parsed repository.
+// Docker Hub's implicit registry and library namespace are normalized so
+// postgres, library/postgres, and docker.io/library/postgres compare equally.
+func (r Reference) CanonicalRepository() string {
+	_, path := splitRegistry(r.Repository)
+	registry := strings.ToLower(r.Registry)
+	if registry == "docker.io" || registry == "index.docker.io" || registry == "registry-1.docker.io" {
+		registry = "docker.io"
+		if !strings.Contains(path, "/") {
+			path = "library/" + path
+		}
+	}
+	return registry + "/" + path
+}
+
 // NormalizeRegistryAuthority validates a bare OCI registry host with an
 // optional port. URL syntax, paths, userinfo, query strings, and fragments are
 // rejected so credentials cannot be stored under an ambiguous Docker auth key.
