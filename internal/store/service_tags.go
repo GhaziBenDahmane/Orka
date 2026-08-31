@@ -159,7 +159,7 @@ func (s *Store) DeleteTag(ctx context.Context, organizationID, id uuid.UUID) err
 
 func (s *Store) ListServiceTags(ctx context.Context, organizationID, serviceID uuid.UUID) ([]Tag, error) {
 	var exists bool
-	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND p.organization_id=$2)`, serviceID, organizationID).Scan(&exists); err != nil {
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2)`, serviceID, organizationID).Scan(&exists); err != nil {
 		return nil, err
 	}
 	if !exists {

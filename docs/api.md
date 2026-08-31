@@ -562,6 +562,9 @@ and prevent concurrent child creation from escaping the deletion.
 Service deletion also serializes with revisions, source and uploaded-artifact
 changes, route creation, deployment-hook issuance, and provider-webhook
 creation; once deletion wins, those mutations return not found.
+Service and managed-database deletion queueing commit the deletion marker,
+finalizer job, and operator audit evidence atomically. An audit failure leaves
+the service active and does not enqueue destructive work.
 Repeating a delete safely resumes failed finalizers. Cluster
 deletion revokes its agent certificate and queued commands and is allowed only
 after environments have been moved or deleted. Named volumes are retained by
@@ -699,7 +702,9 @@ callers retain distinct audit attribution.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
-same deployment endpoint, preserving one audit and rollback model. Database
+same deployment endpoint, preserving one audit and rollback model. The service,
+database record, and creation audit event commit together, so failed audit
+evidence cannot leave an unattributed credential-bearing workload. Database
 records expose `driverSource` and, for external drivers, the bound
 `driverArtifactDigest`; recovery workers reject a different artifact. An
 administrator can rebind only after typing the database slug and only while no

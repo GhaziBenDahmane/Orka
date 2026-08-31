@@ -2008,9 +2008,55 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 		return err
 	}
 	defer tx.Rollback(ctx)
+	deleteVolumeData := len(deleteVolumes) > 0 && deleteVolumes[0]
+	if err = s.queueServiceDeletionTx(ctx, tx, organizationID, serviceID, deleteVolumeData); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) QueueServiceDeletionWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, deleteVolumes bool, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.queueServiceDeletionTx(ctx, tx, principal.OrganizationID, serviceID, deleteVolumes); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service.delete", "compose_service", serviceID.String(), remoteAddr, map[string]any{"deleteVolumes": deleteVolumes}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) QueueDatabaseDeletionWithAudit(ctx context.Context, principal Principal, databaseID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var serviceID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT database.compose_service_id FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2`, databaseID, principal.OrganizationID).Scan(&serviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err = s.queueServiceDeletionTx(ctx, tx, principal.OrganizationID, serviceID, false); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database.delete", "database", databaseID.String(), remoteAddr, map[string]any{"composeServiceId": serviceID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) queueServiceDeletionTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, deleteVolumes bool) error {
 	var stackName string
 	var deleting bool
-	err = tx.QueryRow(ctx, `SELECT s.stack_name,s.deletion_requested_at IS NOT NULL FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&stackName, &deleting)
+	err := tx.QueryRow(ctx, `SELECT s.stack_name,s.deletion_requested_at IS NOT NULL FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&stackName, &deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -2018,11 +2064,11 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 		return err
 	}
 	if deleting {
-		payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": len(deleteVolumes) > 0 && deleteVolumes[0]})
+		payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": deleteVolumes})
 		if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) SELECT $1,'delete.compose',$2,$4,10 WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='delete.compose' AND payload->>'serviceId'=$3 AND status IN ('pending','running'))`, uuid.New(), payload, serviceID.String(), "service:"+serviceID.String()); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return nil
 	}
 	projectID, environmentID, err := servicePolicyScope(ctx, tx, organizationID, serviceID)
 	if err != nil {
@@ -2041,11 +2087,11 @@ func (s *Store) QueueServiceDeletion(ctx context.Context, organizationID, servic
 	if _, err = tx.Exec(ctx, `UPDATE compose_services SET deletion_requested_at=now() WHERE id=$1`, serviceID); err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": len(deleteVolumes) > 0 && deleteVolumes[0]})
+	payload, _ := json.Marshal(map[string]any{"serviceId": serviceID.String(), "stackName": stackName, "deleteVolumes": deleteVolumes})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts) VALUES($1,'delete.compose',$2,$3,10)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) CancelDeployment(ctx context.Context, organizationID, deploymentID uuid.UUID) error {
@@ -3052,6 +3098,36 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 		return DatabaseInstance{}, err
 	}
 	defer tx.Rollback(ctx)
+	instance, err = s.createDatabaseTx(ctx, tx, organizationID, instance, service, encryptedCredentials)
+	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseInstance{}, err
+	}
+	return instance, nil
+}
+
+func (s *Store) CreateDatabaseWithAudit(ctx context.Context, principal Principal, instance DatabaseInstance, service ComposeService, encryptedCredentials, remoteAddr string) (DatabaseInstance, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	defer tx.Rollback(ctx)
+	instance, err = s.createDatabaseTx(ctx, tx, principal.OrganizationID, instance, service, encryptedCredentials)
+	if err != nil {
+		return DatabaseInstance{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database.create", "database", instance.ID.String(), remoteAddr, map[string]any{"engine": instance.Engine}); err != nil {
+		return DatabaseInstance{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseInstance{}, err
+	}
+	return instance, nil
+}
+
+func (s *Store) createDatabaseTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, instance DatabaseInstance, service ComposeService, encryptedCredentials string) (DatabaseInstance, error) {
 	projectID, err := lockEnvironmentForServiceCreation(ctx, tx, organizationID, instance.EnvironmentID)
 	if err != nil {
 		return DatabaseInstance{}, err
@@ -3080,9 +3156,6 @@ func (s *Store) CreateDatabase(ctx context.Context, organizationID uuid.UUID, in
 	}
 	config, _ := json.Marshal(instance.Config)
 	if err = tx.QueryRow(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,compose_service_id,encrypted_credentials,config) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING created_at`, instance.ID, instance.EnvironmentID, instance.Name, instance.Slug, instance.Engine, instance.Version, instance.DriverSource, instance.DriverDigest, instance.ComposeServiceID, encryptedCredentials, config).Scan(&instance.CreatedAt); err != nil {
-		return DatabaseInstance{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return DatabaseInstance{}, err
 	}
 	return instance, nil

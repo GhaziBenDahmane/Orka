@@ -1314,12 +1314,11 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	shortID := strings.Split(serviceID.String(), "-")[0]
 	stackName := "db-" + in.Slug + "-" + shortID
-	instance, err := s.Store.CreateDatabase(r.Context(), p.OrganizationID, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, DriverSource: driver.Source, DriverDigest: driver.ArtifactDigest, Config: database.StoredConfig(in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials)
+	instance, err := s.Store.CreateDatabaseWithAudit(r.Context(), p, store.DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, Engine: in.Engine, Version: rendered.Version, DriverSource: driver.Source, DriverDigest: driver.ArtifactDigest, Config: database.StoredConfig(in.Config)}, store.ComposeService{ID: serviceID, Name: in.Name, Slug: "db-" + in.Slug, StackName: stackName, ComposeYAML: rendered.ComposeYAML, EncryptedEnv: encryptedEnv}, encryptedCredentials, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database.create", "database", instance.ID.String(), r.RemoteAddr, map[string]any{"engine": in.Engine})
 	writeJSON(w, 201, map[string]any{"database": instance, "credentials": rendered.Credentials, "internalUrl": rendered.InternalURL})
 }
 
@@ -1401,12 +1400,7 @@ func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.GetDatabase(r.Context(), p.OrganizationID, id)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	if err = s.Store.QueueServiceDeletion(r.Context(), p.OrganizationID, item.ComposeServiceID, false); err != nil {
+	if err = s.Store.QueueDatabaseDeletionWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "database_busy", "cancel or wait for active database operations or an existing deletion")
 			return
@@ -1414,7 +1408,6 @@ func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database.delete", "database", id.String(), r.RemoteAddr, map[string]any{"composeServiceId": item.ComposeServiceID})
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deletion_queued"})
 }
 
@@ -2244,7 +2237,7 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_delete_option", "deleteVolumes must be true or false")
 		return
 	}
-	if err = s.Store.QueueServiceDeletion(r.Context(), p.OrganizationID, id, deleteVolumes); err != nil {
+	if err = s.Store.QueueServiceDeletionWithAudit(r.Context(), p, id, deleteVolumes, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, 409, "service_busy", "cancel or wait for active deployments before deleting the service")
 			return
@@ -2252,7 +2245,6 @@ func (s *Server) deleteService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.delete", "compose_service", id.String(), r.RemoteAddr, map[string]any{"deleteVolumes": deleteVolumes})
 	writeJSON(w, 202, map[string]string{"status": "deletion_queued"})
 }
 
