@@ -56,12 +56,11 @@ func (s *Server) createTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateTag(r.Context(), p.OrganizationID, store.Tag{Name: input.Name, Color: input.Color})
+	item, err := s.Store.CreateTagWithAudit(r.Context(), p, store.Tag{Name: input.Name, Color: input.Color}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "tag.create", "tag", item.ID.String(), r.RemoteAddr, map[string]any{"name": item.Name})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -80,12 +79,11 @@ func (s *Server) updateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpdateTag(r.Context(), p.OrganizationID, id, input.Name, input.Color)
+	item, err := s.Store.UpdateTagWithAudit(r.Context(), p, id, input.Name, input.Color, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "tag.update", "tag", id.String(), r.RemoteAddr, map[string]any{"name": item.Name})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -96,11 +94,10 @@ func (s *Server) deleteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteTag(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteTagWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "tag.delete", "tag", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -147,12 +144,11 @@ func (s *Server) replaceServiceTags(w http.ResponseWriter, r *http.Request) {
 		seen[id] = struct{}{}
 	}
 	p := principal(r)
-	items, err := s.Store.ReplaceServiceTags(r.Context(), p.OrganizationID, serviceID, input.TagIDs)
+	items, err := s.Store.ReplaceServiceTagsWithAudit(r.Context(), p, serviceID, input.TagIDs, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.tags.replace", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"count": len(items)})
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
@@ -199,11 +195,10 @@ func (s *Server) replaceProjectTags(w http.ResponseWriter, r *http.Request) {
 		seen[id] = struct{}{}
 	}
 	p := principal(r)
-	items, err := s.Store.ReplaceProjectTags(r.Context(), p.OrganizationID, projectID, input.TagIDs)
+	items, err := s.Store.ReplaceProjectTagsWithAudit(r.Context(), p, projectID, input.TagIDs, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "project.tags.replace", "project", projectID.String(), r.RemoteAddr, map[string]any{"count": len(items)})
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
