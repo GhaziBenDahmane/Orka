@@ -222,6 +222,24 @@ groups:
           summary: Named-volume backup coverage cannot be evaluated
           description: Service {{ $labels.service }} has an invalid Compose volume definition; fix it before relying on backup-policy coverage alerts.
 
+      - alert: DockyardVolumeBackupStorageNodeMissing
+        expr: dockyard_volume_backup_storage_node_bound == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: A protected named volume has no storage-node binding
+          description: Service {{ $labels.service }} volume {{ $labels.volume }} cannot be scheduled for backup until the workload is deployed and pinned to its Swarm storage node.
+
+      - alert: DockyardVolumeBackupQuiescenceDisabled
+        expr: dockyard_volume_backup_quiescence_enabled == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A named-volume backup does not pause workload writers
+          description: Service {{ $labels.service }} volume {{ $labels.volume }} permits writes during archive creation; enable quiescence or validate and document crash-consistent recovery.
+
       - alert: DockyardVolumeRestoreRehearsalOverdue
         expr: dockyard_volume_restore_rehearsal_overdue == 1
         for: 15m

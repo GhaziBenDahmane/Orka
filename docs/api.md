@@ -863,5 +863,7 @@ objectives.
 For Compose services, Prometheus reports whether the mounted named-volume
 inventory is parseable and the backup-policy state of every mounted named
 volume. The supplied rules page when a mounted volume has no policy or a
-disabled policy, and warn when an invalid Compose definition prevents the
-coverage calculation.
+disabled policy, or when an enabled policy cannot run because its workload has
+no Swarm storage-node binding. They warn when an invalid Compose definition
+prevents the coverage calculation or a policy permits writes during archive
+creation without an operator-validated crash-consistency guarantee.

@@ -195,6 +195,10 @@ tests:
         values: '1x20'
       - series: 'dockyard_volume_backup_policy_inventory_valid{service="malformed-service-id"}'
         values: '0x20'
+      - series: 'dockyard_volume_backup_storage_node_bound{service="unbound-service-id",volume="data"}'
+        values: '0x20'
+      - series: 'dockyard_volume_backup_quiescence_enabled{service="service-id",volume="cache"}'
+        values: '0x20'
     alert_rule_test:
       - eval_time: 16m
         alertname: DockyardVolumeBackupPolicyUnavailable
@@ -224,3 +228,23 @@ tests:
             exp_annotations:
               summary: Named-volume backup coverage cannot be evaluated
               description: Service malformed-service-id has an invalid Compose volume definition; fix it before relying on backup-policy coverage alerts.
+      - eval_time: 16m
+        alertname: DockyardVolumeBackupStorageNodeMissing
+        exp_alerts:
+          - exp_labels:
+              service: unbound-service-id
+              volume: data
+              severity: critical
+            exp_annotations:
+              summary: A protected named volume has no storage-node binding
+              description: Service unbound-service-id volume data cannot be scheduled for backup until the workload is deployed and pinned to its Swarm storage node.
+      - eval_time: 16m
+        alertname: DockyardVolumeBackupQuiescenceDisabled
+        exp_alerts:
+          - exp_labels:
+              service: service-id
+              volume: cache
+              severity: warning
+            exp_annotations:
+              summary: A named-volume backup does not pause workload writers
+              description: Service service-id volume cache permits writes during archive creation; enable quiescence or validate and document crash-consistent recovery.
