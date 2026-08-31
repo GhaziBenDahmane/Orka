@@ -182,6 +182,7 @@ export const api = {
   revokeDeployToken: (serviceId: string, tokenId: string) => request<void>(`/v1/services/${serviceId}/deploy-tokens/${tokenId}`, { method: "DELETE" }),
   logs: (serviceId: string) => request<{ logs: string }>(`/v1/services/${serviceId}/logs`),
   serviceVolumes: (serviceId: string) => request<Envelope<ServiceVolume>>(`/v1/services/${serviceId}/volumes`),
+  rebindServiceStorageNode: (serviceId: string, nodeId: string, confirm: string) => request<Service>(`/v1/services/${serviceId}/storage-node-rebind`, { method: "POST", body: JSON.stringify({ nodeId, confirm }) }),
   volumeBackupPolicies: (serviceId: string) => request<Envelope<VolumeBackupPolicy>>(`/v1/services/${serviceId}/volume-backup-policies`),
   putVolumeBackupPolicy: (serviceId: string, volumeName: string, body: { destinationId: string; intervalSeconds: number; retentionCount: number; quiesce: boolean; enabled: boolean }) => request<VolumeBackupPolicy>(`/v1/services/${serviceId}/volume-backup-policies/${encodeURIComponent(volumeName)}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteVolumeBackupPolicy: (serviceId: string, volumeName: string) => request<void>(`/v1/services/${serviceId}/volume-backup-policies/${encodeURIComponent(volumeName)}`, { method: "DELETE" }),
