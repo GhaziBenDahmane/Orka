@@ -392,8 +392,9 @@ Validate local rule changes with `make check-alerts`; CI runs the same pinned
 Prometheus `promtool` image.
 
 To add reviewed out-of-tree database engines, build a derived controller image
-that contains the driver executables and apply
-`deploy/swarm-database-drivers.yml`. The packaging and preflight procedure is
+that contains the driver executables and set
+`DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS=true` when running
+`scripts/install-swarm.sh`. The packaging and preflight procedure is
 documented in [database-driver-protocol.md](../docs/database-driver-protocol.md).
 Use the same derived image digest on every controller; mutable host-mounted
 driver directories are not a supported HA distribution mechanism.

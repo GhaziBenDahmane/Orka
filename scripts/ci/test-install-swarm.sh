@@ -34,6 +34,7 @@ case "$1 $2" in
         [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_CREDENTIALS:-false}" != true ] &&
           [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
       *validate-database-url*) [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_URL:-false}" != true ] || exit 1 ;;
+      *inspect-database-drivers*) [ "${DOCKYARD_INSTALL_TEST_INVALID_DATABASE_DRIVERS:-false}" != true ] || exit 1 ;;
       *validate-edge-subnet*)
         case "$*" in
           *' --cidr 10.255.250.0/24'|*' --cidr 10.40.0.0/24') ;;
@@ -183,6 +184,39 @@ fi
 grep -q 'DOCKYARD_EGRESS_PRIVATE_CIDRS must contain' "$temporary/err"
 if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
   echo 'invalid egress policy mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS=true DOCKYARD_INSTALL_DRY_RUN=true \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q ' inspect-database-drivers --directory /usr/local/lib/dockyard/database-drivers$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q "stack config -c $root/deploy/swarm.yml -c $root/deploy/swarm-database-drivers.yml" "$DOCKYARD_INSTALL_TEST_LOG"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'external-driver dry-run mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS=true DOCKYARD_INSTALL_TEST_INVALID_DATABASE_DRIVERS=true \
+  "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted an invalid external database driver bundle' >&2
+  exit 1
+fi
+grep -q 'does not contain a valid external database driver bundle' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid external-driver bundle mutated Docker state' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS=maybe "$root/scripts/install-swarm.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'installer accepted an invalid external-driver mode' >&2
+  exit 1
+fi
+grep -q 'DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS must be true or false' "$temporary/err"
+if grep -Eq '^(network create|secret create|stack deploy)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'invalid external-driver mode mutated Docker state' >&2
   exit 1
 fi
 
@@ -554,6 +588,12 @@ grep -q '^run --rm -i --network none --read-only --cap-drop ALL --security-opt n
 for secret in dockyard_agent_ca_cert dockyard_agent_ca_key dockyard_agent_server_cert dockyard_agent_server_key; do
   grep -q "^secret inspect $secret$" "$DOCKYARD_INSTALL_TEST_LOG"
 done
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_MODE=ha DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS=true DOCKYARD_INSTALL_DRY_RUN=true \
+  "$root/scripts/install-swarm.sh" >/dev/null
+grep -q "stack config -c $root/deploy/swarm.yml -c $root/deploy/swarm-ha.yml -c $root/deploy/swarm-database-drivers.yml" "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q ' inspect-database-drivers --directory /usr/local/lib/dockyard/database-drivers$' "$DOCKYARD_INSTALL_TEST_LOG"
 
 openssl req -newkey rsa:2048 -nodes -subj '/CN=agents.example.test' \
   -addext 'subjectAltName=DNS:agents.example.test' \

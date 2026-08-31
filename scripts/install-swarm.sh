@@ -25,6 +25,7 @@ skip_wait=${DOCKYARD_INSTALL_SKIP_WAIT:-false}
 wait_timeout=${DOCKYARD_INSTALL_WAIT_TIMEOUT:-300}
 stability_seconds=${DOCKYARD_INSTALL_STABILITY_SECONDS:-90}
 egress_private_cidrs=${DOCKYARD_EGRESS_PRIVATE_CIDRS:-}
+external_database_drivers=${DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS:-false}
 
 fail() {
   echo "install-swarm: $*" >&2
@@ -80,6 +81,7 @@ unset seen_secret_names secret_name
 case "$reuse" in true|false) ;; *) fail "DOCKYARD_REUSE_EXISTING_SECRETS must be true or false" ;; esac
 case "$dry_run" in true|false) ;; *) fail "DOCKYARD_INSTALL_DRY_RUN must be true or false" ;; esac
 case "$skip_wait" in true|false) ;; *) fail "DOCKYARD_INSTALL_SKIP_WAIT must be true or false" ;; esac
+case "$external_database_drivers" in true|false) ;; *) fail "DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS must be true or false" ;; esac
 case "$wait_timeout" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer" ;; esac
 [ "$wait_timeout" -gt 0 ] || fail "DOCKYARD_INSTALL_WAIT_TIMEOUT must be a positive integer"
 case "$stability_seconds" in ""|*[!0-9]*) fail "DOCKYARD_INSTALL_STABILITY_SECONDS must be a non-negative integer" ;; esac
@@ -250,6 +252,11 @@ if [ -n "$egress_private_cidrs" ]; then
   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-egress-policy --cidrs "$egress_private_cidrs" >/dev/null || fail "DOCKYARD_EGRESS_PRIVATE_CIDRS must contain at most 64 unique CIDR networks"
 fi
 docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" validate-edge-subnet --cidr "$edge_subnet" >/dev/null || fail "DOCKYARD_EDGE_SUBNET must be a canonical private IPv4 CIDR between /16 and /28"
+if [ "$external_database_drivers" = true ]; then
+  docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --entrypoint /usr/local/bin/dockyard "$DOCKYARD_IMAGE" inspect-database-drivers \
+    --directory /usr/local/lib/dockyard/database-drivers >/dev/null || fail "DOCKYARD_IMAGE does not contain a valid external database driver bundle"
+fi
 
 existing=""
 while IFS= read -r spec; do
@@ -264,14 +271,19 @@ if [ -n "$existing" ] && [ "$reuse" != true ]; then
   fail "Docker secrets already exist:$existing; set DOCKYARD_REUSE_EXISTING_SECRETS=true only after verifying their values"
 fi
 
-# Render and validate the complete stack before creating any resource.
-if [ "$mode" = ha ] && [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
-  docker stack config -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" -c "$root/deploy/swarm-agent-ca-rollover.yml" >/dev/null
-elif [ "$mode" = ha ]; then
-  docker stack config -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" >/dev/null
-else
-  docker stack config -c "$root/deploy/swarm.yml" >/dev/null
+# Render and validate the complete stack before creating any resource. Build
+# the same argument vector once so preflight and deployment cannot diverge.
+set -- -c "$root/deploy/swarm.yml"
+if [ "$mode" = ha ]; then
+  set -- "$@" -c "$root/deploy/swarm-ha.yml"
+  if [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
+    set -- "$@" -c "$root/deploy/swarm-agent-ca-rollover.yml"
+  fi
 fi
+if [ "$external_database_drivers" = true ]; then
+  set -- "$@" -c "$root/deploy/swarm-database-drivers.yml"
+fi
+docker stack config "$@" >/dev/null
 network_exists=false
 if docker network inspect "$network" >/dev/null 2>&1; then
   network_exists=true
@@ -299,13 +311,7 @@ done <<EOF
 $secret_specs
 EOF
 
-if [ "$mode" = ha ] && [ -n "${DOCKYARD_AGENT_PREVIOUS_CA_CERT_FILE:-}" ]; then
-  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" -c "$root/deploy/swarm-agent-ca-rollover.yml" "$stack" || fail "could not submit $mode stack $stack"
-elif [ "$mode" = ha ]; then
-  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" -c "$root/deploy/swarm-ha.yml" "$stack" || fail "could not submit $mode stack $stack"
-else
-  docker stack deploy --prune --with-registry-auth -c "$root/deploy/swarm.yml" "$stack" || fail "could not submit $mode stack $stack"
-fi
+docker stack deploy --prune --with-registry-auth "$@" "$stack" || fail "could not submit $mode stack $stack"
 deployment_started=true
 if [ "$skip_wait" = true ]; then
   echo "Stack $stack submitted; convergence wait was skipped."

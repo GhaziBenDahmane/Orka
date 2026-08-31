@@ -119,19 +119,21 @@ per-driver artifact hashes, and a digest over the complete external inventory.
 It fails when the directory is empty or any artifact violates the protocol or
 filesystem trust rules.
 
-Deploy the derived digest as `DOCKYARD_IMAGE` and add
-`deploy/swarm-database-drivers.yml` after the normal manifests:
+Deploy the derived digest through the standard fail-closed installer with the
+external-driver profile enabled:
 
 ```sh
-docker stack deploy \
-  -c deploy/swarm.yml \
-  -c deploy/swarm-ha.yml \
-  -c deploy/swarm-database-drivers.yml \
-  dockyard
+export DOCKYARD_IMAGE='registry.example/dockyard-with-drivers@sha256:...'
+export DOCKYARD_INSTALL_EXTERNAL_DATABASE_DRIVERS=true
+DOCKYARD_INSTALL_DRY_RUN=true scripts/install-swarm.sh
+scripts/install-swarm.sh
 ```
 
 Embedding the drivers makes every controller task consume the same immutable
-artifact set. Do not mount a mutable shared directory into HA controllers.
+artifact set. The installer runs `inspect-database-drivers` inside that exact
+image with networking disabled and a read-only root filesystem before rendering
+or mutating Swarm, then includes `deploy/swarm-database-drivers.yml` in both
+preflight and deployment. Do not mount a mutable shared directory into HA controllers.
 After rollout, query every task through the per-replica Prometheus discovery
 configuration and require both the controller-build and database-driver
 inventory mismatch alerts to remain clear before allowing recovery or migration
