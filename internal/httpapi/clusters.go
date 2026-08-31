@@ -227,23 +227,35 @@ func (s *Server) agentTrustBundle() []byte {
 
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Name   string         `json:"name"`
-		Slug   string         `json:"slug"`
-		Labels map[string]any `json:"labels"`
+		Name   string            `json:"name"`
+		Slug   string            `json:"slug"`
+		Labels map[string]string `json:"labels"`
 	}
 	if !decode(w, r, &input) {
 		return
 	}
-	input.Name = strings.TrimSpace(input.Name)
+	var err error
+	if input.Name, err = normalizeResourceName(input.Name); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_name", err.Error())
+		return
+	}
 	if input.Slug == "" {
 		input.Slug = slugify(input.Name)
 	}
-	if input.Name == "" || !slugPattern.MatchString(input.Slug) || len(input.Labels) > 64 {
-		writeError(w, 400, "invalid_cluster", "valid name, slug, and at most 64 labels are required")
+	if !slugPattern.MatchString(input.Slug) || len(input.Labels) > 64 {
+		writeError(w, 400, "invalid_cluster", "valid slug and at most 64 labels are required")
 		return
 	}
+	labels := make(map[string]any, len(input.Labels))
+	for key, value := range input.Labels {
+		if !validPlacementLabel(key, value) {
+			writeError(w, http.StatusBadRequest, "invalid_cluster", "labels require unpadded 1-128 byte keys and bounded control-free values")
+			return
+		}
+		labels[key] = value
+	}
 	p := principal(r)
-	item, err := s.Store.CreateClusterWithAudit(r.Context(), p, store.Cluster{Name: input.Name, Slug: input.Slug, Labels: input.Labels}, r.RemoteAddr)
+	item, err := s.Store.CreateClusterWithAudit(r.Context(), p, store.Cluster{Name: input.Name, Slug: input.Slug, Labels: labels}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return

@@ -1174,8 +1174,8 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for key, value := range in.PlacementSelector {
-		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 256 {
-			writeError(w, 400, "invalid_environment", "placement label keys and values exceed limits")
+		if !validPlacementLabel(key, value) {
+			writeError(w, 400, "invalid_environment", "placement labels require unpadded 1-128 byte keys and bounded control-free values")
 			return
 		}
 	}
@@ -3413,6 +3413,12 @@ func normalizeResourceName(raw string) (string, error) {
 		return "", errors.New("resource name must contain 1 to 120 bytes without control characters")
 	}
 	return name, nil
+}
+
+func validPlacementLabel(key, value string) bool {
+	return key != "" && key == strings.TrimSpace(key) && len(key) <= 128 && len(value) <= 256 &&
+		utf8.ValidString(key) && utf8.ValidString(value) &&
+		strings.IndexFunc(key, unicode.IsControl) < 0 && strings.IndexFunc(value, unicode.IsControl) < 0
 }
 
 func canonicalEmail(raw string) (string, string, bool) {

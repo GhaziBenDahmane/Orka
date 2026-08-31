@@ -21,6 +21,7 @@ func TestResourceCreationRejectsInvalidNamesBeforeDependencies(t *testing.T) {
 		{name: "environment", path: "/v1/projects/project/environments", body: map[string]any{"slug": "environment"}, call: server.createEnvironment},
 		{name: "service", path: "/v1/environments/environment/services", body: map[string]any{"slug": "service", "composeYaml": "services: {}"}, call: server.createService},
 		{name: "database", path: "/v1/environments/environment/databases", body: map[string]any{"slug": "database", "engine": "postgres"}, call: server.createDatabase},
+		{name: "cluster", path: "/v1/clusters", body: map[string]any{"slug": "cluster"}, call: server.createCluster},
 	}
 	invalidNames := []string{"", "resource\nname", "resource\u0085name", strings.Repeat("n", 121)}
 	for _, test := range tests {
@@ -49,6 +50,41 @@ func TestResourceCreationRejectsInvalidNamesBeforeDependencies(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPlacementMetadataRejectsMalformedLabelsBeforeDependencies(t *testing.T) {
+	server := &Server{}
+	tests := []struct {
+		name string
+		body map[string]any
+		call func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "cluster nested value", body: map[string]any{"name": "Paris", "labels": map[string]any{"region": map[string]string{"name": "eu"}}}, call: server.createCluster},
+		{name: "cluster padded key", body: map[string]any{"name": "Paris", "labels": map[string]string{" region": "eu"}}, call: server.createCluster},
+		{name: "cluster control value", body: map[string]any{"name": "Paris", "labels": map[string]string{"region": "eu\nwest"}}, call: server.createCluster},
+		{name: "environment oversized value", body: map[string]any{"name": "Production", "placementSelector": map[string]string{"region": strings.Repeat("e", 257)}}, call: server.createEnvironment},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal(test.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(encoded)))
+			request.Header.Set("Content-Type", "application/json")
+			if test.call == nil {
+				t.Fatal("missing handler")
+			}
+			if strings.HasPrefix(test.name, "environment") {
+				request.SetPathValue("projectID", "f47ac10b-58cc-4372-a567-0e02b2c3d479")
+			}
+			test.call(recorder, request)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 
