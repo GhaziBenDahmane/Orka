@@ -1,6 +1,10 @@
 package agentpki
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -91,6 +95,91 @@ func TestValidateAuthorityAcceptsPKCS8RSAKey(t *testing.T) {
 	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})
 	if _, err = ValidateAuthority(certificatePEM, pkcs8PEM, now); err != nil {
 		t.Fatalf("validate PKCS#8 RSA authority: %v", err)
+	}
+}
+
+func TestSignAgentCSRSupportsECDSAAndEd25519Authorities(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecdsaDER, err := x509.MarshalECPrivateKey(ecdsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ed25519Key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed25519DER, err := x509.MarshalPKCS8PrivateKey(ed25519Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		signer   crypto.Signer
+		keyBlock *pem.Block
+	}{
+		{name: "ECDSA SEC1", signer: ecdsaKey, keyBlock: &pem.Block{Type: "EC PRIVATE KEY", Bytes: ecdsaDER}},
+		{name: "Ed25519 PKCS#8", signer: ed25519Key, keyBlock: &pem.Block{Type: "PRIVATE KEY", Bytes: ed25519DER}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			serial, serialErr := randomSerial()
+			if serialErr != nil {
+				t.Fatal(serialErr)
+			}
+			template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "Test Agent CA"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature}
+			certificateDER, createErr := x509.CreateCertificate(rand.Reader, template, template, test.signer.Public(), test.signer)
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER})
+			keyPEM := pem.EncodeToMemory(test.keyBlock)
+			if _, validateErr := ValidateAuthority(certificatePEM, keyPEM, now); validateErr != nil {
+				t.Fatalf("validate authority: %v", validateErr)
+			}
+
+			agentKey, generateErr := rsa.GenerateKey(rand.Reader, 2048)
+			if generateErr != nil {
+				t.Fatal(generateErr)
+			}
+			csrDER, createErr := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, agentKey)
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			agentCertificatePEM, _, signErr := SignAgentCSR(certificatePEM, keyPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), uuid.New(), now, time.Hour)
+			if signErr != nil {
+				t.Fatalf("sign agent CSR: %v", signErr)
+			}
+			agentBlock, _ := pem.Decode(agentCertificatePEM)
+			agentCertificate, parseErr := x509.ParseCertificate(agentBlock.Bytes)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			roots := x509.NewCertPool()
+			roots.AppendCertsFromPEM(certificatePEM)
+			if _, verifyErr := agentCertificate.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); verifyErr != nil {
+				t.Fatalf("verify signed agent certificate: %v", verifyErr)
+			}
+
+			serverSerial, serialErr := randomSerial()
+			if serialErr != nil {
+				t.Fatal(serialErr)
+			}
+			serverTemplate := &x509.Certificate{SerialNumber: serverSerial, Subject: pkix.Name{CommonName: "agents.example.test"}, DNSNames: []string{"agents.example.test"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+			serverDER, createErr := x509.CreateCertificate(rand.Reader, serverTemplate, template, &agentKey.PublicKey, test.signer)
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
+			serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(agentKey)})
+			if _, _, validateErr := ValidateServerCredentials(certificatePEM, keyPEM, serverPEM, serverKeyPEM, now); validateErr != nil {
+				t.Fatalf("validate server credentials: %v", validateErr)
+			}
+		})
 	}
 }
 

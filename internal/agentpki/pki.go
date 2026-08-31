@@ -2,6 +2,9 @@ package agentpki
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -184,7 +187,7 @@ func ValidateAuthority(caCertPEM, caKeyPEM []byte, now time.Time) (*x509.Certifi
 	return ca, nil
 }
 
-func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, *rsa.PrivateKey, error) {
+func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, crypto.Signer, error) {
 	certBlock, certRest := pem.Decode(certPEM)
 	keyBlock, keyRest := pem.Decode(keyPEM)
 	if certBlock == nil || certBlock.Type != "CERTIFICATE" || len(bytes.TrimSpace(certRest)) != 0 || keyBlock == nil || len(bytes.TrimSpace(keyRest)) != 0 {
@@ -194,31 +197,59 @@ func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, *rsa.PrivateKey, error)
 	if err != nil || !cert.IsCA {
 		return nil, nil, errors.New("invalid CA certificate")
 	}
-	var key *rsa.PrivateKey
+	var key crypto.Signer
 	switch keyBlock.Type {
 	case "RSA PRIVATE KEY":
-		key, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+		var parsed *rsa.PrivateKey
+		parsed, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+		if err == nil {
+			err = parsed.Validate()
+			key = parsed
+		}
+	case "EC PRIVATE KEY":
+		key, err = x509.ParseECPrivateKey(keyBlock.Bytes)
 	case "PRIVATE KEY":
 		var parsed any
 		parsed, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
 		if err == nil {
-			var ok bool
-			key, ok = parsed.(*rsa.PrivateKey)
-			if !ok {
-				err = errors.New("private key is not RSA")
+			switch privateKey := parsed.(type) {
+			case *rsa.PrivateKey:
+				err = privateKey.Validate()
+				key = privateKey
+			case *ecdsa.PrivateKey:
+				key = privateKey
+			case ed25519.PrivateKey:
+				key = privateKey
+			default:
+				err = errors.New("private key cannot sign certificates")
 			}
 		}
 	default:
 		err = errors.New("unsupported private key PEM type")
 	}
-	if err != nil || key == nil || key.Validate() != nil {
+	if err != nil || key == nil {
 		return nil, nil, errors.New("invalid CA private key")
 	}
-	publicKey, ok := cert.PublicKey.(*rsa.PublicKey)
-	if !ok || !publicKey.Equal(&key.PublicKey) {
+	if !matchingPublicKey(cert.PublicKey, key.Public()) {
 		return nil, nil, errors.New("CA certificate and key do not match")
 	}
 	return cert, key, nil
+}
+
+func matchingPublicKey(certificateKey, privateKeyPublic crypto.PublicKey) bool {
+	switch certificateKey := certificateKey.(type) {
+	case *rsa.PublicKey:
+		privateKeyPublic, ok := privateKeyPublic.(*rsa.PublicKey)
+		return ok && certificateKey.Equal(privateKeyPublic)
+	case *ecdsa.PublicKey:
+		privateKeyPublic, ok := privateKeyPublic.(*ecdsa.PublicKey)
+		return ok && certificateKey.Equal(privateKeyPublic)
+	case ed25519.PublicKey:
+		privateKeyPublic, ok := privateKeyPublic.(ed25519.PublicKey)
+		return ok && certificateKey.Equal(privateKeyPublic)
+	default:
+		return false
+	}
 }
 
 func randomSerial() (*big.Int, error) {

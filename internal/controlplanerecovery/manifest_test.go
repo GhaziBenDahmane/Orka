@@ -1,13 +1,16 @@
 package controlplanerecovery
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,6 +130,32 @@ func TestVerifyRequiresMatchingAgentCAKeypair(t *testing.T) {
 	}
 	if _, err = Verify(manifest, signature, publicKey, masterKey, certificate, otherKey, expected, now); err == nil || !strings.Contains(err.Error(), "do not match") {
 		t.Fatalf("mismatched keypair error=%v", err)
+	}
+}
+
+func TestVerifyAcceptsECDSAAgentCAEscrow(t *testing.T) {
+	now := time.Date(2026, 8, 31, 10, 1, 0, 0, time.UTC)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}
+	certificateDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	certificateHash := sha256.Sum256(certificateDER)
+	manifest, signature, publicKey, masterKey, expected := signedManifest(t, func(manifest *Manifest) {
+		manifest.AgentCASHA256 = hex.EncodeToString(certificateHash[:])
+	}, nil)
+	if _, err = Verify(manifest, signature, publicKey, masterKey, certificate, keyPEM, expected, now); err != nil {
+		t.Fatalf("verify ECDSA CA escrow: %v", err)
 	}
 }
 

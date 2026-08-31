@@ -505,8 +505,8 @@ rolled-back controller update. For a Compose deployment, explicitly set
 image ID. When agent mTLS is configured, provide both
 `DOCKYARD_AGENT_CA_CERT_FILE` and `DOCKYARD_AGENT_CA_KEY_FILE`; backup refuses
 a missing or mismatched escrow key before recording the CA fingerprint. RSA
-CA private keys may use PKCS#1 (`RSA PRIVATE KEY`) or unencrypted PKCS#8
-(`PRIVATE KEY`) PEM encoding.
+PKCS#1, ECDSA SEC1, and unencrypted PKCS#8 RSA, ECDSA, or Ed25519 private-key
+PEM encodings are accepted consistently by startup and recovery.
 Copy the bundle, master key, agent CA keypair, artifact storage, stack
 configuration, image digest, and recovery verification key to independently
 protected storage.
