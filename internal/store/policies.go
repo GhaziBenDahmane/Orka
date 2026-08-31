@@ -57,13 +57,47 @@ func (s *Store) PutResourcePolicy(ctx context.Context, item ResourcePolicy) (Res
 		return ResourcePolicy{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = s.putResourcePolicyTx(ctx, tx, item)
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ResourcePolicy{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) PutResourcePolicyWithAudit(ctx context.Context, principal Principal, item ResourcePolicy, remoteAddr string) (ResourcePolicy, error) {
+	item.OrganizationID = principal.OrganizationID
+	if err := validatePolicy(item); err != nil {
+		return ResourcePolicy{}, err
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = s.putResourcePolicyTx(ctx, tx, item)
+	if err != nil {
+		return ResourcePolicy{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "policy.update", item.ScopeType, item.ScopeID.String(), remoteAddr, map[string]any{"maintenance": item.Maintenance}); err != nil {
+		return ResourcePolicy{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ResourcePolicy{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) putResourcePolicyTx(ctx context.Context, tx pgx.Tx, item ResourcePolicy) (ResourcePolicy, error) {
 	if err := s.validatePolicyScope(ctx, tx, item.OrganizationID, item.ScopeType, item.ScopeID); err != nil {
 		return ResourcePolicy{}, err
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))`, item.OrganizationID); err != nil {
 		return ResourcePolicy{}, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO resource_policies(organization_id,scope_type,scope_id,maintenance_enabled,maintenance_reason,max_projects,max_environments,max_services,max_databases)
+	err := tx.QueryRow(ctx, `INSERT INTO resource_policies(organization_id,scope_type,scope_id,maintenance_enabled,maintenance_reason,max_projects,max_environments,max_services,max_databases)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		ON CONFLICT(scope_type,scope_id) DO UPDATE SET maintenance_enabled=excluded.maintenance_enabled,maintenance_reason=excluded.maintenance_reason,max_projects=excluded.max_projects,max_environments=excluded.max_environments,max_services=excluded.max_services,max_databases=excluded.max_databases,updated_at=now()
 		WHERE resource_policies.organization_id=excluded.organization_id
@@ -74,7 +108,7 @@ func (s *Store) PutResourcePolicy(ctx context.Context, item ResourcePolicy) (Res
 	if err != nil {
 		return ResourcePolicy{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func servicePolicyScope(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID) (uuid.UUID, uuid.UUID, error) {

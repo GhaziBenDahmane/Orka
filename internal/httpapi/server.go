@@ -671,12 +671,11 @@ func (s *Server) putPolicy(w http.ResponseWriter, r *http.Request, scopeType str
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.PutResourcePolicy(r.Context(), store.ResourcePolicy{OrganizationID: p.OrganizationID, ScopeType: scopeType, ScopeID: scopeID, Maintenance: input.Maintenance, MaintenanceReason: input.MaintenanceReason, MaxProjects: input.MaxProjects, MaxEnvironments: input.MaxEnvironments, MaxServices: input.MaxServices, MaxDatabases: input.MaxDatabases})
+	item, err := s.Store.PutResourcePolicyWithAudit(r.Context(), p, store.ResourcePolicy{ScopeType: scopeType, ScopeID: scopeID, Maintenance: input.Maintenance, MaintenanceReason: input.MaintenanceReason, MaxProjects: input.MaxProjects, MaxEnvironments: input.MaxEnvironments, MaxServices: input.MaxServices, MaxDatabases: input.MaxDatabases}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "policy.update", scopeType, scopeID.String(), r.RemoteAddr, map[string]any{"maintenance": item.Maintenance})
 	writeJSON(w, 200, item)
 }
 
@@ -735,7 +734,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_password", err.Error())
 		return
 	}
-	p, err := s.Store.Bootstrap(r.Context(), in.Email, hash, in.Organization, slug)
+	p, err := s.Store.BootstrapWithAudit(r.Context(), in.Email, hash, in.Organization, slug, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -745,7 +744,6 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "auth.bootstrap", "organization", p.OrganizationID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, map[string]any{"token": token, "principal": p})
 }
 

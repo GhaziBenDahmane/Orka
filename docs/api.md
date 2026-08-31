@@ -74,6 +74,9 @@ session is issued atomically with its login event, so a usable session cannot
 exist without durable tenant audit evidence. An unscoped local login is
 recorded in every organization that identity can enter; a federated login
 remains IdP-tenant scoped.
+Initial bootstrap creates the first user, organization, owner membership, and
+bootstrap audit evidence in one transaction. Failed evidence leaves the
+instance uninitialized and safely retryable.
 
 Local login accepts `totpCode` or `recoveryCode` in addition to `email` and
 `password`. Once MFA is enabled, a correct password without a proof returns
@@ -246,6 +249,8 @@ enforced, so a narrower policy cannot evade a parent quota. Maintenance mode is
 also inherited and rejects new resources, configuration mutations, deletions,
 deployments, rollbacks, and webhook deployments with `503 maintenance_mode`;
 reads, cancellation, backups, and already-running jobs remain available.
+Policy creation and replacement commit atomically with operator audit evidence,
+so a failed audit write cannot silently change maintenance or quota controls.
 
 Notification endpoints support generic webhook, Slack-compatible payloads,
 TLS SMTP (`starttls` or implicit `tls`), PagerDuty Events API v2, and the

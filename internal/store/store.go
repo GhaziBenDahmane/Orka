@@ -492,6 +492,36 @@ func (s *Store) Bootstrap(ctx context.Context, email, passwordHash, orgName, slu
 		return Principal{}, err
 	}
 	defer tx.Rollback(ctx)
+	principal, err := bootstrapTx(ctx, tx, email, passwordHash, orgName, slug)
+	if err != nil {
+		return Principal{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Principal{}, err
+	}
+	return principal, nil
+}
+
+func (s *Store) BootstrapWithAudit(ctx context.Context, email, passwordHash, orgName, slug, remoteAddr string) (Principal, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Principal{}, err
+	}
+	defer tx.Rollback(ctx)
+	principal, err := bootstrapTx(ctx, tx, email, passwordHash, orgName, slug)
+	if err != nil {
+		return Principal{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "auth.bootstrap", "organization", principal.OrganizationID.String(), remoteAddr, nil); err != nil {
+		return Principal{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Principal{}, err
+	}
+	return principal, nil
+}
+
+func bootstrapTx(ctx context.Context, tx pgx.Tx, email, passwordHash, orgName, slug string) (Principal, error) {
 	var count int
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(721046139)`); err != nil {
 		return Principal{}, err
@@ -510,9 +540,6 @@ func (s *Store) Bootstrap(ctx context.Context, email, passwordHash, orgName, slu
 		return Principal{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, orgID, userID); err != nil {
-		return Principal{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return Principal{}, err
 	}
 	return Principal{UserID: userID, Email: strings.ToLower(email), OrganizationID: orgID, Organization: orgName, Role: "owner"}, nil
