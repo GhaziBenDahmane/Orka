@@ -107,7 +107,44 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 		t.Fatal("source credential ciphertext was accepted for another credential")
 	}
 	originalEncrypted := encrypted
+	projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Credential project','credential-project')`, []any{projectID, orgID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Application','application',$3,'services: {web: {image: example/app:1}}')`, []any{serviceID, environmentID, "credential-rotation-" + serviceID.String()}},
+		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://github.com/example/app','web','ghcr.io/example/app',$2)`, []any{serviceID, item.ID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deployment, err := db.QueueDeployment(ctx, orgID, serviceID, userID, "manual")
+	if err != nil {
+		t.Fatal(err)
+	}
 	rotateBody := []byte(`{"secret":"rotated-never-return-this"}`)
+	req, _ = http.NewRequest(http.MethodPut, server.URL+"/v1/source-credentials/"+item.ID.String(), bytes.NewReader(rotateBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"deployment_active"`)) || bytes.Contains(data, []byte("rotated-never-return-this")) {
+		t.Fatalf("active-deployment rotation status=%d body=%s", response.StatusCode, data)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_secret FROM source_credentials WHERE id=$1`, item.ID).Scan(&encrypted); err != nil || encrypted != originalEncrypted {
+		t.Fatalf("blocked rotation changed source credential: changed=%v err=%v", encrypted != originalEncrypted, err)
+	}
+	if err = db.CancelDeployment(ctx, orgID, deployment.ID); err != nil {
+		t.Fatal(err)
+	}
 	req, _ = http.NewRequest(http.MethodPut, server.URL+"/v1/source-credentials/"+item.ID.String(), bytes.NewReader(rotateBody))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Organization-ID", orgID.String())
@@ -131,6 +168,63 @@ func TestSourceCredentialIsEncryptedAndRedacted(t *testing.T) {
 	var rotationAudits int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action='source_credential.rotate' AND resource_id=$3`, orgID, userID, item.ID.String()).Scan(&rotationAudits); err != nil || rotationAudits != 1 {
 		t.Fatalf("credential rotation audit events=%d err=%v", rotationAudits, err)
+	}
+
+	gitCredentialID := uuid.New()
+	gitEncrypted, err := box.Encrypt([]byte("old-git-token"), cryptox.ResourceContext("source-credential", gitCredentialID.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.CreateSourceCredential(ctx, store.SourceCredential{ID: gitCredentialID, OrganizationID: orgID, Kind: "git", Name: "template-sync", Server: "github.com", Username: "token", EncryptedSecret: gitEncrypted}); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := db.CreateTemplateRepository(ctx, store.TemplateRepository{OrganizationID: orgID, Name: "Private templates", Slug: "private-templates", RepositoryURL: "https://github.com/example/templates", GitRef: "main", CredentialID: &gitCredentialID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runningRepository, err := db.BeginTemplateRepositorySync(ctx, orgID, repository.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRotateBody := []byte(`{"secret":"new-git-token"}`)
+	req, _ = http.NewRequest(http.MethodPut, server.URL+"/v1/source-credentials/"+gitCredentialID.String(), bytes.NewReader(gitRotateBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || !bytes.Contains(data, []byte(`"code":"resource_busy"`)) || bytes.Contains(data, []byte("new-git-token")) {
+		t.Fatalf("active-template-sync rotation status=%d body=%s", response.StatusCode, data)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_secret FROM source_credentials WHERE id=$1`, gitCredentialID).Scan(&encrypted); err != nil || encrypted != gitEncrypted {
+		t.Fatalf("blocked template credential rotation changed ciphertext: changed=%v err=%v", encrypted != gitEncrypted, err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, runningRepository, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	req, _ = http.NewRequest(http.MethodPut, server.URL+"/v1/source-credentials/"+gitCredentialID.String(), bytes.NewReader(gitRotateBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Organization-ID", orgID.String())
+	req.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || bytes.Contains(data, []byte("new-git-token")) {
+		t.Fatalf("post-sync credential rotation status=%d body=%s", response.StatusCode, data)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT encrypted_secret FROM source_credentials WHERE id=$1`, gitCredentialID).Scan(&encrypted); err != nil {
+		t.Fatal(err)
+	}
+	plain, err = box.Decrypt(encrypted, cryptox.ResourceContext("source-credential", gitCredentialID.String()))
+	if err != nil || string(plain) != "new-git-token" || encrypted == gitEncrypted {
+		t.Fatalf("post-sync credential rotation was not persisted safely: changed=%v plaintext=%q err=%v", encrypted != gitEncrypted, plain, err)
 	}
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
