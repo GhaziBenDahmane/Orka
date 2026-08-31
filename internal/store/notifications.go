@@ -179,7 +179,27 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 	if err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{"event": eventType, "operation": jobKind, "resourceType": resourceType, "resourceId": resourceID, "error": truncateStore(cause.Error(), 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard " + eventType + " for " + resourceType + " " + resourceID})
+	notification := map[string]any{"event": eventType, "operation": jobKind, "resourceType": resourceType, "resourceId": resourceID, "error": truncateStore(cause.Error(), 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard " + eventType + " for " + resourceType + " " + resourceID}
+	if jobKind == "restore.volume" {
+		var offline bool
+		var serviceID uuid.UUID
+		var volumeName, targetStorageNodeID string
+		if err = s.Pool.QueryRow(ctx, `SELECT restore.offline,service.id,backup.volume_name,restore.target_storage_node_id FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id WHERE restore.id=$1`, resourceID).Scan(&offline, &serviceID, &volumeName, &targetStorageNodeID); err != nil {
+			return err
+		}
+		mode := "online"
+		if offline {
+			mode = "offline"
+		}
+		notification["mode"] = mode
+		notification["serviceId"] = serviceID.String()
+		notification["volumeName"] = volumeName
+		notification["targetStorageNodeId"] = targetStorageNodeID
+		if offline {
+			notification["text"] = "Dockyard restore.failed for offline volume " + volumeName + " on service " + serviceID.String() + " targeting node " + targetStorageNodeID
+		}
+	}
+	payload, _ := json.Marshal(notification)
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err

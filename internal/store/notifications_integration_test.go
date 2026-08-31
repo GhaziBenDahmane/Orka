@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +100,58 @@ func TestRestoreDrillFailureUsesDedicatedEvent(t *testing.T) {
 	var event string
 	if err := db.Pool.QueryRow(ctx, `SELECT event_type FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&event); err != nil || event != "restore.drill.failed" {
 		t.Fatalf("event=%q err=%v", event, err)
+	}
+}
+
+func TestOfflineVolumeRestoreFailureIncludesRecoveryContext(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	destinationID, backupID, restoreID, endpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Offline recovery alert',$2)`, []any{organizationID, "offline-recovery-alert-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,storage_node_id,compose_yaml,desired_state) VALUES($1,$2,'App','app',$3,'nodenew','services: {}','stopped')`, []any{serviceID, environmentID, "offline-alert-" + serviceID.String()}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'S3','https://s3.example.test','backups','encrypted')`, []any{destinationID, organizationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'uploads','nodeold',$3,true,'succeeded','backup.enc',42,$4,$5,'encrypted',now())`, []any{backupID, serviceID, destinationID, strings.Repeat("a", 64), strings.Repeat("b", 64)}},
+		{`INSERT INTO volume_restores(id,volume_backup_id,target_storage_node_id,offline,status,error,started_at,finished_at) VALUES($1,$2,'nodenew',true,'failed','stored private failure',now()-interval '1 minute',now())`, []any{restoreID, backupID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'recovery-on-call','webhook','url','secret',ARRAY['restore.failed'])`, []any{endpointID, organizationID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	payload, _ := json.Marshal(map[string]string{"restoreId": restoreID.String()})
+	if err = db.QueueFailureNotifications(ctx, "restore.volume", payload, errors.New("worker recovery failed")); err != nil {
+		t.Fatal(err)
+	}
+	var eventType, resourceType, resourceID string
+	var deliveryPayload []byte
+	if err = db.Pool.QueryRow(ctx, `SELECT event_type,resource_type,resource_id,payload FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&eventType, &resourceType, &resourceID, &deliveryPayload); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err = json.Unmarshal(deliveryPayload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "restore.failed" || resourceType != "volume_restore" || resourceID != restoreID.String() || decoded["mode"] != "offline" || decoded["serviceId"] != serviceID.String() || decoded["volumeName"] != "uploads" || decoded["targetStorageNodeId"] != "nodenew" || !strings.Contains(decoded["text"].(string), "offline volume uploads") {
+		t.Fatalf("offline restore notification event=%q resource=%q/%q payload=%s", eventType, resourceType, resourceID, deliveryPayload)
 	}
 }
 

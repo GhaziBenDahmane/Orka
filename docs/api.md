@@ -267,8 +267,10 @@ for `deployment.failed`, `service.stop.failed`, `service.schedule.failed`,
 `backup.failed`, `restore.failed`, `restore.drill.failed`,
 `database.migration.failed`, `network.provision.failed`,
 `network.delete.failed`, `audit.archive.failed`, `ai.audit.failed`, and
-`ai.finding.critical`. URLs and signing
-secrets are encrypted at rest. The secret is returned once at creation; generic
+`ai.finding.critical`. Offline named-volume failures use `restore.failed` and
+include `mode`, `serviceId`, `volumeName`, and the snapshotted
+`targetStorageNodeId`, so responders can identify the stopped workload and
+intended recovery node. URLs and signing secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are
 deduplicated per endpoint/event/resource and retried as leased durable jobs.
