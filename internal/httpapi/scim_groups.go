@@ -148,6 +148,10 @@ func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID u
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+		scimError(w, 500, "create failed")
+		return
+	}
 	id := uuid.New()
 	var externalID *string
 	if in.ExternalID != "" {
@@ -238,6 +242,10 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+		scimError(w, http.StatusInternalServerError, "replace failed")
+		return
+	}
 	var currentRole string
 	var currentRevision int64
 	if err = tx.QueryRow(r.Context(), `SELECT role,revision FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&currentRole, &currentRevision); errors.Is(err, pgx.ErrNoRows) {
@@ -313,6 +321,10 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+		scimError(w, 500, "patch failed")
+		return
+	}
 	var lockedGroupID uuid.UUID
 	var currentRevision int64
 	if err = tx.QueryRow(r.Context(), `SELECT id,revision FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&lockedGroupID, &currentRevision); errors.Is(err, pgx.ErrNoRows) {
@@ -524,6 +536,10 @@ func (s *Server) deleteSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, 
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
+		scimError(w, 500, "delete failed")
+		return
+	}
 	var revision int64
 	if err = tx.QueryRow(r.Context(), `SELECT revision FROM scim_groups WHERE id=$1 AND organization_id=$2 FOR UPDATE`, groupID, orgID).Scan(&revision); errors.Is(err, pgx.ErrNoRows) {
 		scimError(w, http.StatusNotFound, "group not found")

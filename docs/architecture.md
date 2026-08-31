@@ -260,6 +260,9 @@ Session issuance locks the authenticated user and the memberships it will
 authorize before writing the token and audit evidence. Membership removal and
 SCIM deprovisioning therefore cannot race session revocation and leave a token
 that becomes valid if access is later restored.
+User and group provisioning share the same organization-first lock order, so
+group membership changes cannot race deprovisioning and retain stale role
+assignments for a deleted identity.
 
 Backup, restore, restore-drill, and migration jobs carry the same
 `database:<uuid>` resource key. Workers claim those jobs in FIFO order and a
