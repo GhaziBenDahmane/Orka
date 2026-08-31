@@ -529,6 +529,12 @@ named-volume backup/restore—return `409 service_stopped` while their owning
 service is stopped. Scheduled policies remain due and resume after the service
 is started; their schedule is not silently advanced while stopped.
 
+Manual deployment, service start/stop, rollback, and deployment cancellation
+commit desired-state changes, immutable snapshots, worker jobs, cancellation
+state, and operator audit evidence in one transaction. Audit persistence
+failure therefore cannot launch, stop, roll back, or cancel Swarm work without
+an attributable event; service-account requests remain separately attributed.
+
 Service schedules accept standard five-field cron expressions (including
 ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`
 descriptors) plus an IANA timezone. Commands run as `sh -lc` or `bash -lc`

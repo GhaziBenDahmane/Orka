@@ -2869,12 +2869,11 @@ func (s *Server) deployService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueDeployment(r.Context(), p.OrganizationID, serviceID, p.UserID, "manual")
+	item, err := s.Store.QueueDeploymentWithAudit(r.Context(), p, serviceID, "manual", r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "deployment.create", "deployment", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 202, item)
 }
 
@@ -2885,7 +2884,7 @@ func (s *Server) stopService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	jobID, queued, err := s.Store.QueueServiceStop(r.Context(), p.OrganizationID, serviceID)
+	jobID, queued, err := s.Store.QueueServiceStopWithAudit(r.Context(), p, serviceID, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "service_busy", "wait for active scheduled command, backup, restore, or migration work before stopping the service")
@@ -2894,7 +2893,6 @@ func (s *Server) stopService(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.stop.requested", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"jobId": jobID, "queued": queued})
 	status := http.StatusOK
 	if queued {
 		status = http.StatusAccepted
@@ -2909,12 +2907,11 @@ func (s *Server) startService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueServiceStart(r.Context(), p.OrganizationID, serviceID, p.UserID)
+	item, err := s.Store.QueueServiceStartWithAudit(r.Context(), p, serviceID, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.start.requested", "compose_service", serviceID.String(), r.RemoteAddr, map[string]any{"deploymentId": item.ID})
 	writeJSON(w, http.StatusAccepted, item)
 }
 
@@ -2968,12 +2965,11 @@ func (s *Server) rollbackService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.QueueRollback(r.Context(), p.OrganizationID, serviceID, p.UserID)
+	item, err := s.Store.QueueRollbackWithAudit(r.Context(), p, serviceID, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "deployment.rollback", "deployment", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 202, item)
 }
 
@@ -3096,7 +3092,7 @@ func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.CancelDeployment(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.CancelDeploymentWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		if errors.Is(err, store.ErrNotCancellable) {
 			writeError(w, 409, "not_cancellable", err.Error())
 			return
@@ -3104,7 +3100,6 @@ func (s *Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "deployment.cancel", "deployment", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 202, map[string]string{"status": "cancellation_requested"})
 }
 

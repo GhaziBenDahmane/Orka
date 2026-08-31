@@ -2001,12 +2001,56 @@ func (s *Store) QueueServiceStart(ctx context.Context, organizationID, serviceID
 	return s.queueDeployment(ctx, organizationID, serviceID, actorID, "start", true)
 }
 
+func (s *Store) QueueDeploymentWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, trigger, remoteAddr string) (Deployment, error) {
+	return s.queueDeploymentWithAudit(ctx, principal, serviceID, trigger, false, "deployment.create", "deployment", remoteAddr)
+}
+
+func (s *Store) QueueServiceStartWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, remoteAddr string) (Deployment, error) {
+	return s.queueDeploymentWithAudit(ctx, principal, serviceID, "start", true, "service.start.requested", "compose_service", remoteAddr)
+}
+
 func (s *Store) queueDeployment(ctx context.Context, organizationID, serviceID, actorID uuid.UUID, trigger string, requireStopped bool) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
 	}
 	defer tx.Rollback(ctx)
+	d, err := s.queueDeploymentTx(ctx, tx, organizationID, serviceID, actorID, trigger, requireStopped)
+	if err != nil {
+		return Deployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Deployment{}, err
+	}
+	return d, nil
+}
+
+func (s *Store) queueDeploymentWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, trigger string, requireStopped bool, action, resourceType, remoteAddr string) (Deployment, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Deployment{}, err
+	}
+	defer tx.Rollback(ctx)
+	d, err := s.queueDeploymentTx(ctx, tx, principal.OrganizationID, serviceID, principal.UserID, trigger, requireStopped)
+	if err != nil {
+		return Deployment{}, err
+	}
+	resourceID := d.ID.String()
+	var metadata any
+	if resourceType == "compose_service" {
+		resourceID = serviceID.String()
+		metadata = map[string]any{"deploymentId": d.ID}
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, action, resourceType, resourceID, remoteAddr, metadata); err != nil {
+		return Deployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Deployment{}, err
+	}
+	return d, nil
+}
+
+func (s *Store) queueDeploymentTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, actorID uuid.UUID, trigger string, requireStopped bool) (Deployment, error) {
 	var d Deployment
 	d.ID = uuid.New()
 	d.ComposeServiceID = serviceID
@@ -2014,6 +2058,7 @@ func (s *Store) queueDeployment(ctx context.Context, organizationID, serviceID, 
 	d.Trigger = trigger
 	var compose, env, desiredState string
 	var projectID, environmentID uuid.UUID
+	var err error
 	err = tx.QueryRow(ctx, `SELECT s.revision,s.compose_yaml,s.encrypted_env,s.desired_state,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&d.Revision, &compose, &env, &desiredState, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
@@ -2047,9 +2092,6 @@ func (s *Store) queueDeployment(ctx context.Context, organizationID, serviceID, 
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
 		return Deployment{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return Deployment{}, err
-	}
 	return d, nil
 }
 
@@ -2061,9 +2103,39 @@ func (s *Store) QueueServiceStop(ctx context.Context, organizationID, serviceID 
 		return uuid.Nil, false, err
 	}
 	defer tx.Rollback(ctx)
+	jobID, queued, err := s.queueServiceStopTx(ctx, tx, organizationID, serviceID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return uuid.Nil, false, err
+	}
+	return jobID, queued, nil
+}
+
+func (s *Store) QueueServiceStopWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, remoteAddr string) (uuid.UUID, bool, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	defer tx.Rollback(ctx)
+	jobID, queued, err := s.queueServiceStopTx(ctx, tx, principal.OrganizationID, serviceID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service.stop.requested", "compose_service", serviceID.String(), remoteAddr, map[string]any{"jobId": jobID, "queued": queued}); err != nil {
+		return uuid.Nil, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return uuid.Nil, false, err
+	}
+	return jobID, queued, nil
+}
+
+func (s *Store) queueServiceStopTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID) (uuid.UUID, bool, error) {
 	var stackName, desiredState string
 	var projectID, environmentID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT s.stack_name,s.desired_state,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF s`, serviceID, organizationID).Scan(&stackName, &desiredState, &projectID, &environmentID)
+	err := tx.QueryRow(ctx, `SELECT s.stack_name,s.desired_state,p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND p.organization_id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF s`, serviceID, organizationID).Scan(&stackName, &desiredState, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, ErrNotFound
 	}
@@ -2088,7 +2160,7 @@ func (s *Store) QueueServiceStop(ctx context.Context, organizationID, serviceID 
 				return uuid.Nil, false, err
 			}
 		}
-		return existingID, false, tx.Commit(ctx)
+		return existingID, false, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, err
@@ -2104,7 +2176,7 @@ func (s *Store) QueueServiceStop(ctx context.Context, organizationID, serviceID 
 		var lastStatus string
 		err = tx.QueryRow(ctx, `SELECT status FROM jobs WHERE kind='stop.compose' AND resource_key=$1 ORDER BY created_at DESC,id DESC LIMIT 1`, resourceKey).Scan(&lastStatus)
 		if err == nil && lastStatus == "succeeded" {
-			return uuid.Nil, false, tx.Commit(ctx)
+			return uuid.Nil, false, nil
 		}
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, false, err
@@ -2118,7 +2190,7 @@ func (s *Store) QueueServiceStop(ctx context.Context, organizationID, serviceID 
 	if _, err = tx.Exec(ctx, `UPDATE compose_services SET desired_state='stopped',updated_at=now() WHERE id=$1`, serviceID); err != nil {
 		return uuid.Nil, false, err
 	}
-	return jobID, true, tx.Commit(ctx)
+	return jobID, true, nil
 }
 
 // snapshotDeploymentRegistryCredentialTx retains the exact encrypted registry
@@ -2235,9 +2307,31 @@ func (s *Store) CancelDeployment(ctx context.Context, organizationID, deployment
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = cancelDeploymentTx(ctx, tx, organizationID, deploymentID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) CancelDeploymentWithAudit(ctx context.Context, principal Principal, deploymentID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = cancelDeploymentTx(ctx, tx, principal.OrganizationID, deploymentID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "deployment.cancel", "deployment", deploymentID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func cancelDeploymentTx(ctx context.Context, tx pgx.Tx, organizationID, deploymentID uuid.UUID) error {
 	var jobID uuid.UUID
 	var status string
-	err = tx.QueryRow(ctx, `SELECT j.id,j.status FROM jobs j JOIN deployments d ON d.id=(j.payload->>'deploymentId')::uuid JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE j.kind='deploy.compose' AND d.id=$1 AND p.organization_id=$2 FOR UPDATE OF j`, deploymentID, organizationID).Scan(&jobID, &status)
+	err := tx.QueryRow(ctx, `SELECT j.id,j.status FROM jobs j JOIN deployments d ON d.id=(j.payload->>'deploymentId')::uuid JOIN compose_services s ON s.id=d.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE j.kind='deploy.compose' AND d.id=$1 AND p.organization_id=$2 FOR UPDATE OF j`, deploymentID, organizationID).Scan(&jobID, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -2262,7 +2356,7 @@ func (s *Store) CancelDeployment(ctx context.Context, organizationID, deployment
 	default:
 		return ErrNotCancellable
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID, userID uuid.UUID, name string, tokenHash []byte, expiresAt time.Time) (DeployToken, error) {
@@ -3182,8 +3276,38 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 		return Deployment{}, err
 	}
 	defer tx.Rollback(ctx)
+	d, err := s.queueRollbackTx(ctx, tx, organizationID, serviceID, actorID)
+	if err != nil {
+		return Deployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Deployment{}, err
+	}
+	return d, nil
+}
+
+func (s *Store) QueueRollbackWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, remoteAddr string) (Deployment, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Deployment{}, err
+	}
+	defer tx.Rollback(ctx)
+	d, err := s.queueRollbackTx(ctx, tx, principal.OrganizationID, serviceID, principal.UserID)
+	if err != nil {
+		return Deployment{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "deployment.rollback", "deployment", d.ID.String(), remoteAddr, nil); err != nil {
+		return Deployment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Deployment{}, err
+	}
+	return d, nil
+}
+
+func (s *Store) queueRollbackTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, actorID uuid.UUID) (Deployment, error) {
 	var projectID, environmentID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&projectID, &environmentID)
+	err := tx.QueryRow(ctx, `SELECT p.id,e.id FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE s.id=$1 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$2 FOR UPDATE OF s`, serviceID, organizationID).Scan(&projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -3219,9 +3343,6 @@ func (s *Store) QueueRollback(ctx context.Context, organizationID, serviceID, ac
 	}
 	payload, _ := json.Marshal(map[string]string{"deploymentId": d.ID.String()})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'deploy.compose',$2,$3)`, uuid.New(), payload, "service:"+serviceID.String()); err != nil {
-		return Deployment{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return Deployment{}, err
 	}
 	return d, nil
