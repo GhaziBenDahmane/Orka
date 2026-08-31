@@ -257,6 +257,8 @@ secrets are encrypted at rest. The secret is returned once at creation; generic
 receivers can verify `HMAC-SHA256(timestamp + "." + rawBody)` from
 `X-Dockyard-Timestamp` and `X-Dockyard-Signature-256`. Deliveries are
 deduplicated per endpoint/event/resource and retried as leased durable jobs.
+Endpoint creation and disablement commit atomically with their audit events;
+failed evidence cannot retain encrypted credentials or cancel queued delivery.
 
 Agent enrollment is disabled unless both `DOCKYARD_AGENT_CA_CERT` and
 `DOCKYARD_AGENT_CA_KEY` (or their `_FILE` variants) are configured. The

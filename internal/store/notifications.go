@@ -39,10 +39,40 @@ type NotificationDelivery struct {
 }
 
 func (s *Store) CreateNotificationEndpoint(ctx context.Context, item NotificationEndpoint) (NotificationEndpoint, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return NotificationEndpoint{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createNotificationEndpointTx(ctx, tx, item)
+	if err != nil {
+		return NotificationEndpoint{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateNotificationEndpointWithAudit(ctx context.Context, principal Principal, item NotificationEndpoint, remoteAddr string) (NotificationEndpoint, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return NotificationEndpoint{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createNotificationEndpointTx(ctx, tx, item)
+	if err != nil {
+		return NotificationEndpoint{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "notification_endpoint.create", "notification_endpoint", item.ID.String(), remoteAddr, map[string]any{"kind": item.Kind, "events": item.Events}); err != nil {
+		return NotificationEndpoint{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createNotificationEndpointTx(ctx context.Context, tx pgx.Tx, item NotificationEndpoint) (NotificationEndpoint, error) {
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Kind, item.EncryptedURL, item.EncryptedSecret, item.Events, item.Enabled).Scan(&item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Kind, item.EncryptedURL, item.EncryptedSecret, item.Events, item.Enabled).Scan(&item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
@@ -69,6 +99,28 @@ func (s *Store) DeleteNotificationEndpoint(ctx context.Context, organizationID, 
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteNotificationEndpointTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteNotificationEndpointWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteNotificationEndpointTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "notification_endpoint.delete", "notification_endpoint", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteNotificationEndpointTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	tag, err := tx.Exec(ctx, `UPDATE notification_endpoints SET enabled=false,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
@@ -84,7 +136,7 @@ func (s *Store) DeleteNotificationEndpoint(ctx context.Context, organizationID, 
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) GetNotificationDeliveryForJob(ctx context.Context, jobID, leaseID, id uuid.UUID) (NotificationDelivery, NotificationEndpoint, error) {

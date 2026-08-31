@@ -80,12 +80,11 @@ func (s *Server) createNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateNotificationEndpoint(r.Context(), store.NotificationEndpoint{ID: id, OrganizationID: p.OrganizationID, Name: input.Name, Kind: input.Kind, EncryptedURL: encryptedURL, EncryptedSecret: encryptedSecret, Events: input.Events, Enabled: true})
+	item, err := s.Store.CreateNotificationEndpointWithAudit(r.Context(), p, store.NotificationEndpoint{ID: id, Name: input.Name, Kind: input.Kind, EncryptedURL: encryptedURL, EncryptedSecret: encryptedSecret, Events: input.Events, Enabled: true}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "notification_endpoint.create", "notification_endpoint", item.ID.String(), r.RemoteAddr, map[string]any{"kind": item.Kind, "events": item.Events})
 	response := map[string]any{"endpoint": item}
 	if revealSecret {
 		response["signingSecret"] = secret
@@ -168,10 +167,9 @@ func (s *Server) deleteNotificationEndpoint(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteNotificationEndpoint(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteNotificationEndpointWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "notification_endpoint.delete", "notification_endpoint", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
