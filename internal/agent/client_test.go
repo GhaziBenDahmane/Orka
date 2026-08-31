@@ -371,7 +371,10 @@ func TestEnsureIdentityRetriesWithTheSameCSR(t *testing.T) {
 
 func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T) {
 	now := time.Now().UTC()
-	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
+	// The fixture needs one CA that was valid when the intentionally expired
+	// replacement was issued and remains valid for the successful cases. Keep
+	// the individual client-certificate lifetimes responsible for expiry.
+	caPEM, caKey, err := agentpki.NewCA(now.Add(-9*24*time.Hour), 10*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +490,7 @@ func TestRotateCertificateValidatesBeforeAtomicIdentityReplacement(t *testing.T)
 		}
 	}
 	t.Run("untrusted authority", func(t *testing.T) {
-		untrustedCA, untrustedKey, caErr := agentpki.NewCA(now, 24*time.Hour)
+		untrustedCA, untrustedKey, caErr := agentpki.NewCA(now.Add(-9*24*time.Hour), 10*24*time.Hour)
 		if caErr != nil {
 			t.Fatal(caErr)
 		}
