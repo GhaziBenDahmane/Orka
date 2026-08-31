@@ -228,6 +228,31 @@ func TestRegistryUsesImportedCredentialsAndImage(t *testing.T) {
 	}
 }
 
+func TestBuiltInDriverRejectsMalformedConfiguration(t *testing.T) {
+	registry := NewRegistry()
+	tests := map[string]map[string]any{
+		"unknown field":       {"apiToken": "secret"},
+		"non-string field":    {"username": 42},
+		"oversized identity":  {"username": strings.Repeat("u", maxDatabaseIdentityBytes+1)},
+		"oversized password":  {"password": strings.Repeat("p", maxDatabasePasswordBytes+1)},
+		"nul password":        {"password": "secret\x00suffix"},
+		"multiline database":  {"database": "app\nother"},
+		"controlled username": {"username": "user\u0085name"},
+		"oversized source id": {"sourceId": strings.Repeat("s", maxDatabaseMigrationMetadataBytes+1)},
+	}
+	for name, config := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := registry.Render("postgres", Request{Name: "data", Config: config}); err == nil {
+				t.Fatal("malformed built-in database config was accepted")
+			}
+		})
+	}
+
+	if _, err := registry.Render("postgres", Request{Name: "data", Config: map[string]any{"source": "dokploy", "sourceId": "legacy-database"}}); err != nil {
+		t.Fatalf("migration provenance config was rejected: %v", err)
+	}
+}
+
 func TestRedisCompatibleDriversUseTheirOwnServerAndPasswordEnvironment(t *testing.T) {
 	registry := NewRegistry()
 	for _, tc := range []struct {

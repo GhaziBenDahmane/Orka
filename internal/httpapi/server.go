@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
 	backupstore "github.com/bendahma/dokploy-go/internal/backup"
@@ -1324,6 +1325,12 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		Config  map[string]any `json:"config"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	rawName := in.Name
+	in.Name = strings.TrimSpace(rawName)
+	if in.Name == "" || len(in.Name) > 120 || strings.IndexFunc(rawName, unicode.IsControl) >= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_name", "database name must contain 1 to 120 bytes without control characters")
 		return
 	}
 	if in.Slug == "" {

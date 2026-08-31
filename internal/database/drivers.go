@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -57,6 +58,13 @@ type EngineInfo struct {
 }
 
 var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+const (
+	maxDatabaseConfigEntries          = 16
+	maxDatabaseIdentityBytes          = 1024
+	maxDatabasePasswordBytes          = 64 << 10
+	maxDatabaseMigrationMetadataBytes = 1024
+)
 
 func NewRegistry() *Registry {
 	r := &Registry{drivers: map[string]Driver{}}
@@ -401,6 +409,9 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 	if req.Name == "" {
 		return Result{}, fmt.Errorf("database name is required")
 	}
+	if err := validateSimpleDriverConfig(req.Config); err != nil {
+		return Result{}, err
+	}
 	user := configString(req.Config, "username", "dockyard")
 	databaseName := configString(req.Config, "database", "app")
 	password := configString(req.Config, "password", secret(32))
@@ -463,6 +474,32 @@ func (d simpleDriver) Render(req Request) (Result, error) {
 		connection.Path = "/" + databaseName
 	}
 	return Result{ComposeYAML: string(out), Environment: env, Credentials: credentials, InternalURL: connection.String(), Version: req.Version}, nil
+}
+
+func validateSimpleDriverConfig(config map[string]any) error {
+	if len(config) > maxDatabaseConfigEntries {
+		return errors.New("database config contains too many entries")
+	}
+	limits := map[string]int{
+		"username":     maxDatabaseIdentityBytes,
+		"database":     maxDatabaseIdentityBytes,
+		"password":     maxDatabasePasswordBytes,
+		"rootPassword": maxDatabasePasswordBytes,
+		"image":        512,
+		"source":       maxDatabaseMigrationMetadataBytes,
+		"sourceId":     maxDatabaseMigrationMetadataBytes,
+	}
+	for key, raw := range config {
+		limit, known := limits[key]
+		value, isString := raw.(string)
+		if !known || !isString || len(value) > limit || strings.ContainsRune(value, '\x00') {
+			return fmt.Errorf("invalid database config field %q", key)
+		}
+		if key != "password" && key != "rootPassword" && strings.IndexFunc(value, unicode.IsControl) >= 0 {
+			return fmt.Errorf("invalid database config field %q", key)
+		}
+	}
+	return nil
 }
 
 var registryImagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)
