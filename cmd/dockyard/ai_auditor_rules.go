@@ -447,12 +447,47 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 				lastSeen = cluster.LastSeenAt.UTC().Format(time.RFC3339)
 			}
 			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote cluster heartbeat is stale", Description: "The active or draining cluster has not reported inside the two-minute scheduling window.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"state": cluster.State, "lastSeenAt": lastSeen}, Remediation: "Restore agent connectivity and certificate validity before scheduling or mutating workloads."})
+		} else {
+			if cluster.Managers == 0 {
+				add(modelFinding{Severity: "critical", Category: "capacity", Title: "Remote cluster has no manager", Description: "A fresh active or draining cluster reports no Swarm manager capable of maintaining control-plane state.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"nodes": cluster.Nodes, "managers": cluster.Managers}, Remediation: "Restore or promote a healthy Swarm manager and confirm a fresh agent heartbeat before scheduling workloads."})
+			}
+			if cluster.SchedulableNodes == 0 {
+				add(modelFinding{Severity: "critical", Category: "capacity", Title: "Remote cluster has no schedulable node", Description: "A fresh active or draining cluster has no node eligible to receive workloads.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"nodes": cluster.Nodes, "readyNodes": cluster.ReadyNodes, "activeNodes": cluster.ActiveNodes, "schedulableNodes": cluster.SchedulableNodes}, Remediation: "Restore a ready active node, remove unintended drain constraints, and confirm capacity before deploying."})
+			}
+			if cluster.ReadyNodes < cluster.Nodes {
+				add(modelFinding{Severity: "high", Category: "capacity", Title: "Remote cluster nodes are not ready", Description: "One or more reported cluster nodes are unavailable.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"nodes": cluster.Nodes, "readyNodes": cluster.ReadyNodes}, Remediation: "Recover or remove unavailable Swarm nodes and verify quorum and workload redundancy."})
+			}
+			if cluster.ActiveNodes < cluster.ReadyNodes {
+				add(modelFinding{Severity: "medium", Category: "capacity", Title: "Remote cluster nodes are drained", Description: "One or more ready cluster nodes are not active for scheduling.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"readyNodes": cluster.ReadyNodes, "activeNodes": cluster.ActiveNodes}, Remediation: "Confirm the drain is intentional or return the affected nodes to active availability."})
+			}
+			if !cluster.DockerSwarm || !cluster.DockerCompose {
+				add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote cluster capability contract is incomplete", Description: "A fresh cluster does not advertise both required Swarm and Compose capabilities.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"dockerSwarm": cluster.DockerSwarm, "dockerCompose": cluster.DockerCompose}, Remediation: "Upgrade or reconfigure the agent and verify the required capability contract on its next heartbeat."})
+			}
+			if cluster.EdgeProxyConfigured && !cluster.EdgeProxyReady {
+				add(modelFinding{Severity: "high", Category: "network", Title: "Remote edge proxy is not ready", Description: "The cluster advertises an edge proxy integration that cannot currently accept managed routing or certificate updates.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"edgeProxyConfigured": true, "edgeProxyReady": false, "edgeProxyStatus": cluster.EdgeProxyStatus}, Remediation: "Repair the Traefik service, public network, and file-provider integration, then confirm a ready capability heartbeat."})
+			}
 		}
 		if cluster.CertificateNotAfter != nil && cluster.CertificateNotAfter.Before(now.Add(7*24*time.Hour)) {
 			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote cluster certificate expires soon", Description: "The active agent certificate expires in less than seven days or is already expired.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"certificateNotAfter": cluster.CertificateNotAfter.UTC().Format(time.RFC3339)}, Remediation: "Complete two-phase agent certificate rotation and confirm the replacement heartbeat."})
 		}
 		if snapshot.AgentCAPosture.Configured && cluster.CertificateAuthorityFingerprint != snapshot.AgentCAPosture.ActiveFingerprint {
 			add(modelFinding{Severity: "high", Category: "cluster", Title: "Remote cluster uses a non-active certificate authority", Description: "The cluster's authenticated client identity does not match the controller's active signing CA.", ResourceType: "cluster", ResourceID: cluster.ID.String(), Evidence: map[string]any{"clusterFingerprint": cluster.CertificateAuthorityFingerprint, "pendingFingerprint": cluster.PendingCertificateAuthorityFingerprint, "activeFingerprint": snapshot.AgentCAPosture.ActiveFingerprint}, Remediation: "Keep dual trust enabled, restore a fresh heartbeat, and wait for automatic identity rotation before retiring the previous CA."})
+		}
+	}
+	clustersByID := make(map[uuid.UUID]store.AIAuditClusterInfo, len(snapshot.Clusters))
+	for _, cluster := range snapshot.Clusters {
+		clustersByID[cluster.ID] = cluster
+	}
+	for _, environment := range snapshot.Environments {
+		if environment.ClusterID == nil || environment.MinimumNodes == 0 && environment.MinimumNanoCPUs == 0 && environment.MinimumMemoryBytes == 0 {
+			continue
+		}
+		cluster, exists := clustersByID[*environment.ClusterID]
+		if !exists || (cluster.State != "active" && cluster.State != "draining") || cluster.LastSeenAt == nil || now.Sub(*cluster.LastSeenAt) > 2*time.Minute {
+			continue
+		}
+		if int64(environment.MinimumNodes) > cluster.SchedulableNodes || environment.MinimumNanoCPUs > cluster.NanoCPUs || environment.MinimumMemoryBytes > cluster.MemoryBytes {
+			add(modelFinding{Severity: "high", Category: "capacity", Title: "Remote cluster does not meet environment capacity requirements", Description: "The environment's selected remote cluster reports less schedulable capacity than the configured minimum.", ResourceType: "environment", ResourceID: environment.ID.String(), Evidence: map[string]any{"clusterId": cluster.ID.String(), "minimumNodes": environment.MinimumNodes, "schedulableNodes": cluster.SchedulableNodes, "minimumNanoCpus": environment.MinimumNanoCPUs, "nanoCpus": cluster.NanoCPUs, "minimumMemoryBytes": environment.MinimumMemoryBytes, "memoryBytes": cluster.MemoryBytes}, Remediation: "Add schedulable capacity or move the environment to a cluster that satisfies all placement requirements."})
 		}
 	}
 	if snapshot.AgentCAPosture.RolloverActive {

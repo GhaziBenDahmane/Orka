@@ -352,7 +352,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 		{`INSERT INTO backup_policies(id,database_instance_id,interval_seconds,retention_count,enabled,next_run_at,verify_restore) VALUES($1,$2,3600,14,true,now(),true)`, []any{policyID, databaseID}},
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,path,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'succeeded','dump',$3,42,$4,true,$5,'wrapped-key',now())`, []any{backupID, databaseID, "/var/lib/dockyard/backups/" + backupID.String() + "/" + backupID.String() + ".dump.enc", strings.Repeat("a", 64), strings.Repeat("b", 64)}},
 		{`INSERT INTO database_restores(id,database_backup_id,status,kind,finished_at) VALUES($1,$2,'succeeded','drill',now())`, []any{uuid.New(), backupID}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,agent_image,agent_update_state,deletion_requested_at) VALUES($1,$2,'Paris','paris','active','{"secret":"target-cluster-label-secret"}','{"secret":"target-cluster-capacity-secret"}',$3,'updating',now()-interval '20 minutes')`, []any{clusterID, organizationID, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,capabilities,agent_image,agent_update_state,deletion_requested_at) VALUES($1,$2,'Paris','paris','active','{"secret":"target-cluster-label-secret"}','{"secret":"target-cluster-capacity-secret","nodes":3,"readyNodes":2,"activeNodes":2,"schedulableNodes":2,"managers":1,"nanoCpus":6000000000,"memoryBytes":12884901888}','{"protocolVersion":1,"dockerSwarm":true,"dockerCompose":true,"edgeProxy":{"provider":"traefik","managementMode":"external","serviceName":"target-edge-service-secret","publicNetwork":"target-edge-network-secret","dynamicConfigurationMode":"file","dynamicConfigurationPath":"/target-edge-path-secret","ready":false,"status":"network_missing","supportsCustomCertificates":false}}',$3,'updating',now()-interval '20 minutes')`, []any{clusterID, organizationID, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,attempts,target_image,last_error,run_after) VALUES($1,$2,'agent.upgrade','agent-command-secret','verifying',1,$3,'target-agent-error-secret',now()-interval '1 minute')`, []any{upgradeID, clusterID, "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,run_after,created_at) VALUES($1,$2,'swarm.logs','target-pending-command-secret','pending',now()-interval '3 minutes',now()-interval '4 minutes')`, []any{uuid.New(), clusterID}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,lease_id,lease_expires_at,created_at) VALUES($1,$2,'swarm.status','target-leased-command-secret','leased',$3,now()-interval '4 minutes',now()-interval '5 minutes')`, []any{uuid.New(), clusterID, uuid.New()}},
@@ -473,6 +473,9 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	if len(snapshot.AgentUpgradePosture) != 1 || snapshot.AgentUpgradePosture[0].ClusterID != clusterID || snapshot.AgentUpgradePosture[0].CommandID != upgradeID || snapshot.AgentUpgradePosture[0].Status != "verifying" || !snapshot.AgentUpgradePosture[0].VerificationOverdue || snapshot.AgentUpgradePosture[0].VerificationDeadline == nil {
 		t.Fatalf("agent upgrade posture=%#v", snapshot.AgentUpgradePosture)
 	}
+	if len(snapshot.Clusters) != 1 || snapshot.Clusters[0].ID != clusterID || snapshot.Clusters[0].Nodes != 3 || snapshot.Clusters[0].ReadyNodes != 2 || snapshot.Clusters[0].ActiveNodes != 2 || snapshot.Clusters[0].SchedulableNodes != 2 || snapshot.Clusters[0].Managers != 1 || snapshot.Clusters[0].NanoCPUs != 6_000_000_000 || snapshot.Clusters[0].MemoryBytes != 12_884_901_888 || !snapshot.Clusters[0].DockerSwarm || !snapshot.Clusters[0].DockerCompose || !snapshot.Clusters[0].EdgeProxyConfigured || snapshot.Clusters[0].EdgeProxyReady || snapshot.Clusters[0].EdgeProxyStatus != "network_missing" {
+		t.Fatalf("cluster posture=%#v", snapshot.Clusters)
+	}
 	if !snapshot.IdentityPosture.RequireSSO || snapshot.IdentityPosture.EnabledOIDCProviders != 1 || snapshot.IdentityPosture.EnabledSAMLProviders != 1 || snapshot.IdentityPosture.ActiveMembers != 2 || snapshot.IdentityPosture.ActiveOwners != 1 || snapshot.IdentityPosture.ActiveAdmins != 0 || snapshot.IdentityPosture.ActiveDevelopers != 1 || snapshot.IdentityPosture.ActiveViewers != 0 || snapshot.IdentityPosture.DisabledMembers != 1 {
 		t.Fatalf("identity membership posture=%#v", snapshot.IdentityPosture)
 	}
@@ -558,6 +561,11 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	}
 	if strings.Contains(string(encodedSnapshot), "target-finalizer-error-secret") || strings.Contains(string(encodedSnapshot), "target-deleting-stack-secret") || strings.Contains(string(encodedSnapshot), "deleting-service-env-secret") {
 		t.Fatalf("snapshot leaked finalizer error: body=%s", encodedSnapshot)
+	}
+	for _, secret := range []string{"target-edge-service-secret", "target-edge-network-secret", "target-edge-path-secret"} {
+		if strings.Contains(string(encodedSnapshot), secret) {
+			t.Fatalf("snapshot leaked edge capability detail %q: body=%s", secret, encodedSnapshot)
+		}
 	}
 	if strings.Contains(string(encodedSnapshot), deletingServiceID.String()) {
 		t.Fatalf("snapshot leaked deleting resource identity %s: body=%s", deletingServiceID, encodedSnapshot)

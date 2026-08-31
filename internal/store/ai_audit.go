@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bendahma/dokploy-go/internal/auth"
+	"github.com/bendahma/dokploy-go/internal/clustercontract"
 	"github.com/bendahma/dokploy-go/internal/composevolume"
 	"github.com/bendahma/dokploy-go/internal/ociref"
 	"github.com/crewjam/saml/samlsp"
@@ -195,6 +196,18 @@ type AIAuditClusterInfo struct {
 	AgentImage                             string     `json:"agentImage"`
 	AgentUpdateState                       string     `json:"agentUpdateState"`
 	DockerVersion                          string     `json:"dockerVersion"`
+	Nodes                                  int64      `json:"nodes"`
+	ReadyNodes                             int64      `json:"readyNodes"`
+	ActiveNodes                            int64      `json:"activeNodes"`
+	SchedulableNodes                       int64      `json:"schedulableNodes"`
+	Managers                               int64      `json:"managers"`
+	NanoCPUs                               int64      `json:"nanoCpus"`
+	MemoryBytes                            int64      `json:"memoryBytes"`
+	DockerSwarm                            bool       `json:"dockerSwarm"`
+	DockerCompose                          bool       `json:"dockerCompose"`
+	EdgeProxyConfigured                    bool       `json:"edgeProxyConfigured"`
+	EdgeProxyReady                         bool       `json:"edgeProxyReady"`
+	EdgeProxyStatus                        string     `json:"edgeProxyStatus,omitempty"`
 	CertificateAuthorityFingerprint        string     `json:"certificateAuthorityFingerprint,omitempty"`
 	PendingCertificateAuthorityFingerprint string     `json:"pendingCertificateAuthorityFingerprint,omitempty"`
 	CertificateNotAfter                    *time.Time `json:"certificateNotAfter,omitempty"`
@@ -596,9 +609,23 @@ func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UU
 		return snapshot, err
 	}
 	for _, item := range clusters {
+		capacity := clustercontract.Capacity{}
+		if encoded, marshalErr := json.Marshal(item.Capacity); marshalErr == nil {
+			_ = json.Unmarshal(encoded, &capacity)
+		}
+		edgeProxyConfigured, edgeProxyReady, edgeProxyStatus := false, false, ""
+		if item.Capabilities.EdgeProxy != nil {
+			edgeProxyConfigured = true
+			edgeProxyReady = item.Capabilities.EdgeProxy.Ready
+			edgeProxyStatus = item.Capabilities.EdgeProxy.Status
+		}
 		snapshot.Clusters = append(snapshot.Clusters, AIAuditClusterInfo{
 			ID: item.ID, OrganizationID: item.OrganizationID, Name: item.Name, Slug: item.Slug, State: item.State,
 			AgentVersion: item.AgentVersion, AgentImage: item.AgentImage, AgentUpdateState: item.AgentUpdateState, DockerVersion: item.DockerVersion,
+			Nodes: capacity.Nodes, ReadyNodes: capacity.ReadyNodes, ActiveNodes: capacity.ActiveNodes, SchedulableNodes: capacity.SchedulableNodes,
+			Managers: capacity.Managers, NanoCPUs: capacity.NanoCPUs, MemoryBytes: capacity.MemoryBytes,
+			DockerSwarm: item.Capabilities.DockerSwarm, DockerCompose: item.Capabilities.DockerCompose,
+			EdgeProxyConfigured: edgeProxyConfigured, EdgeProxyReady: edgeProxyReady, EdgeProxyStatus: edgeProxyStatus,
 			CertificateAuthorityFingerprint: item.CertificateAuthorityFingerprint, PendingCertificateAuthorityFingerprint: item.PendingCertificateAuthorityFingerprint,
 			CertificateNotAfter: item.CertificateNotAfter, LastSeenAt: item.LastSeenAt, MaintenanceStartsAt: item.MaintenanceStartsAt,
 			MaintenanceEndsAt: item.MaintenanceEndsAt, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt,

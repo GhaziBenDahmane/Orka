@@ -72,7 +72,10 @@ keys make it a privileged service.
   finalizers. Resource-policy posture includes
   active maintenance scopes, configured quota limits, and current usage while
   excluding operator-supplied maintenance reasons. Each cluster exposes its
-  reported agent runtime image, and the latest agent upgrade includes its
+  reported agent runtime image plus allowlisted aggregate node, CPU, memory,
+  Swarm/Compose capability, and edge-proxy readiness posture. Raw capacity
+  maps, labels, edge service/network identities, and dynamic paths remain
+  excluded. The latest agent upgrade includes its
   immutable target, state, attempt count, deadline, and overdue flag, but never
   its encrypted command, result, or raw failure text. Pending and leased
   outbound agent commands are grouped by cluster and kind with due-pending and

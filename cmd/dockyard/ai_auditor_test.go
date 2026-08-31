@@ -751,9 +751,9 @@ func TestDeterministicAuditDetectsMutableRemoteAgentImages(t *testing.T) {
 		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		NotificationPosture: fullyCoveredNotifications(),
 		Clusters: []store.AIAuditClusterInfo{
-			{ID: missingID, State: "active", LastSeenAt: &now},
-			{ID: mutableID, State: "draining", AgentImage: "registry.example/dockyard:latest", LastSeenAt: &now},
-			{ID: uuid.New(), State: "active", AgentImage: "registry.example/dockyard:v1@sha256:" + strings.Repeat("a", 64), LastSeenAt: &now},
+			{ID: missingID, State: "active", LastSeenAt: &now, Nodes: 1, ReadyNodes: 1, ActiveNodes: 1, SchedulableNodes: 1, Managers: 1, DockerSwarm: true, DockerCompose: true},
+			{ID: mutableID, State: "draining", AgentImage: "registry.example/dockyard:latest", LastSeenAt: &now, Nodes: 1, ReadyNodes: 1, ActiveNodes: 1, SchedulableNodes: 1, Managers: 1, DockerSwarm: true, DockerCompose: true},
+			{ID: uuid.New(), State: "active", AgentImage: "registry.example/dockyard:v1@sha256:" + strings.Repeat("a", 64), LastSeenAt: &now, Nodes: 1, ReadyNodes: 1, ActiveNodes: 1, SchedulableNodes: 1, Managers: 1, DockerSwarm: true, DockerCompose: true},
 			{ID: uuid.New(), State: "pending", AgentImage: "registry.example/dockyard:latest"},
 		},
 	}
@@ -1381,13 +1381,71 @@ func TestDeterministicAuditDetectsUnhealthyManagedDatabase(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsRemoteClusterCapacityAndCapabilityFailures(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	clusterID, environmentID := uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		Clusters: []store.AIAuditClusterInfo{{
+			ID: clusterID, State: "active", AgentImage: "registry.example/dockyard@sha256:" + strings.Repeat("a", 64), LastSeenAt: &now,
+			Nodes: 3, ReadyNodes: 2, ActiveNodes: 1, SchedulableNodes: 0, Managers: 0,
+			NanoCPUs: 2_000_000_000, MemoryBytes: 4_000_000_000,
+			EdgeProxyConfigured: true, EdgeProxyStatus: "network_missing",
+		}},
+		Environments: []store.AIAuditEnvironmentInfo{{
+			ID: environmentID, ClusterID: &clusterID, MinimumNodes: 2, MinimumNanoCPUs: 4_000_000_000, MinimumMemoryBytes: 8_000_000_000,
+		}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	titles := map[string]modelFinding{}
+	for _, finding := range findings {
+		titles[finding.Title] = finding
+	}
+	for _, title := range []string{
+		"Remote cluster has no manager",
+		"Remote cluster has no schedulable node",
+		"Remote cluster nodes are not ready",
+		"Remote cluster nodes are drained",
+		"Remote cluster capability contract is incomplete",
+		"Remote edge proxy is not ready",
+		"Remote cluster does not meet environment capacity requirements",
+	} {
+		if _, exists := titles[title]; !exists {
+			t.Errorf("missing %q in %#v", title, findings)
+		}
+	}
+	if len(findings) != 7 {
+		t.Fatalf("capacity findings=%d, want 7: %#v", len(findings), findings)
+	}
+	if finding := titles["Remote cluster does not meet environment capacity requirements"]; finding.ResourceID != environmentID.String() || finding.Evidence["clusterId"] != clusterID.String() {
+		t.Fatalf("environment capacity evidence=%#v", finding)
+	}
+}
+
+func TestDeterministicAuditDoesNotTrustStaleClusterCapacity(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-3 * time.Minute)
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		Clusters:            []store.AIAuditClusterInfo{{ID: uuid.New(), State: "active", AgentImage: "registry.example/dockyard@sha256:" + strings.Repeat("a", 64), LastSeenAt: &stale}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Remote cluster heartbeat is stale" {
+		t.Fatalf("stale cluster findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditAcceptsClusterOnActiveCertificateAuthority(t *testing.T) {
 	now := time.Now().UTC()
 	snapshot := store.AIAuditSnapshot{
 		Organization:    uuid.New(),
 		IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
 		AgentCAPosture:  store.AIAuditAgentCAPosture{Configured: true, ActiveFingerprint: "sha256:active"},
-		Clusters:        []store.AIAuditClusterInfo{{ID: uuid.New(), State: "active", AgentImage: "registry.example/dockyard@sha256:" + strings.Repeat("a", 64), CertificateAuthorityFingerprint: "sha256:active", LastSeenAt: &now}},
+		Clusters:        []store.AIAuditClusterInfo{{ID: uuid.New(), State: "active", AgentImage: "registry.example/dockyard@sha256:" + strings.Repeat("a", 64), CertificateAuthorityFingerprint: "sha256:active", LastSeenAt: &now, Nodes: 1, ReadyNodes: 1, ActiveNodes: 1, SchedulableNodes: 1, Managers: 1, DockerSwarm: true, DockerCompose: true}},
 	}
 	for _, finding := range deterministicAuditFindings(snapshot, now) {
 		if finding.Title == "Remote cluster uses a non-active certificate authority" || finding.Title == "Previous agent certificate authority remains trusted" {
