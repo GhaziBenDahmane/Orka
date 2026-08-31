@@ -2377,8 +2377,42 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 		return DatabaseBackup{}, err
 	}
 	defer tx.Rollback(ctx)
+	backup, err := queueDatabaseBackupTx(ctx, tx, organizationID, databaseID, actorID, destinationID)
+	if err != nil {
+		return DatabaseBackup{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseBackup{}, err
+	}
+	return backup, nil
+}
+
+func (s *Store) QueueDatabaseBackupWithAudit(ctx context.Context, principal Principal, databaseID uuid.UUID, destinationID *uuid.UUID, remoteAddr string) (DatabaseBackup, error) {
+	if s.RequireRemoteBackups && destinationID == nil {
+		return DatabaseBackup{}, ErrRemoteBackupRequired
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return DatabaseBackup{}, err
+	}
+	defer tx.Rollback(ctx)
+	backup, err := queueDatabaseBackupTx(ctx, tx, principal.OrganizationID, databaseID, principal.UserID, destinationID)
+	if err != nil {
+		return DatabaseBackup{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database.backup.create", "database_backup", backup.ID.String(), remoteAddr, nil); err != nil {
+		return DatabaseBackup{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseBackup{}, err
+	}
+	return backup, nil
+}
+
+func queueDatabaseBackupTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID, actorID uuid.UUID, destinationID *uuid.UUID) (DatabaseBackup, error) {
 	var lockedID uuid.UUID
 	var composeServiceID *uuid.UUID
+	var err error
 	if err = tx.QueryRow(ctx, `SELECT d.id,d.compose_service_id FROM database_instances d JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE d.id=$1 AND p.organization_id=$2 FOR UPDATE OF d`, databaseID, organizationID).Scan(&lockedID, &composeServiceID); errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseBackup{}, ErrNotFound
 	} else if err != nil {
@@ -2416,9 +2450,6 @@ func (s *Store) QueueDatabaseBackup(ctx context.Context, organizationID, databas
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'backup.database',$2,$3)`, uuid.New(), payload, "database:"+databaseID.String()); err != nil {
 		return DatabaseBackup{}, err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return DatabaseBackup{}, err
-	}
 	return backup, nil
 }
 
@@ -2445,8 +2476,43 @@ func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, database
 		return BackupPolicy{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := upsertBackupPolicyTx(ctx, tx, organizationID, databaseID, intervalSeconds, retentionCount, enabled, verifyRestore, destinationID)
+	if err != nil {
+		return BackupPolicy{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return BackupPolicy{}, err
+	}
+	return item, nil
+}
+
+func (s *Store) UpsertBackupPolicyWithAudit(ctx context.Context, principal Principal, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled, verifyRestore bool, destinationID *uuid.UUID, remoteAddr string) (BackupPolicy, error) {
+	if s.RequireRemoteBackups && enabled && destinationID == nil {
+		return BackupPolicy{}, ErrRemoteBackupRequired
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return BackupPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := upsertBackupPolicyTx(ctx, tx, principal.OrganizationID, databaseID, intervalSeconds, retentionCount, enabled, verifyRestore, destinationID)
+	if err != nil {
+		return BackupPolicy{}, err
+	}
+	metadata := map[string]any{"intervalSeconds": intervalSeconds, "retentionCount": retentionCount, "enabled": enabled, "verifyRestore": verifyRestore}
+	if err = appendPrincipalAudit(ctx, tx, principal, "backup_policy.update", "database", databaseID.String(), remoteAddr, metadata); err != nil {
+		return BackupPolicy{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return BackupPolicy{}, err
+	}
+	return item, nil
+}
+
+func upsertBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID uuid.UUID, intervalSeconds, retentionCount int, enabled, verifyRestore bool, destinationID *uuid.UUID) (BackupPolicy, error) {
 	var lockedID uuid.UUID
 	var composeServiceID *uuid.UUID
+	var err error
 	if err = tx.QueryRow(ctx, `SELECT database.id,database.compose_service_id FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1 AND project.organization_id=$2 FOR UPDATE OF database`, databaseID, organizationID).Scan(&lockedID, &composeServiceID); errors.Is(err, pgx.ErrNoRows) {
 		return BackupPolicy{}, ErrNotFound
 	} else if err != nil {
@@ -2472,7 +2538,7 @@ func (s *Store) UpsertBackupPolicy(ctx context.Context, organizationID, database
 	if err != nil {
 		return BackupPolicy{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) GetBackupPolicy(ctx context.Context, organizationID, databaseID uuid.UUID) (BackupPolicy, error) {
@@ -2490,9 +2556,31 @@ func (s *Store) DeleteBackupPolicy(ctx context.Context, organizationID, database
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = deleteBackupPolicyTx(ctx, tx, organizationID, databaseID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteBackupPolicyWithAudit(ctx context.Context, principal Principal, databaseID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteBackupPolicyTx(ctx, tx, principal.OrganizationID, databaseID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "backup_policy.delete", "database", databaseID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteBackupPolicyTx(ctx context.Context, tx pgx.Tx, organizationID, databaseID uuid.UUID) error {
 	var policyID uuid.UUID
 	var composeServiceID *uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT policy.id,database.compose_service_id FROM backup_policies policy JOIN database_instances database ON database.id=policy.database_instance_id JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE policy.database_instance_id=$1 AND project.organization_id=$2 FOR UPDATE OF database,policy`, databaseID, organizationID).Scan(&policyID, &composeServiceID)
+	err := tx.QueryRow(ctx, `SELECT policy.id,database.compose_service_id FROM backup_policies policy JOIN database_instances database ON database.id=policy.database_instance_id JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE policy.database_instance_id=$1 AND project.organization_id=$2 FOR UPDATE OF database,policy`, databaseID, organizationID).Scan(&policyID, &composeServiceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -2505,7 +2593,7 @@ func (s *Store) DeleteBackupPolicy(ctx context.Context, organizationID, database
 	if _, err = tx.Exec(ctx, `DELETE FROM backup_policies WHERE id=$1`, policyID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) CreateBackupDestination(ctx context.Context, item BackupDestination) (BackupDestination, error) {
@@ -2722,10 +2810,40 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 		return DatabaseRestore{}, err
 	}
 	defer tx.Rollback(ctx)
+	restore, err := queueDatabaseRestoreTx(ctx, tx, organizationID, backupID, actorID, confirmation)
+	if err != nil {
+		return DatabaseRestore{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseRestore{}, err
+	}
+	return restore, nil
+}
+
+func (s *Store) QueueDatabaseRestoreWithAudit(ctx context.Context, principal Principal, backupID uuid.UUID, confirmation, remoteAddr string) (DatabaseRestore, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return DatabaseRestore{}, err
+	}
+	defer tx.Rollback(ctx)
+	restore, err := queueDatabaseRestoreTx(ctx, tx, principal.OrganizationID, backupID, principal.UserID, confirmation)
+	if err != nil {
+		return DatabaseRestore{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "database.restore.create", "database_restore", restore.ID.String(), remoteAddr, map[string]any{"backupId": backupID}); err != nil {
+		return DatabaseRestore{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return DatabaseRestore{}, err
+	}
+	return restore, nil
+}
+
+func queueDatabaseRestoreTx(ctx context.Context, tx pgx.Tx, organizationID, backupID, actorID uuid.UUID, confirmation string) (DatabaseRestore, error) {
 	var slug, status string
 	var backupDatabaseID uuid.UUID
 	var composeServiceID *uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status, &composeServiceID)
+	err := tx.QueryRow(ctx, `SELECT d.id,d.slug,b.status,d.compose_service_id FROM database_backups b JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE b.id=$1 AND p.organization_id=$2 FOR UPDATE OF d,b`, backupID, organizationID).Scan(&backupDatabaseID, &slug, &status, &composeServiceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DatabaseRestore{}, ErrNotFound
 	}
@@ -2760,9 +2878,6 @@ func (s *Store) QueueDatabaseRestore(ctx context.Context, organizationID, backup
 	}
 	payload, _ := json.Marshal(map[string]string{"restoreId": restore.ID.String()})
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key) VALUES($1,'restore.database',$2,$3)`, uuid.New(), payload, "database:"+backupDatabaseID.String()); err != nil {
-		return DatabaseRestore{}, err
-	}
-	if err = tx.Commit(ctx); err != nil {
 		return DatabaseRestore{}, err
 	}
 	return restore, nil

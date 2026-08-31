@@ -691,6 +691,12 @@ in one transaction. Failed audit evidence leaves both the operation and its job
 cancellable. Named-volume backup and restore cancellation has the same atomic
 guarantee.
 
+Database backup and restore creation commit the operation, worker job, and
+operator audit evidence in one transaction. Backup-policy creation, updates,
+and deletion use the same boundary. If audit persistence fails, no recovery job
+is queued and the previous policy remains intact. User and service-account
+callers retain distinct audit attribution.
+
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the
 same deployment endpoint, preserving one audit and rollback model. Database

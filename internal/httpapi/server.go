@@ -1434,7 +1434,7 @@ func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		}
 		destinationID = &parsed
 	}
-	backup, err := s.Store.QueueDatabaseBackup(r.Context(), p.OrganizationID, id, p.UserID, destinationID)
+	backup, err := s.Store.QueueDatabaseBackupWithAudit(r.Context(), p, id, destinationID, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "backup_in_progress", "wait for the active database backup to finish before starting another")
@@ -1443,7 +1443,6 @@ func (s *Server) createDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database.backup.create", "database_backup", backup.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 202, backup)
 }
 
@@ -1482,12 +1481,11 @@ func (s *Server) putBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertBackupPolicy(r.Context(), p.OrganizationID, id, in.IntervalSeconds, in.RetentionCount, in.Enabled, in.VerifyRestore, in.DestinationID)
+	item, err := s.Store.UpsertBackupPolicyWithAudit(r.Context(), p, id, in.IntervalSeconds, in.RetentionCount, in.Enabled, in.VerifyRestore, in.DestinationID, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "backup_policy.update", "database", id.String(), r.RemoteAddr, map[string]any{"intervalSeconds": in.IntervalSeconds, "retentionCount": in.RetentionCount, "enabled": in.Enabled, "verifyRestore": in.VerifyRestore})
 	writeJSON(w, 200, item)
 }
 
@@ -1626,11 +1624,10 @@ func (s *Server) deleteBackupPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteBackupPolicy(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteBackupPolicyWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "backup_policy.delete", "database", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
 func (s *Server) getDatabaseBackup(w http.ResponseWriter, r *http.Request) {
@@ -1660,7 +1657,7 @@ func (s *Server) restoreDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	restore, err := s.Store.QueueDatabaseRestore(r.Context(), p.OrganizationID, id, p.UserID, in.Confirm)
+	restore, err := s.Store.QueueDatabaseRestoreWithAudit(r.Context(), p, id, in.Confirm, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrBusy) {
 			writeError(w, http.StatusConflict, "restore_in_progress", "wait for the active database restore to finish before starting another")
@@ -1673,7 +1670,6 @@ func (s *Server) restoreDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "database.restore.create", "database_restore", restore.ID.String(), r.RemoteAddr, map[string]any{"backupId": id})
 	writeJSON(w, 202, restore)
 }
 func (s *Server) getDatabaseRestore(w http.ResponseWriter, r *http.Request) {
