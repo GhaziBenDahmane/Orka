@@ -77,6 +77,12 @@ if docker secret inspect "$token_secret" >/dev/null 2>&1 && [ "$reuse" != true ]
 fi
 
 docker stack config -c "$root/deploy/agent-swarm.yml" >/dev/null
+stack_existed=false
+stack_inventory=$(docker stack ls --format '{{.Name}}') || fail "could not inspect existing Swarm stacks"
+if printf '%s\n' "$stack_inventory" | grep -Fxq "$stack"; then
+  stack_existed=true
+fi
+unset stack_inventory
 network_exists=false
 if docker network inspect "$network" >/dev/null 2>&1; then
   network_exists=true
@@ -98,14 +104,35 @@ fi
 created_secret=false
 created_network=false
 deployment_started=false
+remove_created_resources() {
+  cleanup_deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    if [ "$created_secret" = true ] && docker secret rm "$token_secret" >/dev/null 2>&1; then
+      created_secret=false
+    fi
+    if [ "$created_network" = true ] && docker network rm "$network" >/dev/null 2>&1; then
+      created_network=false
+    fi
+    [ "$created_secret" = false ] && [ "$created_network" = false ] && return 0
+    if [ "$(date +%s)" -ge "$cleanup_deadline" ]; then
+      echo "install-agent: cleanup timed out; remove the remaining agent secret or network manually" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
 cleanup() {
   status=${1:-$?}
-  if [ "$status" -ne 0 ] && [ "$deployment_started" = false ]; then
-    if [ "$created_secret" = true ]; then
-      docker secret rm "$token_secret" >/dev/null 2>&1 || true
-    fi
-    if [ "$created_network" = true ]; then
-      docker network rm "$network" >/dev/null 2>&1 || true
+  if [ "$status" -ne 0 ]; then
+    if [ "$deployment_started" = true ] && [ "$stack_existed" = false ]; then
+      echo "install-agent: first installation failed; removing stack $stack and newly created resources" >&2
+      if docker stack rm "$stack" >/dev/null 2>&1; then
+        remove_created_resources || true
+      else
+        echo "install-agent: could not remove failed stack $stack; newly created resources were retained" >&2
+      fi
+    elif [ "$deployment_started" = false ]; then
+      remove_created_resources || true
     fi
   fi
   trap - EXIT HUP INT TERM

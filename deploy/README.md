@@ -103,7 +103,9 @@ policy remains authoritative and the installer exits nonzero for operator review
 Interrupt and termination signals follow the same cleanup rules and always
 return a nonzero status, so automation cannot mistake an aborted install for a
 successful one. The remote-agent and AI-auditor installers likewise return
-nonzero when interrupted.
+nonzero when interrupted. Their failed first installations also remove the
+submitted stack and only the resources created by that installer invocation;
+failed upgrades preserve the pre-existing stack and resources.
 The supplied Swarm manifests set CPU and memory reservations plus hard limits
 for every long-running platform, agent, and AI service. Override the documented
 `*_CPU_LIMIT`, `*_MEMORY_LIMIT`, `*_CPU_RESERVATION`, and

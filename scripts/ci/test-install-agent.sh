@@ -47,8 +47,11 @@ case "$1 $2" in
   "stack config")
     printf 'service=%s network=%s\n' "$DOCKYARD_AGENT_SERVICE_NAME" "$DOCKYARD_TRAEFIK_NETWORK" >>"$DOCKYARD_INSTALL_TEST_LOG"
     printf 'enrollment-secret=%s\n' "$DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET" >>"$DOCKYARD_INSTALL_TEST_LOG" ;;
+  "stack ls")
+    [ "${DOCKYARD_INSTALL_TEST_STACK_EXISTS:-false}" != true ] || printf '%s\n' 'edge' ;;
   "stack deploy")
     [ "${DOCKYARD_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
+  "stack rm") ;;
   "service inspect")
     case "$*" in
       *ContainerSpec.Args*) printf '%s\n' '--providers.file.directory=/etc/traefik/dynamic' ;;
@@ -333,6 +336,24 @@ if DOCKYARD_INSTALL_WAIT_TIMEOUT=1 DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_c
   exit 1
 fi
 grep -q 'edge_agent update state is rollback_completed' "$temporary/err"
+grep -q '^stack rm edge$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^secret rm dockyard_agent_enrollment_token$' "$DOCKYARD_INSTALL_TEST_LOG"
+grep -q '^network rm dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
+if DOCKYARD_INSTALL_TEST_STACK_EXISTS=true DOCKYARD_INSTALL_TEST_SECRET_EXISTS=true \
+  DOCKYARD_INSTALL_TEST_NETWORK_EXISTS=true \
+  DOCKYARD_INSTALL_TEST_NETWORK_PROPERTIES='overlay|swarm|true|{"encrypted":""}' \
+  DOCKYARD_REUSE_EXISTING_SECRETS=true DOCKYARD_INSTALL_WAIT_TIMEOUT=1 \
+  DOCKYARD_INSTALL_TEST_UPDATE_STATE=rollback_completed \
+  "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'agent installer accepted a failed existing-stack upgrade' >&2
+  exit 1
+fi
+if grep -Eq '^(stack rm|secret rm|network rm)' "$DOCKYARD_INSTALL_TEST_LOG"; then
+  echo 'failed agent upgrade removed an existing stack resource' >&2
+  exit 1
+fi
 
 printf '%s' 'short-enrollment-token' >"$temporary/secrets/enrollment-token"
 : >"$DOCKYARD_INSTALL_TEST_LOG"

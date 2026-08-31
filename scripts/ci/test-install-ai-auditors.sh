@@ -46,8 +46,11 @@ case "$1 $2" in
     [ "${DOCKYARD_AI_INSTALL_TEST_FAIL_SECRET:-}" != "$3" ] || exit 1 ;;
   "stack config")
     printf 'stack=%s security-secret=%s reliability-secret=%s key-secret=%s\n' "${DOCKYARD_AI_STACK_NAME:-dockyard-ai}" "$DOCKYARD_AI_SECURITY_AUDITOR_TOKEN_SECRET" "$DOCKYARD_AI_RELIABILITY_AUDITOR_TOKEN_SECRET" "$DOCKYARD_AI_API_KEY_SECRET" >>"$DOCKYARD_AI_INSTALL_TEST_LOG" ;;
+  "stack ls")
+    [ "${DOCKYARD_AI_INSTALL_TEST_STACK_EXISTS:-false}" != true ] || printf '%s\n' 'dockyard-ai' ;;
   "stack deploy")
     [ "${DOCKYARD_AI_INSTALL_TEST_FAIL_DEPLOY:-false}" != true ] || exit 1 ;;
+  "stack rm") ;;
   "stack services")
     stack=$3
     printf '%s\n' "${stack}_9router 1/1" "${stack}_headroom 1/1" "${stack}_security-auditor 1/1" "${stack}_reliability-auditor 1/1" ;;
@@ -220,7 +223,24 @@ if DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY="$security_token" DOCKYARD_AI_VERIFY_TIM
   exit 1
 fi
 grep -q 'security-auditor did not complete a fresh run' "$temporary/err"
+grep -q '^stack rm dockyard-ai$' "$DOCKYARD_AI_INSTALL_TEST_LOG"
+for secret in dockyard_ai_security_auditor_token dockyard_ai_reliability_auditor_token dockyard_ai_api_key; do
+  grep -q "^secret rm $secret$" "$DOCKYARD_AI_INSTALL_TEST_LOG"
+done
 if grep -Fq "$security_token" "$DOCKYARD_AI_INSTALL_TEST_LOG" || grep -Fq "$reliability_token" "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
   echo 'AI auditor token leaked while verifying runs' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_AI_INSTALL_TEST_LOG"
+if DOCKYARD_AI_INSTALL_TEST_STACK_EXISTS=true \
+  DOCKYARD_AI_INSTALL_TEST_EXISTING_SECRETS='dockyard_ai_security_auditor_token dockyard_ai_reliability_auditor_token dockyard_ai_api_key' \
+  DOCKYARD_REUSE_EXISTING_SECRETS=true DOCKYARD_AI_INSTALL_TEST_FAIL_VERIFY="$security_token" \
+  DOCKYARD_AI_VERIFY_TIMEOUT=1 "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
+  echo 'AI installer accepted failed verification during an existing-stack upgrade' >&2
+  exit 1
+fi
+if grep -Eq '^(stack rm|secret rm)' "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
+  echo 'failed AI upgrade removed an existing stack resource' >&2
   exit 1
 fi

@@ -97,6 +97,12 @@ done
 [ -z "$existing" ] || [ "$reuse" = true ] || fail "Docker secrets already exist:$existing; set DOCKYARD_REUSE_EXISTING_SECRETS=true only after verifying their values"
 
 docker stack config -c "$root/deploy/ai-auditors.yml" >/dev/null
+stack_existed=false
+stack_inventory=$(docker stack ls --format '{{.Name}}') || fail "could not inspect existing Swarm stacks"
+if printf '%s\n' "$stack_inventory" | grep -Fxq "$stack"; then
+  stack_existed=true
+fi
+unset stack_inventory
 if [ "$dry_run" = true ]; then
   echo "Preflight passed for AI auditor stack $stack; no resources were changed."
   exit 0
@@ -104,12 +110,37 @@ fi
 
 created_secrets=""
 deployment_started=false
+remove_created_secrets() {
+  cleanup_deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    remaining_secrets=""
+    for created_secret in $created_secrets; do
+      if ! docker secret rm "$created_secret" >/dev/null 2>&1; then
+        remaining_secrets="$remaining_secrets $created_secret"
+      fi
+    done
+    created_secrets=$remaining_secrets
+    [ -z "$created_secrets" ] && return 0
+    if [ "$(date +%s)" -ge "$cleanup_deadline" ]; then
+      echo "install-ai-auditors: cleanup timed out; remove remaining secrets manually:${created_secrets}" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
 cleanup() {
   status=${1:-$?}
-  if [ "$status" -ne 0 ] && [ "$deployment_started" = false ]; then
-    for created_secret in $created_secrets; do
-      docker secret rm "$created_secret" >/dev/null 2>&1 || true
-    done
+  if [ "$status" -ne 0 ]; then
+    if [ "$deployment_started" = true ] && [ "$stack_existed" = false ]; then
+      echo "install-ai-auditors: first installation failed; removing stack $stack and newly created secrets" >&2
+      if docker stack rm "$stack" >/dev/null 2>&1; then
+        remove_created_secrets || true
+      else
+        echo "install-ai-auditors: could not remove failed stack $stack; newly created secrets were retained" >&2
+      fi
+    elif [ "$deployment_started" = false ]; then
+      remove_created_secrets || true
+    fi
   fi
   trap - EXIT HUP INT TERM
   exit "$status"
