@@ -39,8 +39,9 @@ new mutations instead of weakening authentication or silently skipping checks.
 ### Tenant escape and privilege escalation
 
 All user-facing resource access is resolved through organization membership;
-project and environment grants can narrow access without bypassing the parent
-organization. Owner changes are serialized and retain an active owner. Auditor
+project and environment grants can elevate a member within their scope without
+bypassing the parent organization or reducing the organization baseline. Owner
+changes are serialized and retain an active owner. Auditor
 accounts are denied normal workload APIs. Tests exercise cross-tenant access,
 concurrent last-owner changes, federated session binding, SCIM ownership, and
 service-account revocation. Mandatory-SSO policy and OIDC/SAML provider state

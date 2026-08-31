@@ -38,6 +38,58 @@ func TestPlatformRoutesUseTheExpectedAuthenticationBoundary(t *testing.T) {
 	}
 }
 
+func TestAuthorizationMiddlewareArgumentsAreValid(t *testing.T) {
+	parsed, err := parser.ParseFile(token.NewFileSet(), "server.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validRoles := map[string]bool{"viewer": true, "developer": true, "admin": true, "owner": true}
+	validResources := map[string]bool{"project": true, "environment": true, "service": true, "database": true, "deployment": true, "backup": true, "restore": true, "migration": true, "webhook": true, "route": true, "volume_backup": true, "volume_restore": true}
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Handle" || len(call.Args) < 2 {
+			return true
+		}
+		pattern, ok := stringLiteral(call.Args[0])
+		if !ok {
+			return true
+		}
+		middleware, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		middlewareSelector, ok := middleware.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch middlewareSelector.Sel.Name {
+		case "requireRole":
+			role, literal := middlewareStringArgument(middleware, 0)
+			if !literal || !validRoles[role] {
+				t.Errorf("route %s has invalid requireRole minimum %q", pattern, role)
+			}
+		case "requireResourceRole":
+			role, roleLiteral := middlewareStringArgument(middleware, 0)
+			resource, resourceLiteral := middlewareStringArgument(middleware, 1)
+			parameter, parameterLiteral := middlewareStringArgument(middleware, 2)
+			if !roleLiteral || !validRoles[role] {
+				t.Errorf("route %s has invalid requireResourceRole minimum %q", pattern, role)
+			}
+			if !resourceLiteral || !validResources[resource] {
+				t.Errorf("route %s has invalid authorization resource %q", pattern, resource)
+			}
+			if !parameterLiteral || !strings.Contains(pattern, "{"+parameter+"}") {
+				t.Errorf("route %s authorization parameter %q is absent from its path", pattern, parameter)
+			}
+		}
+		return true
+	})
+}
+
 func TestAgentRoutesRemainOnTheDedicatedMTLSHandler(t *testing.T) {
 	platformRoutes := registeredRoutes(t, "server.go", "Handler")
 	agentRoutes := registeredRoutes(t, "clusters.go", "AgentHandler")
@@ -59,10 +111,20 @@ func TestAgentRoutesRemainOnTheDedicatedMTLSHandler(t *testing.T) {
 }
 
 func isDirectPublicRoute(path string) bool {
-	if path == "/healthz" || path == "/readyz" || path == "/v1/auth/bootstrap" || path == "/v1/auth/login" || path == "/v1/invitations/accept" || path == "/v1/agent/enroll" || isPublicSCIMDiscovery(path) {
+	if isPublicSCIMDiscovery(path) {
 		return true
 	}
-	return strings.HasPrefix(path, "/v1/auth/sso/") || strings.HasPrefix(path, "/v1/auth/saml/") || strings.HasPrefix(path, "/v1/hooks/")
+	switch path {
+	case "/healthz", "/readyz",
+		"/v1/auth/bootstrap", "/v1/auth/login", "/v1/invitations/accept",
+		"/v1/auth/sso/discover", "/v1/auth/sso/{providerID}/start", "/v1/auth/sso/callback",
+		"/v1/auth/saml/discover", "/v1/auth/saml/{providerID}/metadata", "/v1/auth/saml/{providerID}/start", "/v1/auth/saml/{providerID}/acs",
+		"/v1/hooks/deploy/{token}", "/v1/hooks/provider/{integrationID}", "/v1/hooks/template-repositories/{repositoryID}",
+		"/v1/agent/enroll":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPublicSCIMDiscovery(path string) bool {
@@ -118,4 +180,20 @@ func registeredRoutes(t *testing.T, filename, methodName string) map[string]stri
 		t.Fatalf("no routes found in %s.%s", filename, methodName)
 	}
 	return routes
+}
+
+func middlewareStringArgument(call *ast.CallExpr, index int) (string, bool) {
+	if index >= len(call.Args) {
+		return "", false
+	}
+	return stringLiteral(call.Args[index])
+}
+
+func stringLiteral(expression ast.Expr) (string, bool) {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(literal.Value)
+	return value, err == nil
 }
