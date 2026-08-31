@@ -56,7 +56,10 @@ keys make it a privileged service.
   plus the logical names of declared Compose volumes that are actually mounted
   by a service. Bind mounts, tmpfs, anonymous volumes, and unused declarations
   are excluded, allowing the baseline to identify persistent named volumes
-  with no backup policy at all. It also includes the installed database-driver
+  with no backup policy at all. Named-volume posture includes the latest
+  restore state, whether it ran offline, and its snapshotted target node so an
+  auditor can distinguish routine rehearsal from relocation recovery. It also
+  includes the installed database-driver
   catalog with default versions, built-in or
   external provenance, executable SHA-256 digest, and backup capability,
   enabled SSO provider counts,

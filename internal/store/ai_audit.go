@@ -263,18 +263,20 @@ type AIAuditBackupPosture struct {
 }
 
 type AIAuditVolumeBackupPosture struct {
-	ServiceID         uuid.UUID  `json:"serviceId"`
-	ServiceName       string     `json:"serviceName"`
-	VolumeName        string     `json:"volumeName"`
-	StorageNodeID     string     `json:"storageNodeId,omitempty"`
-	PolicyEnabled     bool       `json:"policyEnabled"`
-	IntervalSeconds   int        `json:"intervalSeconds"`
-	RetentionCount    int        `json:"retentionCount"`
-	Quiesce           bool       `json:"quiesce"`
-	LastBackupStatus  string     `json:"lastBackupStatus,omitempty"`
-	LastBackupAt      *time.Time `json:"lastBackupAt,omitempty"`
-	LastRestoreStatus string     `json:"lastRestoreStatus,omitempty"`
-	LastRestoreAt     *time.Time `json:"lastRestoreAt,omitempty"`
+	ServiceID          uuid.UUID  `json:"serviceId"`
+	ServiceName        string     `json:"serviceName"`
+	VolumeName         string     `json:"volumeName"`
+	StorageNodeID      string     `json:"storageNodeId,omitempty"`
+	PolicyEnabled      bool       `json:"policyEnabled"`
+	IntervalSeconds    int        `json:"intervalSeconds"`
+	RetentionCount     int        `json:"retentionCount"`
+	Quiesce            bool       `json:"quiesce"`
+	LastBackupStatus   string     `json:"lastBackupStatus,omitempty"`
+	LastBackupAt       *time.Time `json:"lastBackupAt,omitempty"`
+	LastRestoreStatus  string     `json:"lastRestoreStatus,omitempty"`
+	LastRestoreAt      *time.Time `json:"lastRestoreAt,omitempty"`
+	LastRestoreOffline bool       `json:"lastRestoreOffline"`
+	LastRestoreNodeID  string     `json:"lastRestoreNodeId,omitempty"`
 }
 
 type AIAuditResourcePolicyPosture struct {
@@ -1055,13 +1057,14 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 
 	rows, err = s.Pool.Query(ctx, `
 		SELECT service.id,service.name,policy.volume_name,service.storage_node_id,policy.enabled,policy.interval_seconds,policy.retention_count,policy.quiesce,
-			COALESCE(last_backup.status,''),last_backup.finished_at,COALESCE(last_restore.status,''),last_restore.finished_at
+			COALESCE(last_backup.status,''),last_backup.finished_at,COALESCE(last_restore.status,''),last_restore.finished_at,
+			COALESCE(last_restore.offline,false),COALESCE(last_restore.target_storage_node_id,'')
 		FROM volume_backup_policies policy
 		JOIN compose_services service ON service.id=policy.compose_service_id
 		JOIN environments environment ON environment.id=service.environment_id
 		JOIN projects project ON project.id=environment.project_id
 		LEFT JOIN LATERAL (SELECT backup.id,backup.status,backup.finished_at,backup.created_at FROM volume_backups backup WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY backup.created_at DESC LIMIT 1) last_backup ON true
-		LEFT JOIN LATERAL (SELECT restore.status,restore.finished_at,restore.created_at FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY restore.created_at DESC LIMIT 1) last_restore ON true
+		LEFT JOIN LATERAL (SELECT restore.status,restore.finished_at,restore.created_at,restore.offline,restore.target_storage_node_id FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id WHERE backup.compose_service_id=service.id AND backup.volume_name=policy.volume_name ORDER BY restore.created_at DESC LIMIT 1) last_restore ON true
 		WHERE project.organization_id=$1 AND service.deletion_requested_at IS NULL
 		ORDER BY service.name,policy.volume_name`, organizationID)
 	if err != nil {
@@ -1069,7 +1072,7 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 	}
 	for rows.Next() {
 		var item AIAuditVolumeBackupPosture
-		if err = rows.Scan(&item.ServiceID, &item.ServiceName, &item.VolumeName, &item.StorageNodeID, &item.PolicyEnabled, &item.IntervalSeconds, &item.RetentionCount, &item.Quiesce, &item.LastBackupStatus, &item.LastBackupAt, &item.LastRestoreStatus, &item.LastRestoreAt); err != nil {
+		if err = rows.Scan(&item.ServiceID, &item.ServiceName, &item.VolumeName, &item.StorageNodeID, &item.PolicyEnabled, &item.IntervalSeconds, &item.RetentionCount, &item.Quiesce, &item.LastBackupStatus, &item.LastBackupAt, &item.LastRestoreStatus, &item.LastRestoreAt, &item.LastRestoreOffline, &item.LastRestoreNodeID); err != nil {
 			rows.Close()
 			return err
 		}

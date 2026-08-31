@@ -40,7 +40,9 @@ Every response includes `X-Request-ID`. A printable caller-provided request ID
 is preserved; otherwise the server generates a UUID. `GET /metrics` is a
 Prometheus text endpoint covering HTTP requests, durable jobs and stale leases,
 deployments, backups, restores, restore drills, durable artifact-cleanup backlog,
-and operation durations. Send `Authorization: Bearer <metrics-token>` and omit
+and operation durations. Named-volume restore counts carry a bounded `mode`
+label (`online` or `offline`) in addition to status. Send
+`Authorization: Bearer <metrics-token>` and omit
 `X-Organization-ID`.
 
 ## Identity

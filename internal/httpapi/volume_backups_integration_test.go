@@ -156,8 +156,12 @@ func TestVolumeBackupPolicyLifecycleAndTenantIsolationAPI(t *testing.T) {
 	var restoreHistory struct {
 		Items []store.VolumeRestore `json:"items"`
 	}
-	if err = json.Unmarshal(body, &restoreHistory); status != http.StatusOK || err != nil || len(restoreHistory.Items) != 1 || restoreHistory.Items[0].Status != "cancelled" {
+	if err = json.Unmarshal(body, &restoreHistory); status != http.StatusOK || err != nil || len(restoreHistory.Items) != 1 || restoreHistory.Items[0].Status != "cancelled" || restoreHistory.Items[0].Offline || restoreHistory.Items[0].TargetStorageNodeID != "nodeabc123" {
 		t.Fatalf("restore history status=%d body=%s err=%v", status, body, err)
+	}
+	snapshot, err = db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil || len(snapshot.VolumeBackupPosture) != 1 || snapshot.VolumeBackupPosture[0].LastRestoreStatus != "cancelled" || snapshot.VolumeBackupPosture[0].LastRestoreOffline || snapshot.VolumeBackupPosture[0].LastRestoreNodeID != "nodeabc123" {
+		t.Fatalf("volume restore audit posture=%#v err=%v", snapshot.VolumeBackupPosture, err)
 	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/volume-backups/"+backup.ID.String(), token, otherOrganizationID, http.MethodGet, nil)
 	if status != http.StatusNotFound {
