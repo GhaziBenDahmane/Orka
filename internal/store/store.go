@@ -2090,21 +2090,53 @@ func (s *Store) CreateDeployToken(ctx context.Context, organizationID, serviceID
 		return DeployToken{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, _, err = lockActiveServiceForMutation(ctx, tx, organizationID, serviceID); err != nil {
+	var creatorID *uuid.UUID
+	if userID != uuid.Nil {
+		creatorID = &userID
+	}
+	item, err := createDeployTokenTx(ctx, tx, organizationID, serviceID, creatorID, name, tokenHash, expiresAt)
+	if err != nil {
+		return DeployToken{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateDeployTokenWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, name string, tokenHash []byte, expiresAt time.Time, remoteAddr string) (DeployToken, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return DeployToken{}, err
+	}
+	defer tx.Rollback(ctx)
+	var creatorID *uuid.UUID
+	if principal.UserID != uuid.Nil {
+		creatorID = &principal.UserID
+	}
+	item, err := createDeployTokenTx(ctx, tx, principal.OrganizationID, serviceID, creatorID, name, tokenHash, expiresAt)
+	if err != nil {
+		return DeployToken{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "deploy_token.create", "deploy_token", item.ID.String(), remoteAddr, map[string]any{"composeServiceId": serviceID, "expiresAt": expiresAt}); err != nil {
+		return DeployToken{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createDeployTokenTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, creatorID *uuid.UUID, name string, tokenHash []byte, expiresAt time.Time) (DeployToken, error) {
+	if _, _, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID); err != nil {
 		return DeployToken{}, err
 	}
 	item := DeployToken{ID: uuid.New(), ComposeServiceID: serviceID, Name: name, ExpiresAt: expiresAt}
-	err = tx.QueryRow(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at)
+	err := tx.QueryRow(ctx, `INSERT INTO deploy_tokens(id,compose_service_id,token_hash,name,created_by,expires_at)
 		SELECT $1,s.id,$3,$4,$5,$6 FROM compose_services s JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id
 		WHERE s.id=$2 AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL AND p.organization_id=$7
-		RETURNING created_at`, item.ID, serviceID, tokenHash, name, nullableUUID(userID), expiresAt, organizationID).Scan(&item.CreatedAt)
+		RETURNING created_at`, item.ID, serviceID, tokenHash, name, creatorID, expiresAt, organizationID).Scan(&item.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DeployToken{}, ErrNotFound
 	}
 	if err != nil {
 		return DeployToken{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListDeployTokens(ctx context.Context, organizationID, serviceID uuid.UUID) ([]DeployToken, error) {
@@ -2127,7 +2159,34 @@ func (s *Store) ListDeployTokens(ctx context.Context, organizationID, serviceID 
 }
 
 func (s *Store) RevokeDeployToken(ctx context.Context, organizationID, serviceID, tokenID uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE deploy_tokens token SET revoked_at=COALESCE(revoked_at,now())
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = revokeDeployTokenTx(ctx, tx, organizationID, serviceID, tokenID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RevokeDeployTokenWithAudit(ctx context.Context, principal Principal, serviceID, tokenID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = revokeDeployTokenTx(ctx, tx, principal.OrganizationID, serviceID, tokenID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "deploy_token.revoke", "deploy_token", tokenID.String(), remoteAddr, map[string]any{"composeServiceId": serviceID}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func revokeDeployTokenTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID, tokenID uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE deploy_tokens token SET revoked_at=COALESCE(revoked_at,now())
 		FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id
 		WHERE token.id=$1 AND token.compose_service_id=$2 AND service.id=token.compose_service_id AND project.organization_id=$3`, tokenID, serviceID, organizationID)
 	if err != nil {

@@ -3032,12 +3032,11 @@ func (s *Server) createDeployToken(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	expiresAt := time.Now().UTC().Add(time.Duration(in.ExpiresInDays) * 24 * time.Hour)
-	item, err := s.Store.CreateDeployToken(r.Context(), p.OrganizationID, serviceID, p.UserID, in.Name, cryptox.Digest(token), expiresAt)
+	item, err := s.Store.CreateDeployTokenWithAudit(r.Context(), p, serviceID, in.Name, cryptox.Digest(token), expiresAt, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "deploy_token.create", "deploy_token", item.ID.String(), r.RemoteAddr, map[string]any{"composeServiceId": serviceID, "expiresAt": expiresAt})
 	writeJSON(w, 201, map[string]any{"deployToken": item, "token": token, "url": s.PublicURL + "/v1/hooks/deploy/" + token})
 }
 
@@ -3067,11 +3066,10 @@ func (s *Server) revokeDeployToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.RevokeDeployToken(r.Context(), p.OrganizationID, serviceID, tokenID); err != nil {
+	if err = s.Store.RevokeDeployTokenWithAudit(r.Context(), p, serviceID, tokenID, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "deploy_token.revoke", "deploy_token", tokenID.String(), r.RemoteAddr, map[string]any{"composeServiceId": serviceID})
 	w.WriteHeader(http.StatusNoContent)
 }
 

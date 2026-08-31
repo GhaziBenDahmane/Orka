@@ -450,7 +450,9 @@ audit event, so an evidence failure cannot activate or revoke a provisioning
 credential.
 CI deployment-hook tokens follow the same bounded-expiry model, record their
 last successful use, and expose expiry metrics keyed only by immutable
-organization, service, and token IDs. Resource-finalizer metrics report active,
+organization, service, and token IDs. Issuance and revocation commit atomically
+with operator audit evidence, so an audit failure cannot activate a new hook or
+revoke an existing one. Resource-finalizer metrics report active,
 failed, and missing deletion jobs plus oldest deletion age without exporting
 job payloads or failure text, including managed-network deletions. Managed
 networks additionally expose aggregate lifecycle state by local/remote scope
