@@ -524,7 +524,7 @@ jobs:
           trap 'rm -rf -- "$recovery_root"' EXIT
           openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
           openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
-          openssl genrsa -traditional -out "$recovery_root/agent-ca.key" 3072 >/dev/null 2>&1
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$recovery_root/agent-ca.key" >/dev/null 2>&1
           openssl req -x509 -new -key "$recovery_root/agent-ca.key" -days 2 -subj '/CN=Dockyard Release Agent CA' \
             -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign,digitalSignature' \
             -out "$recovery_root/agent-ca.crt" >/dev/null 2>&1

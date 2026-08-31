@@ -79,7 +79,7 @@ fi
 
 openssl genpkey -algorithm ED25519 -out "$temporary/signing-key.pem" >/dev/null 2>&1
 openssl pkey -in "$temporary/signing-key.pem" -pubout -out "$temporary/verify-key.pem" >/dev/null 2>&1
-openssl genrsa -traditional -out "$temporary/agent-ca.key" 3072 >/dev/null 2>&1
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$temporary/agent-ca.key" >/dev/null 2>&1
 openssl req -x509 -new -key "$temporary/agent-ca.key" -days 2 -subj '/CN=Dockyard Recovery Command Test CA' \
   -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign,digitalSignature' \
   -out "$temporary/agent-ca.crt" >/dev/null 2>&1
@@ -116,7 +116,7 @@ if (cd "$root" && "$real_go" run ./cmd/dockyard verify-control-plane-recovery-ma
 fi
 grep -q 'manifest signature is invalid' "$temporary/stderr"
 
-openssl genrsa -traditional -out "$temporary/wrong-agent-ca.key" 3072 >/dev/null 2>&1
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$temporary/wrong-agent-ca.key" >/dev/null 2>&1
 chmod 0600 "$temporary/wrong-agent-ca.key"
 if (cd "$root" && "$real_go" run ./cmd/dockyard verify-control-plane-recovery-manifest \
   --manifest "$temporary/manifest.json" --signature "$temporary/manifest.sig" \

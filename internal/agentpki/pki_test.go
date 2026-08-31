@@ -70,6 +70,44 @@ func TestSignAgentCSRRejectsCAWithoutMinimumRemainingLifetime(t *testing.T) {
 	}
 }
 
+func TestValidateAuthorityAcceptsPKCS8RSAKey(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	certificatePEM, pkcs1PEM, err := NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, rest := pem.Decode(pkcs1PEM)
+	if block == nil || len(rest) != 0 {
+		t.Fatal("decode generated CA private key")
+	}
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})
+	if _, err = ValidateAuthority(certificatePEM, pkcs8PEM, now); err != nil {
+		t.Fatalf("validate PKCS#8 RSA authority: %v", err)
+	}
+}
+
+func TestValidateAuthorityRejectsAmbiguousPEM(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	certificatePEM, keyPEM, err := NewCA(now, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateAuthority(append(append([]byte{}, certificatePEM...), certificatePEM...), keyPEM, now); err == nil {
+		t.Fatal("accepted multiple CA certificates")
+	}
+	if _, err = ValidateAuthority(certificatePEM, append(append([]byte{}, keyPEM...), keyPEM...), now); err == nil {
+		t.Fatal("accepted multiple CA private keys")
+	}
+}
+
 func TestValidateServerCredentials(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	caPEM, caKeyPEM, err := NewCA(now, 24*time.Hour)

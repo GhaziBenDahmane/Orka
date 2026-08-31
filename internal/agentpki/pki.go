@@ -185,17 +185,33 @@ func ValidateAuthority(caCertPEM, caKeyPEM []byte, now time.Time) (*x509.Certifi
 }
 
 func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, *rsa.PrivateKey, error) {
-	certBlock, _ := pem.Decode(certPEM)
-	keyBlock, _ := pem.Decode(keyPEM)
-	if certBlock == nil || keyBlock == nil {
+	certBlock, certRest := pem.Decode(certPEM)
+	keyBlock, keyRest := pem.Decode(keyPEM)
+	if certBlock == nil || certBlock.Type != "CERTIFICATE" || len(bytes.TrimSpace(certRest)) != 0 || keyBlock == nil || len(bytes.TrimSpace(keyRest)) != 0 {
 		return nil, nil, errors.New("invalid CA PEM")
 	}
 	cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil || !cert.IsCA {
 		return nil, nil, errors.New("invalid CA certificate")
 	}
-	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-	if err != nil {
+	var key *rsa.PrivateKey
+	switch keyBlock.Type {
+	case "RSA PRIVATE KEY":
+		key, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	case "PRIVATE KEY":
+		var parsed any
+		parsed, err = x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		if err == nil {
+			var ok bool
+			key, ok = parsed.(*rsa.PrivateKey)
+			if !ok {
+				err = errors.New("private key is not RSA")
+			}
+		}
+	default:
+		err = errors.New("unsupported private key PEM type")
+	}
+	if err != nil || key == nil || key.Validate() != nil {
 		return nil, nil, errors.New("invalid CA private key")
 	}
 	publicKey, ok := cert.PublicKey.(*rsa.PublicKey)

@@ -504,7 +504,9 @@ rolled-back controller update. For a Compose deployment, explicitly set
 `DOCKYARD_CONTROLLER_CONTAINER`; the requested digest must match its immutable
 image ID. When agent mTLS is configured, provide both
 `DOCKYARD_AGENT_CA_CERT_FILE` and `DOCKYARD_AGENT_CA_KEY_FILE`; backup refuses
-a missing or mismatched escrow key before recording the CA fingerprint.
+a missing or mismatched escrow key before recording the CA fingerprint. RSA
+CA private keys may use PKCS#1 (`RSA PRIVATE KEY`) or unencrypted PKCS#8
+(`PRIVATE KEY`) PEM encoding.
 Copy the bundle, master key, agent CA keypair, artifact storage, stack
 configuration, image digest, and recovery verification key to independently
 protected storage.

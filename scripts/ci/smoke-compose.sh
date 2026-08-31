@@ -14,7 +14,7 @@ recovery_root="$(mktemp -d)"
 evidence_file="${DOCKYARD_CONTROL_PLANE_RECOVERY_EVIDENCE:-$recovery_root/control-plane-recovery-conformance.json}"
 openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
 openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
-openssl genrsa -traditional -out "$recovery_root/agent-ca.key" 3072 >/dev/null 2>&1
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$recovery_root/agent-ca.key" >/dev/null 2>&1
 openssl req -x509 -new -key "$recovery_root/agent-ca.key" -days 2 -subj '/CN=Dockyard Recovery Test Agent CA' \
   -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign,digitalSignature' \
   -out "$recovery_root/agent-ca.crt" >/dev/null 2>&1
@@ -229,7 +229,7 @@ if DOCKYARD_STACK_NAME="$project" \
   echo "restore unexpectedly accepted a bundle for another stack" >&2
   exit 1
 fi
-openssl genrsa -traditional -out "$recovery_root/wrong-agent-ca.key" 3072 >/dev/null 2>&1
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$recovery_root/wrong-agent-ca.key" >/dev/null 2>&1
 chmod 0600 "$recovery_root/wrong-agent-ca.key"
 if DOCKYARD_STACK_NAME="$project" \
   DOCKYARD_POSTGRES_CONTAINER="$project-postgres-1" \
