@@ -369,6 +369,7 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	for _, requiredGate := range []string{
 		"- name: Validate vulnerability evidence",
 		"- name: Sign and verify immutable digest",
+		"- name: Exercise encrypted AI gateway recovery controls",
 		"- name: Validate release soak evidence",
 		"- name: Aggregate database recovery evidence",
 		"- name: Write final release checksums and promotion manifest",
@@ -400,6 +401,15 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	}
 	if !strings.Contains(workflow, "production-certification.json production-certification.sigstore.json") {
 		t.Fatal("production certification and its signature bundle are missing from the final checksum inventory")
+	}
+	for _, recoveryEvidenceContract := range []string{
+		"ai-gateway-recovery-conformance.json ai-gateway-recovery-conformance.log",
+		`aiGatewayRecoveryConformanceEvidence:"ai-gateway-recovery-conformance.json"`,
+		`.postRestoreDualAuditorVerification == "production-required"`,
+	} {
+		if !strings.Contains(workflow, recoveryEvidenceContract) {
+			t.Errorf("release workflow is missing AI gateway recovery evidence contract %q", recoveryEvidenceContract)
+		}
 	}
 	for _, resumableReleaseGuard := range []string{
 		`gh release create "$VERSION"`,
