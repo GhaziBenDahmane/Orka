@@ -67,6 +67,33 @@ func TestLoginDatabaseFailureIsNotReportedAsBadCredentials(t *testing.T) {
 	}
 }
 
+func TestMissingLoginAccountUsesIdentifierRateLimit(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	db, err := store.Open(context.Background(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	email := "missing-" + uuid.NewString() + "@example.test"
+	if _, err = db.Pool.Exec(context.Background(), `INSERT INTO auth_rate_limits(bucket,key_hash,window_started_at,attempts) VALUES('login',$1,now(),10) ON CONFLICT(bucket,key_hash) DO UPDATE SET window_started_at=now(),attempts=10`, cryptox.Digest(email)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket='login' AND key_hash=$1`, cryptox.Digest(email))
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{"email":"`+email+`","password":"wrong-password"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	(&Server{Store: db}).Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" {
+		t.Fatalf("missing-account limit status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
 func TestPublicIdentityEndpointsAreRateLimitedBeforeExpensiveWork(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {

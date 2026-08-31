@@ -765,10 +765,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_mfa", store.ErrInvalidMFAProof.Error())
 		return
 	}
-	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	normalizedEmail := strings.ToLower(strings.TrimSpace(in.Email))
 	if !s.allowAuthenticationAttempt(w, r, "login-client", authenticationClientKey(r), 300) {
 		return
 	}
+	if !s.allowAuthenticationAttempt(w, r, "login", cryptox.Digest(normalizedEmail), 10) {
+		return
+	}
+	canonical, _, validEmail := canonicalEmail(normalizedEmail)
+	if !validEmail {
+		_ = auth.VerifyPasswordOrDummy("", in.Password)
+		time.Sleep(150 * time.Millisecond)
+		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
+		return
+	}
+	in.Email = canonical
 	credential, err := s.Store.PasswordLoginCredential(r.Context(), in.Email)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
@@ -778,9 +789,6 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		_ = auth.VerifyPasswordOrDummy("", in.Password)
 		time.Sleep(150 * time.Millisecond)
 		writeError(w, 401, "invalid_credentials", "email or password is incorrect")
-		return
-	}
-	if !s.allowAuthenticationAttempt(w, r, "login", cryptox.Digest(in.Email), 10) {
 		return
 	}
 	if !auth.VerifyPasswordOrDummy(credential.PasswordHash, in.Password) {
