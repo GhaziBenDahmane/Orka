@@ -36,9 +36,39 @@ type TemplateRepository struct {
 }
 
 func (s *Store) CreateTemplateRepository(ctx context.Context, item TemplateRepository) (TemplateRepository, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return TemplateRepository{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createTemplateRepositoryTx(ctx, tx, item)
+	if err != nil {
+		return TemplateRepository{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateTemplateRepositoryWithAudit(ctx context.Context, principal Principal, item TemplateRepository, remoteAddr string, metadata any) (TemplateRepository, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return TemplateRepository{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createTemplateRepositoryTx(ctx, tx, item)
+	if err != nil {
+		return TemplateRepository{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template_repository.create", "template_repository", item.ID.String(), remoteAddr, metadata); err != nil {
+		return TemplateRepository{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createTemplateRepositoryTx(ctx context.Context, tx pgx.Tx, item TemplateRepository) (TemplateRepository, error) {
 	item.ID = uuid.New()
 	item.Enabled = true
-	err := s.Pool.QueryRow(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,sync_interval_seconds,next_sync_at) SELECT $1,o.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $11>0 THEN now() ELSE NULL END FROM organizations o WHERE o.id=$2 AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=o.id AND c.kind='git' AND lower(c.server)='github.com')) RETURNING enabled,last_sync_status,last_sync_error,next_sync_at,created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Slug, item.RepositoryURL, item.GitRef, item.CatalogPath, item.TrustedPublicKey, item.RequireSignature, item.CredentialID, item.SyncIntervalSeconds).Scan(&item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.NextSyncAt, &item.CreatedAt, &item.UpdatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,catalog_path,trusted_public_key,require_signature,credential_id,sync_interval_seconds,next_sync_at) SELECT $1,o.id,$3,$4,$5,$6,$7,$8,$9,$10,$11,CASE WHEN $11>0 THEN now() ELSE NULL END FROM organizations o WHERE o.id=$2 AND ($10::uuid IS NULL OR EXISTS(SELECT 1 FROM source_credentials c WHERE c.id=$10 AND c.organization_id=o.id AND c.kind='git' AND lower(c.server)='github.com')) RETURNING enabled,last_sync_status,last_sync_error,next_sync_at,created_at,updated_at`, item.ID, item.OrganizationID, item.Name, item.Slug, item.RepositoryURL, item.GitRef, item.CatalogPath, item.TrustedPublicKey, item.RequireSignature, item.CredentialID, item.SyncIntervalSeconds).Scan(&item.Enabled, &item.LastSyncStatus, &item.LastSyncError, &item.NextSyncAt, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TemplateRepository{}, ErrNotFound
 	}
@@ -81,7 +111,34 @@ func (s *Store) GetTemplateRepositoryForWebhook(ctx context.Context, id uuid.UUI
 }
 
 func (s *Store) SetTemplateRepositoryWebhookSecret(ctx context.Context, organizationID, id uuid.UUID, encryptedSecret string) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET encrypted_webhook_secret=$3,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID, encryptedSecret)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = setTemplateRepositoryWebhookSecretTx(ctx, tx, organizationID, id, encryptedSecret); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) SetTemplateRepositoryWebhookSecretWithAudit(ctx context.Context, principal Principal, id uuid.UUID, encryptedSecret, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = setTemplateRepositoryWebhookSecretTx(ctx, tx, principal.OrganizationID, id, encryptedSecret); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template_repository.webhook.rotate", "template_repository", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func setTemplateRepositoryWebhookSecretTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, encryptedSecret string) error {
+	tag, err := tx.Exec(ctx, `UPDATE template_repositories SET encrypted_webhook_secret=$3,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID, encryptedSecret)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
@@ -89,7 +146,34 @@ func (s *Store) SetTemplateRepositoryWebhookSecret(ctx context.Context, organiza
 }
 
 func (s *Store) ClearTemplateRepositoryWebhookSecret(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE template_repositories SET encrypted_webhook_secret='',sync_requested_at=NULL,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = clearTemplateRepositoryWebhookSecretTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) ClearTemplateRepositoryWebhookSecretWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = clearTemplateRepositoryWebhookSecretTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template_repository.webhook.disable", "template_repository", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func clearTemplateRepositoryWebhookSecretTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE template_repositories SET encrypted_webhook_secret='',sync_requested_at=NULL,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
@@ -102,11 +186,41 @@ func (s *Store) RequestTemplateRepositorySync(ctx context.Context, id uuid.UUID,
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `DELETE FROM template_repository_webhook_deliveries WHERE received_at<now()-interval '30 days'`); err != nil {
+	if err = requestTemplateRepositorySyncTx(ctx, tx, id, deliveryID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RequestTemplateRepositorySyncWithAudit(ctx context.Context, organizationID, id uuid.UUID, deliveryID, expectedGitRef, expectedEncryptedSecret, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var gitRef string
+	err = tx.QueryRow(ctx, `SELECT git_ref FROM template_repositories WHERE id=$1 AND organization_id=$2 AND enabled AND git_ref=$3 AND encrypted_webhook_secret<>'' AND encrypted_webhook_secret=$4 FOR UPDATE`, id, organizationID, expectedGitRef, expectedEncryptedSecret).Scan(&gitRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err = requestTemplateRepositorySyncTx(ctx, tx, id, deliveryID); err != nil {
+		return err
+	}
+	if err = s.AuditOrganizationTx(ctx, tx, organizationID, "template_repository.webhook", "template_repository", id.String(), remoteAddr, map[string]any{"deliveryId": deliveryID, "gitRef": gitRef}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func requestTemplateRepositorySyncTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, deliveryID string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM template_repository_webhook_deliveries WHERE received_at<now()-interval '30 days'`); err != nil {
 		return err
 	}
 	var inserted bool
-	err = tx.QueryRow(ctx, `INSERT INTO template_repository_webhook_deliveries(repository_id,delivery_id) SELECT id,$2 FROM template_repositories WHERE id=$1 AND enabled ON CONFLICT DO NOTHING RETURNING true`, id, deliveryID).Scan(&inserted)
+	err := tx.QueryRow(ctx, `INSERT INTO template_repository_webhook_deliveries(repository_id,delivery_id) SELECT id,$2 FROM template_repositories WHERE id=$1 AND enabled ON CONFLICT DO NOTHING RETURNING true`, id, deliveryID).Scan(&inserted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool
 		if countErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM template_repositories WHERE id=$1 AND enabled)`, id).Scan(&exists); countErr != nil {
@@ -127,15 +241,44 @@ func (s *Store) RequestTemplateRepositorySync(ctx context.Context, id uuid.UUID,
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // QueueTemplateRepositorySync durably coalesces operator refresh requests.
 // If a sync is already running, sync_requested_at remains set so the scheduler
 // performs one more refresh after the in-flight attempt finishes.
 func (s *Store) QueueTemplateRepositorySync(ctx context.Context, organizationID, id uuid.UUID) (time.Time, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer tx.Rollback(ctx)
+	requestedAt, err := queueTemplateRepositorySyncTx(ctx, tx, organizationID, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return requestedAt, tx.Commit(ctx)
+}
+
+func (s *Store) QueueTemplateRepositorySyncWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) (time.Time, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer tx.Rollback(ctx)
+	requestedAt, err := queueTemplateRepositorySyncTx(ctx, tx, principal.OrganizationID, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template_repository.sync.queued", "template_repository", id.String(), remoteAddr, map[string]any{"requestedAt": requestedAt}); err != nil {
+		return time.Time{}, err
+	}
+	return requestedAt, tx.Commit(ctx)
+}
+
+func queueTemplateRepositorySyncTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) (time.Time, error) {
 	var requestedAt time.Time
-	err := s.Pool.QueryRow(ctx, `UPDATE template_repositories
+	err := tx.QueryRow(ctx, `UPDATE template_repositories
 		SET sync_requested_at=COALESCE(sync_requested_at,now()),updated_at=now()
 		WHERE id=$1 AND organization_id=$2 AND enabled
 		RETURNING sync_requested_at`, id, organizationID).Scan(&requestedAt)
@@ -197,10 +340,32 @@ func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizati
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = updateTemplateRepositorySettingsTx(ctx, tx, organizationID, id, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) UpdateTemplateRepositorySettingsWithAudit(ctx context.Context, principal Principal, id uuid.UUID, trustedPublicKey string, requireSignature bool, credentialID *uuid.UUID, syncIntervalSeconds int, remoteAddr string, metadata any) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = updateTemplateRepositorySettingsTx(ctx, tx, principal.OrganizationID, id, trustedPublicKey, requireSignature, credentialID, syncIntervalSeconds); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template_repository.settings.update", "template_repository", id.String(), remoteAddr, metadata); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func updateTemplateRepositorySettingsTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID, trustedPublicKey string, requireSignature bool, credentialID *uuid.UUID, syncIntervalSeconds int) error {
 	var currentKey string
 	var currentRequireSignature bool
 	var currentCredentialID *uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT trusted_public_key,require_signature,credential_id FROM template_repositories WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&currentKey, &currentRequireSignature, &currentCredentialID)
+	err := tx.QueryRow(ctx, `SELECT trusted_public_key,require_signature,credential_id FROM template_repositories WHERE id=$1 AND organization_id=$2 FOR UPDATE`, id, organizationID).Scan(&currentKey, &currentRequireSignature, &currentCredentialID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -232,7 +397,7 @@ func (s *Store) UpdateTemplateRepositorySettings(ctx context.Context, organizati
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func equalOptionalUUID(left, right *uuid.UUID) bool {
@@ -254,7 +419,29 @@ func (s *Store) DeleteTemplateRepository(ctx context.Context, organizationID, id
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `DELETE FROM templates WHERE repository_id=$1 AND organization_id=$2`, id, organizationID); err != nil {
+	if err = deleteTemplateRepositoryTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteTemplateRepositoryWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteTemplateRepositoryTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "template_repository.delete", "template_repository", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteTemplateRepositoryTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM templates WHERE repository_id=$1 AND organization_id=$2`, id, organizationID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM template_repositories WHERE id=$1 AND organization_id=$2`, id, organizationID)
@@ -264,7 +451,7 @@ func (s *Store) DeleteTemplateRepository(ctx context.Context, organizationID, id
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) UpsertRepositoryTemplate(ctx context.Context, item Template) (Template, error) {

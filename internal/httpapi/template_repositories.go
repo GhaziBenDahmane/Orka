@@ -67,12 +67,11 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 		signerFingerprint = templates.PublicKeyFingerprint(key)
 	}
 	p := principal(r)
-	item, err := s.Store.CreateTemplateRepository(r.Context(), store.TemplateRepository{OrganizationID: p.OrganizationID, Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature, CredentialID: credentialID, SyncIntervalSeconds: in.SyncIntervalSeconds})
+	item, err := s.Store.CreateTemplateRepositoryWithAudit(r.Context(), p, store.TemplateRepository{Name: in.Name, Slug: in.Slug, RepositoryURL: strings.TrimSpace(in.RepositoryURL), GitRef: strings.TrimSpace(in.GitRef), CatalogPath: cleanPath, TrustedPublicKey: in.TrustedPublicKey, RequireSignature: in.RequireSignature, CredentialID: credentialID, SyncIntervalSeconds: in.SyncIntervalSeconds}, r.RemoteAddr, map[string]any{"repositoryUrl": strings.TrimSpace(in.RepositoryURL), "gitRef": strings.TrimSpace(in.GitRef), "requireSignature": in.RequireSignature, "signerFingerprint": signerFingerprint, "credentialId": credentialID, "syncIntervalSeconds": in.SyncIntervalSeconds})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.create", "template_repository", item.ID.String(), r.RemoteAddr, map[string]any{"repositoryUrl": item.RepositoryURL, "gitRef": item.GitRef, "requireSignature": item.RequireSignature, "signerFingerprint": signerFingerprint, "credentialId": item.CredentialID, "syncIntervalSeconds": item.SyncIntervalSeconds})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -128,11 +127,10 @@ func (s *Server) updateTemplateRepositorySettings(w http.ResponseWriter, r *http
 		fingerprint = templates.PublicKeyFingerprint(key)
 	}
 	p := principal(r)
-	if err = s.Store.UpdateTemplateRepositorySettings(r.Context(), p.OrganizationID, id, in.TrustedPublicKey, in.RequireSignature, credentialID, in.SyncIntervalSeconds); err != nil {
+	if err = s.Store.UpdateTemplateRepositorySettingsWithAudit(r.Context(), p, id, in.TrustedPublicKey, in.RequireSignature, credentialID, in.SyncIntervalSeconds, r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint, "credentialId": credentialID, "syncIntervalSeconds": in.SyncIntervalSeconds}); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.settings.update", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requireSignature": in.RequireSignature, "signerFingerprint": fingerprint, "credentialId": credentialID, "syncIntervalSeconds": in.SyncIntervalSeconds})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -176,11 +174,10 @@ func (s *Server) rotateTemplateRepositoryWebhookSecret(w http.ResponseWriter, r 
 		return
 	}
 	p := principal(r)
-	if err = s.Store.SetTemplateRepositoryWebhookSecret(r.Context(), p.OrganizationID, id, encrypted); err != nil {
+	if err = s.Store.SetTemplateRepositoryWebhookSecretWithAudit(r.Context(), p, id, encrypted, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.webhook.rotate", "template_repository", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusCreated, map[string]any{"secret": secret, "url": s.PublicURL + "/v1/hooks/template-repositories/" + id.String()})
 }
 
@@ -191,11 +188,10 @@ func (s *Server) disableTemplateRepositoryWebhook(w http.ResponseWriter, r *http
 		return
 	}
 	p := principal(r)
-	if err = s.Store.ClearTemplateRepositoryWebhookSecret(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.ClearTemplateRepositoryWebhookSecretWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.webhook.disable", "template_repository", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -248,14 +244,13 @@ func (s *Server) templateRepositoryWebhook(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if err = s.Store.RequestTemplateRepositorySync(r.Context(), id, deliveryID); errors.Is(err, store.ErrDuplicateDelivery) {
+	if err = s.Store.RequestTemplateRepositorySyncWithAudit(r.Context(), repository.OrganizationID, id, deliveryID, repository.GitRef, repository.EncryptedWebhookSecret, r.RemoteAddr); errors.Is(err, store.ErrDuplicateDelivery) {
 		writeError(w, 409, "duplicate_delivery", err.Error())
 		return
 	} else if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.AuditOrganization(r.Context(), repository.OrganizationID, "template_repository.webhook", "template_repository", id.String(), r.RemoteAddr, map[string]any{"deliveryId": deliveryID, "gitRef": repository.GitRef})
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
@@ -266,12 +261,11 @@ func (s *Server) syncTemplateRepository(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := principal(r)
-	requestedAt, err := s.Store.QueueTemplateRepositorySync(r.Context(), p.OrganizationID, id)
+	requestedAt, err := s.Store.QueueTemplateRepositorySyncWithAudit(r.Context(), p, id, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.sync.queued", "template_repository", id.String(), r.RemoteAddr, map[string]any{"requestedAt": requestedAt})
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "queued", "requestedAt": requestedAt})
 }
 
@@ -282,10 +276,9 @@ func (s *Server) deleteTemplateRepository(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteTemplateRepository(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteTemplateRepositoryWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "template_repository.delete", "template_repository", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

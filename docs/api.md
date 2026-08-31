@@ -653,6 +653,11 @@ Repository creation accepts `trustedPublicKey` as an Ed25519 PEM or base64 raw
 public key and `requireSignature` as a boolean. When a key is configured every
 sync verifies the catalog manifest and signature before any database write;
 `requireSignature` prevents registering the repository without a key.
+Repository creation, trust/credential settings, webhook-secret rotation,
+manual and webhook-triggered sync requests, and deletion commit atomically
+with their audit evidence. Failed evidence cannot publish trust changes,
+retain webhook secrets, enqueue a refresh, consume a delivery ID, or remove a
+catalog.
 
 Template previews execute the same variable resolution, mount conversion, and
 safe-Compose validation as creation, but omit secret environment values,
