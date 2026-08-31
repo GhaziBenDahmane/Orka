@@ -136,7 +136,9 @@ tests:
   - name: overdue database backup
     interval: 1m
     input_series:
-      - series: 'dockyard_database_backup_overdue{database="database-id"}'
+      - series: 'dockyard_database_backup_overdue{instance="10.0.0.1:8080",database="database-id"}'
+        values: '1x20'
+      - series: 'dockyard_database_backup_overdue{instance="10.0.0.2:8080",database="database-id"}'
         values: '1x20'
     alert_rule_test:
       - eval_time: 16m

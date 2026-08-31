@@ -325,7 +325,7 @@ func TestPrometheusAlertsCoverDatabaseDriverIdentity(t *testing.T) {
 		"alert: DockyardDatabaseDriverBindingIssue",
 		"expr: dockyard_database_driver_binding_issues > 0",
 		"alert: DockyardDatabaseUtilityProvenanceMissing",
-		"expr: dockyard_database_utility_provenance_issues > 0",
+		"expr: max without (instance) (dockyard_database_utility_provenance_issues) > 0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -381,24 +381,24 @@ func TestPrometheusAlertsCoverVolumeRecovery(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardVolumeBackupPolicyUnavailable",
-		`expr: dockyard_volume_backup_policy_status{state=~"missing|disabled"} == 1`,
+		`expr: max without (instance) (dockyard_volume_backup_policy_status{state=~"missing|disabled"}) == 1`,
 		"alert: DockyardVolumeBackupPolicyInventoryInvalid",
-		"expr: dockyard_volume_backup_policy_inventory_valid == 0",
+		"expr: max without (instance) (dockyard_volume_backup_policy_inventory_valid) == 0",
 		"alert: DockyardVolumeBackupStorageNodeMissing",
-		"expr: dockyard_volume_backup_storage_node_bound == 0",
+		"expr: max without (instance) (dockyard_volume_backup_storage_node_bound) == 0",
 		"alert: DockyardVolumeBackupQuiescenceDisabled",
-		"expr: dockyard_volume_backup_quiescence_enabled == 0",
+		"expr: max without (instance) (dockyard_volume_backup_quiescence_enabled) == 0",
 		"alert: DockyardVolumeBackupOverdue",
-		"expr: dockyard_volume_backup_overdue == 1",
+		"expr: max without (instance) (dockyard_volume_backup_overdue) == 1",
 		"alert: DockyardVolumeRestoreRehearsalOverdue",
-		"expr: dockyard_volume_restore_rehearsal_overdue == 1",
+		"expr: max without (instance) (dockyard_volume_restore_rehearsal_overdue) == 1",
 		"alert: DockyardOfflineVolumeRestoreFailed",
-		`expr: dockyard_volume_restore_last_failure_age_seconds{mode="offline"} < 900`,
+		`expr: max without (instance) (dockyard_volume_restore_last_failure_age_seconds{mode="offline"}) < 900`,
 		"description: Service {{ $labels.service }} volume {{ $labels.volume }} failed offline recovery",
 		"alert: DockyardOfflineVolumeRestoreStalled",
-		`expr: dockyard_volume_restore_active_age_seconds{mode="offline"} > 1800`,
+		`expr: max without (instance) (dockyard_volume_restore_active_age_seconds{mode="offline"}) > 1800`,
 		"alert: DockyardBackupArtifactDeletionStalled",
-		"expr: dockyard_backup_artifact_deletion_oldest_age_seconds > 900",
+		"expr: max without (instance) (dockyard_backup_artifact_deletion_oldest_age_seconds) > 900",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
@@ -414,12 +414,43 @@ func TestPrometheusAlertsCoverDatabaseRecoveryPolicy(t *testing.T) {
 	text := string(contents)
 	for _, expected := range []string{
 		"alert: DockyardDatabaseBackupPolicyUnavailable",
-		`expr: dockyard_database_backup_policy_status{state=~"missing|disabled"} == 1`,
+		`expr: max without (instance) (dockyard_database_backup_policy_status{state=~"missing|disabled"}) == 1`,
 		"alert: DockyardDatabaseRestoreVerificationDisabled",
-		"expr: dockyard_database_restore_verification_enabled == 0",
+		"expr: max without (instance) (dockyard_database_restore_verification_enabled) == 0",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing database recovery-policy alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusRecoveryAlertsDeduplicateHAReplicas(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, metric := range []string{
+		"dockyard_database_utility_provenance_issues",
+		"dockyard_database_backup_last_success_age_seconds",
+		"dockyard_database_backup_overdue",
+		"dockyard_database_backup_policy_status",
+		"dockyard_database_restore_verification_enabled",
+		"dockyard_backup_artifact_deletion_oldest_age_seconds",
+		"dockyard_volume_backup_overdue",
+		"dockyard_volume_backup_policy_status",
+		"dockyard_volume_backup_policy_inventory_valid",
+		"dockyard_volume_backup_storage_node_bound",
+		"dockyard_volume_backup_quiescence_enabled",
+		"dockyard_volume_restore_rehearsal_overdue",
+		"dockyard_volume_restore_last_failure_age_seconds",
+		"dockyard_volume_restore_active_age_seconds",
+		"dockyard_restore_drill_overdue",
+		"dockyard_database_migration_active_age_seconds",
+		"dockyard_database_migration_last_failure_age_seconds",
+	} {
+		if !strings.Contains(text, "max without (instance) ("+metric) {
+			t.Errorf("recovery alert for %s does not collapse replicated HA series", metric)
 		}
 	}
 }
