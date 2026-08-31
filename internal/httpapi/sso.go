@@ -277,6 +277,9 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 	}
 	provider, err := s.Store.GetOIDCProvider(r.Context(), providerID)
 	if err != nil {
+		if writeFederatedStateError(w, err) {
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
@@ -346,8 +349,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, err := s.Store.JITOIDCUser(r.Context(), provider, claims.Subject, email, name)
-	if errors.Is(err, store.ErrAuthenticationStateChanged) {
-		writeError(w, 400, "invalid_state", "identity provider configuration changed during login")
+	if writeFederatedStateError(w, err) {
 		return
 	}
 	if err != nil {
@@ -355,8 +357,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, providerRevision, "oidc", "", map[string]any{"providerId": provider.ID})
-	if errors.Is(err, store.ErrAuthenticationStateChanged) {
-		writeError(w, 400, "invalid_state", "identity provider configuration changed during login")
+	if writeFederatedStateError(w, err) {
 		return
 	}
 	if err != nil {
@@ -364,6 +365,14 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeLoginSuccess(w, r, token)
+}
+
+func writeFederatedStateError(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, store.ErrAuthenticationStateChanged) && !errors.Is(err, store.ErrNotFound) {
+		return false
+	}
+	writeError(w, http.StatusBadRequest, "invalid_state", "identity provider configuration changed during login")
+	return true
 }
 
 func normalizedOIDCIssuer(raw string) (string, error) {

@@ -367,6 +367,9 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	provider, sp, err := s.samlServiceProvider(r.Context(), providerID.String())
 	if err != nil {
+		if writeFederatedStateError(w, err) {
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
@@ -529,8 +532,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID, err := s.Store.JITSAMLUser(r.Context(), provider, assertion.Subject.NameID.Value, email, name)
-	if errors.Is(err, store.ErrAuthenticationStateChanged) {
-		writeError(w, 400, "invalid_state", "identity provider configuration changed during login")
+	if writeFederatedStateError(w, err) {
 		return
 	}
 	if err != nil {
@@ -538,8 +540,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, providerRevision, "saml", "", map[string]any{"providerId": provider.ID})
-	if errors.Is(err, store.ErrAuthenticationStateChanged) {
-		writeError(w, 400, "invalid_state", "identity provider configuration changed during login")
+	if writeFederatedStateError(w, err) {
 		return
 	}
 	if err != nil {

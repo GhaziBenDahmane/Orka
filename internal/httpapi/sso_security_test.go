@@ -4,15 +4,47 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/bendahma/dokploy-go/internal/store"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
+
+func TestWriteFederatedStateError(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "provider removed or disabled", err: store.ErrNotFound, want: true},
+		{name: "provider revision changed", err: store.ErrAuthenticationStateChanged, want: true},
+		{name: "wrapped state change", err: fmt.Errorf("issue session: %w", store.ErrAuthenticationStateChanged), want: true},
+		{name: "unrelated storage failure", err: errors.New("database unavailable")},
+		{name: "success"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			if got := writeFederatedStateError(recorder, test.err); got != test.want {
+				t.Fatalf("handled=%t want=%t", got, test.want)
+			}
+			if !test.want {
+				if recorder.Code != http.StatusOK || recorder.Body.Len() != 0 {
+					t.Fatalf("unhandled error wrote status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+				return
+			}
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_state"`) {
+				t.Fatalf("state error response status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
 
 func TestNormalizedOIDCIssuer(t *testing.T) {
 	got, err := normalizedOIDCIssuer("  https://login.example.test/tenant/  ")
