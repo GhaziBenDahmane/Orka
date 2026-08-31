@@ -88,12 +88,11 @@ func (s *Server) createOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := principal(r)
-	provider, err := s.Store.CreateOIDCProvider(r.Context(), store.OIDCProvider{ID: id, OrganizationID: principal.OrganizationID, Name: in.Name, Issuer: issuer, ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
+	provider, err := s.Store.CreateOIDCProviderWithAudit(r.Context(), principal, store.OIDCProvider{ID: id, Name: in.Name, Issuer: issuer, ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &principal, "sso.oidc.create", "oidc_provider", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, provider)
 }
 
@@ -154,12 +153,11 @@ func (s *Server) updateOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	provider, err := s.Store.UpdateOIDCProvider(r.Context(), p.OrganizationID, store.OIDCProvider{ID: id, Name: strings.TrimSpace(in.Name), Issuer: issuer, ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole})
+	provider, err := s.Store.UpdateOIDCProviderWithAudit(r.Context(), p, store.OIDCProvider{ID: id, Name: strings.TrimSpace(in.Name), Issuer: issuer, ClientID: in.ClientID, EncryptedClientSecret: encrypted, Domains: in.Domains, Scopes: in.Scopes, DefaultRole: in.DefaultRole}, in.ClientSecret != "", r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.oidc.update", "oidc_provider", id.String(), r.RemoteAddr, map[string]any{"rotatedSecret": in.ClientSecret != ""})
 	writeJSON(w, 200, provider)
 }
 

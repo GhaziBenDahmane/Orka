@@ -149,10 +149,12 @@ enrollment details.
 | POST | `/v1/agent/commands/{id}/complete` | Store a fenced command result |
 | POST | `/v1/agent/rotate` | Issue a pending short-lived certificate; first successful authentication promotes it and revokes the old serial |
 
-Mandatory-SSO policy changes and OIDC/SAML provider enable or disable
-transitions commit atomically with their operator audit records. The same
-organization lock protects the last-enabled-provider invariant, so concurrent
-changes cannot lock a tenant out or leave an unaudited identity-policy state.
+Mandatory-SSO policy changes, OIDC provider creation and secret rotation, and
+OIDC/SAML provider enable or disable transitions commit atomically with their
+operator audit records. OIDC updates invalidate outstanding login state in the
+same transaction. The organization lock protects the last-enabled-provider
+invariant, so concurrent changes cannot lock a tenant out or leave an
+unaudited identity-policy state.
 
 Source-credential rotation and deletion are serialized with every consumer. A
 credential referenced by a queued or running deployment returns

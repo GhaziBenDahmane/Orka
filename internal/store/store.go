@@ -3185,6 +3185,32 @@ func (s *Store) UpgradeTemplateService(ctx context.Context, organizationID uuid.
 }
 
 func (s *Store) CreateOIDCProvider(ctx context.Context, p OIDCProvider) (OIDCProvider, error) {
+	return createOIDCProvider(ctx, s.Pool, p)
+}
+
+func (s *Store) CreateOIDCProviderWithAudit(ctx context.Context, principal Principal, p OIDCProvider, remoteAddr string) (OIDCProvider, error) {
+	p.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	defer tx.Rollback(ctx)
+	p, err = createOIDCProvider(ctx, tx, p)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.oidc.create", "oidc_provider", p.ID.String(), remoteAddr, nil); err != nil {
+		return OIDCProvider{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return OIDCProvider{}, err
+	}
+	return p, nil
+}
+
+func createOIDCProvider(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, p OIDCProvider) (OIDCProvider, error) {
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
 	}
@@ -3195,7 +3221,7 @@ func (s *Store) CreateOIDCProvider(ctx context.Context, p OIDCProvider) (OIDCPro
 		p.DefaultRole = "developer"
 	}
 	p.Enabled = true
-	err := s.Pool.QueryRow(ctx, `INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.Enabled)
+	err := db.QueryRow(ctx, `INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,scopes,default_role) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.Enabled)
 	return p, err
 }
 
@@ -3205,7 +3231,37 @@ func (s *Store) UpdateOIDCProvider(ctx context.Context, organizationID uuid.UUID
 		return OIDCProvider{}, err
 	}
 	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `UPDATE oidc_providers SET name=$3,issuer=$4,client_id=$5,encrypted_client_secret=CASE WHEN $6='' THEN encrypted_client_secret ELSE $6 END,domains=$7,scopes=$8,default_role=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled`, p.ID, organizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled)
+	p, err = updateOIDCProviderTx(ctx, tx, organizationID, p)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return OIDCProvider{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) UpdateOIDCProviderWithAudit(ctx context.Context, principal Principal, p OIDCProvider, rotatedSecret bool, remoteAddr string) (OIDCProvider, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	defer tx.Rollback(ctx)
+	p, err = updateOIDCProviderTx(ctx, tx, principal.OrganizationID, p)
+	if err != nil {
+		return OIDCProvider{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.oidc.update", "oidc_provider", p.ID.String(), remoteAddr, map[string]any{"rotatedSecret": rotatedSecret}); err != nil {
+		return OIDCProvider{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return OIDCProvider{}, err
+	}
+	return p, nil
+}
+
+func updateOIDCProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, p OIDCProvider) (OIDCProvider, error) {
+	err := tx.QueryRow(ctx, `UPDATE oidc_providers SET name=$3,issuer=$4,client_id=$5,encrypted_client_secret=CASE WHEN $6='' THEN encrypted_client_secret ELSE $6 END,domains=$7,scopes=$8,default_role=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,issuer,client_id,domains,scopes,default_role,enabled`, p.ID, organizationID, p.Name, p.Issuer, p.ClientID, p.EncryptedClientSecret, p.Domains, p.Scopes, p.DefaultRole).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.Issuer, &p.ClientID, &p.Domains, &p.Scopes, &p.DefaultRole, &p.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OIDCProvider{}, ErrNotFound
 	}
@@ -3215,7 +3271,7 @@ func (s *Store) UpdateOIDCProvider(ctx context.Context, organizationID uuid.UUID
 	if _, err = tx.Exec(ctx, `DELETE FROM oidc_states WHERE provider_id=$1`, p.ID); err != nil {
 		return OIDCProvider{}, err
 	}
-	return p, tx.Commit(ctx)
+	return p, nil
 }
 
 func (s *Store) GetOIDCProvider(ctx context.Context, id uuid.UUID) (OIDCProvider, error) {
