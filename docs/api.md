@@ -777,6 +777,10 @@ Restore admission validates the selected recovery point while holding its row
 lock. A malformed legacy row marked `succeeded` returns `409 restore_rejected`
 without creating a restore, job, or audit event; worker-side validation remains
 defense in depth for already queued work and database tampering.
+Retention likewise counts only recovery points with complete restore metadata,
+so a malformed successful row cannot evict an older valid database or
+named-volume artifact. Invalid rows remain visible to integrity metrics and the
+AI auditor instead of silently displacing usable recovery history.
 
 Database credentials are returned once on creation and encrypted at rest.
 Creating a database produces a normal Compose service; deploy it through the

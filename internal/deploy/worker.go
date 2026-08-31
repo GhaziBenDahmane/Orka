@@ -1665,7 +1665,7 @@ type expiredVolumeBackupCandidate struct {
 // deleteExpiredVolumeBackupMetadata is the admission boundary and rechecks
 // restore references under the same row lock used by QueueVolumeRestore.
 func (w *Worker) expiredVolumeBackupCandidates(ctx context.Context, newestID uuid.UUID, keep int) ([]expiredVolumeBackupCandidate, error) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND old.object_key<>'' AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND old.size_bytes>0 AND old.sha256~'^[a-f0-9]{64}$' AND old.plaintext_sha256~'^[a-f0-9]{64}$' AND old.encrypted_data_key<>'' AND old.object_key<>'' AND old.finished_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
 	if err != nil {
 		return nil, err
 	}
@@ -1968,7 +1968,7 @@ func (w *Worker) queueRestoreDrill(ctx context.Context, backupID uuid.UUID) erro
 }
 
 func (w *Worker) pruneBackups(ctx context.Context, newestID uuid.UUID, keep int) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id AND (r.kind='manual' OR r.status IN ('queued','running') OR EXISTS(SELECT 1 FROM jobs job WHERE job.kind='restore.database' AND job.payload->>'restoreId'=r.id::text AND job.status IN ('pending','running')))) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.path,old.destination_id,old.object_key FROM database_backups old JOIN database_backups newest ON newest.database_instance_id=old.database_instance_id WHERE newest.id=$1 AND old.status='succeeded' AND old.size_bytes>0 AND old.sha256~'^[a-f0-9]{64}$' AND old.finished_at IS NOT NULL AND (NOT old.encrypted OR (old.plaintext_sha256~'^[a-f0-9]{64}$' AND old.encrypted_data_key<>'')) AND ((old.destination_id IS NULL AND old.path<>'') OR (old.destination_id IS NOT NULL AND old.object_key<>'' AND old.encrypted)) AND NOT EXISTS (SELECT 1 FROM database_restores r WHERE r.database_backup_id=old.id AND (r.kind='manual' OR r.status IN ('queued','running') OR EXISTS(SELECT 1 FROM jobs job WHERE job.kind='restore.database' AND job.payload->>'restoreId'=r.id::text AND job.status IN ('pending','running')))) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
 	if err != nil {
 		w.Logger.Error("select expired backups", "error", err)
 		return

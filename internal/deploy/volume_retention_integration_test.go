@@ -144,7 +144,7 @@ func verifyVolumeRetentionRestoreWinsAfterCandidateSelection(t *testing.T, ctx c
 	t.Cleanup(db.Pool.Close)
 
 	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
-	serviceID, destinationID, expiredID, newestID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	serviceID, destinationID, expiredID, malformedID, newestID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +159,7 @@ func verifyVolumeRetentionRestoreWinsAfterCandidateSelection(t *testing.T, ctx c
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,storage_node_id) VALUES($1,$2,'App','app',$3,'services: {}','node1')`, []any{serviceID, environmentID, "volume-retention-conformance-" + serviceID.String()}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'archive','https://objects.example.test','backups','ciphertext')`, []any{destinationID, organizationID}},
 		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,created_at,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded','volumes/expired.enc',42,$4,$5,'wrapped',now()-interval '1 hour',now()-interval '1 hour')`, []any{expiredID, serviceID, destinationID, stringOf('a', 64), stringOf('b', 64)}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,created_at,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded','volumes/malformed.enc',now()-interval '30 minutes',now()-interval '30 minutes')`, []any{malformedID, serviceID, destinationID}},
 		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,created_at,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded','volumes/newest.enc',42,$4,$5,'wrapped',now(),now())`, []any{newestID, serviceID, destinationID, stringOf('c', 64), stringOf('d', 64)}},
 	}
 	for _, statement := range statements {
@@ -177,7 +178,14 @@ func verifyVolumeRetentionRestoreWinsAfterCandidateSelection(t *testing.T, ctx c
 	})
 
 	worker := &Worker{Store: db}
-	candidates, err := worker.expiredVolumeBackupCandidates(ctx, newestID, 1)
+	candidates, err := worker.expiredVolumeBackupCandidates(ctx, newestID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("malformed backup consumed a retention slot: candidates=%+v", candidates)
+	}
+	candidates, err = worker.expiredVolumeBackupCandidates(ctx, newestID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

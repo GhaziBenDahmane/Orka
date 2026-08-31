@@ -96,6 +96,76 @@ func TestDatabaseRetentionPreservesActiveRestoreDrill(t *testing.T) {
 	}
 }
 
+func TestDatabaseRetentionDoesNotCountMalformedSuccessfulBackups(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	serviceID, databaseID := uuid.New(), uuid.New()
+	oldID, malformedID, newestID := uuid.New(), uuid.New(), uuid.New()
+	backupRoot := t.TempDir()
+	artifactPath := func(id uuid.UUID) string {
+		directory := filepath.Join(backupRoot, id.String())
+		if mkdirErr := os.Mkdir(directory, 0700); mkdirErr != nil {
+			t.Fatal(mkdirErr)
+		}
+		path := filepath.Join(directory, id.String()+".dump.enc")
+		if writeErr := os.WriteFile(path, []byte("encrypted backup"), 0600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		return path
+	}
+	oldPath, newestPath := artifactPath(oldID), artifactPath(newestID)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Database retention integrity',$2)`, []any{organizationID, "database-retention-integrity-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Database','database',$3,'services: {}')`, []any{serviceID, environmentID, "database-retention-integrity-" + serviceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17',$3,'ciphertext')`, []any{databaseID, environmentID, serviceID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,path,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,created_at,finished_at) VALUES($1,$2,'succeeded','native',$3,16,$4,true,$5,'wrapped',now()-interval '1 hour',now()-interval '1 hour')`, []any{oldID, databaseID, oldPath, strings.Repeat("a", 64), strings.Repeat("b", 64)}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,created_at,finished_at) VALUES($1,$2,'succeeded','native',now()-interval '30 minutes',now()-interval '30 minutes')`, []any{malformedID, databaseID}},
+		{`INSERT INTO database_backups(id,database_instance_id,status,format,path,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,created_at,finished_at) VALUES($1,$2,'succeeded','native',$3,16,$4,true,$5,'wrapped',now(),now())`, []any{newestID, databaseID, newestPath, strings.Repeat("c", 64), strings.Repeat("d", 64)}},
+	}
+	for _, statement := range statements {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+
+	worker := &Worker{Store: db, BackupDirectory: backupRoot}
+	worker.pruneBackups(ctx, newestID, 2)
+	var count int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM database_backups WHERE id=ANY($1)`, []uuid.UUID{oldID, malformedID, newestID}).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("malformed backup consumed a retention slot: remaining=%d err=%v", count, err)
+	}
+	if _, err = os.Stat(oldPath); err != nil {
+		t.Fatalf("retained valid artifact disappeared: %v", err)
+	}
+
+	worker.pruneBackups(ctx, newestID, 1)
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM database_backups WHERE id=ANY($1)`, []uuid.UUID{oldID, malformedID, newestID}).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("valid retention did not remove exactly one recovery point: remaining=%d err=%v", count, err)
+	}
+	if _, err = os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired valid artifact still exists: %v", err)
+	}
+}
+
 func TestValidatedLocalBackupDirectory(t *testing.T) {
 	root := t.TempDir()
 	backupID := uuid.New()
