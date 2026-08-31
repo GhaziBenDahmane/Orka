@@ -190,7 +190,7 @@ func TestDatabaseMigrationQueueCommitsWithSystemAudit(t *testing.T) {
 	}
 }
 
-func TestTemplateRepositoryFinalizationCommitsWithSystemAudit(t *testing.T) {
+func TestTemplateRepositoryPublicationCommitsWithSystemAudit(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatal(err)
@@ -216,6 +216,10 @@ func TestTemplateRepositoryFinalizationCommitsWithSystemAudit(t *testing.T) {
 	if err != nil || claimed.SyncAttemptID == nil {
 		t.Fatalf("claimed repository=%#v err=%v", claimed, err)
 	}
+	oldTemplate := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/redis", Version: "1", Name: "Old Redis", ComposeYAML: "services: {}", Source: "github", SourcePath: "blueprints/redis", Checksum: "old"}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, claimed, []Template{oldTemplate}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = pool.Exec(ctx, `CREATE FUNCTION reject_template_sync_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='template_repository.sync' THEN RAISE EXCEPTION 'forced audit failure'; END IF; RETURN NEW; END $$`); err != nil {
 		t.Fatal(err)
 	}
@@ -223,22 +227,30 @@ func TestTemplateRepositoryFinalizationCommitsWithSystemAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := map[string]any{"imported": 1, "scheduled": true}
-	if err = db.FinishTemplateRepositorySyncWithAudit(ctx, claimed, "succeeded", "", "scheduler", metadata); err == nil {
-		t.Fatal("template sync finalized without audit evidence")
+	newTemplate := Template{OrganizationID: &organizationID, RepositoryID: &repository.ID, Key: "catalog/postgres", Version: "1", Name: "New Postgres", ComposeYAML: "services: {}", Source: "github", SourcePath: "blueprints/postgres", Checksum: "new"}
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, claimed, []Template{newTemplate}, "scheduler", metadata); err == nil {
+		t.Fatal("template catalog published without audit evidence")
 	}
 	stored, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
 	if err != nil || stored.LastSyncStatus != "running" || stored.SyncAttemptID == nil || *stored.SyncAttemptID != *claimed.SyncAttemptID {
 		t.Fatalf("failed evidence finalized template sync: repository=%#v err=%v", stored, err)
 	}
+	var templateName string
+	if err = pool.QueryRow(ctx, `SELECT name FROM templates WHERE repository_id=$1`, repository.ID).Scan(&templateName); err != nil || templateName != "Old Redis" {
+		t.Fatalf("failed evidence changed published catalog: name=%q err=%v", templateName, err)
+	}
 	if _, err = pool.Exec(ctx, `DROP TRIGGER reject_template_sync_audit ON audit_events`); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.FinishTemplateRepositorySyncWithAudit(ctx, claimed, "succeeded", "", "scheduler", metadata); err != nil {
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, claimed, []Template{newTemplate}, "scheduler", metadata); err != nil {
 		t.Fatal(err)
 	}
 	stored, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
 	if err != nil || stored.LastSyncStatus != "succeeded" || stored.SyncAttemptID != nil {
 		t.Fatalf("audited template sync finalization=%#v err=%v", stored, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT name FROM templates WHERE repository_id=$1`, repository.ID).Scan(&templateName); err != nil || templateName != "New Postgres" {
+		t.Fatalf("audited catalog publication: name=%q err=%v", templateName, err)
 	}
 	var count int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id IS NULL AND actor_service_account_id IS NULL AND action='template_repository.sync' AND resource_id=$2`, organizationID, repository.ID.String()).Scan(&count); err != nil || count != 1 {

@@ -519,6 +519,54 @@ func (s *Store) ReplaceRepositoryTemplatesForSync(ctx context.Context, repositor
 	if attemptID != nil && (currentAttemptID == nil || *currentAttemptID != *attemptID || syncStatus != "running") {
 		return ErrBusy
 	}
+	if err = replaceRepositoryTemplatesTx(ctx, tx, repository, items); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// PublishRepositoryTemplatesForSyncWithAudit commits a complete catalog
+// snapshot, successful sync state, and system audit evidence atomically.
+func (s *Store) PublishRepositoryTemplatesForSyncWithAudit(ctx context.Context, repository TemplateRepository, items []Template, remoteAddr string, metadata any) error {
+	if repository.SyncAttemptID == nil {
+		return ErrBusy
+	}
+	if len(items) == 0 {
+		return errors.New("repository catalog must contain at least one template")
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var currentAttemptID *uuid.UUID
+	var syncStatus string
+	if err = tx.QueryRow(ctx, `SELECT sync_attempt_id,last_sync_status FROM template_repositories WHERE id=$1 AND organization_id=$2 FOR UPDATE`, repository.ID, repository.OrganizationID).Scan(&currentAttemptID, &syncStatus); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if currentAttemptID == nil || *currentAttemptID != *repository.SyncAttemptID || syncStatus != "running" {
+		return ErrBusy
+	}
+	if err = replaceRepositoryTemplatesTx(ctx, tx, repository, items); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE template_repositories SET last_sync_status='succeeded',last_sync_error='',last_synced_at=now(),sync_started_at=NULL,sync_attempt_id=NULL,next_sync_at=CASE WHEN sync_interval_seconds>0 THEN now()+(sync_interval_seconds * interval '1 second') ELSE NULL END,updated_at=now() WHERE id=$1 AND organization_id=$2 AND last_sync_status='running' AND sync_attempt_id=$3`, repository.ID, repository.OrganizationID, *repository.SyncAttemptID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrBusy
+	}
+	if err = s.AuditOrganizationTx(ctx, tx, repository.OrganizationID, "template_repository.sync", "template_repository", repository.ID.String(), remoteAddr, metadata); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func replaceRepositoryTemplatesTx(ctx context.Context, tx pgx.Tx, repository TemplateRepository, items []Template) error {
+	organizationID, repositoryID := repository.OrganizationID, repository.ID
 	ids := make([]uuid.UUID, 0, len(items))
 	for _, item := range items {
 		if item.RepositoryID == nil || item.OrganizationID == nil || *item.RepositoryID != repositoryID || *item.OrganizationID != organizationID {
@@ -526,7 +574,7 @@ func (s *Store) ReplaceRepositoryTemplatesForSync(ctx context.Context, repositor
 		}
 		item.ID = uuid.New()
 		var id uuid.UUID
-		if err = tx.QueryRow(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum)
+		if err := tx.QueryRow(ctx, `INSERT INTO templates(id,organization_id,repository_id,template_key,version,name,description,compose_yaml,config,source,source_path,checksum)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 			ON CONFLICT (organization_id,template_key,version) DO UPDATE SET repository_id=excluded.repository_id,name=excluded.name,description=excluded.description,compose_yaml=excluded.compose_yaml,config=excluded.config,source=excluded.source,source_path=excluded.source_path,checksum=excluded.checksum
 			RETURNING id`, item.ID, organizationID, repositoryID, item.Key, item.Version, item.Name, item.Description, item.ComposeYAML, item.Config, item.Source, item.SourcePath, item.Checksum).Scan(&id); err != nil {
@@ -534,8 +582,8 @@ func (s *Store) ReplaceRepositoryTemplatesForSync(ctx context.Context, repositor
 		}
 		ids = append(ids, id)
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM templates WHERE repository_id=$1 AND organization_id=$2 AND NOT (id=ANY($3::uuid[]))`, repositoryID, organizationID, ids); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM templates WHERE repository_id=$1 AND organization_id=$2 AND NOT (id=ANY($3::uuid[]))`, repositoryID, organizationID, ids); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }

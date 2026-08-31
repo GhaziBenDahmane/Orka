@@ -159,14 +159,28 @@ func ImportDokployCatalog(ctx context.Context, db *store.Store, root string) (Im
 // keys by repository slug. This keeps identically named templates from multiple
 // repositories independent and makes their provenance explicit.
 func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository store.TemplateRepository, root string) (ImportReport, error) {
+	report, items, err := ParseRepositoryCatalog(repository, root)
+	if err != nil {
+		return report, err
+	}
+	if err = db.ReplaceRepositoryTemplatesForSync(ctx, repository, items); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+// ParseRepositoryCatalog validates and materializes a repository catalog
+// without publishing it. Callers can therefore commit the resulting snapshot
+// in the same transaction as sync completion and its audit evidence.
+func ParseRepositoryCatalog(repository store.TemplateRepository, root string) (ImportReport, []store.Template, error) {
 	catalogPath, err := NormalizeCatalogPath(repository.CatalogPath)
 	if err != nil {
-		return ImportReport{}, err
+		return ImportReport{}, nil, err
 	}
 	blueprints := filepath.Join(root, filepath.FromSlash(catalogPath), "blueprints")
 	entries, err := os.ReadDir(blueprints)
 	if err != nil {
-		return ImportReport{}, err
+		return ImportReport{}, nil, err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	report := ImportReport{Failed: map[string]string{}}
@@ -229,16 +243,13 @@ func ImportRepositoryCatalog(ctx context.Context, db *store.Store, repository st
 		items = append(items, store.Template{OrganizationID: &organizationID, RepositoryID: &repositoryID, Key: key, Version: meta.Version, Name: meta.Name, Description: meta.Description, ComposeYAML: string(compose), Config: config, Source: "github", SourcePath: filepath.ToSlash(filepath.Join(repository.CatalogPath, "blueprints", entry.Name())), Checksum: hex.EncodeToString(sum[:])})
 	}
 	if len(report.Failed) > 0 {
-		return report, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
+		return report, nil, fmt.Errorf("catalog contains %d invalid template(s)", len(report.Failed))
 	}
 	if len(items) == 0 {
-		return report, errors.New("catalog contains no templates")
-	}
-	if err = db.ReplaceRepositoryTemplatesForSync(ctx, repository, items); err != nil {
-		return report, err
+		return report, nil, errors.New("catalog contains no templates")
 	}
 	report.Imported = len(items)
-	return report, nil
+	return report, items, nil
 }
 
 func ValidateDokployCatalog(root string, compiler deploy.Compiler) (ImportReport, error) {

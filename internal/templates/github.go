@@ -299,25 +299,22 @@ func SyncClaimedRepository(ctx context.Context, db *store.Store, box *cryptox.Bo
 		_, err = VerifyRepositoryCatalog(repository, root)
 	}
 	var report ImportReport
+	var items []store.Template
 	if err == nil {
-		report, err = ImportRepositoryCatalog(ctx, db, repository, root)
-	}
-	status, message := "succeeded", ""
-	if err != nil {
-		status, message = "failed", boundedSyncError(err)
+		report, items, err = ParseRepositoryCatalog(repository, root)
 	}
 	metadata := map[string]any{"imported": report.Imported, "restricted": report.Restricted, "invalid": report.Invalid, "failed": len(report.Failed), "scheduled": true}
 	if err != nil {
 		metadata["error"] = boundedSyncError(err)
-	}
-	if finishErr := db.FinishTemplateRepositorySyncWithAudit(ctx, repository, status, message, "scheduler", metadata); finishErr != nil {
-		if err == nil {
-			err = finishErr
-		} else {
+		if finishErr := db.FinishTemplateRepositorySyncWithAudit(ctx, repository, "failed", boundedSyncError(err), "scheduler", metadata); finishErr != nil {
 			err = errors.Join(err, finishErr)
 		}
+		return report, err
 	}
-	return report, err
+	if err = db.PublishRepositoryTemplatesForSyncWithAudit(ctx, repository, items, "scheduler", metadata); err != nil {
+		return report, err
+	}
+	return report, nil
 }
 
 func repositoryToken(ctx context.Context, db *store.Store, box *cryptox.Box, repository store.TemplateRepository) (string, error) {
