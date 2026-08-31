@@ -55,7 +55,9 @@ links for every item below.
   file identity or PostgreSQL migration and marker state survives replacement.
   Post-replacement assertions are read-only and cannot recreate missing test
   data; the BarkTrace PostgreSQL variant replaces both its application and
-  database services. CI publishes
+  database services. Evidence records distinct pre/post task IDs and matching
+  local image IDs for every replacement, including that PostgreSQL dependency,
+  so a no-op update or image change cannot satisfy the gate. CI publishes
   `template-conformance.json` with template versions and Swarm-resolved image
   digests, including BarkTrace PostgreSQL's database dependency; both
   BarkTrace variants must resolve from the released

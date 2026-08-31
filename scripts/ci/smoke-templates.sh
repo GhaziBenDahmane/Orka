@@ -72,6 +72,18 @@ service_container() {
   docker ps --filter "label=com.docker.swarm.service.name=$service_name" --filter status=running --format '{{.ID}}' | head -1
 }
 
+service_task() {
+  local service_name="$1"
+  docker service ps --filter desired-state=running --quiet "$service_name" | head -1
+}
+
+task_local_image_id() {
+  local task_id="$1" container_id
+  container_id="$(docker inspect "$task_id" --format '{{.Status.ContainerStatus.ContainerID}}')"
+  test -n "$container_id"
+  docker inspect "$container_id" --format '{{.Image}}'
+}
+
 seed_product_state() {
   local template_key="$1" service_name="$2" stack="$3" container_id postgres_id
   container_id="$(service_container "$service_name")"
@@ -209,13 +221,31 @@ for template_key in "${template_keys[@]}"; do
   seed_product_state "$template_key" "$service_name" "$stack"
   verify_product_state "$template_key" "$service_name" "$stack"
 
+  task_before="$(service_task "$service_name")"
+  runtime_image_before="$(task_local_image_id "$task_before")"
+  [[ "$runtime_image_before" =~ ^sha256:[a-f0-9]{64}$ ]]
   docker service update --force --detach=false "$service_name" >/dev/null
   wait_for_service "$service_name"
   verify_product_state "$template_key" "$service_name" "$stack"
+  task_after="$(service_task "$service_name")"
+  runtime_image_after="$(task_local_image_id "$task_after")"
+  test "$task_before" != "$task_after"
+  test "$runtime_image_before" = "$runtime_image_after"
+  dependency_task_before=''
+  dependency_task_after=''
+  dependency_runtime_image_before=''
+  dependency_runtime_image_after=''
   if [[ "$template_key" == barktrace-postgres ]]; then
+    dependency_task_before="$(service_task "${stack}_postgres")"
+    dependency_runtime_image_before="$(task_local_image_id "$dependency_task_before")"
+    [[ "$dependency_runtime_image_before" =~ ^sha256:[a-f0-9]{64}$ ]]
     docker service update --force --detach=false "${stack}_postgres" >/dev/null
     wait_for_service "${stack}_postgres"
     verify_product_state "$template_key" "$service_name" "$stack"
+    dependency_task_after="$(service_task "${stack}_postgres")"
+    dependency_runtime_image_after="$(task_local_image_id "$dependency_task_after")"
+    test "$dependency_task_before" != "$dependency_task_after"
+    test "$dependency_runtime_image_before" = "$dependency_runtime_image_after"
   fi
   resolved_image="$(docker service inspect "$service_name" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
   "$root_dir/scripts/ci/validate-image-reference.sh" "$resolved_image"
@@ -228,6 +258,7 @@ for template_key in "${template_keys[@]}"; do
   state_seeded_before_restart=true
   post_restart_read_only=true
   dependency_restart_verified=false
+  dependency_runtime_image_identity_verified=false
   sqlite_file_identity_verified=false
   if [[ "$template_key" == 9router ]]; then
     headroom_image="$(docker service inspect "${stack}_headroom" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
@@ -242,17 +273,22 @@ for template_key in "${template_keys[@]}"; do
     "$root_dir/scripts/ci/validate-image-reference.sh" "$postgres_image"
     dependency_images="$(jq -cn --arg image "$postgres_image" '[{service:"postgres",image:$image}]')"
     dependency_restart_verified=true
+    dependency_runtime_image_identity_verified=true
   elif [[ "$template_key" == barktrace-sqlite ]]; then
     sqlite_file_identity_verified=true
   fi
   products="$(jq -c \
     --arg template "$template_key" --arg templateVersion "$template_version" \
     --arg deploymentId "$deployment_id" --arg service "$service_name" --arg image "$resolved_image" \
+    --arg taskBefore "$task_before" --arg taskAfter "$task_after" \
+    --arg runtimeImageBefore "$runtime_image_before" --arg runtimeImageAfter "$runtime_image_after" \
+    --arg dependencyTaskBefore "$dependency_task_before" --arg dependencyTaskAfter "$dependency_task_after" \
+    --arg dependencyRuntimeImageBefore "$dependency_runtime_image_before" --arg dependencyRuntimeImageAfter "$dependency_runtime_image_after" \
     --argjson dependencyImages "$dependency_images" --argjson dataVerified "$data_verified" \
     --argjson dataVerificationApplicable "$data_verification_applicable" \
     --argjson stateSeededBeforeRestart "$state_seeded_before_restart" --argjson postRestartReadOnly "$post_restart_read_only" \
-    --argjson dependencyRestartVerified "$dependency_restart_verified" --argjson sqliteFileIdentityVerified "$sqlite_file_identity_verified" \
-    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dependencyImages:$dependencyImages,deploymentVerified:true,dataVerified:$dataVerified,dataVerificationApplicable:$dataVerificationApplicable,stateSeededBeforeRestart:$stateSeededBeforeRestart,postRestartReadOnly:$postRestartReadOnly,restartVerified:true,dependencyRestartVerified:$dependencyRestartVerified,sqliteFileIdentityVerified:$sqliteFileIdentityVerified}]' \
+    --argjson dependencyRestartVerified "$dependency_restart_verified" --argjson dependencyRuntimeImageIdentityVerified "$dependency_runtime_image_identity_verified" --argjson sqliteFileIdentityVerified "$sqlite_file_identity_verified" \
+    '. + [{template:$template,templateVersion:$templateVersion,deploymentId:$deploymentId,service:$service,image:$image,dependencyImages:$dependencyImages,deploymentVerified:true,dataVerified:$dataVerified,dataVerificationApplicable:$dataVerificationApplicable,stateSeededBeforeRestart:$stateSeededBeforeRestart,postRestartReadOnly:$postRestartReadOnly,restartVerified:($taskBefore != $taskAfter),taskBefore:$taskBefore,taskAfter:$taskAfter,runtimeImageBefore:$runtimeImageBefore,runtimeImageAfter:$runtimeImageAfter,runtimeImageIdentityVerified:($runtimeImageBefore == $runtimeImageAfter),dependencyRestartVerified:$dependencyRestartVerified,dependencyTaskBefore:$dependencyTaskBefore,dependencyTaskAfter:$dependencyTaskAfter,dependencyRuntimeImageBefore:$dependencyRuntimeImageBefore,dependencyRuntimeImageAfter:$dependencyRuntimeImageAfter,dependencyRuntimeImageIdentityVerified:$dependencyRuntimeImageIdentityVerified,sqliteFileIdentityVerified:$sqliteFileIdentityVerified}]' \
     <<<"$products")"
 done
 
@@ -264,12 +300,12 @@ jq -n \
 jq -e '
   .status == "passed" and .productCount == ($expected | length) and
   ([.products[].template] | sort == ($expected | sort)) and
-  all(.products[]; .deploymentVerified and .restartVerified and (.image | test("@sha256:[a-f0-9]{64}$"))) and
+  all(.products[]; .deploymentVerified and .restartVerified and .runtimeImageIdentityVerified and .taskBefore != .taskAfter and (.runtimeImageBefore | test("^sha256:[a-f0-9]{64}$")) and .runtimeImageAfter == .runtimeImageBefore and (.image | test("@sha256:[a-f0-9]{64}$"))) and
   all(.products[]; .dataVerified or (.dataVerificationApplicable == false)) and
   all(.products[]; if .dataVerificationApplicable then .stateSeededBeforeRestart and .postRestartReadOnly else true end) and
-  (.products[] | select(.template == "barktrace-postgres") | .dependencyRestartVerified) and
-  (.products[] | select(.template == "barktrace-postgres") | (.dependencyImages | length == 1 and .[0].service == "postgres" and (.[0].image | test("@sha256:[a-f0-9]{64}$")))) and
-  (.products[] | select(.template == "barktrace-sqlite") | .sqliteFileIdentityVerified) and
+  all(.products[] | select(.template == "barktrace-postgres"); .dependencyRestartVerified and .dependencyRuntimeImageIdentityVerified and .dependencyTaskBefore != .dependencyTaskAfter and (.dependencyRuntimeImageBefore | test("^sha256:[a-f0-9]{64}$")) and .dependencyRuntimeImageAfter == .dependencyRuntimeImageBefore) and
+  all(.products[] | select(.template == "barktrace-postgres"); .dependencyImages | length == 1 and .[0].service == "postgres" and (.[0].image | test("@sha256:[a-f0-9]{64}$"))) and
+  all(.products[] | select(.template == "barktrace-sqlite"); .sqliteFileIdentityVerified) and
   all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
   all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
 ' --arg version "$barktrace_version" --argjson expected "$(printf '%s\n' "${template_keys[@]}" | jq -R . | jq -s .)" "$evidence_file" >/dev/null
