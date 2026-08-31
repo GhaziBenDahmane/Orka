@@ -83,9 +83,14 @@ func TestRecoveryConformanceUsesRenderedDatabaseDataPaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, field := range []string{"replacementVerified", "persistentVolumeVerified"} {
+		for _, field := range []string{"replacementVerified", "persistentVolumeVerified", "imageIdentityVerified"} {
 			if !strings.Contains(string(raw), "."+field+" == true") {
 				t.Fatalf("%s does not require %s evidence", workflow, field)
+			}
+		}
+		for _, contract := range []string{".replacementImageId == .serverImage.id", "all(.serverImage,.backupImage,.restoreImage"} {
+			if !strings.Contains(string(raw), contract) {
+				t.Fatalf("%s does not require image identity contract %q", workflow, contract)
 			}
 		}
 	}
@@ -129,6 +134,12 @@ type recoveryCase struct {
 	clearCommand []string
 	readCommand  []string
 	want         string
+}
+
+type recoveryImageIdentity struct {
+	Reference string `json:"reference"`
+	ID        string `json:"id"`
+	Digest    string `json:"digest"`
 }
 
 func meilisearchRecovery() recoveryCase {
@@ -233,6 +244,7 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	args = append(args, image+":"+tc.version)
 	args = append(args, tc.serverArgs...)
 	docker(t, ctx, nil, args...)
+	serverImage := inspectRecoveryImage(t, ctx, image+":"+tc.version)
 	t.Cleanup(func() {
 		_, _ = dockerOutput(context.Background(), nil, "rm", "--force", container)
 		_, _ = dockerOutput(context.Background(), nil, "volume", "rm", volume)
@@ -269,6 +281,7 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if _, err = scheduler.RunContainerJob(ctx, network, backup.Image, directory, backup.Environment, backup.Command); err != nil {
 		t.Fatal(err)
 	}
+	backupImage := inspectRecoveryImage(t, ctx, backup.Image)
 	backupFinished := time.Now()
 	info, err := os.Stat(filepath.Join(directory, filename))
 	if err != nil || info.Size() == 0 {
@@ -285,14 +298,36 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if _, err = scheduler.RunContainerJob(ctx, network, restore.Image, directory, restore.Environment, restore.Command); err != nil {
 		t.Fatal(err)
 	}
+	restoreImage := inspectRecoveryImage(t, ctx, restore.Image)
 	restoreFinished := time.Now()
 	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
 	docker(t, ctx, nil, "rm", "--force", container)
 	docker(t, ctx, nil, args...)
+	replacementImageID := strings.TrimSpace(docker(t, ctx, nil, "inspect", "--format", "{{.Image}}", container))
+	if replacementImageID != serverImage.ID {
+		t.Fatalf("replacement image changed from %s to %s", serverImage.ID, replacementImageID)
+	}
 	waitForRecoveryDatabase(t, ctx, scheduler, network, readiness, container)
 	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
-	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true, "restartVerified": true, "replacementVerified": true, "persistentVolumeVerified": true})
+	evidence, _ := json.Marshal(map[string]any{"engine": tc.engine, "version": tc.version, "rpoSeconds": backupFinished.Sub(seededAt).Seconds(), "backupSeconds": backupFinished.Sub(backupStarted).Seconds(), "rtoSeconds": restoreFinished.Sub(restoreStarted).Seconds(), "artifactBytes": info.Size(), "dataVerified": true, "restartVerified": true, "replacementVerified": true, "persistentVolumeVerified": true, "serverImage": serverImage, "backupImage": backupImage, "restoreImage": restoreImage, "replacementImageId": replacementImageID, "imageIdentityVerified": true})
 	t.Logf("RECOVERY_EVIDENCE %s", evidence)
+}
+
+func inspectRecoveryImage(t *testing.T, ctx context.Context, reference string) recoveryImageIdentity {
+	t.Helper()
+	id := strings.TrimSpace(docker(t, ctx, nil, "image", "inspect", "--format", "{{.Id}}", reference))
+	var digests []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(docker(t, ctx, nil, "image", "inspect", "--format", "{{json .RepoDigests}}", reference))), &digests); err != nil {
+		t.Fatalf("decode repository digests for %s: %v", reference, err)
+	}
+	if len(id) != len("sha256:")+64 || !strings.HasPrefix(id, "sha256:") || len(digests) == 0 {
+		t.Fatalf("image %s has no immutable local identity: id=%q digests=%v", reference, id, digests)
+	}
+	digestParts := strings.Split(digests[0], "@sha256:")
+	if len(digestParts) != 2 || digestParts[0] == "" || len(digestParts[1]) != 64 {
+		t.Fatalf("image %s has invalid repository digest %q", reference, digests[0])
+	}
+	return recoveryImageIdentity{Reference: reference, ID: id, Digest: digests[0]}
 }
 
 func recoveryDataPath(engine string) string {

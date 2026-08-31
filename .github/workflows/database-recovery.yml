@@ -50,7 +50,7 @@ jobs:
             "recovery-${RECOVERY_ENGINE}.json" > recovery-evidence.tmp
           mv recovery-evidence.tmp "recovery-${RECOVERY_ENGINE}.json"
           jq -e --arg engine "$RECOVERY_ENGINE" --arg sourceCommit "$GITHUB_SHA" \
-            '.status == "passed" and .sourceCommit == $sourceCommit and .engine == $engine and .dataVerified == true and .restartVerified == true and .replacementVerified == true and .persistentVolumeVerified == true and .artifactBytes > 0 and .rpoSeconds >= 0 and .rtoSeconds >= 0' \
+            '.status == "passed" and .sourceCommit == $sourceCommit and .engine == $engine and .dataVerified == true and .restartVerified == true and .replacementVerified == true and .persistentVolumeVerified == true and .imageIdentityVerified == true and .replacementImageId == .serverImage.id and all(.serverImage,.backupImage,.restoreImage; (.id | test("^sha256:[a-f0-9]{64}$")) and (.digest | test("@sha256:[a-f0-9]{64}$"))) and .artifactBytes > 0 and .rpoSeconds >= 0 and .rtoSeconds >= 0' \
             "recovery-${RECOVERY_ENGINE}.json" >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

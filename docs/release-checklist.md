@@ -183,7 +183,9 @@ links for every item below.
   ClickHouse, Qdrant, and Meilisearch and emits one `RECOVERY_EVIDENCE` JSON
   record per engine. Every case mounts the driver's production data path on a
   named volume, removes and recreates the database container after restore,
-  and reads the restored application data again without reseeding it.
+  and reads the restored application data again without reseeding it. Evidence
+  records immutable local IDs and repository digests for the server, backup,
+  and restore images and proves replacement used the same server image.
   The release workflow runs the same matrix, validates a machine-readable
   record for each engine, and publishes their aggregate as
   `database-recovery-evidence.json`; repeat on production-equivalent storage
