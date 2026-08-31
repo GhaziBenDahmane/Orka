@@ -3,7 +3,16 @@ set -eu
 
 output=$(mktemp)
 cleanup() { rm -f -- "$output"; }
-trap cleanup EXIT HUP INT TERM
+handle_signal() {
+  status=$1
+  trap - EXIT HUP INT TERM
+  cleanup
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 if ! go run github.com/google/go-licenses@v1.6.0 check ./... \
   --disallowed_types=forbidden,restricted >"$output" 2>&1; then

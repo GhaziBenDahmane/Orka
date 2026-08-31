@@ -14,7 +14,16 @@ cleanup() {
   docker rm -f "$keycloak_container" "$postgres_container" >/dev/null 2>&1 || true
   rm -rf "$work_dir"
 }
-trap cleanup EXIT INT TERM
+handle_signal() {
+  local status="$1"
+  trap - EXIT HUP INT TERM
+  cleanup
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 # A failed run must not leave a prior successful record available to callers
 # or the always-upload artifact step.

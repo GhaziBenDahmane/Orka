@@ -23,7 +23,16 @@ cleanup() {
   fi
   rm -rf "$work_dir"
 }
-trap cleanup EXIT INT TERM
+handle_signal() {
+  local status="$1"
+  trap - EXIT HUP INT TERM
+  cleanup
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'handle_signal 129' HUP
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 for command in docker go jq; do
   command -v "$command" >/dev/null || { echo "$command is required for reconciliation conformance" >&2; exit 1; }
