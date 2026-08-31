@@ -94,12 +94,11 @@ func (s *Server) createAuditArchive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "object_lock_required", err.Error())
 		return
 	}
-	item, err := s.Store.CreateAuditArchiveDestination(r.Context(), store.AuditArchiveDestination{OrganizationID: p.OrganizationID, BackupDestinationID: input.BackupDestinationID, Name: input.Name, ObjectPrefix: input.ObjectPrefix, RetentionDays: input.RetentionDays})
+	item, err := s.Store.CreateAuditArchiveDestinationWithAudit(r.Context(), p, store.AuditArchiveDestination{BackupDestinationID: input.BackupDestinationID, Name: input.Name, ObjectPrefix: input.ObjectPrefix, RetentionDays: input.RetentionDays}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "audit.archive.create", "audit_archive", item.ID.String(), r.RemoteAddr, map[string]any{"retentionDays": item.RetentionDays})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -133,11 +132,10 @@ func (s *Server) deleteAuditArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DisableAuditArchiveDestination(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DisableAuditArchiveDestinationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "audit.archive.disable", "audit_archive", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -148,12 +146,11 @@ func (s *Server) runAuditArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	batch, err := s.Store.QueueAuditArchive(r.Context(), p.OrganizationID, id)
+	batch, err := s.Store.QueueAuditArchiveWithAudit(r.Context(), p, id, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "audit.archive.run", "audit_archive_batch", batch.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, http.StatusAccepted, batch)
 }
 
@@ -235,11 +232,10 @@ func (s *Server) putAuditRetention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.UpsertAuditRetentionPolicy(r.Context(), p.OrganizationID, in.RetentionDays)
+	item, err := s.Store.UpsertAuditRetentionPolicyWithAudit(r.Context(), p, in.RetentionDays, r.RemoteAddr)
 	if err != nil {
 		writeError(w, 400, "invalid_retention", err.Error())
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "audit.retention.update", "organization", p.OrganizationID.String(), r.RemoteAddr, map[string]any{"retentionDays": in.RetentionDays})
 	writeJSON(w, 200, item)
 }

@@ -73,8 +73,40 @@ func (s *Store) UpsertAuditRetentionPolicy(ctx context.Context, organizationID u
 	if days < 30 || days > 3650 {
 		return AuditRetentionPolicy{}, errors.New("retention days must be between 30 and 3650")
 	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AuditRetentionPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := upsertAuditRetentionPolicyTx(ctx, tx, organizationID, days)
+	if err != nil {
+		return AuditRetentionPolicy{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) UpsertAuditRetentionPolicyWithAudit(ctx context.Context, principal Principal, days int, remoteAddr string) (AuditRetentionPolicy, error) {
+	if days < 30 || days > 3650 {
+		return AuditRetentionPolicy{}, errors.New("retention days must be between 30 and 3650")
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AuditRetentionPolicy{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := upsertAuditRetentionPolicyTx(ctx, tx, principal.OrganizationID, days)
+	if err != nil {
+		return AuditRetentionPolicy{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "audit.retention.update", "organization", principal.OrganizationID.String(), remoteAddr, map[string]any{"retentionDays": days}); err != nil {
+		return AuditRetentionPolicy{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func upsertAuditRetentionPolicyTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, days int) (AuditRetentionPolicy, error) {
 	item := AuditRetentionPolicy{OrganizationID: organizationID, RetentionDays: days}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO audit_retention_policies(organization_id,retention_days) SELECT id,$2 FROM organizations WHERE id=$1 ON CONFLICT(organization_id) DO UPDATE SET retention_days=excluded.retention_days,updated_at=now() RETURNING updated_at`, organizationID, days).Scan(&item.UpdatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO audit_retention_policies(organization_id,retention_days) SELECT id,$2 FROM organizations WHERE id=$1 ON CONFLICT(organization_id) DO UPDATE SET retention_days=excluded.retention_days,updated_at=now() RETURNING updated_at`, organizationID, days).Scan(&item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AuditRetentionPolicy{}, ErrNotFound
 	}

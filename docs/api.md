@@ -440,7 +440,10 @@ destination whose bucket has Object Lock enabled. Workers upload batches with
 COMPLIANCE retention and create a SHA-256 chain from each manifest to the
 previous object. Pruning stops at the least-progressed enabled archive, so an
 outage cannot silently erase unexported events. Failed ranges remain pinned
-until an administrator retries them.
+until an administrator retries them. Retention-policy changes, archive
+destination creation or disablement, and manual archive queueing commit in the
+same PostgreSQL transaction as their operator audit event; an evidence failure
+rolls back the policy, destination, batch, and job changes.
 
 ## Workloads
 

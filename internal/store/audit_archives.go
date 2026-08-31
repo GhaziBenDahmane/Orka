@@ -45,10 +45,40 @@ type AuditArchiveBatch struct {
 }
 
 func (s *Store) CreateAuditArchiveDestination(ctx context.Context, item AuditArchiveDestination) (AuditArchiveDestination, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AuditArchiveDestination{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createAuditArchiveDestinationTx(ctx, tx, item)
+	if err != nil {
+		return AuditArchiveDestination{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateAuditArchiveDestinationWithAudit(ctx context.Context, principal Principal, item AuditArchiveDestination, remoteAddr string) (AuditArchiveDestination, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AuditArchiveDestination{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createAuditArchiveDestinationTx(ctx, tx, item)
+	if err != nil {
+		return AuditArchiveDestination{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "audit.archive.create", "audit_archive", item.ID.String(), remoteAddr, map[string]any{"retentionDays": item.RetentionDays}); err != nil {
+		return AuditArchiveDestination{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createAuditArchiveDestinationTx(ctx context.Context, tx pgx.Tx, item AuditArchiveDestination) (AuditArchiveDestination, error) {
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
-	err := s.Pool.QueryRow(ctx, `INSERT INTO audit_archive_destinations(id,organization_id,backup_destination_id,name,object_prefix,retention_days)
+	err := tx.QueryRow(ctx, `INSERT INTO audit_archive_destinations(id,organization_id,backup_destination_id,name,object_prefix,retention_days)
 		SELECT $1,$2,b.id,$4,$5,$6 FROM backup_destinations b WHERE b.id=$3 AND b.organization_id=$2 AND b.use_tls
 		RETURNING enabled,last_archived_id,last_chain_hash,created_at,updated_at`, item.ID, item.OrganizationID, item.BackupDestinationID, item.Name, item.ObjectPrefix, item.RetentionDays).Scan(&item.Enabled, &item.LastArchivedID, &item.LastChainHash, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -91,6 +121,28 @@ func (s *Store) DisableAuditArchiveDestination(ctx context.Context, organization
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = disableAuditArchiveDestinationTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DisableAuditArchiveDestinationWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = disableAuditArchiveDestinationTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "audit.archive.disable", "audit_archive", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func disableAuditArchiveDestinationTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
 	tag, err := tx.Exec(ctx, `UPDATE audit_archive_destinations SET enabled=false,updated_at=now() WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
@@ -104,7 +156,7 @@ func (s *Store) DisableAuditArchiveDestination(ctx context.Context, organization
 	if _, err = tx.Exec(ctx, `UPDATE audit_archive_batches SET status='failed',last_error='archive disabled',finished_at=now() WHERE destination_id=$1 AND status='pending'`, id); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (s *Store) QueueNextAuditArchive(ctx context.Context) (AuditArchiveBatch, error) {
@@ -115,13 +167,38 @@ func (s *Store) QueueAuditArchive(ctx context.Context, organizationID, destinati
 	return s.queueAuditArchive(ctx, organizationID, destinationID)
 }
 
+func (s *Store) QueueAuditArchiveWithAudit(ctx context.Context, principal Principal, destinationID uuid.UUID, remoteAddr string) (AuditArchiveBatch, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AuditArchiveBatch{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := queueAuditArchiveTx(ctx, tx, principal.OrganizationID, destinationID)
+	if err != nil {
+		return AuditArchiveBatch{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "audit.archive.run", "audit_archive_batch", item.ID.String(), remoteAddr, nil); err != nil {
+		return AuditArchiveBatch{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
 func (s *Store) queueAuditArchive(ctx context.Context, organizationID, destinationID uuid.UUID) (AuditArchiveBatch, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return AuditArchiveBatch{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := queueAuditArchiveTx(ctx, tx, organizationID, destinationID)
+	if err != nil {
+		return AuditArchiveBatch{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func queueAuditArchiveTx(ctx context.Context, tx pgx.Tx, organizationID, destinationID uuid.UUID) (AuditArchiveBatch, error) {
 	var destination AuditArchiveDestination
+	var err error
 	query := `SELECT id,organization_id,object_prefix,retention_days,last_archived_id,last_chain_hash FROM audit_archive_destinations a
 		WHERE enabled AND ($1::uuid='00000000-0000-0000-0000-000000000000' OR organization_id=$1) AND ($2::uuid='00000000-0000-0000-0000-000000000000' OR id=$2)
 		AND NOT EXISTS(SELECT 1 FROM audit_archive_batches b WHERE b.destination_id=a.id AND b.status<>'succeeded')
@@ -140,7 +217,7 @@ func (s *Store) queueAuditArchive(ctx context.Context, organizationID, destinati
 					return AuditArchiveBatch{}, err
 				}
 				retry.Status = "pending"
-				return retry, tx.Commit(ctx)
+				return retry, nil
 			}
 			if retryErr != nil && !errors.Is(retryErr, pgx.ErrNoRows) {
 				return AuditArchiveBatch{}, retryErr
@@ -170,7 +247,7 @@ func (s *Store) queueAuditArchive(ctx context.Context, organizationID, destinati
 	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'audit.archive',$2,12)`, uuid.New(), payload); err != nil {
 		return AuditArchiveBatch{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) GetAuditArchiveBatchForJob(ctx context.Context, jobID, leaseID, id uuid.UUID) (AuditArchiveBatch, error) {
