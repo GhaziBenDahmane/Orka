@@ -81,15 +81,15 @@ func TestMandatorySSOAndSessionAdministration(t *testing.T) {
 	}
 
 	ownerHash, localHash, samlHash := []byte("owner-local-token-hash"), []byte("developer-local-token-hash"), []byte("developer-saml-token-hash")
-	ownerSessionID, err := db.CreateSessionWithMetadata(ctx, ownerID, nil, ownerHash, time.Now().Add(time.Hour), "local", "owner-agent", "127.0.0.1")
+	ownerSessionID, err := db.CreateSessionWithMetadata(ctx, ownerID, nil, nil, ownerHash, time.Now().Add(time.Hour), "local", "owner-agent", "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	localID, err := db.CreateSessionWithMetadata(ctx, developerID, nil, localHash, time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
+	localID, err := db.CreateSessionWithMetadata(ctx, developerID, nil, nil, localHash, time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	samlID, err := db.CreateSessionWithMetadata(ctx, developerID, &orgID, samlHash, time.Now().Add(time.Hour), "saml", "saml-agent", "127.0.0.3")
+	samlID, err := db.CreateSessionWithMetadata(ctx, developerID, &orgID, &samlProvider.ID, samlHash, time.Now().Add(time.Hour), "saml", "saml-agent", "127.0.0.3")
 	if err != nil {
 		t.Fatal(err)
 	}

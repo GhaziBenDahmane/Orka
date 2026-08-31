@@ -14,15 +14,15 @@ import (
 // durable transition. Unscoped local sessions are visible in every tenant the
 // identity can enter, so their login event is appended to each membership's
 // audit chain. Federated sessions and events remain bound to their IdP tenant.
-func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, organizationID *uuid.UUID, tokenHash []byte, expires time.Time, authMethod, expectedPasswordHash, userAgent, ipAddress, remoteAddr string, metadata any) (uuid.UUID, error) {
+func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, organizationID, providerID *uuid.UUID, tokenHash []byte, expires time.Time, authMethod, expectedPasswordHash, userAgent, ipAddress, remoteAddr string, metadata any) (uuid.UUID, error) {
 	switch authMethod {
 	case "local":
-		if expectedPasswordHash == "" {
+		if expectedPasswordHash == "" || organizationID != nil || providerID != nil {
 			return uuid.Nil, ErrAuthenticationStateChanged
 		}
 	case "oidc", "saml":
-		if expectedPasswordHash != "" {
-			return uuid.Nil, errors.New("federated session cannot bind a password hash")
+		if expectedPasswordHash != "" || organizationID == nil || providerID == nil {
+			return uuid.Nil, errors.New("federated session requires organization and provider binding")
 		}
 	default:
 		return uuid.Nil, errors.New("unsupported audited authentication method")
@@ -36,10 +36,28 @@ func (s *Store) CreateSessionWithAudit(ctx context.Context, userID uuid.UUID, or
 		return uuid.Nil, err
 	}
 	defer tx.Rollback(ctx)
+	var oidcProviderID, samlProviderID *uuid.UUID
+	if authMethod == "oidc" {
+		oidcProviderID = providerID
+		var enabled bool
+		if err = tx.QueryRow(ctx, `SELECT enabled FROM oidc_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, *providerID, *organizationID).Scan(&enabled); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
+			return uuid.Nil, ErrNotFound
+		} else if err != nil {
+			return uuid.Nil, err
+		}
+	} else if authMethod == "saml" {
+		samlProviderID = providerID
+		var enabled bool
+		if err = tx.QueryRow(ctx, `SELECT enabled FROM saml_providers WHERE id=$1 AND organization_id=$2 FOR KEY SHARE`, *providerID, *organizationID).Scan(&enabled); errors.Is(err, pgx.ErrNoRows) || err == nil && !enabled {
+			return uuid.Nil, ErrNotFound
+		} else if err != nil {
+			return uuid.Nil, err
+		}
+	}
 	id := uuid.New()
-	tag, err := tx.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method,user_agent,ip_address)
-		SELECT $1,u.id,$3,$4,$5,$6,$7,$8 FROM users u
-		WHERE u.id=$2 AND u.disabled_at IS NULL AND ($6<>'local' OR u.password_hash=$9)`, id, userID, organizationID, tokenHash, expires, authMethod, userAgent, ipAddress, expectedPasswordHash)
+	tag, err := tx.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,saml_provider_id,token_hash,expires_at,auth_method,user_agent,ip_address)
+		SELECT $1,u.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM users u
+		WHERE u.id=$2 AND u.disabled_at IS NULL AND ($8<>'local' OR u.password_hash=$11)`, id, userID, organizationID, oidcProviderID, samlProviderID, tokenHash, expires, authMethod, userAgent, ipAddress, expectedPasswordHash)
 	if err != nil {
 		return uuid.Nil, err
 	}

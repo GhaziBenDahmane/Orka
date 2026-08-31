@@ -6,7 +6,7 @@ export type Principal = {
   role: "viewer" | "developer" | "admin" | "owner";
 };
 export type Role = Principal["role"];
-export type SessionInfo = { id: string; organizationId?: string; authMethod: string; userAgent: string; ipAddress: string; expiresAt: string; createdAt: string; lastSeenAt: string; current: boolean };
+export type SessionInfo = { id: string; organizationId?: string; providerId?: string; authMethod: string; userAgent: string; ipAddress: string; expiresAt: string; createdAt: string; lastSeenAt: string; current: boolean };
 export type MFAStatus = { enabled: boolean; enrollmentPending: boolean; recoveryCodesRemaining: number };
 
 export type Project = { id: string; name: string; slug: string; description: string; tags: Tag[] };

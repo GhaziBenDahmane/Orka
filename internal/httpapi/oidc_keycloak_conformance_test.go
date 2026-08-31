@@ -153,7 +153,7 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrganizationID)
 	})
 	assertConformanceSession(t, server.URL, otherOrganizationID, login.Token, http.StatusUnauthorized, "")
-	localSessionID, err := db.CreateSessionWithMetadata(ctx, me.UserID, nil, cryptox.Digest("other-tenant-local-session"), time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
+	localSessionID, err := db.CreateSessionWithMetadata(ctx, me.UserID, nil, nil, cryptox.Digest("other-tenant-local-session"), time.Now().Add(time.Hour), "local", "local-agent", "127.0.0.2")
 	if err != nil {
 		t.Fatal(err)
 	}

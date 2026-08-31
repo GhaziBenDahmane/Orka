@@ -79,7 +79,10 @@ commit atomically with their tenant audit records. Each local, OIDC, or SAML
 session is issued atomically with its login event, so a usable session cannot
 exist without durable tenant audit evidence. An unscoped local login is
 recorded in every organization that identity can enter; a federated login
-remains IdP-tenant scoped.
+remains IdP-tenant scoped and records the exact provider that authenticated it.
+Disabling or changing an OIDC or SAML provider atomically revokes its pending
+login attempts and active sessions without affecting sessions from other
+providers in the organization.
 Initial bootstrap creates the first user, organization, owner membership, and
 bootstrap audit evidence in one transaction. Failed evidence leaves the
 instance uninitialized and safely retryable.

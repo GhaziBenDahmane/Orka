@@ -113,7 +113,7 @@ func TestLocalPasswordChangeIsAtomicAndRevokesOtherSessions(t *testing.T) {
 	}
 	t.Cleanup(db.Pool.Close)
 
-	organizationID, userID, otherUserID := uuid.New(), uuid.New(), uuid.New()
+	organizationID, userID, otherUserID, oidcProviderID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	currentID, otherID, federatedID, unrelatedID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	currentToken, otherToken := "current-"+uuid.NewString(), "other-"+uuid.NewString()
 	federatedToken, unrelatedToken := "federated-"+uuid.NewString(), "unrelated-"+uuid.NewString()
@@ -129,7 +129,8 @@ func TestLocalPasswordChangeIsAtomicAndRevokesOtherSessions(t *testing.T) {
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Password rotation',$2)`, []any{organizationID, "password-rotation-" + organizationID.String()}},
 		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3),($4,$5,'unused')`, []any{userID, userID.String() + "@example.test", oldHash, otherUserID, otherUserID.String() + "@example.test"}},
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'viewer')`, []any{organizationID, userID, otherUserID}},
-		{`INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,NULL,$3,now()+interval '1 hour','local'),($4,$2,NULL,$5,now()+interval '1 hour','local'),($6,$2,$7,$8,now()+interval '1 hour','oidc'),($9,$10,NULL,$11,now()+interval '1 hour','local')`, []any{currentID, userID, cryptox.Digest(currentToken), otherID, cryptox.Digest(otherToken), federatedID, organizationID, cryptox.Digest(federatedToken), unrelatedID, otherUserID, cryptox.Digest(unrelatedToken)}},
+		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains) VALUES($1,$2,'Password test','https://identity.example.test','client','ciphertext','{example.test}')`, []any{oidcProviderID, organizationID}},
+		{`INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,NULL,NULL,$3,now()+interval '1 hour','local'),($4,$2,NULL,NULL,$5,now()+interval '1 hour','local'),($6,$2,$7,$8,$9,now()+interval '1 hour','oidc'),($10,$11,NULL,NULL,$12,now()+interval '1 hour','local')`, []any{currentID, userID, cryptox.Digest(currentToken), otherID, cryptox.Digest(otherToken), federatedID, organizationID, oidcProviderID, cryptox.Digest(federatedToken), unrelatedID, otherUserID, cryptox.Digest(unrelatedToken)}},
 	}
 	for _, statement := range statements {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {

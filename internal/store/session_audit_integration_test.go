@@ -30,7 +30,7 @@ func TestCreateSessionWithAuditScopesEvidenceAndRollsBackWithoutMembership(t *te
 		}
 	}
 
-	localID, err := db.CreateSessionWithAudit(ctx, userID, nil, []byte("local-token-hash"), time.Now().Add(time.Hour), "local", "expected-hash", "browser", "127.0.0.1", "127.0.0.1:1234", nil)
+	localID, err := db.CreateSessionWithAudit(ctx, userID, nil, nil, []byte("local-token-hash"), time.Now().Add(time.Hour), "local", "expected-hash", "browser", "127.0.0.1", "127.0.0.1:1234", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,14 +41,18 @@ func TestCreateSessionWithAuditScopesEvidenceAndRollsBackWithoutMembership(t *te
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action='auth.local.login' AND resource_type='user' AND resource_id=$1 AND actor_user_id=$2`, userID.String(), userID).Scan(&localEvents); err != nil || localEvents != 2 {
 		t.Fatalf("local audit events=%d err=%v", localEvents, err)
 	}
-	if _, err = db.CreateSessionWithAudit(ctx, userID, nil, []byte("stale-password-token"), time.Now().Add(time.Hour), "local", "stale-hash", "", "", "", nil); !errors.Is(err, ErrAuthenticationStateChanged) {
+	if _, err = db.CreateSessionWithAudit(ctx, userID, nil, nil, []byte("stale-password-token"), time.Now().Add(time.Hour), "local", "stale-hash", "", "", "", nil); !errors.Is(err, ErrAuthenticationStateChanged) {
 		t.Fatalf("stale password session error=%v, want ErrAuthenticationStateChanged", err)
 	}
 	var staleSessions int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE token_hash=$1`, []byte("stale-password-token")).Scan(&staleSessions); err != nil || staleSessions != 0 {
 		t.Fatalf("stale password sessions=%d err=%v", staleSessions, err)
 	}
-	federatedID, err := db.CreateSessionWithAudit(ctx, userID, &firstOrganization, []byte("oidc-token-hash"), time.Now().Add(time.Hour), "oidc", "", "browser", "127.0.0.1", "127.0.0.1:1234", map[string]string{"providerId": uuid.NewString()})
+	provider, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: firstOrganization, Name: "Session audit", Issuer: "https://identity.example.test", ClientID: "client", EncryptedClientSecret: "ciphertext", Domains: []string{"example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	federatedID, err := db.CreateSessionWithAudit(ctx, userID, &firstOrganization, &provider.ID, []byte("oidc-token-hash"), time.Now().Add(time.Hour), "oidc", "", "browser", "127.0.0.1", "127.0.0.1:1234", map[string]string{"providerId": provider.ID.String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,10 +60,26 @@ func TestCreateSessionWithAuditScopesEvidenceAndRollsBackWithoutMembership(t *te
 	if federatedID == uuid.Nil {
 		t.Fatal("federated session ID is empty")
 	}
+	sessions, err := db.ListSessions(ctx, userID, federatedID, &firstOrganization)
+	if err != nil || len(sessions) != 1 || sessions[0].ProviderID == nil || *sessions[0].ProviderID != provider.ID {
+		t.Fatalf("federated session provider binding=%#v err=%v", sessions, err)
+	}
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action='auth.oidc.login' AND resource_type='user' AND resource_id=$1 AND actor_user_id=$2 AND organization_id=$3`, userID.String(), userID, firstOrganization).Scan(&federatedEvents); err != nil || federatedEvents != 1 {
 		t.Fatalf("federated audit events=%d err=%v", federatedEvents, err)
 	}
-	if _, err = db.CreateSessionWithAudit(ctx, orphanID, nil, []byte("orphan-token-hash"), time.Now().Add(time.Hour), "local", "expected-hash", "", "", "", nil); !errors.Is(err, ErrNotFound) {
+	if _, err = db.CreateSessionWithAudit(ctx, userID, &firstOrganization, nil, []byte("unbound-provider-token"), time.Now().Add(time.Hour), "oidc", "", "", "", "", nil); err == nil {
+		t.Fatal("provider-unbound federated session was accepted")
+	}
+	if _, err = db.CreateSessionWithAudit(ctx, userID, &secondOrganization, &provider.ID, []byte("cross-tenant-provider-token"), time.Now().Add(time.Hour), "oidc", "", "", "", "", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-tenant provider session error=%v, want not found", err)
+	}
+	if err = db.SetOIDCProviderEnabled(ctx, firstOrganization, provider.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.CreateSessionWithAudit(ctx, userID, &firstOrganization, &provider.ID, []byte("disabled-provider-token"), time.Now().Add(time.Hour), "oidc", "", "", "", "", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("disabled provider session error=%v, want not found", err)
+	}
+	if _, err = db.CreateSessionWithAudit(ctx, orphanID, nil, nil, []byte("orphan-token-hash"), time.Now().Add(time.Hour), "local", "expected-hash", "", "", "", nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("orphan session error=%v, want ErrNotFound", err)
 	}
 	var orphanSessions int

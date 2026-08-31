@@ -16,7 +16,7 @@ func TestRBACMutationsCommitWithAudit(t *testing.T) {
 	}
 	db := &Store{Pool: pool}
 	organizationID, ownerID, memberID := uuid.New(), uuid.New(), uuid.New()
-	projectID, environmentID, sessionID := uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, sessionID, providerID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -24,7 +24,8 @@ func TestRBACMutationsCommitWithAudit(t *testing.T) {
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'RBAC audit',$2)`, []any{organizationID, "rbac-audit-" + organizationID.String()}},
 		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test'),($3,$4,'!test')`, []any{ownerID, ownerID.String() + "@example.test", memberID, memberID.String() + "@example.test"}},
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'viewer')`, []any{organizationID, ownerID, memberID}},
-		{`INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,'oidc')`, []any{sessionID, memberID, organizationID, []byte("member-session"), time.Now().Add(time.Hour)}},
+		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains) VALUES($1,$2,'RBAC OIDC','https://identity.example.test','client','ciphertext','{example.test}')`, []any{providerID, organizationID}},
+		{`INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,$6,'oidc')`, []any{sessionID, memberID, organizationID, providerID, []byte("member-session"), time.Now().Add(time.Hour)}},
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 	} {

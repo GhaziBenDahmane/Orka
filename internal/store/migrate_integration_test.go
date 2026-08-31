@@ -605,7 +605,7 @@ func TestMigrateDeploymentRegistryCredentialSnapshots(t *testing.T) {
 	}
 }
 
-func TestMigrateUpgradeFrom068ScopesFederatedSessions(t *testing.T) {
+func TestMigrateUpgradeFrom068ScopesAndBindsFederatedSessions(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := migrateThrough(ctx, pool, "068_auth_rate_limits.sql"); err != nil {
 		t.Fatal(err)
@@ -631,11 +631,18 @@ func TestMigrateUpgradeFrom068ScopesFederatedSessions(t *testing.T) {
 	if localCount != 1 || federatedCount != 0 {
 		t.Fatalf("migrated sessions local=%d federated=%d, want 1 and 0", localCount, federatedCount)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','oidc')`, uuid.New(), userID, []byte("unscoped")); err == nil {
+	providerID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains) VALUES($1,$2,'migration provider','https://identity.example.test','client','ciphertext','{example.test}')`, providerID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc')`, uuid.New(), userID, providerID, []byte("unscoped")); err == nil {
 		t.Fatal("unscoped federated session was accepted")
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc')`, uuid.New(), userID, organizationID, []byte("scoped")); err != nil {
-		t.Fatalf("scoped federated session was rejected: %v", err)
+	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc')`, uuid.New(), userID, organizationID, []byte("unbound")); err == nil {
+		t.Fatal("provider-unbound federated session was accepted")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour','oidc')`, uuid.New(), userID, organizationID, providerID, []byte("scoped")); err != nil {
+		t.Fatalf("scoped provider-bound federated session was rejected: %v", err)
 	}
 }
 

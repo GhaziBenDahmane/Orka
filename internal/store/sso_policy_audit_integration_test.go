@@ -95,11 +95,13 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 	}
 
 	tests := []struct {
-		name       string
-		kind       string
-		providerID uuid.UUID
-		create     func([]byte) error
-		count      func([]byte) int
+		name          string
+		kind          string
+		providerID    uuid.UUID
+		create        func([]byte) error
+		count         func([]byte) int
+		createSession func([]byte) error
+		countSessions func() int
 	}{
 		{
 			name:       "oidc",
@@ -111,6 +113,17 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 			count: func(state []byte) int {
 				var count int
 				if err := pool.QueryRow(ctx, `SELECT count(*) FROM oidc_states WHERE token_hash=$1 AND provider_id=$2`, state, oidcProvider.ID).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				return count
+			},
+			createSession: func(token []byte) error {
+				_, err := db.CreateSessionWithMetadata(ctx, userID, &organizationID, &oidcProvider.ID, token, time.Now().Add(time.Hour), "oidc", "browser", "127.0.0.1")
+				return err
+			},
+			countSessions: func() int {
+				var count int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE oidc_provider_id=$1`, oidcProvider.ID).Scan(&count); err != nil {
 					t.Fatal(err)
 				}
 				return count
@@ -130,6 +143,17 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 				}
 				return count
 			},
+			createSession: func(token []byte) error {
+				_, err := db.CreateSessionWithMetadata(ctx, userID, &organizationID, &samlProvider.ID, token, time.Now().Add(time.Hour), "saml", "browser", "127.0.0.1")
+				return err
+			},
+			countSessions: func() int {
+				var count int
+				if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE saml_provider_id=$1`, samlProvider.ID).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				return count
+			},
 		},
 	}
 	for _, test := range tests {
@@ -138,11 +162,17 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 			if err := test.create(rollbackState); err != nil {
 				t.Fatal(err)
 			}
+			if err := test.createSession([]byte(test.name + "-rollback-session")); err != nil {
+				t.Fatal(err)
+			}
 			if err := db.SetSSOProviderEnabledWithAudit(ctx, invalidPrincipal, test.providerID, test.kind, false, "127.0.0.1:1234"); err == nil {
 				t.Fatal("provider transition succeeded without a valid audit actor")
 			}
 			if count := test.count(rollbackState); count != 1 {
 				t.Fatalf("failed audited transition retained %d pending states, want 1", count)
+			}
+			if count := test.countSessions(); count != 1 {
+				t.Fatalf("failed audited transition retained %d active sessions, want 1", count)
 			}
 
 			disableState := []byte(test.name + "-disable")
@@ -155,9 +185,15 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 			if count := test.count(disableState); count != 0 {
 				t.Fatalf("disable retained %d pending states, want 0", count)
 			}
+			if count := test.countSessions(); count != 0 {
+				t.Fatalf("disable retained %d active sessions, want 0", count)
+			}
 
 			enableState := []byte(test.name + "-enable")
 			if err := test.create(enableState); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.createSession([]byte(test.name + "-enable-session")); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.SetSSOProviderEnabledWithAudit(ctx, principal, test.providerID, test.kind, true, "127.0.0.1:1234"); err != nil {
@@ -165,6 +201,9 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 			}
 			if count := test.count(enableState); count != 0 {
 				t.Fatalf("enable retained %d pending states, want 0", count)
+			}
+			if count := test.countSessions(); count != 0 {
+				t.Fatalf("enable retained %d active sessions, want 0", count)
 			}
 		})
 	}
@@ -201,6 +240,9 @@ func TestOIDCProviderMutationCommitsWithAudit(t *testing.T) {
 	if err = db.CreateOIDCState(ctx, stateHash, provider.ID, "verifier", "nonce"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.CreateSessionWithMetadata(ctx, userID, &organizationID, &provider.ID, []byte("pending-oidc-session"), time.Now().Add(time.Hour), "oidc", "browser", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
 	update := provider
 	update.Name = "Renamed workforce"
 	update.ClientID = "rotated-client"
@@ -217,12 +259,19 @@ func TestOIDCProviderMutationCommitsWithAudit(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM oidc_states WHERE token_hash=$1 AND provider_id=$2`, stateHash, provider.ID).Scan(&stateCount); err != nil || stateCount != 1 {
 		t.Fatalf("failed audit did not restore pending OIDC state: count=%d err=%v", stateCount, err)
 	}
+	var sessionCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE oidc_provider_id=$1`, provider.ID).Scan(&sessionCount); err != nil || sessionCount != 1 {
+		t.Fatalf("failed audit did not restore active OIDC session: count=%d err=%v", sessionCount, err)
+	}
 	stored, err = db.UpdateOIDCProviderWithAudit(ctx, principal, update, true, "127.0.0.1:1234")
 	if err != nil || stored.Name != "Renamed workforce" || stored.ClientID != "rotated-client" || stored.DefaultRole != "viewer" {
 		t.Fatalf("audited OIDC update=%#v err=%v", stored, err)
 	}
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM oidc_states WHERE provider_id=$1`, provider.ID).Scan(&stateCount); err != nil || stateCount != 0 {
 		t.Fatalf("successful OIDC update retained login state: count=%d err=%v", stateCount, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE oidc_provider_id=$1`, provider.ID).Scan(&sessionCount); err != nil || sessionCount != 0 {
+		t.Fatalf("successful OIDC update retained active session: count=%d err=%v", sessionCount, err)
 	}
 	var auditCount int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND resource_id=$3 AND action IN ('sso.oidc.create','sso.oidc.update')`, organizationID, userID, provider.ID.String()).Scan(&auditCount); err != nil || auditCount != 2 {
@@ -261,6 +310,9 @@ func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
 	if err = db.CreateSAMLState(ctx, stateHash, provider.ID, "request-id"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.CreateSessionWithMetadata(ctx, userID, &organizationID, &provider.ID, []byte("pending-saml-session"), time.Now().Add(time.Hour), "saml", "browser", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
 	update := provider
 	update.Name = "Renamed workforce"
 	update.IDPMetadata = "rotated-metadata"
@@ -277,12 +329,19 @@ func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE token_hash=$1 AND provider_id=$2`, stateHash, provider.ID).Scan(&stateCount); err != nil || stateCount != 1 {
 		t.Fatalf("failed audit did not restore pending SAML state: count=%d err=%v", stateCount, err)
 	}
+	var sessionCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE saml_provider_id=$1`, provider.ID).Scan(&sessionCount); err != nil || sessionCount != 1 {
+		t.Fatalf("failed audit did not restore active SAML session: count=%d err=%v", sessionCount, err)
+	}
 	stored, err = db.UpdateSAMLProviderWithAudit(ctx, principal, update, "127.0.0.1:1234")
 	if err != nil || stored.Name != "Renamed workforce" || stored.IDPMetadata != "rotated-metadata" || stored.DefaultRole != "viewer" || !stored.AllowIDPInitiated {
 		t.Fatalf("audited SAML update=%#v err=%v", stored, err)
 	}
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE provider_id=$1`, provider.ID).Scan(&stateCount); err != nil || stateCount != 0 {
 		t.Fatalf("successful SAML update retained login state: count=%d err=%v", stateCount, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE saml_provider_id=$1`, provider.ID).Scan(&sessionCount); err != nil || sessionCount != 0 {
+		t.Fatalf("successful SAML update retained active session: count=%d err=%v", sessionCount, err)
 	}
 	rotationExpiry := time.Now().Add(365 * 24 * time.Hour).UTC()
 	if err = db.BeginSAMLCertificateRotationWithAudit(ctx, invalidPrincipal, provider.ID, "replacement-certificate", "replacement-key", rotationExpiry, "127.0.0.1:1234"); err == nil {

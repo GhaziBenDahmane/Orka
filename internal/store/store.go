@@ -163,6 +163,7 @@ type Principal struct {
 type Session struct {
 	ID             uuid.UUID  `json:"id"`
 	OrganizationID *uuid.UUID `json:"organizationId,omitempty"`
+	ProviderID     *uuid.UUID `json:"providerId,omitempty"`
 	AuthMethod     string     `json:"authMethod"`
 	UserAgent      string     `json:"userAgent"`
 	IPAddress      string     `json:"ipAddress"`
@@ -566,13 +567,19 @@ func (s *Store) LocalLoginAllowed(ctx context.Context, userID uuid.UUID) (bool, 
 }
 
 func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash []byte, expires time.Time) error {
-	_, err := s.CreateSessionWithMetadata(ctx, userID, nil, tokenHash, expires, "local", "", "")
+	_, err := s.CreateSessionWithMetadata(ctx, userID, nil, nil, tokenHash, expires, "local", "", "")
 	return err
 }
 
-func (s *Store) CreateSessionWithMetadata(ctx context.Context, userID uuid.UUID, organizationID *uuid.UUID, tokenHash []byte, expires time.Time, authMethod, userAgent, ipAddress string) (uuid.UUID, error) {
+func (s *Store) CreateSessionWithMetadata(ctx context.Context, userID uuid.UUID, organizationID, providerID *uuid.UUID, tokenHash []byte, expires time.Time, authMethod, userAgent, ipAddress string) (uuid.UUID, error) {
 	id := uuid.New()
-	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method,user_agent,ip_address) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, userID, organizationID, tokenHash, expires, authMethod, userAgent, ipAddress)
+	var oidcProviderID, samlProviderID *uuid.UUID
+	if authMethod == "oidc" {
+		oidcProviderID = providerID
+	} else if authMethod == "saml" {
+		samlProviderID = providerID
+	}
+	_, err := s.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,saml_provider_id,token_hash,expires_at,auth_method,user_agent,ip_address) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, userID, organizationID, oidcProviderID, samlProviderID, tokenHash, expires, authMethod, userAgent, ipAddress)
 	return id, err
 }
 
@@ -582,7 +589,7 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organizationID *uuid.UUID) (Principal, error) {
-	query := `SELECT u.id,s.id,s.organization_id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (s.organization_id IS NULL OR s.organization_id=o.id) AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local')`
+	query := `SELECT u.id,s.id,s.organization_id,u.email,o.id,o.name,m.role FROM sessions s JOIN users u ON u.id=s.user_id JOIN memberships m ON m.user_id=u.id JOIN organizations o ON o.id=m.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=o.id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.disabled_at IS NULL AND (s.organization_id IS NULL OR s.organization_id=o.id) AND (m.role='owner' OR NOT COALESCE(a.require_sso,false) OR s.auth_method<>'local') AND (s.auth_method='local' OR s.auth_method='oidc' AND EXISTS(SELECT 1 FROM oidc_providers provider WHERE provider.id=s.oidc_provider_id AND provider.organization_id=s.organization_id AND provider.enabled) OR s.auth_method='saml' AND EXISTS(SELECT 1 FROM saml_providers provider WHERE provider.id=s.saml_provider_id AND provider.organization_id=s.organization_id AND provider.enabled))`
 	args := []any{tokenHash}
 	if organizationID != nil {
 		query += ` AND o.id=$2`
@@ -766,7 +773,7 @@ func disableServiceAccountTx(ctx context.Context, tx pgx.Tx, organizationID, id 
 }
 
 func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID, organizationID *uuid.UUID) ([]Session, error) {
-	query := `SELECT id,organization_id,auth_method,user_agent,ip_address,expires_at,created_at,last_seen_at,id=$2 FROM sessions WHERE user_id=$1 AND expires_at>now()`
+	query := `SELECT id,organization_id,COALESCE(oidc_provider_id,saml_provider_id),auth_method,user_agent,ip_address,expires_at,created_at,last_seen_at,id=$2 FROM sessions WHERE user_id=$1 AND expires_at>now()`
 	args := []any{userID, currentID}
 	if organizationID != nil {
 		query += ` AND organization_id=$3`
@@ -781,7 +788,7 @@ func (s *Store) ListSessions(ctx context.Context, userID, currentID uuid.UUID, o
 	items := []Session{}
 	for rows.Next() {
 		var item Session
-		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.AuthMethod, &item.UserAgent, &item.IPAddress, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &item.Current); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.ProviderID, &item.AuthMethod, &item.UserAgent, &item.IPAddress, &item.ExpiresAt, &item.CreatedAt, &item.LastSeenAt, &item.Current); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -4231,6 +4238,9 @@ func updateOIDCProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UU
 	if _, err = tx.Exec(ctx, `DELETE FROM oidc_states WHERE provider_id=$1`, p.ID); err != nil {
 		return OIDCProvider{}, err
 	}
+	if _, err = tx.Exec(ctx, `DELETE FROM sessions WHERE oidc_provider_id=$1`, p.ID); err != nil {
+		return OIDCProvider{}, err
+	}
 	return p, nil
 }
 
@@ -4427,6 +4437,9 @@ func updateSAMLProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UU
 		return SAMLProvider{}, err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM saml_states WHERE provider_id=$1`, p.ID); err != nil {
+		return SAMLProvider{}, err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM sessions WHERE saml_provider_id=$1`, p.ID); err != nil {
 		return SAMLProvider{}, err
 	}
 	return p, nil

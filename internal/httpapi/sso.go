@@ -346,7 +346,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, userID, &provider.OrganizationID, "oidc", "", map[string]any{"providerId": provider.ID})
+	token, err := s.newSession(r, userID, &provider.OrganizationID, &provider.ID, "oidc", "", map[string]any{"providerId": provider.ID})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return

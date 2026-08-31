@@ -49,6 +49,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	}
 	scimTokenCreatedAt := time.Now().UTC().Add(-30 * 24 * time.Hour).Truncate(time.Microsecond)
 	targetSCIMAdminGroupID, targetSCIMViewerGroupID, otherSCIMGroupID := uuid.New(), uuid.New(), uuid.New()
+	targetOIDCProviderID, otherSAMLProviderID := uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -56,8 +57,11 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'unused'),($3,$4,'unused'),($5,$6,'unused')`, []any{developerUserID, developerUserID.String() + "@example.test", disabledUserID, disabledUserID.String() + "@example.test", otherUserID, otherUserID.String() + "@example.test"}},
 		{`UPDATE users SET disabled_at=now() WHERE id=$1`, []any{disabledUserID}},
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'developer'),($1,$4,'viewer'),($5,$6,'owner')`, []any{organizationID, userID, developerUserID, disabledUserID, otherOrganizationID, otherUserID}},
+		{`INSERT INTO oidc_providers(id,organization_id,name,issuer,client_id,encrypted_client_secret,domains,enabled) VALUES($1,$2,'Session provenance OIDC','https://identity.example.test','client','ciphertext','{example.test}',false)`, []any{targetOIDCProviderID, organizationID}},
+		{`INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains) VALUES($1,$2,'Session provenance SAML','metadata','certificate','ciphertext','{example.test}')`, []any{otherSAMLProviderID, otherOrganizationID}},
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local'),($4,$5,$6,now()+interval '1 hour','local'),($7,$8,$9,now()+interval '1 hour','local'),($10,$11,$12,now()+interval '1 hour','local')`, []any{uuid.New(), userID, []byte("target-owner-local"), uuid.New(), developerUserID, []byte("target-developer-local"), uuid.New(), disabledUserID, []byte("disabled-local"), uuid.New(), otherUserID, []byte("other-local")}},
-		{`INSERT INTO sessions(id,user_id,organization_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,now()+interval '1 hour','oidc'),($5,$6,$7,$8,now()+interval '1 hour','saml')`, []any{uuid.New(), developerUserID, organizationID, []byte("target-oidc"), uuid.New(), otherUserID, otherOrganizationID, []byte("other-saml")}},
+		{`INSERT INTO sessions(id,user_id,organization_id,oidc_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour','oidc')`, []any{uuid.New(), developerUserID, organizationID, targetOIDCProviderID, []byte("target-oidc")}},
+		{`INSERT INTO sessions(id,user_id,organization_id,saml_provider_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,$4,$5,now()+interval '1 hour','saml')`, []any{uuid.New(), otherUserID, otherOrganizationID, otherSAMLProviderID, []byte("other-saml")}},
 		{`INSERT INTO scim_tokens(id,organization_id,name,token_hash,created_at) VALUES($1,$2,'Target SCIM',$3,$4),($5,$6,'Other SCIM',$7,now()-interval '1 year')`, []any{uuid.New(), organizationID, []byte("target-scim"), scimTokenCreatedAt, uuid.New(), otherOrganizationID, []byte("other-scim")}},
 		{`INSERT INTO organization_invitations(id,organization_id,email,role,token_hash,created_by,expires_at) VALUES
 			($1,$2,'target-admin-invite@example.test','admin',$3,$4,now()+interval '12 hours'),

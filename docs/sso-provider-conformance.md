@@ -11,6 +11,11 @@ commands. SAML signing-certificate rollover remains an explicit begin,
 IdP-import, and promote sequence; do not model promotion as an automatic
 Terraform update.
 
+Provider and mandatory-SSO mutations require an organization owner because
+they change the identity trust boundary. Administrators retain read access.
+Disabling or changing a provider revokes its pending login attempts and active
+sessions; sessions issued by other providers remain valid.
+
 The SAML CLI lifecycle is `saml-providers`, `create-saml-provider JSON`,
 `update-saml-provider ID JSON`, `enable-saml-provider ID`, and
 `disable-saml-provider ID`. Certificate rollover uses
@@ -91,8 +96,8 @@ For every configured provider, verify and record:
 2. PKCE, state-cookie binding, nonce validation, and callback replay rejection;
 3. JIT provisioning assigns the configured non-owner default role;
 4. an unverified email and an email outside the allowed domains are rejected;
-5. disabled providers cannot start or complete login;
-6. sessions are bound to the intended organization;
+5. disabled providers cannot start or complete login and their existing sessions are revoked;
+6. sessions are bound to the intended organization and exact provider;
 7. two organizations using the same email remain tenant-isolated;
 8. mandatory SSO and the documented owner break-glass procedure both work.
 

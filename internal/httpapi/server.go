@@ -741,7 +741,7 @@ func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	token, err := s.newSession(r, p.UserID, nil, "local", hash, map[string]any{"bootstrap": true})
+	token, err := s.newSession(r, p.UserID, nil, nil, "local", hash, map[string]any{"bootstrap": true})
 	if err != nil {
 		s.writeInternalError(w, r, 500, "session_failed", "session could not be created", err)
 		return
@@ -812,7 +812,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		token, err = s.newMFASession(r, credential, counter, recoveryDigest)
 	} else {
-		token, err = s.newSession(r, credential.UserID, nil, "local", credential.PasswordHash, nil)
+		token, err = s.newSession(r, credential.UserID, nil, nil, "local", credential.PasswordHash, nil)
 	}
 	if err != nil {
 		if errors.Is(err, store.ErrAuthenticationStateChanged) {
@@ -843,7 +843,7 @@ func (s *Server) allowAuthenticationAttempt(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
-func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *uuid.UUID, method, expectedPasswordHash string, metadata any) (string, error) {
+func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID, providerID *uuid.UUID, method, expectedPasswordHash string, metadata any) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -852,7 +852,7 @@ func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID *u
 	if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
 		ipAddress = host
 	}
-	if _, err = s.Store.CreateSessionWithAudit(r.Context(), userID, organizationID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, expectedPasswordHash, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128), r.RemoteAddr, metadata); err != nil {
+	if _, err = s.Store.CreateSessionWithAudit(r.Context(), userID, organizationID, providerID, cryptox.Digest(token), time.Now().Add(s.SessionTTL), method, expectedPasswordHash, truncateText(r.UserAgent(), 512), truncateText(ipAddress, 128), r.RemoteAddr, metadata); err != nil {
 		return "", err
 	}
 	return token, nil

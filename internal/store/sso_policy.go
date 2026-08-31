@@ -79,14 +79,19 @@ func setSSOProviderEnabledTx(ctx context.Context, tx pgx.Tx, organizationID, pro
 	}
 	if enabled != currentlyEnabled {
 		stateTable := "oidc_states"
+		providerColumn := "oidc_provider_id"
 		if kind == "saml" {
 			stateTable = "saml_states"
+			providerColumn = "saml_provider_id"
 		}
 		// A provider state transition is an authentication trust-boundary
 		// change. Revoke every outstanding browser flow so a login started
 		// before a disable (or while configuration was being reviewed) cannot
 		// become valid again after the provider is enabled.
 		if _, err := tx.Exec(ctx, `DELETE FROM `+stateTable+` WHERE provider_id=$1`, providerID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE `+providerColumn+`=$1`, providerID); err != nil {
 			return err
 		}
 	}
