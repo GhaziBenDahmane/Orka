@@ -116,7 +116,7 @@ func (s *Server) acceptOrganizationInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	input.DisplayName = displayName
-	if !s.allowAuthenticationAttempt(w, r, "invitation-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "invitation", cryptox.Digest(input.Token), 20) {
+	if !s.allowAuthenticationAttempt(w, r, "invitation-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "invitation", cryptox.Digest(input.Token), 20) {
 		return
 	}
 	passwordHash := ""

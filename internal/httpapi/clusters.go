@@ -461,7 +461,7 @@ func (s *Server) enrollClusterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimSpace(input.Token)
-	if !s.allowAuthenticationAttempt(w, r, "agent-enroll-global", cryptox.Digest("instance"), 120) || !s.allowAuthenticationAttempt(w, r, "agent-enroll-token", cryptox.Digest(token), 20) {
+	if !s.allowAuthenticationAttempt(w, r, "agent-enroll-client", authenticationClientKey(r), 120) || !s.allowAuthenticationAttempt(w, r, "agent-enroll-token", cryptox.Digest(token), 20) {
 		return
 	}
 	tokenHash := cryptox.Digest(token)

@@ -39,6 +39,24 @@ func TestRequestIDMiddleware(t *testing.T) {
 	}
 }
 
+func TestAuthenticationClientKeyUsesCanonicalRemoteIP(t *testing.T) {
+	requests := []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/", nil),
+		httptest.NewRequest(http.MethodGet, "/", nil),
+		httptest.NewRequest(http.MethodGet, "/", nil),
+	}
+	requests[0].RemoteAddr = "192.0.2.10:1234"
+	requests[1].RemoteAddr = "192.0.2.10:5678"
+	requests[2].RemoteAddr = "198.51.100.20:1234"
+	first := authenticationClientKey(requests[0])
+	if !bytes.Equal(first, authenticationClientKey(requests[1])) {
+		t.Fatal("source ports produced different authentication rate-limit keys")
+	}
+	if bytes.Equal(first, authenticationClientKey(requests[2])) {
+		t.Fatal("different client IPs produced the same authentication rate-limit key")
+	}
+}
+
 func TestDecodeEnforcesJSONMediaTypeAndBodyLimit(t *testing.T) {
 	for _, mediaType := range []string{"application/json", "application/json; charset=utf-8", "application/scim+json"} {
 		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"value":"ok"}`))

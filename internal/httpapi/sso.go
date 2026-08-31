@@ -197,7 +197,7 @@ func (s *Server) discoverOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
 		return
 	}
 	providers, err := s.Store.DiscoverOIDC(r.Context(), parts[1])
@@ -214,7 +214,7 @@ func (s *Server) startOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid provider id")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-start-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-start-provider", cryptox.Digest(id.String()), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-start-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-start-provider", cryptox.Digest(id.String()), 60) {
 		return
 	}
 	provider, err := s.Store.GetOIDCProvider(r.Context(), id)
@@ -263,7 +263,7 @@ func (s *Server) callbackOIDC(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_callback", "state and code are required")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-callback-global", cryptox.Digest("instance"), 300) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-callback-client", authenticationClientKey(r), 300) {
 		return
 	}
 	if !s.consumeLoginStateCookie(w, r, "oidc", stateValue, http.SameSiteLaxMode) {

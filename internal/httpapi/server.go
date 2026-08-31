@@ -766,7 +766,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
-	if !s.allowAuthenticationAttempt(w, r, "login-global", cryptox.Digest("instance"), 300) {
+	if !s.allowAuthenticationAttempt(w, r, "login-client", authenticationClientKey(r), 300) {
 		return
 	}
 	credential, err := s.Store.PasswordLoginCredential(r.Context(), in.Email)
@@ -842,6 +842,14 @@ func (s *Server) allowAuthenticationAttempt(w http.ResponseWriter, r *http.Reque
 		return false
 	}
 	return true
+}
+
+func authenticationClientKey(r *http.Request) []byte {
+	address := remoteIPAddress(r.RemoteAddr)
+	if address == nil {
+		return cryptox.Digest("unknown-client")
+	}
+	return cryptox.Digest(address.String())
 }
 
 func (s *Server) newSession(r *http.Request, userID uuid.UUID, organizationID, providerID *uuid.UUID, providerRevision int64, method, expectedPasswordHash string, metadata any) (string, error) {

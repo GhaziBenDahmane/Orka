@@ -77,25 +77,30 @@ func TestPublicIdentityEndpointsAreRateLimitedBeforeExpensiveWork(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Pool.Close)
-	if _, err = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket IN ('sso-discovery-global','sso-start-global','sso-callback-global','sso-metadata-global','agent-enroll-global')`); err != nil {
+	clientKey := cryptox.Digest("192.0.2.1")
+	if _, err = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket IN ('login-client','invitation-client','sso-discovery-client','sso-start-client','sso-callback-client','sso-metadata-client','agent-enroll-client')`); err != nil {
 		t.Fatal(err)
 	}
 	for bucket, attempts := range map[string]int{
-		"sso-discovery-global": 300,
-		"sso-start-global":     300,
-		"sso-callback-global":  300,
-		"sso-metadata-global":  300,
-		"agent-enroll-global":  120,
+		"login-client":         300,
+		"invitation-client":    300,
+		"sso-discovery-client": 300,
+		"sso-start-client":     300,
+		"sso-callback-client":  300,
+		"sso-metadata-client":  300,
+		"agent-enroll-client":  120,
 	} {
-		if _, err = db.Pool.Exec(context.Background(), `INSERT INTO auth_rate_limits(bucket,key_hash,window_started_at,attempts) VALUES($1,$2,now(),$3) ON CONFLICT(bucket,key_hash) DO UPDATE SET window_started_at=now(),attempts=excluded.attempts`, bucket, cryptox.Digest("instance"), attempts); err != nil {
+		if _, err = db.Pool.Exec(context.Background(), `INSERT INTO auth_rate_limits(bucket,key_hash,window_started_at,attempts) VALUES($1,$2,now(),$3) ON CONFLICT(bucket,key_hash) DO UPDATE SET window_started_at=now(),attempts=excluded.attempts`, bucket, clientKey, attempts); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Cleanup(func() {
-		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket IN ('sso-discovery-global','sso-start-global','sso-callback-global','sso-metadata-global','agent-enroll-global')`)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM auth_rate_limits WHERE bucket IN ('login-client','invitation-client','sso-discovery-client','sso-start-client','sso-callback-client','sso-metadata-client','agent-enroll-client')`)
 	})
 	server := (&Server{Store: db, AgentCACertificate: []byte("configured"), AgentCAKey: []byte("configured")}).Handler()
 	requests := []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(`{"email":"user@example.test","password":"wrong-password"}`)),
+		httptest.NewRequest(http.MethodPost, "/v1/invitations/accept", bytes.NewBufferString(`{"token":"dky_inv_0000000000000000000000000000000000000000","displayName":"User","password":"long-enough-password"}`)),
 		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/discover?email=user@example.test", nil),
 		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/"+uuid.NewString()+"/start", nil),
 		httptest.NewRequest(http.MethodGet, "/v1/auth/sso/callback?state=state&code=code", nil),
@@ -115,5 +120,13 @@ func TestPublicIdentityEndpointsAreRateLimitedBeforeExpensiveWork(t *testing.T) 
 		if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") == "" {
 			t.Fatalf("request %d %s: status=%d retry-after=%q body=%q", index, request.URL.Path, recorder.Code, recorder.Header().Get("Retry-After"), recorder.Body.String())
 		}
+	}
+
+	otherClient := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/discover?email=user@example.test", nil)
+	otherClient.RemoteAddr = "198.51.100.8:4321"
+	otherResponse := httptest.NewRecorder()
+	server.ServeHTTP(otherResponse, otherClient)
+	if otherResponse.Code == http.StatusTooManyRequests {
+		t.Fatalf("one client exhausted another client's authentication allowance: body=%q", otherResponse.Body.String())
 	}
 }

@@ -345,7 +345,7 @@ func (s *Server) discoverSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_email", "valid email required")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-discovery-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-discovery-domain", cryptox.Digest(parts[1]), 60) {
 		return
 	}
 	providers, err := s.Store.DiscoverSAML(r.Context(), parts[1])
@@ -362,7 +362,7 @@ func (s *Server) samlMetadata(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid provider id")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-metadata-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-metadata-provider", cryptox.Digest(providerID.String()), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-metadata-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-metadata-provider", cryptox.Digest(providerID.String()), 60) {
 		return
 	}
 	provider, sp, err := s.samlServiceProvider(r.Context(), providerID.String())
@@ -399,7 +399,7 @@ func (s *Server) startSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid provider id")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-start-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-start-provider", cryptox.Digest(providerID.String()), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-start-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-start-provider", cryptox.Digest(providerID.String()), 60) {
 		return
 	}
 	provider, sp, err := s.samlServiceProvider(r.Context(), r.PathValue("providerID"))
@@ -439,7 +439,7 @@ func (s *Server) callbackSAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_id", "invalid provider id")
 		return
 	}
-	if !s.allowAuthenticationAttempt(w, r, "sso-callback-global", cryptox.Digest("instance"), 300) || !s.allowAuthenticationAttempt(w, r, "sso-callback-provider", cryptox.Digest(providerID.String()), 60) {
+	if !s.allowAuthenticationAttempt(w, r, "sso-callback-client", authenticationClientKey(r), 300) || !s.allowAuthenticationAttempt(w, r, "sso-callback-provider", cryptox.Digest(providerID.String()), 60) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
