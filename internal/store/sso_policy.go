@@ -12,25 +12,52 @@ import (
 // policy. The organization row is the shared lock across OIDC and SAML, so two
 // concurrent disables cannot each observe the other provider as enabled.
 func (s *Store) setSSOProviderEnabled(ctx context.Context, organizationID, providerID uuid.UUID, kind string, enabled bool) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = setSSOProviderEnabledTx(ctx, tx, organizationID, providerID, kind, enabled); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) SetSSOProviderEnabledWithAudit(ctx context.Context, principal Principal, providerID uuid.UUID, kind string, enabled bool, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = setSSOProviderEnabledTx(ctx, tx, principal.OrganizationID, providerID, kind, enabled); err != nil {
+		return err
+	}
+	resourceType := kind + "_provider"
+	action := "sso." + kind + ".disable"
+	if enabled {
+		action = "sso." + kind + ".enable"
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, action, resourceType, providerID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func setSSOProviderEnabledTx(ctx context.Context, tx pgx.Tx, organizationID, providerID uuid.UUID, kind string, enabled bool) error {
 	table := "oidc_providers"
 	if kind == "saml" {
 		table = "saml_providers"
 	} else if kind != "oidc" {
 		return errors.New("invalid SSO provider kind")
 	}
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
 	var organizationExists bool
-	if err = tx.QueryRow(ctx, `SELECT true FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&organizationExists); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT true FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&organizationExists); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
 	}
 	var currentlyEnabled bool
-	if err = tx.QueryRow(ctx, `SELECT enabled FROM `+table+` WHERE id=$1 AND organization_id=$2 FOR UPDATE`, providerID, organizationID).Scan(&currentlyEnabled); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT enabled FROM `+table+` WHERE id=$1 AND organization_id=$2 FOR UPDATE`, providerID, organizationID).Scan(&currentlyEnabled); errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	} else if err != nil {
 		return err
@@ -38,7 +65,7 @@ func (s *Store) setSSOProviderEnabled(ctx context.Context, organizationID, provi
 	if !enabled && currentlyEnabled {
 		var requireSSO bool
 		var enabledProviders int64
-		if err = tx.QueryRow(ctx, `SELECT COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false),
+		if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT require_sso FROM organization_auth_settings WHERE organization_id=$1),false),
 			(SELECT count(*) FROM oidc_providers WHERE organization_id=$1 AND enabled) +
 			(SELECT count(*) FROM saml_providers WHERE organization_id=$1 AND enabled)`, organizationID).Scan(&requireSSO, &enabledProviders); err != nil {
 			return err
@@ -47,8 +74,8 @@ func (s *Store) setSSOProviderEnabled(ctx context.Context, organizationID, provi
 			return ErrSSOProviderRequired
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE `+table+` SET enabled=$3 WHERE id=$1 AND organization_id=$2`, providerID, organizationID, enabled); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE `+table+` SET enabled=$3 WHERE id=$1 AND organization_id=$2`, providerID, organizationID, enabled); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return nil
 }

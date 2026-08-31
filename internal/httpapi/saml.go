@@ -206,11 +206,10 @@ func (s *Server) deleteSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DisableSAMLProvider(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.SetSSOProviderEnabledWithAudit(r.Context(), p, id, "saml", false, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.saml.disable", "saml_provider", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -236,11 +235,10 @@ func (s *Server) enableSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "invalid_saml_endpoint", err.Error())
 		return
 	}
-	if err = s.Store.SetSAMLProviderEnabled(r.Context(), p.OrganizationID, id, true); err != nil {
+	if err = s.Store.SetSSOProviderEnabledWithAudit(r.Context(), p, id, "saml", true, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.saml.enable", "saml_provider", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

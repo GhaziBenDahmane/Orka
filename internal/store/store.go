@@ -733,14 +733,44 @@ func (s *Store) SetOrganizationAuthSettings(ctx context.Context, organizationID 
 		return OrganizationAuthSettings{}, err
 	}
 	defer tx.Rollback(ctx)
+	settings, err := setOrganizationAuthSettingsTx(ctx, tx, organizationID, requireSSO)
+	if err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s *Store) SetOrganizationAuthSettingsWithAudit(ctx context.Context, principal Principal, requireSSO bool, remoteAddr string) (OrganizationAuthSettings, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	defer tx.Rollback(ctx)
+	settings, err := setOrganizationAuthSettingsTx(ctx, tx, principal.OrganizationID, requireSSO)
+	if err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.policy.update", "organization", principal.OrganizationID.String(), remoteAddr, map[string]any{"requireSso": settings.RequireSSO}); err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return OrganizationAuthSettings{}, err
+	}
+	return settings, nil
+}
+
+func setOrganizationAuthSettingsTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, requireSSO bool) (OrganizationAuthSettings, error) {
 	var organizationExists bool
-	if err = tx.QueryRow(ctx, `SELECT true FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&organizationExists); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT true FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&organizationExists); errors.Is(err, pgx.ErrNoRows) {
 		return OrganizationAuthSettings{}, ErrNotFound
 	} else if err != nil {
 		return OrganizationAuthSettings{}, err
 	}
 	var settings OrganizationAuthSettings
-	err = tx.QueryRow(ctx, `INSERT INTO organization_auth_settings(organization_id,require_sso)
+	err := tx.QueryRow(ctx, `INSERT INTO organization_auth_settings(organization_id,require_sso)
 		SELECT o.id,$2 FROM organizations o WHERE o.id=$1 AND (NOT $2 OR EXISTS(SELECT 1 FROM oidc_providers WHERE organization_id=$1 AND enabled) OR EXISTS(SELECT 1 FROM saml_providers WHERE organization_id=$1 AND enabled))
 		ON CONFLICT(organization_id) DO UPDATE SET require_sso=excluded.require_sso,updated_at=now()
 		RETURNING require_sso,updated_at`, organizationID, requireSSO).Scan(&settings.RequireSSO, &settings.UpdatedAt)
@@ -753,7 +783,7 @@ func (s *Store) SetOrganizationAuthSettings(ctx context.Context, organizationID 
 	if err != nil {
 		return OrganizationAuthSettings{}, err
 	}
-	return settings, tx.Commit(ctx)
+	return settings, nil
 }
 
 func (s *Store) CreateProject(ctx context.Context, organizationID uuid.UUID, name, slug, description string) (Project, error) {

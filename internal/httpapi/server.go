@@ -1000,7 +1000,7 @@ func (s *Server) putAuthSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	settings, err := s.Store.SetOrganizationAuthSettings(r.Context(), p.OrganizationID, in.RequireSSO)
+	settings, err := s.Store.SetOrganizationAuthSettingsWithAudit(r.Context(), p, in.RequireSSO, r.RemoteAddr)
 	if errors.Is(err, store.ErrSSOProviderRequired) {
 		writeError(w, 409, "sso_provider_required", err.Error())
 		return
@@ -1009,7 +1009,6 @@ func (s *Server) putAuthSettings(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.policy.update", "organization", p.OrganizationID.String(), r.RemoteAddr, map[string]any{"requireSso": settings.RequireSSO})
 	writeJSON(w, 200, settings)
 }
 

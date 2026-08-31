@@ -170,11 +170,10 @@ func (s *Server) deleteOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DisableOIDCProvider(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.SetSSOProviderEnabledWithAudit(r.Context(), p, id, "oidc", false, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.oidc.disable", "oidc_provider", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(204)
 }
 
@@ -185,11 +184,10 @@ func (s *Server) enableOIDCProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	if err = s.Store.SetOIDCProviderEnabled(r.Context(), p.OrganizationID, id, true); err != nil {
+	if err = s.Store.SetSSOProviderEnabledWithAudit(r.Context(), p, id, "oidc", true, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "sso.oidc.enable", "oidc_provider", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
