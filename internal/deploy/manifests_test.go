@@ -381,6 +381,20 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	if !strings.Contains(workflow, "production-certification.json production-certification.sigstore.json") {
 		t.Fatal("production certification and its signature bundle are missing from the final checksum inventory")
 	}
+	for _, resumableReleaseGuard := range []string{
+		`gh release create "$VERSION"`,
+		`--draft`,
+		`gh release upload "$VERSION" "${assets[@]}"`,
+		`--clobber`,
+		`gh release download "$VERSION"`,
+		`cmp --silent "$asset" "$download_dir/$asset"`,
+		`gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false`,
+		`existing release $VERSION does not match this promotion`,
+	} {
+		if !strings.Contains(workflow, resumableReleaseGuard) {
+			t.Errorf("release workflow is missing resumable draft guard %q", resumableReleaseGuard)
+		}
+	}
 	for _, releaseChainGuard := range []string{
 		"highest stable release",
 		"sort --version-sort",

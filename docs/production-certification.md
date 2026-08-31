@@ -26,7 +26,11 @@ and re-verifies all automated evidence. If promotion ran before certification
 was available, create the certification and rerun only the failed promotion
 job; the candidate is not rebuilt. A retry after stable image tagging accepts
 the existing version tag only when its manifest digest is exactly the verified
-candidate digest; a conflicting tag remains a hard failure.
+candidate digest; a conflicting tag remains a hard failure. GitHub Release
+publication first creates a commit-bound draft, uploads every evidence asset,
+downloads and byte-compares the complete inventory, and only then publishes
+the release. A retry may resume that exact draft but rejects any conflicting
+release.
 
 Submit a JSON object using schema version 1. The workflow overwrites
 `sourceCommit`, `candidateImage`, `createdAt`, and `expiresAt` with its selected

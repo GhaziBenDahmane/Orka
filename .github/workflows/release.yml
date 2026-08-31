@@ -770,8 +770,46 @@ jobs:
         run: |
           set -euo pipefail
           assets=(promotion-manifest.json promotion-manifest.sigstore.json production-certification.json production-certification.sigstore.json release-evidence.sha256 image-digest.txt image-platforms.json trivy-amd64.json trivy-arm64.json sbom.spdx.json database-recovery-evidence.json volume-recovery-conformance.json volume-recovery-conformance.log template-conformance.json template-conformance.log sso-keycloak-evidence.json swarm-ha-conformance.json lifecycle-conformance.json reconciliation-conformance.json agent-certificate-conformance.json ai-audit-conformance.json notification-conformance.json migration-conformance.json upgrade-conformance.json release-soak-evidence.json)
-          gh release create "$VERSION" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Dockyard $VERSION" \
-            --generate-notes
+          release_json="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName,targetCommitish,name 2>/dev/null || true)"
+          if [ -n "$release_json" ]; then
+            jq -e --arg version "$VERSION" --arg commit "$GITHUB_SHA" --arg title "Dockyard $VERSION" \
+              '(.isDraft | type) == "boolean" and .isPrerelease == false and .tagName == $version and .targetCommitish == $commit and .name == $title' \
+              <<<"$release_json" >/dev/null || {
+                echo "existing release $VERSION does not match this promotion for commit $GITHUB_SHA" >&2
+                exit 1
+              }
+            release_is_draft="$(jq -r '.isDraft' <<<"$release_json")"
+          else
+            gh release create "$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Dockyard $VERSION" \
+              --generate-notes \
+              --draft
+            release_is_draft=true
+          fi
+          if [ "$release_is_draft" = true ]; then
+            gh release upload "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          fi
+          download_dir="$(mktemp -d)"
+          trap 'rm -rf "$download_dir"' EXIT
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir "$download_dir"
+          mapfile -t published_assets < <(find "$download_dir" -maxdepth 1 -type f -printf '%f\n' | sort)
+          mapfile -t expected_assets < <(printf '%s\n' "${assets[@]}" | sort)
+          [[ "${published_assets[*]}" == "${expected_assets[*]}" ]] || {
+            echo "draft release asset inventory does not match the verified promotion package" >&2
+            exit 1
+          }
+          for asset in "${assets[@]}"; do
+            cmp --silent "$asset" "$download_dir/$asset" || {
+              echo "uploaded release asset $asset does not match the verified local file" >&2
+              exit 1
+            }
+          done
+          if [ "$release_is_draft" = true ]; then
+            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          else
+            echo "release $VERSION is already published with the verified asset set; resuming promotion"
+          fi
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName \
+            --jq '.isDraft == false and .isPrerelease == false' | grep -qx true
