@@ -267,6 +267,11 @@ acknowledgements, returns every check even when `ready` is false, and appends
 the aggregate result to the tenant audit log without storing acknowledgement
 text.
 
+For remote automation, `dockyardctl verify-dokploy-migration -` accepts that
+request JSON on standard input, prints the complete report, and exits non-zero
+when the report is not ready. `dockyardctl migration-resources
+[SOURCE_ORGANIZATION_ID] [NEXT_CURSOR]` pages the underlying manifest.
+
 Keep Dokploy running until every reported resource has a documented mapping,
 then perform a maintenance-window dry run, database backup, final import,
 database transfer, DNS cutover, and application-level validation. The

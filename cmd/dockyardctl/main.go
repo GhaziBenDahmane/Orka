@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,6 +62,16 @@ func run(arguments []string, stdin io.Reader, stdout io.Writer) error {
 	method, apiPath, input, err := commandRequest(args, stdin)
 	if err != nil {
 		return err
+	}
+	if args[0] == "verify-dokploy-migration" {
+		var response bytes.Buffer
+		if err = client.Do(ctx, method, apiPath, input, &response); err != nil {
+			return err
+		}
+		if _, err = io.Copy(stdout, bytes.NewReader(response.Bytes())); err != nil {
+			return err
+		}
+		return verifyDokployMigrationResult(response.Bytes())
 	}
 	return client.Do(ctx, method, apiPath, input, stdout)
 }
@@ -160,6 +171,20 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 		}
 		input, err := parseJSONArgument(args[2], stdin)
 		return http.MethodPatch, "/v1/ai/audit-findings/" + args[1], input, err
+	case "migration-resources":
+		if len(args) < 1 || len(args) > 3 {
+			return "", "", nil, usageError()
+		}
+		query := url.Values{"limit": {"500"}}
+		if len(args) >= 2 && strings.TrimSpace(args[1]) != "" {
+			query.Set("sourceOrganizationId", args[1])
+		}
+		if len(args) == 3 && strings.TrimSpace(args[2]) != "" {
+			query.Set("cursor", args[2])
+		}
+		return http.MethodGet, "/v1/migration-resources?" + query.Encode(), nil, nil
+	case "verify-dokploy-migration":
+		return jsonCommand(args, stdin, http.MethodPost, "/v1/migration-resources/verify", 2)
 	case "audit-retention":
 		return http.MethodGet, "/v1/audit-retention", nil, require(1)
 	case "put-audit-retention":
@@ -996,5 +1021,19 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules, migration-resources, verify-dokploy-migration)")
+}
+
+func verifyDokployMigrationResult(data []byte) error {
+	var report struct {
+		Ready   bool `json:"ready"`
+		Blocked int  `json:"blocked"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		return fmt.Errorf("decode Dokploy verification response: %w", err)
+	}
+	if !report.Ready {
+		return fmt.Errorf("Dokploy cutover verification blocked by %d resource checks", report.Blocked)
+	}
+	return nil
 }

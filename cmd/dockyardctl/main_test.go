@@ -31,6 +31,9 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"ai-audit-findings"}, http.MethodGet, "/v1/ai/audit-findings"},
 		{[]string{"ai-audit-run-findings", "run-id"}, http.MethodGet, "/v1/ai/audit-runs/run-id/findings"},
 		{[]string{"triage-ai-audit-finding", "finding-id", `{}`}, http.MethodPatch, "/v1/ai/audit-findings/finding-id"},
+		{[]string{"migration-resources"}, http.MethodGet, "/v1/migration-resources?limit=500"},
+		{[]string{"migration-resources", "source org", "opaque+/cursor"}, http.MethodGet, "/v1/migration-resources?cursor=opaque%2B%2Fcursor&limit=500&sourceOrganizationId=source+org"},
+		{[]string{"verify-dokploy-migration", `{}`}, http.MethodPost, "/v1/migration-resources/verify"},
 		{[]string{"audit-retention"}, http.MethodGet, "/v1/audit-retention"},
 		{[]string{"put-audit-retention", `{}`}, http.MethodPut, "/v1/audit-retention"},
 		{[]string{"audit-archives"}, http.MethodGet, "/v1/audit-archives"},
@@ -295,6 +298,26 @@ func TestAIAuditAdministrationCommandBodies(t *testing.T) {
 	triage := input.(map[string]any)
 	if triage["disposition"] != "acknowledged" || triage["note"] != "investigating" {
 		t.Fatalf("triage input=%#v", triage)
+	}
+}
+
+func TestDokployMigrationVerificationCommand(t *testing.T) {
+	method, path, input, err := commandRequest([]string{"verify-dokploy-migration", "-"}, strings.NewReader(`{"sourceOrganizationId":"source-org","requireOperational":true,"acknowledgements":["source_credential:github:id"]}`))
+	if err != nil || method != http.MethodPost || path != "/v1/migration-resources/verify" {
+		t.Fatalf("method=%q path=%q input=%#v err=%v", method, path, input, err)
+	}
+	body := input.(map[string]any)
+	if body["sourceOrganizationId"] != "source-org" || body["requireOperational"] != true {
+		t.Fatalf("verification input=%#v", body)
+	}
+	if err = verifyDokployMigrationResult([]byte(`{"ready":true,"blocked":0}`)); err != nil {
+		t.Fatalf("ready verification failed: %v", err)
+	}
+	if err = verifyDokployMigrationResult([]byte(`{"ready":false,"blocked":3}`)); err == nil || !strings.Contains(err.Error(), "3 resource checks") {
+		t.Fatalf("blocked verification error=%v", err)
+	}
+	if err = verifyDokployMigrationResult([]byte(`not-json`)); err == nil {
+		t.Fatal("invalid verification response was accepted")
 	}
 }
 

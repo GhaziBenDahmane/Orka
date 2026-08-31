@@ -165,6 +165,14 @@ cluster operations have short commands. `dockyardctl request METHOD /v1/path
 release. Environment variables `DOCKYARD_URL`, `DOCKYARD_TOKEN`, and
 `DOCKYARD_ORGANIZATION_ID` override saved configuration.
 
+Dokploy cutovers can be inspected with
+`dockyardctl migration-resources [SOURCE_ORGANIZATION_ID] [NEXT_CURSOR]` and
+verified with `dockyardctl verify-dokploy-migration JSON`. The verification
+command prints the complete report and exits non-zero when `ready` is false,
+so it can gate an automated cutover without discarding blocked-check details.
+Use `-` for the JSON argument to keep long acknowledgement lists out of shell
+history.
+
 Federated catalogs have dedicated `template-repositories`,
 `create-template-repository JSON`, `update-template-repository ID JSON`,
 `sync-template-repository ID`, webhook rotation/disable, and deletion commands.
