@@ -92,6 +92,10 @@ paths:
 			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {
 				if strings.HasSuffix(op.path, "/artifact-source") {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          multipart/form-data:\n            schema:\n              type: object\n              required: [file]\n              properties:\n                file:\n                  type: string\n                  format: binary\n")
+				} else if op.method == "put" && op.path == "/v1/services/{serviceID}/volume-backup-policies/{volumeName}" {
+					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/VolumeBackupPolicyInput'\n")
+				} else if op.method == "post" && op.path == "/v1/volume-backups/{backupID}/restore" {
+					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/VolumeRestoreRequest'\n")
 				} else if op.path == "/v1/migration-resources/verify" {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              required: [sourceOrganizationId]\n              properties:\n                sourceOrganizationId: {type: string, minLength: 1, maxLength: 255}\n                requireOperational: {type: boolean, default: true}\n                acknowledgements:\n                  type: array\n                  maxItems: 1000\n                  items: {type: string, maxLength: 1024, pattern: '^[^:]+:.+$'}\n")
 				} else {
@@ -122,6 +126,20 @@ paths:
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseRestoreList'\n")
 			} else if op.method == "get" && op.path == "/v1/databases/{databaseID}/migrations" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseMigrationList'\n")
+			} else if op.method == "get" && op.path == "/v1/services/{serviceID}/volumes" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/ServiceVolumeList'\n")
+			} else if op.method == "get" && op.path == "/v1/services/{serviceID}/volume-backup-policies" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/VolumeBackupPolicyList'\n")
+			} else if op.method == "put" && op.path == "/v1/services/{serviceID}/volume-backup-policies/{volumeName}" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/VolumeBackupPolicy'\n")
+			} else if op.method == "get" && op.path == "/v1/services/{serviceID}/volume-backups" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/VolumeBackupList'\n")
+			} else if op.method == "post" && op.path == "/v1/services/{serviceID}/volume-backups/{volumeName}" || op.method == "get" && op.path == "/v1/volume-backups/{backupID}" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/VolumeBackup'\n")
+			} else if op.method == "get" && op.path == "/v1/services/{serviceID}/volume-restores" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/VolumeRestoreList'\n")
+			} else if op.method == "post" && op.path == "/v1/volume-backups/{backupID}/restore" || op.method == "get" && op.path == "/v1/volume-restores/{restoreID}" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/VolumeRestore'\n")
 			} else if isMigrationList {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/MigrationResourcePage'\n")
 			} else if op.method == "post" && op.path == "/v1/migration-resources/verify" {
@@ -208,6 +226,108 @@ paths:
         items:
           type: array
           items: {$ref: '#/components/schemas/DatabaseRestore'}
+    ServiceVolume:
+      type: object
+      required: [name, dockerName, storageNodeId]
+      properties:
+        name: {type: string}
+        dockerName: {type: string}
+        storageNodeId: {type: string}
+    ServiceVolumeList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ServiceVolume'}
+    VolumeBackupPolicyInput:
+      type: object
+      additionalProperties: false
+      required: [destinationId, intervalSeconds, retentionCount, quiesce, enabled]
+      properties:
+        destinationId: {type: string, format: uuid}
+        intervalSeconds: {type: integer, minimum: 900, maximum: 2678400}
+        retentionCount: {type: integer, minimum: 1, maximum: 100}
+        quiesce: {type: boolean}
+        enabled: {type: boolean}
+    VolumeBackupPolicy:
+      type: object
+      required: [id, composeServiceId, volumeName, destinationId, intervalSeconds, retentionCount, quiesce, enabled, nextRunAt, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        composeServiceId: {type: string, format: uuid}
+        volumeName: {type: string}
+        destinationId: {type: string, format: uuid}
+        intervalSeconds: {type: integer, minimum: 900, maximum: 2678400}
+        retentionCount: {type: integer, minimum: 1, maximum: 100}
+        quiesce: {type: boolean}
+        enabled: {type: boolean}
+        nextRunAt: {type: string, format: date-time}
+        lastRunAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    VolumeBackupPolicyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/VolumeBackupPolicy'}
+    VolumeBackup:
+      type: object
+      required: [id, composeServiceId, volumeName, storageNodeId, destinationId, quiesce, status, artifactValid, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        volumeBackupPolicyId: {type: string, format: uuid}
+        composeServiceId: {type: string, format: uuid}
+        volumeName: {type: string}
+        storageNodeId: {type: string}
+        destinationId: {type: string, format: uuid}
+        quiesce: {type: boolean}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        artifactValid: {type: boolean, description: True only when a successful encrypted backup has complete metadata required for restore.}
+        objectKey: {type: string}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        plaintextSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    VolumeBackupList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/VolumeBackup'}
+    VolumeRestoreRequest:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties:
+        confirm: {type: string, minLength: 1}
+        offline: {type: boolean, default: false}
+    VolumeRestore:
+      type: object
+      required: [id, volumeBackupId, offline, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        volumeBackupId: {type: string, format: uuid}
+        targetStorageNodeId: {type: string}
+        offline: {type: boolean}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    VolumeRestoreList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/VolumeRestore'}
     DatabaseMigration:
       type: object
       required: [id, databaseInstanceId, sourceKind, sourceId, sourceEngine, sourceVersion, sourceHost, status, createdAt]

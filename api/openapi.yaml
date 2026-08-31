@@ -4347,6 +4347,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeBackupPolicyList'
         default:
           description: Structured API error
           content:
@@ -4394,15 +4398,18 @@ paths:
           schema:
             type: string
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/VolumeBackupPolicyInput'
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeBackupPolicy'
         default:
           description: Structured API error
           content:
@@ -4423,6 +4430,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeBackupList'
         default:
           description: Structured API error
           content:
@@ -4455,6 +4466,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeBackup'
         default:
           description: Structured API error
           content:
@@ -4475,6 +4490,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeRestoreList'
         default:
           description: Structured API error
           content:
@@ -4495,6 +4514,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceVolumeList'
         default:
           description: Structured API error
           content:
@@ -5366,6 +5389,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeBackup'
         default:
           description: Structured API error
           content:
@@ -5411,15 +5438,18 @@ paths:
             type: string
             format: uuid
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/VolumeRestoreRequest'
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeRestore'
         default:
           description: Structured API error
           content:
@@ -5440,6 +5470,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VolumeRestore'
         default:
           description: Structured API error
           content:
@@ -5557,6 +5591,108 @@ components:
         items:
           type: array
           items: {$ref: '#/components/schemas/DatabaseRestore'}
+    ServiceVolume:
+      type: object
+      required: [name, dockerName, storageNodeId]
+      properties:
+        name: {type: string}
+        dockerName: {type: string}
+        storageNodeId: {type: string}
+    ServiceVolumeList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ServiceVolume'}
+    VolumeBackupPolicyInput:
+      type: object
+      additionalProperties: false
+      required: [destinationId, intervalSeconds, retentionCount, quiesce, enabled]
+      properties:
+        destinationId: {type: string, format: uuid}
+        intervalSeconds: {type: integer, minimum: 900, maximum: 2678400}
+        retentionCount: {type: integer, minimum: 1, maximum: 100}
+        quiesce: {type: boolean}
+        enabled: {type: boolean}
+    VolumeBackupPolicy:
+      type: object
+      required: [id, composeServiceId, volumeName, destinationId, intervalSeconds, retentionCount, quiesce, enabled, nextRunAt, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        composeServiceId: {type: string, format: uuid}
+        volumeName: {type: string}
+        destinationId: {type: string, format: uuid}
+        intervalSeconds: {type: integer, minimum: 900, maximum: 2678400}
+        retentionCount: {type: integer, minimum: 1, maximum: 100}
+        quiesce: {type: boolean}
+        enabled: {type: boolean}
+        nextRunAt: {type: string, format: date-time}
+        lastRunAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    VolumeBackupPolicyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/VolumeBackupPolicy'}
+    VolumeBackup:
+      type: object
+      required: [id, composeServiceId, volumeName, storageNodeId, destinationId, quiesce, status, artifactValid, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        volumeBackupPolicyId: {type: string, format: uuid}
+        composeServiceId: {type: string, format: uuid}
+        volumeName: {type: string}
+        storageNodeId: {type: string}
+        destinationId: {type: string, format: uuid}
+        quiesce: {type: boolean}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        artifactValid: {type: boolean, description: True only when a successful encrypted backup has complete metadata required for restore.}
+        objectKey: {type: string}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        plaintextSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    VolumeBackupList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/VolumeBackup'}
+    VolumeRestoreRequest:
+      type: object
+      additionalProperties: false
+      required: [confirm]
+      properties:
+        confirm: {type: string, minLength: 1}
+        offline: {type: boolean, default: false}
+    VolumeRestore:
+      type: object
+      required: [id, volumeBackupId, offline, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        volumeBackupId: {type: string, format: uuid}
+        targetStorageNodeId: {type: string}
+        offline: {type: boolean}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    VolumeRestoreList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/VolumeRestore'}
     DatabaseMigration:
       type: object
       required: [id, databaseInstanceId, sourceKind, sourceId, sourceEngine, sourceVersion, sourceHost, status, createdAt]

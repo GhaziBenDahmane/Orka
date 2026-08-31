@@ -149,6 +149,28 @@ func TestOpenAPIDocumentsDatabaseRecoveryProvenance(t *testing.T) {
 	}
 }
 
+func TestOpenAPIDocumentsVolumeRecoveryContract(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{
+		"#/components/schemas/ServiceVolumeList",
+		"#/components/schemas/VolumeBackupPolicyInput",
+		"#/components/schemas/VolumeBackupPolicyList",
+		"#/components/schemas/VolumeBackupList",
+		"#/components/schemas/VolumeRestoreRequest",
+		"#/components/schemas/VolumeRestoreList",
+		"required: [id, composeServiceId, volumeName, storageNodeId, destinationId, quiesce, status, artifactValid, createdAt]",
+		"artifactValid: {type: boolean, description: True only when a successful encrypted backup has complete metadata required for restore.}",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing volume recovery contract %q", expected)
+		}
+	}
+}
+
 func TestOpenAPIDocumentsTemplatePagination(t *testing.T) {
 	specification, err := os.ReadFile("../../api/openapi.yaml")
 	if err != nil {
