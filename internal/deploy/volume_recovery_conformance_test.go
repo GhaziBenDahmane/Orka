@@ -42,13 +42,14 @@ type volumeRecoveryEvidence struct {
 	SymlinkVerified           bool    `json:"symlinkVerified"`
 	WorkloadResumed           bool    `json:"workloadResumed"`
 	RestartVerified           bool    `json:"restartVerified"`
+	RetentionRestoreProtected bool    `json:"retentionRestoreProtected"`
 }
 
 func (e volumeRecoveryEvidence) validate() error {
 	if e.Status != "passed" || !ociref.IsDigestPinned(e.Image) || e.ArtifactBytes <= 0 || !artifactSHA256.MatchString(e.EncryptedSHA256) || !artifactSHA256.MatchString(e.PlaintextSHA256) || e.BackupSeconds < 0 || e.RTOSeconds < 0 {
 		return errors.New("invalid named-volume recovery evidence identity or measurements")
 	}
-	if !e.BackupQuiesced || !e.RestoreQuiesced || !e.EncryptedArtifactVerified || !e.CorruptionReplaced || !e.PermissionsVerified || !e.SymlinkVerified || !e.WorkloadResumed || !e.RestartVerified {
+	if !e.BackupQuiesced || !e.RestoreQuiesced || !e.EncryptedArtifactVerified || !e.CorruptionReplaced || !e.PermissionsVerified || !e.SymlinkVerified || !e.WorkloadResumed || !e.RestartVerified || !e.RetentionRestoreProtected {
 		return errors.New("named-volume recovery evidence has an unverified assertion")
 	}
 	return nil
@@ -68,6 +69,10 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker is not installed")
+	}
+	databaseURL := strings.TrimSpace(os.Getenv("DOCKYARD_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Fatal("DOCKYARD_TEST_DATABASE_URL is required to prove restore/retention serialization")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -149,6 +154,7 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	}
 	waitVolumeReplicas(t, ctx, workloadService, "1/1")
 	verifyVolumeContents(t, ctx, probeImage, volumeName, marker)
+	verifyVolumeRetentionRestoreWinsAfterCandidateSelection(t, ctx, databaseURL)
 	volumeDocker(t, ctx, "service", "update", "--force", "--detach=false", workloadService)
 	waitVolumeReplicas(t, ctx, workloadService, "1/1")
 	verifyVolumeContents(t, ctx, probeImage, volumeName, marker)
@@ -162,7 +168,7 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 		ArtifactBytes: backup.SizeBytes, EncryptedSHA256: backup.SHA256, PlaintextSHA256: backup.PlaintextSHA256,
 		BackupSeconds: backupSeconds, RTOSeconds: restoreSeconds, BackupQuiesced: true, RestoreQuiesced: true,
 		EncryptedArtifactVerified: true, CorruptionReplaced: true, PermissionsVerified: true, SymlinkVerified: true,
-		WorkloadResumed: true, RestartVerified: true,
+		WorkloadResumed: true, RestartVerified: true, RetentionRestoreProtected: true,
 	}
 	if err = evidence.validate(); err != nil {
 		t.Fatal(err)
@@ -309,7 +315,7 @@ func TestVolumeRecoveryEvidenceContract(t *testing.T) {
 		Status: "passed", SourceCommit: "local", Image: "registry.example/orka@sha256:" + strings.Repeat("a", 64),
 		ArtifactBytes: 42, EncryptedSHA256: strings.Repeat("b", 64), PlaintextSHA256: strings.Repeat("c", 64), BackupSeconds: 1, RTOSeconds: 2,
 		BackupQuiesced: true, RestoreQuiesced: true, EncryptedArtifactVerified: true, CorruptionReplaced: true,
-		PermissionsVerified: true, SymlinkVerified: true, WorkloadResumed: true, RestartVerified: true,
+		PermissionsVerified: true, SymlinkVerified: true, WorkloadResumed: true, RestartVerified: true, RetentionRestoreProtected: true,
 	}
 	if err := evidence.validate(); err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ test-database-recovery:
 
 test-volume-recovery:
 	@test -n "$${DOCKYARD_TEST_VOLUME_HELPER_IMAGE:-}" || { echo "DOCKYARD_TEST_VOLUME_HELPER_IMAGE must be an immutable image digest" >&2; exit 1; }
+	@test -n "$${DOCKYARD_TEST_DATABASE_URL:-}" || { echo "DOCKYARD_TEST_DATABASE_URL must point to a disposable PostgreSQL database" >&2; exit 1; }
 	DOCKYARD_TEST_VOLUME_RECOVERY=1 go test -timeout 15m -run TestNamedVolumeRecoveryConformance -v -count=1 ./internal/deploy
 
 test-install:

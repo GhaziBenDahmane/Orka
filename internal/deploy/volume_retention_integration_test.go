@@ -125,6 +125,81 @@ func TestVolumeRetentionNeverDeletesRestoreReferencedBackup(t *testing.T) {
 	}
 }
 
+func TestVolumeRetentionRestoreWinsAfterCandidateSelection(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	verifyVolumeRetentionRestoreWinsAfterCandidateSelection(t, ctx, databaseURL)
+}
+
+func verifyVolumeRetentionRestoreWinsAfterCandidateSelection(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+	db, err := store.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	serviceID, destinationID, expiredID, newestID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Volume retention conformance',$2)`, []any{organizationID, "volume-retention-conformance-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,storage_node_id) VALUES($1,$2,'App','app',$3,'services: {}','node1')`, []any{serviceID, environmentID, "volume-retention-conformance-" + serviceID.String()}},
+		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,encrypted_credentials) VALUES($1,$2,'archive','https://objects.example.test','backups','ciphertext')`, []any{destinationID, organizationID}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,created_at,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded','volumes/expired.enc',42,$4,$5,'wrapped',now()-interval '1 hour',now()-interval '1 hour')`, []any{expiredID, serviceID, destinationID, stringOf('a', 64), stringOf('b', 64)}},
+		{`INSERT INTO volume_backups(id,compose_service_id,volume_name,storage_node_id,destination_id,quiesce,status,object_key,size_bytes,sha256,plaintext_sha256,encrypted_data_key,created_at,finished_at) VALUES($1,$2,'data','node1',$3,true,'succeeded','volumes/newest.enc',42,$4,$5,'wrapped',now(),now())`, []any{newestID, serviceID, destinationID, stringOf('c', 64), stringOf('d', 64)}},
+	}
+	for _, statement := range statements {
+		if _, err = tx.Exec(ctx, statement.query, statement.args...); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM jobs WHERE resource_key=$1`, "service:"+serviceID.String())
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM backup_artifact_deletions WHERE source_id=$1`, expiredID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+
+	worker := &Worker{Store: db}
+	candidates, err := worker.expiredVolumeBackupCandidates(ctx, newestID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].id != expiredID || candidates[0].objectKey != "volumes/expired.enc" {
+		t.Fatalf("retention candidates=%+v", candidates)
+	}
+	restore, err := db.QueueVolumeRestore(ctx, organizationID, expiredID, uuid.Nil, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, deleted, err := worker.deleteExpiredVolumeBackupMetadata(ctx, expiredID); err != nil || deleted {
+		t.Fatalf("restore-referenced candidate deleted=%v err=%v", deleted, err)
+	}
+	var backupExists, restoreExists bool
+	if err = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM volume_backups WHERE id=$1),EXISTS(SELECT 1 FROM volume_restores WHERE id=$2 AND volume_backup_id=$1 AND status='queued')`, expiredID, restore.ID).Scan(&backupExists, &restoreExists); err != nil {
+		t.Fatal(err)
+	}
+	if !backupExists || !restoreExists {
+		t.Fatalf("retention race result backupExists=%v restoreExists=%v", backupExists, restoreExists)
+	}
+}
+
 func stringOf(value byte, count int) string {
 	buffer := make([]byte, count)
 	for index := range buffer {

@@ -1586,26 +1586,9 @@ func (w *Worker) failVolumeRestore(ctx context.Context, j job, id uuid.UUID, cau
 }
 
 func (w *Worker) pruneVolumeBackups(ctx context.Context, newestID uuid.UUID, keep int) {
-	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND old.object_key<>'' AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	candidates, err := w.expiredVolumeBackupCandidates(ctx, newestID, keep)
 	if err != nil {
 		w.Logger.Error("list expired volume backups", "error", err)
-		return
-	}
-	type candidate struct {
-		id uuid.UUID
-		expiredVolumeBackup
-	}
-	var candidates []candidate
-	for rows.Next() {
-		var item candidate
-		if err = rows.Scan(&item.id, &item.destinationID, &item.objectKey); err != nil {
-			break
-		}
-		candidates = append(candidates, item)
-	}
-	rows.Close()
-	if err != nil {
-		w.Logger.Error("scan expired volume backups", "error", err)
 		return
 	}
 	for _, candidate := range candidates {
@@ -1632,6 +1615,31 @@ func (w *Worker) pruneVolumeBackups(ctx context.Context, newestID uuid.UUID, kee
 			w.Logger.Error("delete expired volume backup object", "backup", candidate.id, "objectKey", item.objectKey, "error", storageErr)
 		}
 	}
+}
+
+type expiredVolumeBackupCandidate struct {
+	id uuid.UUID
+	expiredVolumeBackup
+}
+
+// expiredVolumeBackupCandidates deliberately does not lock candidate rows.
+// deleteExpiredVolumeBackupMetadata is the admission boundary and rechecks
+// restore references under the same row lock used by QueueVolumeRestore.
+func (w *Worker) expiredVolumeBackupCandidates(ctx context.Context, newestID uuid.UUID, keep int) ([]expiredVolumeBackupCandidate, error) {
+	rows, err := w.Store.Pool.Query(ctx, `SELECT old.id,old.destination_id,old.object_key FROM volume_backups old JOIN volume_backups newest ON newest.compose_service_id=old.compose_service_id AND newest.volume_name=old.volume_name WHERE newest.id=$1 AND old.status='succeeded' AND old.object_key<>'' AND NOT EXISTS(SELECT 1 FROM volume_restores restore WHERE restore.volume_backup_id=old.id) ORDER BY old.created_at DESC OFFSET $2`, newestID, keep)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []expiredVolumeBackupCandidate
+	for rows.Next() {
+		var item expiredVolumeBackupCandidate
+		if err = rows.Scan(&item.id, &item.destinationID, &item.objectKey); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, item)
+	}
+	return candidates, rows.Err()
 }
 
 type expiredVolumeBackup struct {

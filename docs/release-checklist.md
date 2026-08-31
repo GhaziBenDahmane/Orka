@@ -192,7 +192,8 @@ links for every item below.
   because CI timings are not SLOs.
 - Run `make test-volume-recovery` with
   `DOCKYARD_TEST_VOLUME_HELPER_IMAGE` set to the exact immutable candidate
-  image. The release workflow runs this gate against its signed amd64 digest
+  image and `DOCKYARD_TEST_DATABASE_URL` set to a disposable PostgreSQL
+  database. The release workflow runs this gate against its signed amd64 digest
   and publishes `volume-recovery-conformance.json`. The evidence must prove
   backup and restore quiescence, encrypted-artifact integrity, replacement of
   deliberately corrupted contents, preservation of permissions and safe
