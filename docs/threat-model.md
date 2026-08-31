@@ -211,8 +211,10 @@ than an apparently healthy workload with empty replacement storage.
 Relocation is a separate administrator-only operation: the service must have
 completed its stop flow, no deployment or data job may be active, the service
 slug must be confirmed, and the service plus any linked database binding move
-in the same audited transaction. The operator remains responsible for copying
-or restoring the volume contents before starting on the replacement node.
+in the same audited transaction. The target must also exist in the service's
+local or remote Swarm and be ready and active at validation time; unavailable
+node inventory fails closed. The operator remains responsible for copying or
+restoring the volume contents before starting on the replacement node.
 Generic named-volume transfer helpers are scheduled only on an explicitly
 persisted node and must run the same digest-pinned image as the controller or
 cluster agent. Presigned URLs and envelope keys are delivered in an ephemeral

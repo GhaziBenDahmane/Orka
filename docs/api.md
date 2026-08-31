@@ -773,6 +773,9 @@ node, verify the copied data independently, then run
 Only an administrator can perform this operation. The transaction rejects a
 running, deleting, unassigned, or busy service, updates a linked managed
 database atomically, and records the old and new node IDs in the audit log.
+Before committing, the controller verifies that the target belongs to the
+service's local or remote Swarm and is currently ready and active; an
+unreachable node inventory fails closed.
 Start the service only after the rebind succeeds.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),

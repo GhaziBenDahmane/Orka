@@ -12,12 +12,18 @@ import (
 
 var storageNodeIDPattern = regexp.MustCompile(`^[a-z0-9]{1,64}$`)
 
+// ValidStorageNodeID reports whether value can safely be persisted and later
+// interpolated into a Swarm node.id placement constraint.
+func ValidStorageNodeID(value string) bool {
+	return storageNodeIDPattern.MatchString(strings.TrimSpace(value))
+}
+
 // RebindComposeServiceStorageNode records an operator-confirmed relocation of
 // node-local named volumes. The platform does not copy data: callers must stop
 // the service and move or restore every volume before changing the binding.
 func (s *Store) RebindComposeServiceStorageNode(ctx context.Context, principal Principal, serviceID uuid.UUID, nodeID, confirmation, remoteAddr string) (ComposeService, error) {
 	nodeID = strings.TrimSpace(nodeID)
-	if !storageNodeIDPattern.MatchString(nodeID) {
+	if !ValidStorageNodeID(nodeID) {
 		return ComposeService{}, ErrInvalidStorageNode
 	}
 	tx, err := s.Pool.Begin(ctx)
