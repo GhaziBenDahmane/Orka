@@ -211,7 +211,9 @@ remains authoritative. Removing a member also removes their project and
 environment grants and revokes federated sessions for that organization.
 Invitation tokens are returned only at creation and stored as SHA-256 digests.
 Creating another invitation for the same organization and email revokes the
-previous token. Acceptance is transactional and one-time. New local identities
+previous token. Creation, revocation, and one-time acceptance commit atomically
+with their audit evidence; failed evidence leaves the previous invitation,
+membership, and user state unchanged. New local identities
 must set a password of at least 12 characters; organizations enforcing SSO can
 pre-provision the identity without a local password, ready for OIDC or SAML
 linking on first sign-in; any password submitted while accepting an SSO-only

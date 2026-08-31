@@ -32,6 +32,14 @@ type InvitationAcceptance struct {
 }
 
 func (s *Store) CreateOrganizationInvitation(ctx context.Context, organizationID, creatorID uuid.UUID, email, role, actorRole string, tokenHash []byte, expiresAt time.Time) (OrganizationInvitation, error) {
+	return s.createOrganizationInvitation(ctx, Principal{}, organizationID, creatorID, email, role, actorRole, tokenHash, expiresAt, "", false)
+}
+
+func (s *Store) CreateOrganizationInvitationWithAudit(ctx context.Context, principal Principal, email, role string, tokenHash []byte, expiresAt time.Time, remoteAddr string) (OrganizationInvitation, error) {
+	return s.createOrganizationInvitation(ctx, principal, principal.OrganizationID, principal.UserID, email, role, principal.Role, tokenHash, expiresAt, remoteAddr, true)
+}
+
+func (s *Store) createOrganizationInvitation(ctx context.Context, principal Principal, organizationID, creatorID uuid.UUID, email, role, actorRole string, tokenHash []byte, expiresAt time.Time, remoteAddr string, audit bool) (OrganizationInvitation, error) {
 	if !ValidOrganizationRole(role) {
 		return OrganizationInvitation{}, errors.New("invalid organization role")
 	}
@@ -44,28 +52,41 @@ func (s *Store) CreateOrganizationInvitation(ctx context.Context, organizationID
 		return OrganizationInvitation{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := createOrganizationInvitationTx(ctx, tx, organizationID, creatorID, email, role, tokenHash, expiresAt)
+	if err != nil {
+		return OrganizationInvitation{}, err
+	}
+	if audit {
+		if err = appendPrincipalAudit(ctx, tx, principal, "invitation.create", "invitation", item.ID.String(), remoteAddr, map[string]any{"email": item.Email, "role": item.Role, "expiresAt": item.ExpiresAt}); err != nil {
+			return OrganizationInvitation{}, err
+		}
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, organizationID, creatorID uuid.UUID, email, role string, tokenHash []byte, expiresAt time.Time) (OrganizationInvitation, error) {
 	var lockedOrganizationID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
 		return OrganizationInvitation{}, ErrNotFound
 	} else if err != nil {
 		return OrganizationInvitation{}, err
 	}
 	var member bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.email=$2)`, organizationID, email).Scan(&member); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.organization_id=$1 AND u.email=$2)`, organizationID, email).Scan(&member); err != nil {
 		return OrganizationInvitation{}, err
 	}
 	if member {
 		return OrganizationInvitation{}, ErrAlreadyMember
 	}
-	if _, err = tx.Exec(ctx, `UPDATE organization_invitations SET revoked_at=now() WHERE organization_id=$1 AND email=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, organizationID, email); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE organization_invitations SET revoked_at=now() WHERE organization_id=$1 AND email=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, organizationID, email); err != nil {
 		return OrganizationInvitation{}, err
 	}
 	item := OrganizationInvitation{ID: uuid.New(), OrganizationID: organizationID, Email: email, Role: role, ExpiresAt: expiresAt}
-	err = tx.QueryRow(ctx, `INSERT INTO organization_invitations(id,organization_id,email,role,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at`, item.ID, organizationID, email, role, tokenHash, creatorID, expiresAt).Scan(&item.CreatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO organization_invitations(id,organization_id,email,role,token_hash,created_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING created_at`, item.ID, organizationID, email, role, tokenHash, creatorID, expiresAt).Scan(&item.CreatedAt)
 	if err != nil {
 		return OrganizationInvitation{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) ListOrganizationInvitations(ctx context.Context, organizationID uuid.UUID) ([]OrganizationInvitation, error) {
@@ -97,7 +118,34 @@ func (s *Store) GetOrganizationInvitation(ctx context.Context, organizationID, i
 }
 
 func (s *Store) RevokeOrganizationInvitation(ctx context.Context, organizationID, invitationID uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE organization_invitations SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = revokeOrganizationInvitationTx(ctx, tx, organizationID, invitationID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RevokeOrganizationInvitationWithAudit(ctx context.Context, principal Principal, invitationID uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = revokeOrganizationInvitationTx(ctx, tx, principal.OrganizationID, invitationID); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "invitation.revoke", "invitation", invitationID.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func revokeOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, organizationID, invitationID uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `UPDATE organization_invitations SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID, organizationID)
 	if err != nil {
 		return err
 	}
@@ -108,25 +156,47 @@ func (s *Store) RevokeOrganizationInvitation(ctx context.Context, organizationID
 }
 
 func (s *Store) AcceptOrganizationInvitation(ctx context.Context, tokenHash []byte, displayName, passwordHash string) (InvitationAcceptance, error) {
+	return s.acceptOrganizationInvitation(ctx, tokenHash, displayName, passwordHash, "", false)
+}
+
+func (s *Store) AcceptOrganizationInvitationWithAudit(ctx context.Context, tokenHash []byte, displayName, passwordHash, remoteAddr string) (InvitationAcceptance, error) {
+	return s.acceptOrganizationInvitation(ctx, tokenHash, displayName, passwordHash, remoteAddr, true)
+}
+
+func (s *Store) acceptOrganizationInvitation(ctx context.Context, tokenHash []byte, displayName, passwordHash, remoteAddr string, audit bool) (InvitationAcceptance, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return InvitationAcceptance{}, err
 	}
 	defer tx.Rollback(ctx)
+	acceptance, err := acceptOrganizationInvitationTx(ctx, tx, tokenHash, displayName, passwordHash)
+	if err != nil {
+		return InvitationAcceptance{}, err
+	}
+	if audit {
+		principal := Principal{UserID: acceptance.UserID, OrganizationID: acceptance.OrganizationID, Organization: acceptance.Organization, Email: acceptance.Email, Role: acceptance.Role}
+		if err = appendPrincipalAudit(ctx, tx, principal, "invitation.accept", "invitation", acceptance.InvitationID.String(), remoteAddr, map[string]any{"email": acceptance.Email, "role": acceptance.Role}); err != nil {
+			return InvitationAcceptance{}, err
+		}
+	}
+	return acceptance, tx.Commit(ctx)
+}
+
+func acceptOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, displayName, passwordHash string) (InvitationAcceptance, error) {
 	var invitationID uuid.UUID
 	var acceptance InvitationAcceptance
-	if err = tx.QueryRow(ctx, `SELECT organization_id FROM organization_invitations WHERE token_hash=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now()`, tokenHash).Scan(&acceptance.OrganizationID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT organization_id FROM organization_invitations WHERE token_hash=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>now()`, tokenHash).Scan(&acceptance.OrganizationID); errors.Is(err, pgx.ErrNoRows) {
 		return InvitationAcceptance{}, ErrNotFound
 	} else if err != nil {
 		return InvitationAcceptance{}, err
 	}
 	var lockedOrganizationID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, acceptance.OrganizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, acceptance.OrganizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
 		return InvitationAcceptance{}, ErrNotFound
 	} else if err != nil {
 		return InvitationAcceptance{}, err
 	}
-	err = tx.QueryRow(ctx, `SELECT i.id,i.organization_id,o.name,i.email,i.role,COALESCE(a.require_sso,false) FROM organization_invitations i JOIN organizations o ON o.id=i.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=i.organization_id WHERE i.token_hash=$1 AND i.organization_id=$2 AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at>now() FOR UPDATE OF i`, tokenHash, acceptance.OrganizationID).Scan(&invitationID, &acceptance.OrganizationID, &acceptance.Organization, &acceptance.Email, &acceptance.Role, &acceptance.RequireSSO)
+	err := tx.QueryRow(ctx, `SELECT i.id,i.organization_id,o.name,i.email,i.role,COALESCE(a.require_sso,false) FROM organization_invitations i JOIN organizations o ON o.id=i.organization_id LEFT JOIN organization_auth_settings a ON a.organization_id=i.organization_id WHERE i.token_hash=$1 AND i.organization_id=$2 AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at>now() FOR UPDATE OF i`, tokenHash, acceptance.OrganizationID).Scan(&invitationID, &acceptance.OrganizationID, &acceptance.Organization, &acceptance.Email, &acceptance.Role, &acceptance.RequireSSO)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return InvitationAcceptance{}, ErrNotFound
 	}
@@ -163,5 +233,5 @@ func (s *Store) AcceptOrganizationInvitation(ctx context.Context, tokenHash []by
 	if _, err = tx.Exec(ctx, `UPDATE organization_invitations SET accepted_at=now(),accepted_user_id=$2 WHERE id=$1`, invitationID, acceptance.UserID); err != nil {
 		return InvitationAcceptance{}, err
 	}
-	return acceptance, tx.Commit(ctx)
+	return acceptance, nil
 }

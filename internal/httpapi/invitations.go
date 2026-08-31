@@ -47,7 +47,7 @@ func (s *Server) createOrganizationInvitation(w http.ResponseWriter, r *http.Req
 	}
 	token = "dky_inv_" + token
 	p := principal(r)
-	item, err := s.Store.CreateOrganizationInvitation(r.Context(), p.OrganizationID, p.UserID, input.Email, input.Role, p.Role, cryptox.Digest(token), time.Now().Add(time.Duration(input.ExpiresInDays)*24*time.Hour))
+	item, err := s.Store.CreateOrganizationInvitationWithAudit(r.Context(), p, input.Email, input.Role, cryptox.Digest(token), time.Now().Add(time.Duration(input.ExpiresInDays)*24*time.Hour), r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -56,7 +56,6 @@ func (s *Server) createOrganizationInvitation(w http.ResponseWriter, r *http.Req
 	if s.PublicURL == "" {
 		acceptURL = "/#invitation=" + url.QueryEscape(token)
 	}
-	s.Store.Audit(r.Context(), &p, "invitation.create", "invitation", item.ID.String(), r.RemoteAddr, map[string]any{"email": item.Email, "role": item.Role, "expiresAt": item.ExpiresAt})
 	writeJSON(w, http.StatusCreated, map[string]any{"invitation": item, "token": token, "acceptUrl": acceptURL})
 }
 
@@ -90,11 +89,10 @@ func (s *Server) revokeOrganizationInvitation(w http.ResponseWriter, r *http.Req
 		return
 	}
 	p := principal(r)
-	if err = s.Store.RevokeOrganizationInvitation(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.RevokeOrganizationInvitationWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "invitation.revoke", "invitation", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -130,7 +128,7 @@ func (s *Server) acceptOrganizationInvitation(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	accepted, err := s.Store.AcceptOrganizationInvitation(r.Context(), cryptox.Digest(input.Token), input.DisplayName, passwordHash)
+	accepted, err := s.Store.AcceptOrganizationInvitationWithAudit(r.Context(), cryptox.Digest(input.Token), input.DisplayName, passwordHash, r.RemoteAddr)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "invalid_invitation", "invitation is invalid or expired")
 		return
@@ -139,7 +137,5 @@ func (s *Server) acceptOrganizationInvitation(w http.ResponseWriter, r *http.Req
 		writeStoreError(w, err)
 		return
 	}
-	p := store.Principal{UserID: accepted.UserID, OrganizationID: accepted.OrganizationID, Organization: accepted.Organization, Email: accepted.Email, Role: accepted.Role}
-	s.Store.Audit(r.Context(), &p, "invitation.accept", "invitation", accepted.InvitationID.String(), r.RemoteAddr, map[string]any{"email": accepted.Email, "role": accepted.Role})
 	writeJSON(w, http.StatusOK, accepted)
 }
