@@ -94,13 +94,12 @@ func (s *Server) createSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	provider, err := s.Store.CreateSAMLProvider(r.Context(), store.SAMLProvider{ID: id, OrganizationID: p.OrganizationID, Name: in.Name, IDPMetadata: in.MetadataXML, CertificatePEM: string(certificatePEM), EncryptedPrivateKey: encryptedKey, Domains: in.Domains, EmailAttribute: in.EmailAttribute, NameAttribute: in.NameAttribute, DefaultRole: in.DefaultRole, AllowIDPInitiated: in.AllowIDPInitiated})
+	provider, err := s.Store.CreateSAMLProviderWithAudit(r.Context(), p, store.SAMLProvider{ID: id, Name: in.Name, IDPMetadata: in.MetadataXML, CertificatePEM: string(certificatePEM), EncryptedPrivateKey: encryptedKey, Domains: in.Domains, EmailAttribute: in.EmailAttribute, NameAttribute: in.NameAttribute, DefaultRole: in.DefaultRole, AllowIDPInitiated: in.AllowIDPInitiated}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	setSAMLCertificateStatus(&provider, metadata, time.Now())
-	s.Store.Audit(r.Context(), &p, "sso.saml.create", "saml_provider", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, provider)
 }
 
@@ -172,13 +171,12 @@ func (s *Server) updateSAMLProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	provider, err := s.Store.UpdateSAMLProvider(r.Context(), p.OrganizationID, store.SAMLProvider{ID: id, Name: in.Name, IDPMetadata: in.MetadataXML, Domains: in.Domains, EmailAttribute: in.EmailAttribute, NameAttribute: in.NameAttribute, DefaultRole: in.DefaultRole, AllowIDPInitiated: in.AllowIDPInitiated})
+	provider, err := s.Store.UpdateSAMLProviderWithAudit(r.Context(), p, store.SAMLProvider{ID: id, Name: in.Name, IDPMetadata: in.MetadataXML, Domains: in.Domains, EmailAttribute: in.EmailAttribute, NameAttribute: in.NameAttribute, DefaultRole: in.DefaultRole, AllowIDPInitiated: in.AllowIDPInitiated}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	setSAMLCertificateStatus(&provider, metadata, time.Now())
-	s.Store.Audit(r.Context(), &p, "sso.saml.update", "saml_provider", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 200, provider)
 }
 

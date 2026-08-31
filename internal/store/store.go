@@ -3389,11 +3389,37 @@ func (s *Store) JITOIDCUser(ctx context.Context, p OIDCProvider, subject, email,
 }
 
 func (s *Store) CreateSAMLProvider(ctx context.Context, p SAMLProvider) (SAMLProvider, error) {
+	return createSAMLProvider(ctx, s.Pool, p)
+}
+
+func (s *Store) CreateSAMLProviderWithAudit(ctx context.Context, principal Principal, p SAMLProvider, remoteAddr string) (SAMLProvider, error) {
+	p.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	defer tx.Rollback(ctx)
+	p, err = createSAMLProvider(ctx, tx, p)
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.create", "saml_provider", p.ID.String(), remoteAddr, nil); err != nil {
+		return SAMLProvider{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return SAMLProvider{}, err
+	}
+	return p, nil
+}
+
+func createSAMLProvider(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, p SAMLProvider) (SAMLProvider, error) {
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
 	}
 	p.Enabled = true
-	err := s.Pool.QueryRow(ctx, `INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.IDPMetadata, p.CertificatePEM, p.EncryptedPrivateKey, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.Enabled)
+	err := db.QueryRow(ctx, `INSERT INTO saml_providers(id,organization_id,name,idp_metadata,certificate_pem,encrypted_private_key,domains,email_attribute,name_attribute,default_role,allow_idp_initiated) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING enabled`, p.ID, p.OrganizationID, p.Name, p.IDPMetadata, p.CertificatePEM, p.EncryptedPrivateKey, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.Enabled)
 	return p, err
 }
 
@@ -3403,7 +3429,37 @@ func (s *Store) UpdateSAMLProvider(ctx context.Context, organizationID uuid.UUID
 		return SAMLProvider{}, err
 	}
 	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
+	p, err = updateSAMLProviderTx(ctx, tx, organizationID, p)
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return SAMLProvider{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) UpdateSAMLProviderWithAudit(ctx context.Context, principal Principal, p SAMLProvider, remoteAddr string) (SAMLProvider, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	defer tx.Rollback(ctx)
+	p, err = updateSAMLProviderTx(ctx, tx, principal.OrganizationID, p)
+	if err != nil {
+		return SAMLProvider{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.update", "saml_provider", p.ID.String(), remoteAddr, nil); err != nil {
+		return SAMLProvider{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return SAMLProvider{}, err
+	}
+	return p, nil
+}
+
+func updateSAMLProviderTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, p SAMLProvider) (SAMLProvider, error) {
+	err := tx.QueryRow(ctx, `UPDATE saml_providers SET name=$3,idp_metadata=$4,domains=$5,email_attribute=$6,name_attribute=$7,default_role=$8,allow_idp_initiated=$9 WHERE id=$1 AND organization_id=$2 RETURNING id,organization_id,name,idp_metadata,certificate_pem,COALESCE(pending_certificate_pem,''),pending_certificate_not_after,pending_certificate_created_at,domains,email_attribute,name_attribute,default_role,allow_idp_initiated,enabled`, p.ID, organizationID, p.Name, p.IDPMetadata, p.Domains, p.EmailAttribute, p.NameAttribute, p.DefaultRole, p.AllowIDPInitiated).Scan(&p.ID, &p.OrganizationID, &p.Name, &p.IDPMetadata, &p.CertificatePEM, &p.PendingCertificatePEM, &p.PendingCertificateNotAfter, &p.PendingCertificateCreatedAt, &p.Domains, &p.EmailAttribute, &p.NameAttribute, &p.DefaultRole, &p.AllowIDPInitiated, &p.Enabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SAMLProvider{}, ErrNotFound
 	}
@@ -3413,7 +3469,7 @@ func (s *Store) UpdateSAMLProvider(ctx context.Context, organizationID uuid.UUID
 	if _, err = tx.Exec(ctx, `DELETE FROM saml_states WHERE provider_id=$1`, p.ID); err != nil {
 		return SAMLProvider{}, err
 	}
-	return p, tx.Commit(ctx)
+	return p, nil
 }
 
 func (s *Store) GetSAMLProvider(ctx context.Context, id uuid.UUID) (SAMLProvider, error) {

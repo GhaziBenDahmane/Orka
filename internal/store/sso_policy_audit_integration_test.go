@@ -129,6 +129,66 @@ func TestOIDCProviderMutationCommitsWithAudit(t *testing.T) {
 	}
 }
 
+func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, userID, providerID := uuid.New(), uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'SAML provider audit',$2)`, organizationID, "saml-provider-audit-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	invalidPrincipal := Principal{OrganizationID: organizationID, UserID: uuid.New()}
+	principal := Principal{OrganizationID: organizationID, UserID: userID}
+	providerInput := SAMLProvider{ID: providerID, Name: "Workforce", IDPMetadata: "original-metadata", CertificatePEM: "certificate", EncryptedPrivateKey: "original-key", Domains: []string{"example.test"}, EmailAttribute: "email", NameAttribute: "name", DefaultRole: "developer"}
+
+	if _, err := db.CreateSAMLProviderWithAudit(ctx, invalidPrincipal, providerInput, "127.0.0.1:1234"); err == nil {
+		t.Fatal("SAML provider creation succeeded without a valid audit actor")
+	}
+	if _, err := db.GetOrganizationSAMLProvider(ctx, organizationID, providerID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("failed audit did not roll back SAML provider creation: %v", err)
+	}
+	provider, err := db.CreateSAMLProviderWithAudit(ctx, principal, providerInput, "127.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateHash := []byte("pending-saml-state")
+	if err = db.CreateSAMLState(ctx, stateHash, provider.ID, "request-id"); err != nil {
+		t.Fatal(err)
+	}
+	update := provider
+	update.Name = "Renamed workforce"
+	update.IDPMetadata = "rotated-metadata"
+	update.DefaultRole = "viewer"
+	update.AllowIDPInitiated = true
+	if _, err = db.UpdateSAMLProviderWithAudit(ctx, invalidPrincipal, update, "127.0.0.1:1234"); err == nil {
+		t.Fatal("SAML provider update succeeded without a valid audit actor")
+	}
+	stored, err := db.GetOrganizationSAMLProvider(ctx, organizationID, provider.ID)
+	if err != nil || stored.Name != "Workforce" || stored.IDPMetadata != "original-metadata" || stored.DefaultRole != "developer" || stored.AllowIDPInitiated {
+		t.Fatalf("failed audit did not roll back SAML update: provider=%#v err=%v", stored, err)
+	}
+	var stateCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE token_hash=$1 AND provider_id=$2`, stateHash, provider.ID).Scan(&stateCount); err != nil || stateCount != 1 {
+		t.Fatalf("failed audit did not restore pending SAML state: count=%d err=%v", stateCount, err)
+	}
+	stored, err = db.UpdateSAMLProviderWithAudit(ctx, principal, update, "127.0.0.1:1234")
+	if err != nil || stored.Name != "Renamed workforce" || stored.IDPMetadata != "rotated-metadata" || stored.DefaultRole != "viewer" || !stored.AllowIDPInitiated {
+		t.Fatalf("audited SAML update=%#v err=%v", stored, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM saml_states WHERE provider_id=$1`, provider.ID).Scan(&stateCount); err != nil || stateCount != 0 {
+		t.Fatalf("successful SAML update retained login state: count=%d err=%v", stateCount, err)
+	}
+	var auditCount int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND resource_id=$3 AND action IN ('sso.saml.create','sso.saml.update')`, organizationID, userID, provider.ID.String()).Scan(&auditCount); err != nil || auditCount != 2 {
+		t.Fatalf("SAML provider mutation audit count=%d err=%v", auditCount, err)
+	}
+}
+
 func assertOIDCProviderEnabled(t *testing.T, pool interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, ctx context.Context, providerID uuid.UUID, want bool) {
