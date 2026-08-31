@@ -214,6 +214,9 @@ func (s RemoteSwarm) RunArtifactJob(ctx context.Context, job RemoteArtifactJob) 
 	if err = json.Unmarshal([]byte(output), &result); err != nil {
 		return result, fmt.Errorf("decode remote artifact result: %w", err)
 	}
+	if err = ValidateRemoteArtifactResult(job, result); err != nil {
+		return RemoteArtifactResult{}, err
+	}
 	return result, nil
 }
 
@@ -228,6 +231,9 @@ func (s RemoteSwarm) RunVolumeArtifact(ctx context.Context, job VolumeArtifactJo
 	}
 	if err = json.Unmarshal([]byte(output), &result); err != nil {
 		return result, fmt.Errorf("decode remote volume artifact result: %w", err)
+	}
+	if err = ValidateVolumeArtifactResult(job, result); err != nil {
+		return volumeartifact.Result{}, err
 	}
 	return result, nil
 }
@@ -247,7 +253,37 @@ func (s RemoteSwarm) RunDatabaseTransfer(ctx context.Context, job DatabaseTransf
 	if err = json.Unmarshal([]byte(output), &result); err != nil {
 		return result, fmt.Errorf("decode remote database transfer result: %w", err)
 	}
+	if err = ValidateDatabaseTransferResult(result); err != nil {
+		return DatabaseTransferResult{}, err
+	}
 	return result, nil
+}
+
+func ValidateRemoteArtifactResult(job RemoteArtifactJob, result RemoteArtifactResult) error {
+	if result.SizeBytes <= 0 || !artifactSHA256.MatchString(result.SHA256) || !artifactSHA256.MatchString(result.PlaintextSHA256) {
+		return errors.New("remote artifact result is missing valid checksums or size")
+	}
+	if job.Mode == "download" && (result.SizeBytes != job.SizeBytes || result.SHA256 != job.SHA256 || result.PlaintextSHA256 != job.PlaintextSHA256) {
+		return errors.New("remote artifact result does not match requested backup metadata")
+	}
+	return nil
+}
+
+func ValidateVolumeArtifactResult(job VolumeArtifactJob, result volumeartifact.Result) error {
+	if result.SizeBytes <= 0 || !artifactSHA256.MatchString(result.SHA256) || !artifactSHA256.MatchString(result.PlaintextSHA256) {
+		return errors.New("remote volume artifact result is missing valid checksums or size")
+	}
+	if job.Mode == "restore" && (result.SizeBytes != job.SizeBytes || result.SHA256 != job.SHA256 || result.PlaintextSHA256 != job.PlaintextSHA256) {
+		return errors.New("remote volume artifact result does not match requested backup metadata")
+	}
+	return nil
+}
+
+func ValidateDatabaseTransferResult(result DatabaseTransferResult) error {
+	if result.SizeBytes <= 0 || !artifactSHA256.MatchString(result.SHA256) {
+		return errors.New("remote database transfer result is missing a valid checksum or size")
+	}
+	return nil
 }
 
 func ValidateRemoteArtifactJob(job RemoteArtifactJob) error {

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/bendahma/dokploy-go/internal/volumeartifact"
 )
 
 func validRemoteArtifactJob() RemoteArtifactJob {
@@ -19,6 +21,51 @@ func validRemoteArtifactJob() RemoteArtifactJob {
 		SHA256:          strings.Repeat("a", 64),
 		PlaintextSHA256: strings.Repeat("b", 64),
 		SizeBytes:       1024,
+	}
+}
+
+func TestValidateRemoteArtifactResult(t *testing.T) {
+	job := validRemoteArtifactJob()
+	valid := RemoteArtifactResult{SHA256: job.SHA256, PlaintextSHA256: job.PlaintextSHA256, SizeBytes: job.SizeBytes}
+	if err := ValidateRemoteArtifactResult(job, valid); err != nil {
+		t.Fatalf("valid result rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*RemoteArtifactResult){
+		"size":             func(result *RemoteArtifactResult) { result.SizeBytes++ },
+		"encrypted digest": func(result *RemoteArtifactResult) { result.SHA256 = strings.Repeat("c", 64) },
+		"plaintext digest": func(result *RemoteArtifactResult) { result.PlaintextSHA256 = strings.Repeat("c", 64) },
+		"invalid digest":   func(result *RemoteArtifactResult) { result.SHA256 = strings.Repeat("z", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := valid
+			mutate(&result)
+			if err := ValidateRemoteArtifactResult(job, result); err == nil {
+				t.Fatal("untrusted result was accepted")
+			}
+		})
+	}
+	upload := job
+	upload.Mode, upload.SHA256, upload.PlaintextSHA256, upload.SizeBytes = "upload", "", "", 0
+	if err := ValidateRemoteArtifactResult(upload, RemoteArtifactResult{SHA256: strings.Repeat("c", 64), PlaintextSHA256: strings.Repeat("d", 64), SizeBytes: 42}); err != nil {
+		t.Fatalf("valid upload result rejected: %v", err)
+	}
+}
+
+func TestValidateRemoteVolumeAndDatabaseTransferResults(t *testing.T) {
+	volumeJob := VolumeArtifactJob{Job: volumeartifact.Job{Mode: "restore", SHA256: strings.Repeat("a", 64), PlaintextSHA256: strings.Repeat("b", 64), SizeBytes: 42}}
+	volumeResult := volumeartifact.Result{SHA256: volumeJob.SHA256, PlaintextSHA256: volumeJob.PlaintextSHA256, SizeBytes: volumeJob.SizeBytes}
+	if err := ValidateVolumeArtifactResult(volumeJob, volumeResult); err != nil {
+		t.Fatalf("valid volume result rejected: %v", err)
+	}
+	volumeResult.SizeBytes++
+	if err := ValidateVolumeArtifactResult(volumeJob, volumeResult); err == nil {
+		t.Fatal("mismatched volume restore result was accepted")
+	}
+	if err := ValidateDatabaseTransferResult(DatabaseTransferResult{SHA256: strings.Repeat("a", 64), SizeBytes: 42}); err != nil {
+		t.Fatalf("valid database transfer result rejected: %v", err)
+	}
+	if err := ValidateDatabaseTransferResult(DatabaseTransferResult{SHA256: strings.Repeat("z", 64), SizeBytes: 42}); err == nil {
+		t.Fatal("invalid database transfer result was accepted")
 	}
 }
 
