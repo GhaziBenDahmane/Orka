@@ -154,6 +154,50 @@ func TestTemplateRepositoryCredentialRotationFencesButRetainsCatalog(t *testing.
 	}
 }
 
+func TestTemplateRepositoryCredentialMutationQueuesAuthenticationRefresh(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, credentialID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Catalog credential refresh',$2)`, organizationID, "catalog-credential-refresh-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateSourceCredential(ctx, SourceCredential{ID: credentialID, OrganizationID: organizationID, Kind: "git", Name: "GitHub", Server: "github.com", Username: "token", EncryptedSecret: "old-ciphertext"}); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Manual catalog", Slug: "manual", RepositoryURL: "https://github.com/acme/catalog", GitRef: "main", CredentialID: &credentialID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.RotateSourceCredential(ctx, organizationID, credentialID, "new-ciphertext"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || stored.SyncRequestedAt == nil || stored.CredentialID == nil || *stored.CredentialID != credentialID {
+		t.Fatalf("rotation did not queue authenticated refresh: repository=%#v err=%v", stored, err)
+	}
+	claimed, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID || claimed.CredentialID == nil || *claimed.CredentialID != credentialID {
+		t.Fatalf("rotated credential refresh claim=%#v err=%v", claimed, err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, claimed, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.DeleteSourceCredential(ctx, organizationID, credentialID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = db.GetTemplateRepository(ctx, organizationID, repository.ID)
+	if err != nil || stored.SyncRequestedAt == nil || stored.CredentialID != nil {
+		t.Fatalf("deletion did not queue anonymous refresh: repository=%#v err=%v", stored, err)
+	}
+	claimed, err = db.ClaimDueTemplateRepository(ctx)
+	if err != nil || claimed.ID != repository.ID || claimed.CredentialID != nil {
+		t.Fatalf("anonymous credential refresh claim=%#v err=%v", claimed, err)
+	}
+}
+
 func TestTemplateRepositorySettingsRequireExactGitHubCredentialAuthority(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {

@@ -1834,6 +1834,12 @@ func deleteSourceCredentialTx(ctx context.Context, tx pgx.Tx, organizationID, id
 	if err := lockSourceCredentialConsumers(ctx, tx, organizationID, id); err != nil {
 		return err
 	}
+	// Repositories using a deleted GitHub token fall back to anonymous access.
+	// Queue a fenced refresh in the same transaction so manual-only catalogs do
+	// not retain an indefinitely unverified authentication state.
+	if _, err := tx.Exec(ctx, `UPDATE template_repositories SET credential_id=NULL,sync_requested_at=COALESCE(sync_requested_at,now()),updated_at=now() WHERE credential_id=$1 AND organization_id=$2`, id, organizationID); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `DELETE FROM source_credentials WHERE id=$1 AND organization_id=$2`, id, organizationID)
 	if err != nil {
 		return err
@@ -1888,7 +1894,16 @@ func rotateSourceCredentialTx(ctx context.Context, tx pgx.Tx, organizationID, id
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SourceCredential{}, ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return SourceCredential{}, err
+	}
+	// A repository sync is already fenced above. Queue a new attempt atomically
+	// so the replacement token is promptly proven, including for repositories
+	// configured without a periodic schedule.
+	if _, err = tx.Exec(ctx, `UPDATE template_repositories SET sync_requested_at=COALESCE(sync_requested_at,now()),updated_at=now() WHERE credential_id=$1 AND organization_id=$2`, id, organizationID); err != nil {
+		return SourceCredential{}, err
+	}
+	return item, nil
 }
 
 func lockSourceCredentialConsumers(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {

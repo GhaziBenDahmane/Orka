@@ -109,8 +109,10 @@ reuse an organization-scoped HTTPS Git source credential whose server is
 `github.com`; its token is decrypted only for the
 bounded archive request and is never copied into the repository record,
 response, audit event, or sync error. Deleting the credential safely returns
-the repository to unauthenticated access. Repository URLs remain restricted to
-canonical GitHub HTTPS URLs.
+the repository to unauthenticated access. Rotating or deleting a referenced
+credential atomically queues a refresh, including for manual-only repositories,
+so the replacement authentication state is promptly verified. Repository URLs
+remain restricted to canonical GitHub HTTPS URLs.
 
 Repository responses expose the pending request time, last attempt state, and
 bounded error. Prometheus reports queued/running ages and failed attempts, and
