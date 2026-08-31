@@ -196,7 +196,11 @@ func (s *Server) disableTemplateRepositoryWebhook(w http.ResponseWriter, r *http
 }
 
 func (s *Server) templateRepositoryWebhook(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("repositoryID"))
+	rawID := r.PathValue("repositoryID")
+	if !s.allowPublicWebhookAttempt(w, r, "template-repository", rawID) {
+		return
+	}
+	id, err := uuid.Parse(rawID)
 	if err != nil {
 		writeError(w, 404, "not_found", "template repository webhook not found")
 		return

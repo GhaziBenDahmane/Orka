@@ -853,6 +853,11 @@ func (s *Server) allowAuthenticationAttempt(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
+func (s *Server) allowPublicWebhookAttempt(w http.ResponseWriter, r *http.Request, kind, identifier string) bool {
+	return s.allowAuthenticationAttempt(w, r, "webhook-client", authenticationClientKey(r), 600) &&
+		s.allowAuthenticationAttempt(w, r, "webhook-target", cryptox.Digest(kind+":"+identifier), 300)
+}
+
 func authenticationClientKey(r *http.Request) []byte {
 	address := remoteIPAddress(r.RemoteAddr)
 	if address == nil {
@@ -3077,6 +3082,9 @@ func (s *Server) deployWebhook(w http.ResponseWriter, r *http.Request) {
 	token := r.PathValue("token")
 	if token == "" {
 		writeError(w, 404, "not_found", "deployment token not found")
+		return
+	}
+	if !s.allowPublicWebhookAttempt(w, r, "deploy", token) {
 		return
 	}
 	deployment, err := s.Store.QueueDeploymentByToken(r.Context(), cryptox.Digest(token))

@@ -94,7 +94,11 @@ func (s *Server) deleteWebhookIntegration(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) providerWebhook(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("integrationID"))
+	rawID := r.PathValue("integrationID")
+	if !s.allowPublicWebhookAttempt(w, r, "provider", rawID) {
+		return
+	}
+	id, err := uuid.Parse(rawID)
 	if err != nil {
 		writeError(w, 404, "not_found", "webhook integration not found")
 		return
