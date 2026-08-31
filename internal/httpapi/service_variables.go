@@ -216,7 +216,7 @@ func (s *Server) putServiceVariables(w http.ResponseWriter, r *http.Request) {
 			names = append(names, name)
 		}
 		sort.Strings(names)
-		updated, updateErr := s.Store.ReplaceComposeServiceEnvironment(r.Context(), p.OrganizationID, id, item.Revision, encrypted, templateManagedKeys)
+		updated, updateErr := s.Store.UpsertComposeServiceVariablesWithAudit(r.Context(), p, id, item.Revision, encrypted, templateManagedKeys, names, r.RemoteAddr)
 		if errors.Is(updateErr, store.ErrBusy) {
 			continue
 		}
@@ -224,7 +224,6 @@ func (s *Server) putServiceVariables(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, updateErr)
 			return
 		}
-		s.Store.Audit(r.Context(), &p, "service.variables.upsert", "compose_service", id.String(), r.RemoteAddr, map[string]any{"names": names, "count": len(names), "revision": updated.Revision})
 		writeJSON(w, 200, serviceVariableResponse(values, updated.Revision))
 		return
 	}
@@ -268,7 +267,7 @@ func (s *Server) deleteServiceVariable(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		updated, updateErr := s.Store.ReplaceComposeServiceEnvironment(r.Context(), p.OrganizationID, id, item.Revision, encrypted, nil)
+		_, updateErr := s.Store.DeleteComposeServiceVariableWithAudit(r.Context(), p, id, item.Revision, encrypted, name, r.RemoteAddr)
 		if errors.Is(updateErr, store.ErrBusy) {
 			continue
 		}
@@ -276,7 +275,6 @@ func (s *Server) deleteServiceVariable(w http.ResponseWriter, r *http.Request) {
 			writeStoreError(w, updateErr)
 			return
 		}
-		s.Store.Audit(r.Context(), &p, "service.variables.delete", "compose_service", id.String(), r.RemoteAddr, map[string]any{"name": name, "revision": updated.Revision})
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

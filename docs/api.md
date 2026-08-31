@@ -545,6 +545,9 @@ Compose revisions, encrypted runtime environment replacement, application
 build-source settings, encrypted build arguments/secrets, and uploaded source
 artifacts also commit with their audit evidence. Failed evidence preserves the
 previous revision and ciphertext instead of publishing an unattributed change.
+Individual variable upserts and deletions include their revision and
+secret-free variable names in that same atomic audit boundary; template-owned
+key provenance rolls back with the ciphertext.
 
 Service schedules accept standard five-field cron expressions (including
 ranges, lists, steps, month/day names, and common `@hourly` through `@yearly`

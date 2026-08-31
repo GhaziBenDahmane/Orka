@@ -17,6 +17,47 @@ func (s *Store) ReplaceComposeServiceEnvironment(ctx context.Context, organizati
 		return ComposeService{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err := s.replaceComposeServiceEnvironmentTx(ctx, tx, organizationID, serviceID, expectedRevision, encryptedEnvironment, templateManagedKeys)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	item.Tags, err = s.ListServiceTags(ctx, organizationID, serviceID)
+	return item, err
+}
+
+func (s *Store) UpsertComposeServiceVariablesWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, expectedRevision int64, encryptedEnvironment string, templateManagedKeys *[]string, names []string, remoteAddr string) (ComposeService, error) {
+	return s.replaceComposeServiceEnvironmentWithAudit(ctx, principal, serviceID, expectedRevision, encryptedEnvironment, templateManagedKeys, "service.variables.upsert", map[string]any{"names": names, "count": len(names)}, remoteAddr)
+}
+
+func (s *Store) DeleteComposeServiceVariableWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, expectedRevision int64, encryptedEnvironment, name, remoteAddr string) (ComposeService, error) {
+	return s.replaceComposeServiceEnvironmentWithAudit(ctx, principal, serviceID, expectedRevision, encryptedEnvironment, nil, "service.variables.delete", map[string]any{"name": name}, remoteAddr)
+}
+
+func (s *Store) replaceComposeServiceEnvironmentWithAudit(ctx context.Context, principal Principal, serviceID uuid.UUID, expectedRevision int64, encryptedEnvironment string, templateManagedKeys *[]string, action string, metadata map[string]any, remoteAddr string) (ComposeService, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err := s.replaceComposeServiceEnvironmentTx(ctx, tx, principal.OrganizationID, serviceID, expectedRevision, encryptedEnvironment, templateManagedKeys)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	metadata["revision"] = item.Revision
+	if err = appendPrincipalAudit(ctx, tx, principal, action, "compose_service", serviceID.String(), remoteAddr, metadata); err != nil {
+		return ComposeService{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	item.Tags, err = s.ListServiceTags(ctx, principal.OrganizationID, serviceID)
+	return item, err
+}
+
+func (s *Store) replaceComposeServiceEnvironmentTx(ctx context.Context, tx pgx.Tx, organizationID, serviceID uuid.UUID, expectedRevision int64, encryptedEnvironment string, templateManagedKeys *[]string) (ComposeService, error) {
 	projectID, environmentID, err := lockActiveServiceForMutation(ctx, tx, organizationID, serviceID)
 	if err != nil {
 		return ComposeService{}, err
@@ -40,9 +81,5 @@ func (s *Store) ReplaceComposeServiceEnvironment(ctx context.Context, organizati
 			return ComposeService{}, err
 		}
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return ComposeService{}, err
-	}
-	item.Tags, err = s.ListServiceTags(ctx, organizationID, serviceID)
-	return item, err
+	return item, nil
 }
