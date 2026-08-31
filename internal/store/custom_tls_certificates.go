@@ -46,11 +46,45 @@ func scanCustomTLSCertificate(row pgx.Row) (CustomTLSCertificate, error) {
 }
 
 func (s *Store) CreateCustomTLSCertificate(ctx context.Context, item CustomTLSCertificate) (CustomTLSCertificate, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createCustomTLSCertificateTx(ctx, tx, item)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) CreateCustomTLSCertificateWithAudit(ctx context.Context, principal Principal, item CustomTLSCertificate, remoteAddr string) (CustomTLSCertificate, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = createCustomTLSCertificateTx(ctx, tx, item)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "custom_tls_certificate.create", "custom_tls_certificate", item.ID.String(), remoteAddr, map[string]any{"fingerprint": item.Fingerprint, "notAfter": item.NotAfter}); err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func createCustomTLSCertificateTx(ctx context.Context, tx pgx.Tx, item CustomTLSCertificate) (CustomTLSCertificate, error) {
 	if item.ID == uuid.Nil {
 		item.ID = uuid.New()
 	}
 	item.Revision = 1
-	return scanCustomTLSCertificate(s.Pool.QueryRow(ctx, `INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,common_name,dns_names,not_before,not_after) SELECT $1,o.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM organizations o WHERE o.id=$2 RETURNING `+customTLSCertificateColumns, item.ID, item.OrganizationID, item.Name, item.EncryptedCertificate, item.EncryptedPrivateKey, item.Fingerprint, item.CommonName, item.DNSNames, item.NotBefore, item.NotAfter))
+	item, err := scanCustomTLSCertificate(tx.QueryRow(ctx, `INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,common_name,dns_names,not_before,not_after) SELECT $1,o.id,$3,$4,$5,$6,$7,$8,$9,$10 FROM organizations o WHERE o.id=$2 RETURNING `+customTLSCertificateColumns, item.ID, item.OrganizationID, item.Name, item.EncryptedCertificate, item.EncryptedPrivateKey, item.Fingerprint, item.CommonName, item.DNSNames, item.NotBefore, item.NotAfter))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CustomTLSCertificate{}, ErrNotFound
+	}
+	return item, err
 }
 
 func (s *Store) ListCustomTLSCertificates(ctx context.Context, organizationID uuid.UUID) ([]CustomTLSCertificate, error) {
@@ -84,6 +118,32 @@ func (s *Store) UpdateCustomTLSCertificate(ctx context.Context, item CustomTLSCe
 		return CustomTLSCertificate{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = updateCustomTLSCertificateTx(ctx, tx, item)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func (s *Store) UpdateCustomTLSCertificateWithAudit(ctx context.Context, principal Principal, item CustomTLSCertificate, remoteAddr string) (CustomTLSCertificate, error) {
+	item.OrganizationID = principal.OrganizationID
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	defer tx.Rollback(ctx)
+	item, err = updateCustomTLSCertificateTx(ctx, tx, item)
+	if err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "custom_tls_certificate.rotate", "custom_tls_certificate", item.ID.String(), remoteAddr, map[string]any{"fingerprint": item.Fingerprint, "notAfter": item.NotAfter, "revision": item.Revision}); err != nil {
+		return CustomTLSCertificate{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func updateCustomTLSCertificateTx(ctx context.Context, tx pgx.Tx, item CustomTLSCertificate) (CustomTLSCertificate, error) {
+	var err error
 	item, err = scanCustomTLSCertificate(tx.QueryRow(ctx, `UPDATE custom_tls_certificates SET name=$3,encrypted_certificate=$4,encrypted_private_key=$5,fingerprint=$6,common_name=$7,dns_names=$8,not_before=$9,not_after=$10,revision=revision+1,updated_at=now() WHERE id=$1 AND organization_id=$2 AND revision=$11 RETURNING `+customTLSCertificateColumns, item.ID, item.OrganizationID, item.Name, item.EncryptedCertificate, item.EncryptedPrivateKey, item.Fingerprint, item.CommonName, item.DNSNames, item.NotBefore, item.NotAfter, item.Revision))
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool
@@ -101,17 +161,44 @@ func (s *Store) UpdateCustomTLSCertificate(ctx context.Context, item CustomTLSCe
 	if err = queueCertificateTargetsForCertificateTx(ctx, tx, item.ID); err != nil {
 		return CustomTLSCertificate{}, err
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) DeleteCustomTLSCertificate(ctx context.Context, organizationID, id uuid.UUID) error {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM custom_tls_certificates certificate WHERE certificate.id=$1 AND certificate.organization_id=$2 AND NOT EXISTS(SELECT 1 FROM routes WHERE custom_certificate_id=certificate.id)`, id, organizationID)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteCustomTLSCertificateTx(ctx, tx, organizationID, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) DeleteCustomTLSCertificateWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = deleteCustomTLSCertificateTx(ctx, tx, principal.OrganizationID, id); err != nil {
+		return err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "custom_tls_certificate.delete", "custom_tls_certificate", id.String(), remoteAddr, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func deleteCustomTLSCertificateTx(ctx context.Context, tx pgx.Tx, organizationID, id uuid.UUID) error {
+	tag, err := tx.Exec(ctx, `DELETE FROM custom_tls_certificates certificate WHERE certificate.id=$1 AND certificate.organization_id=$2 AND NOT EXISTS(SELECT 1 FROM routes WHERE custom_certificate_id=certificate.id)`, id, organizationID)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		var exists bool
-		if err = s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM custom_tls_certificates WHERE id=$1 AND organization_id=$2)`, id, organizationID).Scan(&exists); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM custom_tls_certificates WHERE id=$1 AND organization_id=$2)`, id, organizationID).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {

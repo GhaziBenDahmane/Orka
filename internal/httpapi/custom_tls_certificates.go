@@ -27,13 +27,12 @@ func (s *Server) createCustomTLSCertificate(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	item, err := s.Store.CreateCustomTLSCertificate(r.Context(), item)
+	p := principal(r)
+	item, err := s.Store.CreateCustomTLSCertificateWithAudit(r.Context(), p, item, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	p := principal(r)
-	s.Store.Audit(r.Context(), &p, "custom_tls_certificate.create", "custom_tls_certificate", item.ID.String(), r.RemoteAddr, map[string]any{"fingerprint": item.Fingerprint, "notAfter": item.NotAfter})
 	writeJSON(w, http.StatusCreated, item)
 }
 
@@ -64,13 +63,12 @@ func (s *Server) updateCustomTLSCertificate(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	item, err = s.Store.UpdateCustomTLSCertificate(r.Context(), item)
+	p := principal(r)
+	item, err = s.Store.UpdateCustomTLSCertificateWithAudit(r.Context(), p, item, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	p := principal(r)
-	s.Store.Audit(r.Context(), &p, "custom_tls_certificate.rotate", "custom_tls_certificate", item.ID.String(), r.RemoteAddr, map[string]any{"fingerprint": item.Fingerprint, "notAfter": item.NotAfter, "revision": item.Revision})
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -81,11 +79,10 @@ func (s *Server) deleteCustomTLSCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	p := principal(r)
-	if err = s.Store.DeleteCustomTLSCertificate(r.Context(), p.OrganizationID, id); err != nil {
+	if err = s.Store.DeleteCustomTLSCertificateWithAudit(r.Context(), p, id, r.RemoteAddr); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "custom_tls_certificate.delete", "custom_tls_certificate", id.String(), r.RemoteAddr, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -295,7 +295,9 @@ resource-bound contexts and remain write-only. A route selects one with
 coverage is checked transactionally. Route attachment and certificate rotation
 queue a generation-fenced edge reconciliation; workload deployment waits until
 the target generation is ready. Remote reconciliation proceeds only while the
-agent reports a fresh, verified custom-certificate edge capability.
+agent reports a fresh, verified custom-certificate edge capability. Certificate
+creation, key rotation, and deletion commit atomically with their audit events,
+so failed evidence cannot retain or replace private-key material.
 
 ## AI auditing
 
