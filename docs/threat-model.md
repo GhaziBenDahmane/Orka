@@ -21,7 +21,7 @@ new mutations instead of weakening authentication or silently skipping checks.
 | Boundary | Trusted material | Untrusted input | Required control |
 |---|---|---|---|
 | Public API and console | session/service-account hashes, RBAC policy | HTTP bodies, identifiers, forwarded metadata, server responses consumed by operator tools | authentication, tenant-scoped queries, bounded request/response handling, rate limits, security headers, non-cacheable API responses |
-| Global metrics | dedicated operator-token hash | scrape requests | separate fail-closed bearer authentication with no tenant-token fallback |
+| Global metrics | dedicated operator-token hash, controller build identity | scrape requests and Swarm task discovery | separate fail-closed bearer authentication with no tenant-token fallback, dedicated encrypted internal overlay, per-task DNS targets, bounded immutable labels |
 | SSO and SCIM | provider configuration, SP keys, SCIM token hashes | discovery documents, assertions, claims, directory writes | exact issuer/audience/domain checks, HTTPS-only OIDC and SAML endpoints, redirect-free and response-bounded OIDC requests, PKCE/nonce/state, XML signatures, replay protection, tenant binding |
 | PostgreSQL | desired state, encrypted secrets, audit chain, job fences | concurrent controller/worker transactions | TLS in HA, migrations, row/tenant predicates, transactionally coupled mutations and audit evidence, leases and fencing |
 | Local Swarm manager | Docker socket, registry credentials | Compose, build sources, image behavior, container logs | safe Compose compiler, argument-only process execution, bounded Docker output, encrypted overlays, temporary credentials, immutable release images |
@@ -77,6 +77,16 @@ forwarding headers only when the immediate peer belongs to an explicitly
 configured trusted-proxy CIDR, walks proxy chains from right to left, and
 ignores malformed chains. This preserves per-client authentication throttling
 and audit attribution without allowing direct clients to spoof either value.
+
+Metrics use a separate encrypted, internal, stack-scoped overlay that is not
+shared with tenant workloads, Traefik, or PostgreSQL. Prometheus joins that
+network as a Swarm service and resolves `tasks.<stack>_dockyard`, producing one
+target per controller instead of sending all scrapes through the service VIP.
+The endpoint still requires the dedicated operator token. Controller build
+labels accept only a bounded character set and length, contain no host or task
+identity, and are injected from release metadata. Replica-count and build/driver
+fingerprint alerts therefore fail visibly when discovery is incomplete or a
+rollout leaves heterogeneous controllers; they do not authorize mutations.
 
 ### Credential disclosure
 
