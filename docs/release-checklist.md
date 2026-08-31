@@ -208,7 +208,10 @@ links for every item below.
   backup and restore quiescence, encrypted-artifact integrity, replacement of
   deliberately corrupted contents, preservation of permissions and safe
   symlinks, workload resumption, data survival after a service restart, and
-  retention losing safely to a restore queued after candidate selection.
+  retention losing safely to a restore queued after candidate selection. The
+  disposable gate also removes the workload, performs an offline restore with
+  the candidate helper, proves no application service exists during transfer,
+  and verifies recovered data before and after recreating the workload.
   Exercise the offline recovery path on a multi-node Swarm: stop and rebind a
   workload, restore its retained artifact onto the new node without starting
   application services, then start it and verify the pre-failure data. Evidence

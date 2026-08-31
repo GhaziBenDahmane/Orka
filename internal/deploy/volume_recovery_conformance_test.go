@@ -34,8 +34,14 @@ type volumeRecoveryEvidence struct {
 	PlaintextSHA256           string  `json:"plaintextSha256"`
 	BackupSeconds             float64 `json:"backupSeconds"`
 	RTOSeconds                float64 `json:"rtoSeconds"`
+	OfflineRestoreSeconds     float64 `json:"offlineRestoreSeconds"`
+	BackupNodeID              string  `json:"backupNodeId"`
+	OfflineRestoreNodeID      string  `json:"offlineRestoreNodeId"`
 	BackupQuiesced            bool    `json:"backupQuiesced"`
 	RestoreQuiesced           bool    `json:"restoreQuiesced"`
+	OfflineWorkloadAbsent     bool    `json:"offlineWorkloadAbsent"`
+	OfflineRestoreVerified    bool    `json:"offlineRestoreVerified"`
+	OfflineStartVerified      bool    `json:"offlineStartVerified"`
 	EncryptedArtifactVerified bool    `json:"encryptedArtifactVerified"`
 	CorruptionReplaced        bool    `json:"corruptionReplaced"`
 	PermissionsVerified       bool    `json:"permissionsVerified"`
@@ -46,10 +52,10 @@ type volumeRecoveryEvidence struct {
 }
 
 func (e volumeRecoveryEvidence) validate() error {
-	if e.Status != "passed" || !ociref.IsDigestPinned(e.Image) || e.ArtifactBytes <= 0 || !artifactSHA256.MatchString(e.EncryptedSHA256) || !artifactSHA256.MatchString(e.PlaintextSHA256) || e.BackupSeconds < 0 || e.RTOSeconds < 0 {
+	if e.Status != "passed" || !ociref.IsDigestPinned(e.Image) || e.ArtifactBytes <= 0 || !artifactSHA256.MatchString(e.EncryptedSHA256) || !artifactSHA256.MatchString(e.PlaintextSHA256) || e.BackupSeconds < 0 || e.RTOSeconds < 0 || e.OfflineRestoreSeconds < 0 || !safeNodeID.MatchString(e.BackupNodeID) || !safeNodeID.MatchString(e.OfflineRestoreNodeID) {
 		return errors.New("invalid named-volume recovery evidence identity or measurements")
 	}
-	if !e.BackupQuiesced || !e.RestoreQuiesced || !e.EncryptedArtifactVerified || !e.CorruptionReplaced || !e.PermissionsVerified || !e.SymlinkVerified || !e.WorkloadResumed || !e.RestartVerified || !e.RetentionRestoreProtected {
+	if !e.BackupQuiesced || !e.RestoreQuiesced || !e.OfflineWorkloadAbsent || !e.OfflineRestoreVerified || !e.OfflineStartVerified || !e.EncryptedArtifactVerified || !e.CorruptionReplaced || !e.PermissionsVerified || !e.SymlinkVerified || !e.WorkloadResumed || !e.RestartVerified || !e.RetentionRestoreProtected {
 		return errors.New("named-volume recovery evidence has an unverified assertion")
 	}
 	return nil
@@ -57,8 +63,9 @@ func (e volumeRecoveryEvidence) validate() error {
 
 // TestNamedVolumeRecoveryConformance is an opt-in release gate that exercises
 // the production helper image through a real Swarm service. It proves that
-// writers are quiesced, the encrypted artifact replaces corrupted data, and
-// the mounting workload resumes and survives a restart.
+// writers are quiesced, the encrypted artifact replaces corrupted data, the
+// mounting workload resumes and survives a restart, and the same artifact can
+// be restored while the workload is absent without implicitly starting it.
 func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	if os.Getenv("DOCKYARD_TEST_VOLUME_RECOVERY") != "1" {
 		t.Skip("set DOCKYARD_TEST_VOLUME_RECOVERY=1 to run named-volume recovery conformance")
@@ -109,9 +116,9 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	waitVolumeReplicas(t, ctx, helperService, "1/1")
 
 	artifactPath := filepath.Join(t.TempDir(), "volume.tar.gz.enc")
-	var backupQuiesced, restoreQuiesced atomic.Bool
-	var backupObservation, restoreObservation atomic.Value
-	transferURL, stopServer := volumeTransferServer(t, artifactPath, workloadService, &backupQuiesced, &restoreQuiesced, &backupObservation, &restoreObservation)
+	var backupQuiesced, restoreQuiesced, offlineWorkloadAbsent atomic.Bool
+	var backupObservation, restoreObservation, offlineObservation atomic.Value
+	transferURL, stopServer := volumeTransferServer(t, artifactPath, workloadService, &backupQuiesced, &restoreQuiesced, &offlineWorkloadAbsent, &backupObservation, &restoreObservation, &offlineObservation)
 	defer stopServer()
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
@@ -159,6 +166,29 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	waitVolumeReplicas(t, ctx, workloadService, "1/1")
 	verifyVolumeContents(t, ctx, probeImage, volumeName, marker)
 
+	volumeDocker(t, ctx, "service", "rm", workloadService)
+	waitVolumeServicesGone(workloadService)
+	if output, _ := volumeDockerOutput(ctx, "service", "ls", "--filter", "name="+workloadService, "--format", "{{.Name}}"); strings.TrimSpace(output) != "" {
+		t.Fatalf("workload service still exists before offline restore: %q", strings.TrimSpace(output))
+	}
+	volumeDocker(t, ctx, "run", "--rm", "--entrypoint", "sh", "--mount", "type=volume,source="+volumeName+",target=/volume", probeImage, "-ec", "rm -rf /volume/* /volume/.[!.]* /volume/..?*; printf offline-corruption >/volume/corrupt.txt")
+	offlineStarted := time.Now()
+	offlineRestored, err := runner.RunVolumeArtifact(ctx, VolumeArtifactJob{Job: volumeartifact.Job{Mode: "restore", TransferURL: transferURL + "?offline=1", EncryptionKey: base64.RawStdEncoding.EncodeToString(key), EncryptionAAD: aad, SHA256: backup.SHA256, PlaintextSHA256: backup.PlaintextSHA256, SizeBytes: backup.SizeBytes}, VolumeName: volumeName, NodeID: nodeID, Network: networkName, StackName: stackName, Offline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offlineSeconds := time.Since(offlineStarted).Seconds()
+	if !offlineWorkloadAbsent.Load() {
+		t.Fatalf("application workload existed during offline restore: %v", offlineObservation.Load())
+	}
+	if offlineRestored != backup {
+		t.Fatalf("offline restore result=%#v backup=%#v", offlineRestored, backup)
+	}
+	verifyVolumeContents(t, ctx, probeImage, volumeName, marker)
+	volumeDocker(t, ctx, "service", "create", "--detach", "--name", workloadService, "--label", "com.docker.stack.namespace="+stackName, "--constraint", "node.id=="+nodeID, "--mount", "type=volume,source="+volumeName+",target=/volume", "--entrypoint", "sh", probeImage, "-c", "while :; do sleep 60; done")
+	waitVolumeReplicas(t, ctx, workloadService, "1/1")
+	verifyVolumeContents(t, ctx, probeImage, volumeName, marker)
+
 	sourceCommit := os.Getenv("GITHUB_SHA")
 	if sourceCommit == "" {
 		sourceCommit = "local"
@@ -166,7 +196,8 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	evidence := volumeRecoveryEvidence{
 		Status: "passed", SourceCommit: sourceCommit, Image: helperImage,
 		ArtifactBytes: backup.SizeBytes, EncryptedSHA256: backup.SHA256, PlaintextSHA256: backup.PlaintextSHA256,
-		BackupSeconds: backupSeconds, RTOSeconds: restoreSeconds, BackupQuiesced: true, RestoreQuiesced: true,
+		BackupSeconds: backupSeconds, RTOSeconds: restoreSeconds, OfflineRestoreSeconds: offlineSeconds, BackupNodeID: nodeID, OfflineRestoreNodeID: nodeID,
+		BackupQuiesced: true, RestoreQuiesced: true, OfflineWorkloadAbsent: true, OfflineRestoreVerified: true, OfflineStartVerified: true,
 		EncryptedArtifactVerified: true, CorruptionReplaced: true, PermissionsVerified: true, SymlinkVerified: true,
 		WorkloadResumed: true, RestartVerified: true, RetentionRestoreProtected: true,
 	}
@@ -187,7 +218,7 @@ func TestNamedVolumeRecoveryConformance(t *testing.T) {
 	t.Logf("VOLUME_RECOVERY_EVIDENCE %s", encoded)
 }
 
-func volumeTransferServer(t *testing.T, artifactPath, workloadService string, backupQuiesced, restoreQuiesced *atomic.Bool, backupObservation, restoreObservation *atomic.Value) (string, func()) {
+func volumeTransferServer(t *testing.T, artifactPath, workloadService string, backupQuiesced, restoreQuiesced, offlineWorkloadAbsent *atomic.Bool, backupObservation, restoreObservation, offlineObservation *atomic.Value) (string, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
@@ -216,8 +247,14 @@ func volumeTransferServer(t *testing.T, artifactPath, workloadService string, ba
 			}
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodGet:
-			restoreQuiesced.Store(quiesced)
-			restoreObservation.Store(observation)
+			if r.URL.Query().Get("offline") == "1" {
+				absent := inspectErr != nil && tasksErr != nil && strings.TrimSpace(running) == ""
+				offlineWorkloadAbsent.Store(absent)
+				offlineObservation.Store(observation)
+			} else {
+				restoreQuiesced.Store(quiesced)
+				restoreObservation.Store(observation)
+			}
 			http.ServeFile(w, r, artifactPath)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -314,7 +351,8 @@ func TestVolumeRecoveryEvidenceContract(t *testing.T) {
 	evidence := volumeRecoveryEvidence{
 		Status: "passed", SourceCommit: "local", Image: "registry.example/orka@sha256:" + strings.Repeat("a", 64),
 		ArtifactBytes: 42, EncryptedSHA256: strings.Repeat("b", 64), PlaintextSHA256: strings.Repeat("c", 64), BackupSeconds: 1, RTOSeconds: 2,
-		BackupQuiesced: true, RestoreQuiesced: true, EncryptedArtifactVerified: true, CorruptionReplaced: true,
+		OfflineRestoreSeconds: 3, BackupNodeID: "nodeabc123", OfflineRestoreNodeID: "nodeabc123",
+		BackupQuiesced: true, RestoreQuiesced: true, OfflineWorkloadAbsent: true, OfflineRestoreVerified: true, OfflineStartVerified: true, EncryptedArtifactVerified: true, CorruptionReplaced: true,
 		PermissionsVerified: true, SymlinkVerified: true, WorkloadResumed: true, RestartVerified: true, RetentionRestoreProtected: true,
 	}
 	if err := evidence.validate(); err != nil {

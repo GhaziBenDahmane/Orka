@@ -403,8 +403,10 @@ jobs:
           DOCKYARD_TEST_VOLUME_RECOVERY=1 go test -timeout 15m -run TestNamedVolumeRecoveryConformance -v -count=1 ./internal/deploy | tee volume-recovery-conformance.log
           jq -e --arg image "$DOCKYARD_TEST_VOLUME_HELPER_IMAGE" --arg sourceCommit "$GITHUB_SHA" '
             .status == "passed" and .image == $image and .sourceCommit == $sourceCommit and
-            .artifactBytes > 0 and .backupSeconds >= 0 and .rtoSeconds >= 0 and
+            .artifactBytes > 0 and .backupSeconds >= 0 and .rtoSeconds >= 0 and .offlineRestoreSeconds >= 0 and
+            (.backupNodeId | test("^[a-z0-9]{1,64}$")) and (.offlineRestoreNodeId | test("^[a-z0-9]{1,64}$")) and
             .backupQuiesced and .restoreQuiesced and .encryptedArtifactVerified and
+            .offlineWorkloadAbsent and .offlineRestoreVerified and .offlineStartVerified and
             .corruptionReplaced and .permissionsVerified and .symlinkVerified and
             .workloadResumed and .restartVerified and .retentionRestoreProtected
           ' volume-recovery-conformance.json >/dev/null
