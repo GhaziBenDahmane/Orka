@@ -555,6 +555,11 @@ grant applies within that environment. Scoped roles elevate a member's
 organization role; they never reduce an owner or administrator's authority.
 Service accounts continue to use their organization-scoped role.
 
+Project, environment, and Compose-service creation commit atomically with the
+operator audit event. An audit persistence failure rolls back the entire new
+resource, including encrypted service configuration, and service-account
+automation is attributed separately from users.
+
 Project and environment deletion is asynchronous and cascades through service
 stack finalizers. Cascades lock every child database and service, reject active
 deployment or data work (including databases without a linked Compose service),

@@ -863,16 +863,46 @@ func (s *Store) CreateProject(ctx context.Context, organizationID uuid.UUID, nam
 		return Project{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err = s.enforcePolicy(ctx, tx, organizationID, nil, nil, "projects"); err != nil {
+	p, err := s.createProjectTx(ctx, tx, organizationID, name, slug, description)
+	if err != nil {
+		return Project{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Project{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) CreateProjectWithAudit(ctx context.Context, principal Principal, name, slug, description, remoteAddr string) (Project, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback(ctx)
+	p, err := s.createProjectTx(ctx, tx, principal.OrganizationID, name, slug, description)
+	if err != nil {
+		return Project{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "project.create", "project", p.ID.String(), remoteAddr, nil); err != nil {
+		return Project{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Project{}, err
+	}
+	return p, nil
+}
+
+func (s *Store) createProjectTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, name, slug, description string) (Project, error) {
+	if err := s.enforcePolicy(ctx, tx, organizationID, nil, nil, "projects"); err != nil {
 		return Project{}, err
 	}
 	p := Project{ID: uuid.New(), OrganizationID: organizationID, Name: name, Slug: slug, Description: description}
 	p.Tags = []Tag{}
-	err = tx.QueryRow(ctx, `INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,$3,$4,$5) RETURNING created_at`, p.ID, p.OrganizationID, p.Name, p.Slug, p.Description).Scan(&p.CreatedAt)
+	err := tx.QueryRow(ctx, `INSERT INTO projects(id,organization_id,name,slug,description) VALUES($1,$2,$3,$4,$5) RETURNING created_at`, p.ID, p.OrganizationID, p.Name, p.Slug, p.Description).Scan(&p.CreatedAt)
 	if err != nil {
 		return Project{}, err
 	}
-	return p, tx.Commit(ctx)
+	return p, nil
 }
 
 func (s *Store) ListProjects(ctx context.Context, organizationID uuid.UUID) ([]Project, error) {
@@ -1100,7 +1130,38 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 		return Environment{}, err
 	}
 	defer tx.Rollback(ctx)
+	e, err := s.createEnvironmentWithPlacementTx(ctx, tx, organizationID, projectID, name, slug, clusterID, selector, minimumNodes, minimumNanoCPUs, minimumMemoryBytes)
+	if err != nil {
+		return Environment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Environment{}, err
+	}
+	return e, nil
+}
+
+func (s *Store) CreateEnvironmentWithPlacementAndAudit(ctx context.Context, principal Principal, projectID uuid.UUID, name, slug string, clusterID *uuid.UUID, selector map[string]string, minimumNodes int, minimumNanoCPUs, minimumMemoryBytes int64, remoteAddr string) (Environment, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return Environment{}, err
+	}
+	defer tx.Rollback(ctx)
+	e, err := s.createEnvironmentWithPlacementTx(ctx, tx, principal.OrganizationID, projectID, name, slug, clusterID, selector, minimumNodes, minimumNanoCPUs, minimumMemoryBytes)
+	if err != nil {
+		return Environment{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "environment.create", "environment", e.ID.String(), remoteAddr, nil); err != nil {
+		return Environment{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Environment{}, err
+	}
+	return e, nil
+}
+
+func (s *Store) createEnvironmentWithPlacementTx(ctx context.Context, tx pgx.Tx, organizationID, projectID uuid.UUID, name, slug string, clusterID *uuid.UUID, selector map[string]string, minimumNodes int, minimumNanoCPUs, minimumMemoryBytes int64) (Environment, error) {
 	var lockedProjectID uuid.UUID
+	var err error
 	if err = tx.QueryRow(ctx, `SELECT id FROM projects WHERE id=$1 AND organization_id=$2 AND deletion_requested_at IS NULL FOR UPDATE`, projectID, organizationID).Scan(&lockedProjectID); errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	} else if err != nil {
@@ -1144,7 +1205,7 @@ func (s *Store) CreateEnvironmentWithPlacement(ctx context.Context, organization
 	if err != nil {
 		return Environment{}, err
 	}
-	return e, tx.Commit(ctx)
+	return e, nil
 }
 
 func (s *Store) ListEnvironments(ctx context.Context, organizationID, projectID uuid.UUID) ([]Environment, error) {
@@ -1298,6 +1359,36 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 		return ComposeService{}, err
 	}
 	defer tx.Rollback(ctx)
+	service, err = s.createComposeServiceTx(ctx, tx, organizationID, service)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	return service, nil
+}
+
+func (s *Store) CreateComposeServiceWithAudit(ctx context.Context, principal Principal, service ComposeService, remoteAddr string) (ComposeService, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	defer tx.Rollback(ctx)
+	service, err = s.createComposeServiceTx(ctx, tx, principal.OrganizationID, service)
+	if err != nil {
+		return ComposeService{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "service.create", "compose_service", service.ID.String(), remoteAddr, nil); err != nil {
+		return ComposeService{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return ComposeService{}, err
+	}
+	return service, nil
+}
+
+func (s *Store) createComposeServiceTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, service ComposeService) (ComposeService, error) {
 	projectID, err := lockEnvironmentForServiceCreation(ctx, tx, organizationID, service.EnvironmentID)
 	if err != nil {
 		return ComposeService{}, err
@@ -1318,7 +1409,7 @@ func (s *Store) CreateComposeService(ctx context.Context, organizationID uuid.UU
 	if err != nil {
 		return ComposeService{}, err
 	}
-	return service, tx.Commit(ctx)
+	return service, nil
 }
 
 func (s *Store) UpdateComposeService(ctx context.Context, organizationID, id uuid.UUID, composeYAML, encryptedEnv string) (ComposeService, error) {

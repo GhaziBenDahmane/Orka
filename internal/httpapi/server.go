@@ -1076,12 +1076,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateProject(r.Context(), p.OrganizationID, in.Name, in.Slug, in.Description)
+	item, err := s.Store.CreateProjectWithAudit(r.Context(), p, in.Name, in.Slug, in.Description, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "project.create", "project", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
 func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -1116,7 +1115,7 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	item, err := s.Store.CreateEnvironmentWithPlacement(r.Context(), p.OrganizationID, projectID, in.Name, in.Slug, in.ClusterID, in.PlacementSelector, in.MinimumNodes, in.MinimumNanoCPUs, in.MinimumMemoryBytes)
+	item, err := s.Store.CreateEnvironmentWithPlacementAndAudit(r.Context(), p, projectID, in.Name, in.Slug, in.ClusterID, in.PlacementSelector, in.MinimumNodes, in.MinimumNanoCPUs, in.MinimumMemoryBytes, r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrNoCapacity) {
 			writeError(w, http.StatusConflict, "no_cluster_capacity", err.Error())
@@ -1125,7 +1124,6 @@ func (s *Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "environment.create", "environment", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
 
@@ -1226,12 +1224,11 @@ func (s *Server) createService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := principal(r)
-	item, err := s.Store.CreateComposeService(r.Context(), p.OrganizationID, store.ComposeService{ID: id, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, StackName: "dy-" + in.Slug + "-" + strings.Split(id.String(), "-")[0], ComposeYAML: in.ComposeYAML, EncryptedEnv: encrypted})
+	item, err := s.Store.CreateComposeServiceWithAudit(r.Context(), p, store.ComposeService{ID: id, EnvironmentID: environmentID, Name: in.Name, Slug: in.Slug, StackName: "dy-" + in.Slug + "-" + strings.Split(id.String(), "-")[0], ComposeYAML: in.ComposeYAML, EncryptedEnv: encrypted}, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.Store.Audit(r.Context(), &p, "service.create", "compose_service", item.ID.String(), r.RemoteAddr, nil)
 	writeJSON(w, 201, item)
 }
 
