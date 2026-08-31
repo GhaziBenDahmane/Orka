@@ -1683,6 +1683,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseBackup'
         default:
           description: Structured API error
           content:
@@ -1774,6 +1778,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseMigration'
         default:
           description: Structured API error
           content:
@@ -1821,6 +1829,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseRestore'
         default:
           description: Structured API error
           content:
@@ -1972,6 +1984,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseBackupList'
         default:
           description: Structured API error
           content:
@@ -2045,6 +2061,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseMigrationList'
         default:
           description: Structured API error
           content:
@@ -2065,6 +2085,10 @@ paths:
       responses:
         '2XX':
           description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatabaseRestoreList'
         default:
           description: Structured API error
           content:
@@ -5485,6 +5509,82 @@ components:
     mutualTLS:
       type: mutualTLS
   schemas:
+    DatabaseBackup:
+      type: object
+      required: [id, databaseInstanceId, status, format, encrypted, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        databaseInstanceId: {type: string, format: uuid}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        format: {type: string}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        encrypted: {type: boolean}
+        plaintextSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        destinationId: {type: string, format: uuid}
+        objectKey: {type: string}
+        utilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    DatabaseBackupList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatabaseBackup'}
+    DatabaseRestore:
+      type: object
+      required: [id, databaseBackupId, status, kind, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        databaseBackupId: {type: string, format: uuid}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        kind: {type: string, enum: [manual, drill]}
+        utilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        readinessImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    DatabaseRestoreList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatabaseRestore'}
+    DatabaseMigration:
+      type: object
+      required: [id, databaseInstanceId, sourceKind, sourceId, sourceEngine, sourceVersion, sourceHost, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        databaseInstanceId: {type: string, format: uuid}
+        sourceKind: {type: string}
+        sourceId: {type: string}
+        sourceEngine: {type: string}
+        sourceVersion: {type: string}
+        sourceHost: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        output: {type: string}
+        sourceUtilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        targetUtilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        readinessImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    DatabaseMigrationList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatabaseMigration'}
     DatabaseEngine:
       type: object
       required: [name, defaultVersion, source, backupCapable, backupExtension]

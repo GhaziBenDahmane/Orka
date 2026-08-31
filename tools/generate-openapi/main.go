@@ -69,7 +69,8 @@ paths:
 			}
 			parameters := parameterPattern.FindAllStringSubmatch(op.path, -1)
 			isSCIMList := op.method == "get" && (op.path == "/scim/v2/Users" || op.path == "/scim/v2/Groups")
-			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList {
+			isMigrationList := op.method == "get" && op.path == "/v1/migration-resources"
+			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList {
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
@@ -84,10 +85,15 @@ paths:
 				if isSCIMList {
 					output.WriteString("        - name: filter\n          in: query\n          schema: {type: string}\n        - name: startIndex\n          in: query\n          schema: {type: integer, minimum: 1, default: 1}\n        - name: count\n          in: query\n          schema: {type: integer, minimum: 0, maximum: 100, default: 100}\n")
 				}
+				if isMigrationList {
+					output.WriteString("        - name: sourceOrganizationId\n          in: query\n          schema: {type: string, maxLength: 255}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 500, default: 250}\n        - name: cursor\n          in: query\n          description: Opaque cursor returned by the previous page. It is bound to the source organization filter.\n          schema: {type: string, maxLength: 8192}\n")
+				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {
 				if strings.HasSuffix(op.path, "/artifact-source") {
 					output.WriteString("      requestBody:\n        required: true\n        content:\n          multipart/form-data:\n            schema:\n              type: object\n              required: [file]\n              properties:\n                file:\n                  type: string\n                  format: binary\n")
+				} else if op.path == "/v1/migration-resources/verify" {
+					output.WriteString("      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              required: [sourceOrganizationId]\n              properties:\n                sourceOrganizationId: {type: string, minLength: 1, maxLength: 255}\n                requireOperational: {type: boolean, default: true}\n                acknowledgements:\n                  type: array\n                  maxItems: 1000\n                  items: {type: string, maxLength: 1024, pattern: '^[^:]+:.+$'}\n")
 				} else {
 					mediaType := "application/json"
 					if strings.HasPrefix(op.path, "/scim/") {
@@ -96,9 +102,30 @@ paths:
 					fmt.Fprintf(&output, "      requestBody:\n        required: false\n        content:\n          %s:\n            schema:\n              type: object\n              additionalProperties: true\n", mediaType)
 				}
 			}
-			output.WriteString("      responses:\n        '2XX':\n          description: Successful response\n")
+			output.WriteString("      responses:\n        '2XX':\n")
+			if op.method == "post" && op.path == "/v1/migration-resources/verify" {
+				output.WriteString("          description: Fail-closed verification report. A successful response may still have ready=false.\n")
+			} else {
+				output.WriteString("          description: Successful response\n")
+			}
 			if op.method == "get" && op.path == "/v1/database-engines" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseEngineList'\n")
+			} else if op.method == "get" && op.path == "/v1/database-backups/{backupID}" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseBackup'\n")
+			} else if op.method == "get" && op.path == "/v1/database-restores/{restoreID}" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseRestore'\n")
+			} else if op.method == "get" && op.path == "/v1/database-migrations/{migrationID}" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseMigration'\n")
+			} else if op.method == "get" && op.path == "/v1/databases/{databaseID}/backups" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseBackupList'\n")
+			} else if op.method == "get" && op.path == "/v1/databases/{databaseID}/restores" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseRestoreList'\n")
+			} else if op.method == "get" && op.path == "/v1/databases/{databaseID}/migrations" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DatabaseMigrationList'\n")
+			} else if isMigrationList {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/MigrationResourcePage'\n")
+			} else if op.method == "post" && op.path == "/v1/migration-resources/verify" {
+				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/DokployVerification'\n")
 			} else if op.method == "get" && op.path == "/v1/templates" {
 				output.WriteString("          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/TemplateCatalogPage'\n")
 			} else if isSCIMList {
@@ -133,6 +160,82 @@ paths:
     mutualTLS:
       type: mutualTLS
   schemas:
+    DatabaseBackup:
+      type: object
+      required: [id, databaseInstanceId, status, format, encrypted, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        databaseInstanceId: {type: string, format: uuid}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        format: {type: string}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        encrypted: {type: boolean}
+        plaintextSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        destinationId: {type: string, format: uuid}
+        objectKey: {type: string}
+        utilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    DatabaseBackupList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatabaseBackup'}
+    DatabaseRestore:
+      type: object
+      required: [id, databaseBackupId, status, kind, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        databaseBackupId: {type: string, format: uuid}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        kind: {type: string, enum: [manual, drill]}
+        utilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        readinessImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    DatabaseRestoreList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatabaseRestore'}
+    DatabaseMigration:
+      type: object
+      required: [id, databaseInstanceId, sourceKind, sourceId, sourceEngine, sourceVersion, sourceHost, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        databaseInstanceId: {type: string, format: uuid}
+        sourceKind: {type: string}
+        sourceId: {type: string}
+        sourceEngine: {type: string}
+        sourceVersion: {type: string}
+        sourceHost: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        sizeBytes: {type: integer, format: int64, minimum: 0}
+        sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        output: {type: string}
+        sourceUtilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        targetUtilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        readinessImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+    DatabaseMigrationList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatabaseMigration'}
     DatabaseEngine:
       type: object
       required: [name, defaultVersion, source, backupCapable, backupExtension]
@@ -165,6 +268,48 @@ paths:
           type: array
           items: {type: object, additionalProperties: true}
         nextCursor: {type: string}
+    MigrationResourcePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [targetOrganizationId, sourceOrganizationId, sourceKind, sourceId, status, metadata, updatedAt]
+            properties:
+              targetOrganizationId: {type: string, format: uuid}
+              sourceOrganizationId: {type: string}
+              sourceKind: {type: string}
+              sourceId: {type: string}
+              targetId: {type: string, format: uuid}
+              status: {type: string, enum: [imported, skipped]}
+              reason: {type: string}
+              metadata: {type: object, additionalProperties: true}
+              updatedAt: {type: string, format: date-time}
+        nextCursor: {type: string}
+    DokployVerification:
+      type: object
+      required: [ready, targetOrganizationId, sourceOrganizationId, checkedAt, verified, acknowledged, blocked, checks]
+      properties:
+        ready: {type: boolean}
+        targetOrganizationId: {type: string, format: uuid}
+        sourceOrganizationId: {type: string}
+        checkedAt: {type: string, format: date-time}
+        verified: {type: integer, minimum: 0}
+        acknowledged: {type: integer, minimum: 0}
+        blocked: {type: integer, minimum: 0}
+        checks:
+          type: array
+          items:
+            type: object
+            required: [sourceKind, sourceId, status]
+            properties:
+              sourceKind: {type: string}
+              sourceId: {type: string}
+              targetId: {type: string, format: uuid}
+              status: {type: string, enum: [verified, acknowledged, blocked]}
+              reason: {type: string}
     SCIMResource:
       type: object
       additionalProperties: true

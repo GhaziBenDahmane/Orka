@@ -128,6 +128,27 @@ func TestOpenAPIDocumentsStructuredDatabaseEngineResponse(t *testing.T) {
 	}
 }
 
+func TestOpenAPIDocumentsDatabaseRecoveryProvenance(t *testing.T) {
+	specification, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(specification)
+	for _, expected := range []string{
+		"#/components/schemas/DatabaseBackupList",
+		"#/components/schemas/DatabaseRestoreList",
+		"#/components/schemas/DatabaseMigrationList",
+		"utilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}",
+		"sourceUtilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}",
+		"targetUtilityImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}",
+		"readinessImage: {type: string, pattern: '^.+@sha256:[a-f0-9]{64}$'}",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("OpenAPI is missing recovery contract %q", expected)
+		}
+	}
+}
+
 func TestOpenAPIDocumentsTemplatePagination(t *testing.T) {
 	specification, err := os.ReadFile("../../api/openapi.yaml")
 	if err != nil {

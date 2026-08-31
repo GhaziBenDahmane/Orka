@@ -748,6 +748,13 @@ authenticated context and is never returned by the API.
 | GET | `/v1/database-migrations/{id}` | Inspect a Dokploy native data transfer |
 | POST | `/v1/database-migrations/{id}/cancel` | Request transfer cancellation |
 
+Successful backup and restore responses include the digest-pinned
+`utilityImage` used for the operation; restore drills also include their
+`readinessImage`. Successful migration responses include
+`sourceUtilityImage`, `targetUtilityImage`, and `readinessImage`. Empty values
+identify legacy records created before immutable utility provenance was
+recorded and are surfaced by both the AI auditor and Prometheus.
+
 Queued database backup, restore, and migration cancellation updates the
 operation record, worker job, cancellation timestamp, and operator audit event
 in one transaction. Failed audit evidence leaves both the operation and its job
