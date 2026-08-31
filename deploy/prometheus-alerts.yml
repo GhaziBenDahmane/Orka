@@ -10,6 +10,24 @@ groups:
           summary: Dockyard controller is unavailable
           description: Prometheus has been unable to scrape Dockyard for two minutes.
 
+      - alert: DockyardControllerReplicaShortfall
+        expr: count(dockyard_controller_build_info) < max(dockyard_controller_expected_replicas) or absent(dockyard_controller_build_info)
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Fewer Dockyard controller replicas are being scraped than configured
+          description: Prometheus cannot see the configured number of controller tasks. Check Swarm task health and tasks.<stack>_dockyard DNS discovery before trusting fleet-wide consistency alerts.
+
+      - alert: DockyardControllerBuildFleetMismatch
+        expr: count(count by (version, revision) (dockyard_controller_build_info)) > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Dockyard controllers are running different builds
+          description: Scraped controller replicas report different immutable version or source-revision identities; finish or roll back the controller update before control-plane maintenance.
+
       - alert: DockyardStaleJobLease
         expr: dockyard_job_stale_leases > 0
         for: 2m

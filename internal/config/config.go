@@ -26,6 +26,7 @@ type Config struct {
 	MetricsToken               string
 	DockerBin                  string
 	WorkerConcurrency          int
+	ExpectedControllerReplicas int
 	MaxBuildWorkspaceBytes     int64
 	SessionTTL                 time.Duration
 	TraefikNetwork             string
@@ -66,6 +67,10 @@ func Load() (Config, error) {
 	concurrency, err := strconv.Atoi(env("DOCKYARD_WORKER_CONCURRENCY", "2"))
 	if err != nil || concurrency < 1 || concurrency > 32 {
 		return Config{}, errors.New("DOCKYARD_WORKER_CONCURRENCY must be between 1 and 32")
+	}
+	expectedControllerReplicas, err := strconv.Atoi(env("DOCKYARD_EXPECTED_CONTROLLER_REPLICAS", "1"))
+	if err != nil || expectedControllerReplicas < 1 || expectedControllerReplicas > 99 {
+		return Config{}, errors.New("DOCKYARD_EXPECTED_CONTROLLER_REPLICAS must be between 1 and 99")
 	}
 	maxBuildWorkspaceBytes, err := strconv.ParseInt(env("DOCKYARD_MAX_BUILD_WORKSPACE_BYTES", "2147483648"), 10, 64)
 	if err != nil || maxBuildWorkspaceBytes < 64<<20 || maxBuildWorkspaceBytes > 1<<40 {
@@ -236,6 +241,7 @@ func Load() (Config, error) {
 		MetricsToken:               metricsToken,
 		DockerBin:                  env("DOCKYARD_DOCKER_BIN", "docker"),
 		WorkerConcurrency:          concurrency,
+		ExpectedControllerReplicas: expectedControllerReplicas,
 		MaxBuildWorkspaceBytes:     maxBuildWorkspaceBytes,
 		SessionTTL:                 ttl,
 		TraefikNetwork:             traefikNetwork,

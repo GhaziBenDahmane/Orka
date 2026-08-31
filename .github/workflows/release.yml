@@ -209,7 +209,7 @@ jobs:
         if: steps.previous.outputs.first_release == 'false'
         env:
           RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
-        run: docker build --build-arg "VERSION=$RELEASE_VERSION" --tag dockyard:upgrade-candidate .
+        run: docker build --build-arg "VERSION=$RELEASE_VERSION" --build-arg "REVISION=$GITHUB_SHA" --tag dockyard:upgrade-candidate .
 
       - name: Exercise persisted-state upgrade
         if: steps.previous.outputs.first_release == 'false'
@@ -317,7 +317,9 @@ jobs:
           # The public version tag is assigned only after scans, signature
           # verification, soak, and evidence aggregation have all passed.
           tags: ${{ steps.release.outputs.image }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          build-args: VERSION=${{ steps.release.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            REVISION=${{ github.sha }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha

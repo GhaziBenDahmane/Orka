@@ -39,6 +39,7 @@ import (
 )
 
 var version = "dev"
+var revision = "unknown"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -758,6 +759,7 @@ func serve() error {
 		}
 	}
 	metrics := observability.NewMetrics()
+	metrics.SetControllerBuild(version, revision, cfg.ExpectedControllerReplicas)
 	driverMetrics := make([]observability.DatabaseDriverInfo, 0, len(databaseRegistry.Engines()))
 	for _, engine := range databaseRegistry.Engines() {
 		driverMetrics = append(driverMetrics, observability.DatabaseDriverInfo{Engine: engine.Name, Source: engine.Source, Digest: engine.ArtifactDigest, BackupCapable: engine.BackupCapable})

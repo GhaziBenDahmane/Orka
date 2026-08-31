@@ -11,6 +11,7 @@ services:
     environment:
       DOCKYARD_REQUIRE_DATABASE_TLS: "true"
       DOCKYARD_REQUIRE_REMOTE_BACKUPS: "true"
+      DOCKYARD_EXPECTED_CONTROLLER_REPLICAS: "3"
       DOCKYARD_AGENT_LISTEN_ADDR: ":8444"
       DOCKYARD_AGENT_CA_CERT_FILE: /run/secrets/dockyard_agent_ca_cert
       DOCKYARD_AGENT_CA_KEY_FILE: /run/secrets/dockyard_agent_ca_key

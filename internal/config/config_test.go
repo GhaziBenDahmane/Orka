@@ -160,6 +160,23 @@ func TestLoadValidatesSwarmServiceName(t *testing.T) {
 	}
 }
 
+func TestLoadValidatesExpectedControllerReplicas(t *testing.T) {
+	setRequiredConfig(t)
+	t.Setenv("DOCKYARD_EXPECTED_CONTROLLER_REPLICAS", "3")
+	if cfg, err := Load(); err != nil || cfg.ExpectedControllerReplicas != 3 {
+		t.Fatalf("replicas=%d error=%v", cfg.ExpectedControllerReplicas, err)
+	}
+	for _, value := range []string{"0", "100", "not-a-number"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredConfig(t)
+			t.Setenv("DOCKYARD_EXPECTED_CONTROLLER_REPLICAS", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "DOCKYARD_EXPECTED_CONTROLLER_REPLICAS") {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestLoadValidatesTrustedProxyNetworks(t *testing.T) {
 	setRequiredConfig(t)
 	t.Setenv("DOCKYARD_TRUSTED_PROXY_CIDRS", "10.255.250.0/24, 2001:db8::/64")

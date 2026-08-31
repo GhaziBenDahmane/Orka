@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS build
 ARG VERSION=dev
+ARG REVISION=unknown
 ARG TARGETARCH
 ARG NIXPACKS_VERSION=v1.41.0
 ARG RAILPACK_VERSION=v0.38.0
@@ -20,7 +21,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=secret,id=build_ca,required=false \
     if [ -s /run/secrets/goproxy ]; then export GOPROXY="$(cat /run/secrets/goproxy)"; fi; \
     if [ -s /run/secrets/build_ca ]; then export SSL_CERT_FILE=/run/secrets/build_ca; fi; \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/dockyard ./cmd/dockyard \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" -o /out/dockyard ./cmd/dockyard \
     && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/dockyardctl ./cmd/dockyardctl
 RUN --mount=type=secret,id=build_ca,required=false \
     case "$TARGETARCH" in \

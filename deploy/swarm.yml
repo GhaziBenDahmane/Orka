@@ -73,7 +73,7 @@ services:
       - /tmp:rw,nosuid,nodev,size=1073741824,mode=1777
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    networks: [control, edge-control]
+    networks: [control, edge-control, metrics]
     logging:
       driver: local
       options:
@@ -188,6 +188,11 @@ networks:
     ipam:
       config:
         - subnet: ${DOCKYARD_EDGE_SUBNET:-10.255.250.0/24}
+  metrics:
+    driver: overlay
+    internal: true
+    driver_opts:
+      encrypted: ""
   dockyard-public:
     external: true
     name: ${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}

@@ -26,6 +26,7 @@ import (
 
 func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 	m := NewMetrics()
+	m.SetControllerBuild("v1.2.3", strings.Repeat("a", 40), 3)
 	m.SetCertificateExpiry("agent_ca", time.Now().Add(24*time.Hour))
 	m.ObserveHTTP("GET", "/v1/services/{serviceID}", 200, 20*time.Millisecond)
 	m.ObserveHTTP("GET", "/v1/services/{serviceID}", 200, 2*time.Second)
@@ -41,10 +42,26 @@ func TestRuntimeMetricsUseBoundedLabelsAndCumulativeBuckets(t *testing.T) {
 		`dockyard_operation_duration_seconds_count{kind="deploy.compose",status="succeeded"} 1`,
 		`dockyard_build_workspace_limit_rejections_total 1`,
 		`dockyard_control_plane_certificate_expiry_seconds{certificate="agent_ca"}`,
+		`dockyard_controller_build_info{version="v1.2.3",revision="` + strings.Repeat("a", 40) + `"} 1`,
+		`dockyard_controller_expected_replicas 3`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("missing %q in metrics:\n%s", expected, text)
 		}
+	}
+}
+
+func TestControllerBuildMetricsRejectUnboundedIdentity(t *testing.T) {
+	m := NewMetrics()
+	m.SetControllerBuild("release\nsecret", strings.Repeat("x", 129), 100)
+	var output bytes.Buffer
+	m.renderRuntime(&output)
+	text := output.String()
+	if !strings.Contains(text, `dockyard_controller_build_info{version="unknown",revision="unknown"} 1`) {
+		t.Fatalf("unsafe build identity was not normalized:\n%s", text)
+	}
+	if !strings.Contains(text, "dockyard_controller_expected_replicas 1") {
+		t.Fatalf("invalid replica count was not normalized:\n%s", text)
 	}
 }
 
@@ -265,6 +282,46 @@ func TestPrometheusAlertsCoverDatabaseDriverIdentity(t *testing.T) {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)
 		}
+	}
+}
+
+func TestPrometheusAlertsCoverControllerFleetIdentity(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardControllerReplicaShortfall",
+		"count(dockyard_controller_build_info) < max(dockyard_controller_expected_replicas)",
+		"alert: DockyardControllerBuildFleetMismatch",
+		"count(count by (version, revision) (dockyard_controller_build_info)) > 1",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing controller fleet alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusSwarmScrapeDiscoversControllerTasksDirectly(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-scrape.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"job_name: dockyard",
+		"bearer_token_file: /run/secrets/dockyard_metrics_token",
+		"- tasks.dockyard_dockyard",
+		"type: A",
+		"port: 8080",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing direct Swarm task discovery configuration %q", expected)
+		}
+	}
+	if strings.Contains(text, "http://dockyard:8080") {
+		t.Error("scrape configuration uses the Swarm VIP instead of per-task DNS discovery")
 	}
 }
 

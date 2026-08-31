@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 )
 
 var durationBuckets = [...]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 2700}
+var buildIdentityLabel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}$`)
 
 type Queryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -49,11 +51,38 @@ type Metrics struct {
 	drivers                       []DatabaseDriverInfo
 	driverSet                     map[string]DatabaseDriverInfo
 	driverDigest                  string
+	controllerVersion             string
+	controllerRevision            string
+	expectedControllerReplicas    int
 	buildWorkspaceLimitRejections uint64
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time), driverSet: make(map[string]DatabaseDriverInfo)}
+	return &Metrics{http: make(map[string]*observation), operations: make(map[string]*observation), certificates: make(map[string]time.Time), driverSet: make(map[string]DatabaseDriverInfo), controllerVersion: "dev", controllerRevision: "unknown", expectedControllerReplicas: 1}
+}
+
+// SetControllerBuild records immutable, bounded build identity and the desired
+// controller replica count. Prometheus target identity distinguishes tasks; no
+// hostname, task ID, or other unbounded runtime value is exported here.
+func (m *Metrics) SetControllerBuild(version, revision string, expectedReplicas int) {
+	version = boundedBuildIdentity(version, "unknown")
+	revision = boundedBuildIdentity(revision, "unknown")
+	if expectedReplicas < 1 || expectedReplicas > 99 {
+		expectedReplicas = 1
+	}
+	m.mu.Lock()
+	m.controllerVersion = version
+	m.controllerRevision = revision
+	m.expectedControllerReplicas = expectedReplicas
+	m.mu.Unlock()
+}
+
+func boundedBuildIdentity(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if !buildIdentityLabel.MatchString(value) {
+		return fallback
+	}
+	return value
 }
 
 // SetDatabaseDrivers replaces the immutable startup inventory used to detect
@@ -439,11 +468,20 @@ func (m *Metrics) renderRuntime(w io.Writer) {
 	httpItems := clone(m.http)
 	operationItems := clone(m.operations)
 	buildWorkspaceLimitRejections := m.buildWorkspaceLimitRejections
+	controllerVersion := m.controllerVersion
+	controllerRevision := m.controllerRevision
+	expectedControllerReplicas := m.expectedControllerReplicas
 	certificateExpiries := make(map[string]time.Time, len(m.certificates))
 	for name, expiresAt := range m.certificates {
 		certificateExpiries[name] = expiresAt
 	}
 	m.mu.RUnlock()
+	fmt.Fprintln(w, "# HELP dockyard_controller_build_info Immutable controller build identity; every HA replica should report the same version and revision.")
+	fmt.Fprintln(w, "# TYPE dockyard_controller_build_info gauge")
+	fmt.Fprintf(w, "dockyard_controller_build_info%s 1\n", labels([]string{"version", "revision"}, []string{controllerVersion, controllerRevision}))
+	fmt.Fprintln(w, "# HELP dockyard_controller_expected_replicas Desired controller replica count configured for this deployment.")
+	fmt.Fprintln(w, "# TYPE dockyard_controller_expected_replicas gauge")
+	fmt.Fprintf(w, "dockyard_controller_expected_replicas %d\n", expectedControllerReplicas)
 	renderCounter(w, "dockyard_http_requests_total", "HTTP requests by method, route, and status.", httpItems, []string{"method", "route", "status"})
 	renderHistogram(w, "dockyard_http_request_duration_seconds", "HTTP request latency.", httpItems, []string{"method", "route", "status"})
 	renderCounter(w, "dockyard_operations_total", "Completed background operations by kind and status.", operationItems, []string{"kind", "status"})

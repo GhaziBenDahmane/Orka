@@ -313,11 +313,38 @@ it uses versioned secret names, the temporary
 `deploy/swarm-agent-ca-rollover.yml` overlay, per-cluster CA fingerprints, and
 a reversible old-listener/new-signer transition.
 
-Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler)
-and scrape `http://dockyard:8080/metrics` with the fleet-wide operator token in
-the `dockyard_metrics_token` Docker secret (or its configured versioned name).
-Configure Prometheus with a protected `bearer_token_file` containing the same
-value; tenant sessions and service-account tokens cannot scrape this endpoint.
+Import `deploy/prometheus-alerts.yml` into Prometheus (or a compatible ruler).
+Run Prometheus as a Swarm service attached to the private
+`<DOCKYARD_STACK_NAME>_metrics` overlay and merge
+`deploy/prometheus-scrape.yml` into its configuration. If the stack name is not
+`dockyard`, replace `tasks.dockyard_dockyard` with
+`tasks.<DOCKYARD_STACK_NAME>_dockyard`. Swarm's `tasks.` DNS record returns one
+address per controller task, so Prometheus creates an independent target for
+every replica. Do not scrape `http://dockyard:8080/metrics` in HA: that service
+name uses the VIP and can repeatedly select one replica, making fleet-mismatch
+alerts ineffective. Do not change the public controller endpoint to DNSRR;
+Traefik and the published agent port continue to require ingress routing.
+
+Mount the `dockyard_metrics_token` Docker secret (or its configured versioned
+name) into Prometheus at `/run/secrets/dockyard_metrics_token`; the sample job
+uses it as a protected `bearer_token_file`. Tenant sessions and service-account
+tokens cannot scrape this endpoint. A Prometheus stack can reference the
+Dockyard-owned network without exposing it to standalone containers:
+
+```yaml
+services:
+  prometheus:
+    networks: [dockyard-metrics]
+networks:
+  dockyard-metrics:
+    external: true
+    name: dockyard_metrics
+```
+
+The controller exports immutable build version and source revision plus its
+configured replica count. `DockyardControllerReplicaShortfall` detects missing
+scrape targets and `DockyardControllerBuildFleetMismatch` detects mixed builds,
+including interrupted rollouts.
 The rules cover controller outage,
 stale worker leases, queue backlog, failed operations, stale backups, overdue
 restore drills, stalled durable artifact deletion, stalled or failed Dokploy
