@@ -102,8 +102,9 @@ recovery evidence remains.
   catalog revision.
 - PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, libSQL, ClickHouse,
   Qdrant, and Meilisearch provisioning definitions.
-- Managed databases using Docker's local volume driver are durably assigned to
-  one Swarm node on first deployment. Existing stacks are discovered only when
+- Every Compose workload with a named volume, including managed databases and
+  stateful catalog templates, is durably assigned to one Swarm node on first
+  deployment. Existing stacks are discovered only when
   their running tasks resolve to one node; every deployment, rollback, and
   reconciliation snapshot is then constrained to that node so node loss fails
   unavailable instead of silently creating empty storage elsewhere.

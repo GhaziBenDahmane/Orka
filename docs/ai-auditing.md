@@ -245,6 +245,7 @@ printf '%s' "$MODEL_API_KEY" | docker secret create "$DOCKYARD_AI_API_KEY_SECRET
 DOCKYARD_IMAGE='registry.example/dockyard@sha256:...' \
 NINEROUTER_IMAGE='decolua/9router@sha256:...' \
 HEADROOM_IMAGE='ghcr.io/headroomlabs-ai/headroom@sha256:...' \
+NINEROUTER_STORAGE_NODE_ID="$(docker info --format '{{.Swarm.NodeID}}')" \
 DOCKYARD_AI_MODEL='provider/model-name' \
 docker stack deploy -c deploy/ai-auditors.yml dockyard-ai
 ```
@@ -256,6 +257,11 @@ a run, and only then remove the previous secret. The external secret names may
 change while the files inside each container remain
 `/run/secrets/dockyard_ai_auditor_token` and
 `/run/secrets/dockyard_ai_api_key`.
+9Router stores provider configuration in a node-local volume. The manifest
+therefore requires `NINEROUTER_STORAGE_NODE_ID` and constrains the gateway to
+that exact node. A node outage remains visible as unavailability instead of
+starting 9Router against an unrelated empty volume; move or restore the volume
+explicitly before changing this value.
 Auditor startup fails if a configured secret file is unreadable or empty, or
 if an inline value and its `_FILE` setting are both present. This prevents a
 stale environment value from overriding a rotated Docker secret and prevents

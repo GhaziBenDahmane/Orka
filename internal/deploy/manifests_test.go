@@ -44,6 +44,9 @@ type deploymentManifest struct {
 			RollbackConfig struct {
 				Order string `yaml:"order"`
 			} `yaml:"rollback_config"`
+			Placement struct {
+				Constraints []string `yaml:"constraints"`
+			} `yaml:"placement"`
 		} `yaml:"deploy"`
 	} `yaml:"services"`
 	Volumes map[string]any `yaml:"volumes"`
@@ -285,6 +288,16 @@ func TestAIAuditorSecretsCanBeVersioned(t *testing.T) {
 	}
 }
 
+func TestAIGatewayPersistentStateIsPinned(t *testing.T) {
+	service := readDeploymentManifest(t, "../../deploy/ai-auditors.yml").Services["9router"]
+	if !slices.Contains(service.Volumes, "nine-router-data:/app/data") {
+		t.Fatalf("9Router data volume is missing: %v", service.Volumes)
+	}
+	if !slices.Contains(service.Deploy.Placement.Constraints, "node.id == ${NINEROUTER_STORAGE_NODE_ID:?set the Swarm node ID that owns 9Router data}") {
+		t.Fatalf("9Router data is not pinned to its owner node: %v", service.Deploy.Placement.Constraints)
+	}
+}
+
 func TestHighAvailabilityManifestUsesExternalStateAndAgentTLS(t *testing.T) {
 	manifest := readDeploymentManifest(t, "../../deploy/swarm-ha.yml")
 	if replicas := manifest.Services["postgres"].Deploy.Replicas; replicas != 0 {
@@ -321,7 +334,7 @@ func TestControllerIngressUsesIsolatedTrustedProxyNetwork(t *testing.T) {
 	if !slices.Contains(proxy.Networks, "edge-control") || !slices.Contains(proxy.Networks, "dockyard-public") {
 		t.Fatalf("Traefik does not bridge isolated and public networks: %v", proxy.Networks)
 	}
-	if controller.Deploy.Labels["traefik.docker.network"] != "dockyard-edge-control" || controller.Environment["DOCKYARD_TRUSTED_PROXY_CIDRS"] == "" {
+	if controller.Deploy.Labels["traefik.docker.network"] != "${DOCKYARD_EDGE_CONTROL_NETWORK:-dockyard-edge-control}" || controller.Environment["DOCKYARD_TRUSTED_PROXY_CIDRS"] == "" {
 		t.Fatalf("controller proxy trust is incomplete: labels=%v environment=%v", controller.Deploy.Labels, controller.Environment)
 	}
 

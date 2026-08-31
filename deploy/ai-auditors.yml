@@ -15,6 +15,8 @@ services:
       options: {max-size: "${DOCKYARD_CONTAINER_LOG_MAX_SIZE:-20m}", max-file: "${DOCKYARD_CONTAINER_LOG_MAX_FILES:-5}"}
     deploy:
       replicas: 1
+      placement:
+        constraints: ["node.id == ${NINEROUTER_STORAGE_NODE_ID:?set the Swarm node ID that owns 9Router data}"]
       resources:
         limits: {cpus: "${NINEROUTER_CPU_LIMIT:-1.0}", memory: "${NINEROUTER_MEMORY_LIMIT:-1G}"}
         reservations: {cpus: "${NINEROUTER_CPU_RESERVATION:-0.10}", memory: "${NINEROUTER_MEMORY_RESERVATION:-128M}"}

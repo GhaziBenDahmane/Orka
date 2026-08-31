@@ -45,7 +45,7 @@ func TestManagedDatabaseStoragePlacementIsPersistedAndReused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Pool.Close)
-	organizationID, projectID, environmentID, serviceID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	organizationID, projectID, environmentID, serviceID, applicationID, databaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -54,6 +54,7 @@ func TestManagedDatabaseStoragePlacementIsPersistedAndReused(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Environment','environment')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Database','database','database-stack','services: {}')`, []any{serviceID, environmentID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Router','router','router-stack','services: {}')`, []any{applicationID, environmentID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,compose_service_id,encrypted_credentials) VALUES($1,$2,'Database','database','postgres','17',$3,'encrypted')`, []any{databaseID, environmentID, serviceID}},
 	} {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -81,5 +82,22 @@ func TestManagedDatabaseStoragePlacementIsPersistedAndReused(t *testing.T) {
 	pinned, err = worker.pinPersistentStorage(ctx, serviceID, "database-stack", compose, nil)
 	if err != nil || !strings.Contains(pinned, "node.id == nodeabc123") || strings.Contains(pinned, "differentnode") || second.calls != 0 {
 		t.Fatalf("reused placement calls=%d err=%v compose=%s", second.calls, err, pinned)
+	}
+
+	applicationCompose := "services:\n  router:\n    image: example/router:1\n    volumes: [data:/app/data]\nvolumes:\n  data: {}\n"
+	applicationFirst := &storagePlacementScheduler{node: "nodeapp123"}
+	worker.Swarm = applicationFirst
+	pinned, err = worker.pinPersistentStorage(ctx, applicationID, "router-stack", applicationCompose, nil)
+	if err != nil || !strings.Contains(pinned, "node.id == nodeapp123") || applicationFirst.calls != 1 {
+		t.Fatalf("application first placement calls=%d err=%v compose=%s", applicationFirst.calls, err, pinned)
+	}
+	if err = db.Pool.QueryRow(ctx, `SELECT storage_node_id FROM compose_services WHERE id=$1`, applicationID).Scan(&stored); err != nil || stored != "nodeapp123" {
+		t.Fatalf("application stored node=%q err=%v", stored, err)
+	}
+	applicationSecond := &storagePlacementScheduler{node: "differentnode"}
+	worker.Swarm = applicationSecond
+	pinned, err = worker.pinPersistentStorage(ctx, applicationID, "router-stack", applicationCompose, nil)
+	if err != nil || !strings.Contains(pinned, "node.id == nodeapp123") || strings.Contains(pinned, "differentnode") || applicationSecond.calls != 0 {
+		t.Fatalf("application reused placement calls=%d err=%v compose=%s", applicationSecond.calls, err, pinned)
 	}
 }

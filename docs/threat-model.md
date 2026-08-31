@@ -202,12 +202,12 @@ considered production evidence until its native engine restore and
 application-level data checks succeed. Destination changes verify access before
 atomically replacing resource-bound encrypted credentials, allowing recovery
 from key rotation without weakening tenant ownership.
-Managed databases backed by Docker's node-local volume driver persist their
-first storage-node assignment and receive a platform-owned `node.id` placement
-constraint on every deployment. Legacy stacks are adopted only when all
-running tasks resolve unambiguously to one node. Loss of that node therefore
-causes visible unavailability rather than an apparently healthy database with
-empty replacement storage.
+Every Compose workload with a named volume persists its first storage-node
+assignment and receives a platform-owned `node.id` placement constraint on
+every deployment. This includes managed databases and stateful templates.
+Legacy stacks are adopted only when all running tasks resolve unambiguously to
+one node. Loss of that node therefore causes visible unavailability rather
+than an apparently healthy workload with empty replacement storage.
 Generic named-volume transfer helpers are scheduled only on an explicitly
 persisted node and must run the same digest-pinned image as the controller or
 cluster agent. Presigned URLs and envelope keys are delivered in an ephemeral

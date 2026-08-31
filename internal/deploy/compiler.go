@@ -286,7 +286,7 @@ func (c Compiler) CompileWithNetworkAttachments(source string, routes []store.Ro
 
 // PinNamedVolumes constrains every service using a named volume to one Swarm
 // node. Docker's local volume driver creates an unrelated empty volume when a
-// task moves to another node, so managed databases must fail unavailable
+// task moves to another node, so stateful workloads must fail unavailable
 // instead of silently starting with empty storage.
 func PinNamedVolumes(source, nodeID string) (string, bool, error) {
 	if !safeNodeID.MatchString(nodeID) {

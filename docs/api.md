@@ -754,15 +754,16 @@ records expose `driverSource` and, for external drivers, the bound
 administrator can rebind only after typing the database slug and only while no
 backup, restore, or migration job is queued or running for it. The identity
 change and its before/after digests are committed with one audit event.
-On first deployment, a database with a named local volume is assigned a
-`storageNodeId`. Dockyard discovers the node for a pre-existing running stack
-or selects a ready node for a new stack, persists the assignment, and injects a
-`node.id` placement constraint into deployments, rollbacks, and reconciliation
-snapshots. It refuses ambiguous legacy stacks spread across nodes and rejects
-caller-supplied node identity constraints for managed database storage. This
-fails unavailable after node loss instead of silently starting against a new,
-empty local volume; restoring or deliberately relocating that volume remains
-an explicit operator recovery action.
+On first deployment, every Compose service with a named volume is assigned a
+`storageNodeId`; managed databases use the same mechanism. Dockyard discovers
+the node for a pre-existing running stack or selects a ready node for a new
+stack, persists the assignment, and injects a `node.id` placement constraint
+into deployments, rollbacks, and reconciliation snapshots. It refuses
+ambiguous legacy stacks spread across nodes and rejects conflicting
+caller-supplied node identity constraints. This fails unavailable after node
+loss instead of silently starting against a new, empty local volume; restoring
+or deliberately relocating that volume remains an explicit operator recovery
+action.
 The engine response includes a structured `engines` collection with each
 driver's `name`, `defaultVersion`, `source` (`built-in` or `external`),
 optional SHA-256 `artifactDigest`, `backupCapable`, and `backupExtension`.

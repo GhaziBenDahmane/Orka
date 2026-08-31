@@ -1093,13 +1093,9 @@ func (w *Worker) registryCredentialForDeployment(ctx context.Context, deployment
 func (w *Worker) pinPersistentStorage(ctx context.Context, serviceID uuid.UUID, stack, compose string, clusterID *uuid.UUID) (string, error) {
 	var databaseID *uuid.UUID
 	var serviceNodeID, databaseNodeID string
-	var protected bool
-	err := w.Store.Pool.QueryRow(ctx, `SELECT s.storage_node_id,d.id,COALESCE(d.storage_node_id,''),d.id IS NOT NULL OR EXISTS(SELECT 1 FROM volume_backup_policies policy WHERE policy.compose_service_id=s.id) FROM compose_services s LEFT JOIN database_instances d ON d.compose_service_id=s.id WHERE s.id=$1`, serviceID).Scan(&serviceNodeID, &databaseID, &databaseNodeID, &protected)
+	err := w.Store.Pool.QueryRow(ctx, `SELECT s.storage_node_id,d.id,COALESCE(d.storage_node_id,'') FROM compose_services s LEFT JOIN database_instances d ON d.compose_service_id=s.id WHERE s.id=$1`, serviceID).Scan(&serviceNodeID, &databaseID, &databaseNodeID)
 	if err != nil {
 		return "", err
-	}
-	if !protected {
-		return compose, nil
 	}
 	hasVolumes, err := HasNamedVolumes(compose)
 	if err != nil {
@@ -1118,12 +1114,12 @@ func (w *Worker) pinPersistentStorage(ctx context.Context, serviceID uuid.UUID, 
 	if storageNodeID == "" {
 		resolver, ok := w.scheduler(clusterID).(StorageNodeResolver)
 		if !ok {
-			return "", errors.New("scheduler does not support durable database placement")
+			return "", errors.New("scheduler does not support durable volume placement")
 		}
 		storageNodeID, err = resolver.ResolveStorageNode(ctx, stack)
 		storageNodeID = strings.TrimSpace(storageNodeID)
 		if err != nil {
-			return "", fmt.Errorf("resolve database storage node: %w", err)
+			return "", fmt.Errorf("resolve persistent storage node: %w", err)
 		}
 		if err = w.Store.BindPersistentStorageNode(ctx, serviceID, databaseID, storageNodeID); err != nil {
 			return "", fmt.Errorf("bind persistent storage node: %w", err)
@@ -1131,7 +1127,7 @@ func (w *Worker) pinPersistentStorage(ctx context.Context, serviceID uuid.UUID, 
 	}
 	pinned, _, err := PinNamedVolumes(compose, storageNodeID)
 	if err != nil {
-		return "", fmt.Errorf("pin database storage: %w", err)
+		return "", fmt.Errorf("pin persistent storage: %w", err)
 	}
 	return pinned, nil
 }
