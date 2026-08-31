@@ -105,7 +105,7 @@ fi
 created_secrets=""
 deployment_started=false
 cleanup() {
-  status=$?
+  status=${1:-$?}
   if [ "$status" -ne 0 ] && [ "$deployment_started" = false ]; then
     for created_secret in $created_secrets; do
       docker secret rm "$created_secret" >/dev/null 2>&1 || true
@@ -114,7 +114,10 @@ cleanup() {
   trap - EXIT HUP INT TERM
   exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'cleanup 129' HUP
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
 
 create_secret() {
 	name=$1

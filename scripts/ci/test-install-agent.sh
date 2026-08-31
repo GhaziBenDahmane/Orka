@@ -137,6 +137,32 @@ grep -q '^secret rm dockyard_agent_enrollment_token$' "$DOCKYARD_INSTALL_TEST_LO
 grep -q '^network rm dockyard-public$' "$DOCKYARD_INSTALL_TEST_LOG"
 
 : >"$DOCKYARD_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_STABILITY_SECONDS=30 \
+  "$root/scripts/install-agent.sh" >"$temporary/out" 2>"$temporary/err" &
+installer_pid=$!
+attempt=0
+while ! grep -q '^stack deploy ' "$DOCKYARD_INSTALL_TEST_LOG"; do
+  if ! kill -0 "$installer_pid" 2>/dev/null; then
+    wait "$installer_pid" || true
+    echo 'agent installer exited before the interruption test reached deployment' >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 100 ] || {
+    kill -TERM "$installer_pid" 2>/dev/null || true
+    wait "$installer_pid" || true
+    echo 'agent installer did not reach deployment during interruption test' >&2
+    exit 1
+  }
+  sleep 0.01
+done
+kill -TERM "$installer_pid"
+if wait "$installer_pid"; then
+  echo 'interrupted agent installer returned a successful exit status' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_INSTALL_TEST_LOG"
 DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET=dockyard_agent_enrollment_token_v2 \
   "$root/scripts/install-agent.sh" >/dev/null
 grep -q '^secret inspect dockyard_agent_enrollment_token_v2$' "$DOCKYARD_INSTALL_TEST_LOG"

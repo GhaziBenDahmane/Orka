@@ -130,6 +130,32 @@ if grep -q ' verify-ai-auditor-runs ' "$DOCKYARD_AI_INSTALL_TEST_LOG"; then
 fi
 
 : >"$DOCKYARD_AI_INSTALL_TEST_LOG"
+DOCKYARD_INSTALL_STABILITY_SECONDS=30 \
+  "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err" &
+installer_pid=$!
+attempt=0
+while ! grep -q '^stack deploy ' "$DOCKYARD_AI_INSTALL_TEST_LOG"; do
+  if ! kill -0 "$installer_pid" 2>/dev/null; then
+    wait "$installer_pid" || true
+    echo 'AI installer exited before the interruption test reached deployment' >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 100 ] || {
+    kill -TERM "$installer_pid" 2>/dev/null || true
+    wait "$installer_pid" || true
+    echo 'AI installer did not reach deployment during interruption test' >&2
+    exit 1
+  }
+  sleep 0.01
+done
+kill -TERM "$installer_pid"
+if wait "$installer_pid"; then
+  echo 'interrupted AI installer returned a successful exit status' >&2
+  exit 1
+fi
+
+: >"$DOCKYARD_AI_INSTALL_TEST_LOG"
 if DOCKYARD_AI_INSTALL_TEST_EXISTING_SECRETS='dockyard_ai_security_auditor_token' "$root/scripts/install-ai-auditors.sh" >"$temporary/out" 2>"$temporary/err"; then
   echo 'AI installer accepted an existing secret without explicit reuse' >&2
   exit 1
