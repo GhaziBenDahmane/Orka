@@ -14,6 +14,7 @@ func TestResourceCreationRejectsInvalidNamesBeforeDependencies(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
+		code string
 		body map[string]any
 		call func(http.ResponseWriter, *http.Request)
 	}{
@@ -22,6 +23,7 @@ func TestResourceCreationRejectsInvalidNamesBeforeDependencies(t *testing.T) {
 		{name: "service", path: "/v1/environments/environment/services", body: map[string]any{"slug": "service", "composeYaml": "services: {}"}, call: server.createService},
 		{name: "database", path: "/v1/environments/environment/databases", body: map[string]any{"slug": "database", "engine": "postgres"}, call: server.createDatabase},
 		{name: "cluster", path: "/v1/clusters", body: map[string]any{"slug": "cluster"}, call: server.createCluster},
+		{name: "template repository", path: "/v1/template-repositories", code: "invalid_template_repository", body: map[string]any{"slug": "catalog", "repositoryURL": "https://github.com/acme/catalog"}, call: server.createTemplateRepository},
 	}
 	invalidNames := []string{"", "resource\nname", "resource\u0085name", strings.Repeat("n", 121)}
 	for _, test := range tests {
@@ -45,7 +47,11 @@ func TestResourceCreationRejectsInvalidNamesBeforeDependencies(t *testing.T) {
 					request.SetPathValue("environmentID", "f47ac10b-58cc-4372-a567-0e02b2c3d479")
 				}
 				test.call(recorder, request)
-				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_name"`) {
+				expectedCode := test.code
+				if expectedCode == "" {
+					expectedCode = "invalid_name"
+				}
+				if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"`+expectedCode+`"`) {
 					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 				}
 			})

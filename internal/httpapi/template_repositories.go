@@ -26,12 +26,13 @@ func (s *Server) createTemplateRepository(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &in) {
 		return
 	}
-	in.Name, in.Slug = strings.TrimSpace(in.Name), strings.TrimSpace(in.Slug)
+	name, nameErr := normalizeResourceName(in.Name)
+	in.Name, in.Slug = name, strings.TrimSpace(in.Slug)
 	if in.GitRef == "" {
 		in.GitRef = "main"
 	}
 	cleanPath, pathErr := templates.NormalizeCatalogPath(in.CatalogPath)
-	if in.Name == "" || len(in.Name) > maxTemplateRepositoryNameBytes || strings.ContainsAny(in.Name, "\x00\r\n") || !slugPattern.MatchString(in.Slug) || pathErr != nil {
+	if nameErr != nil || !validDisplayLabel(in.Name, maxTemplateRepositoryNameBytes) || !slugPattern.MatchString(in.Slug) || pathErr != nil {
 		writeError(w, 400, "invalid_template_repository", "name, slug, and a safe relative catalogPath are required")
 		return
 	}

@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/store"
 )
@@ -37,7 +39,7 @@ func TestGitHubArchiveURL(t *testing.T) {
 			t.Errorf("accepted %q", invalid)
 		}
 	}
-	for _, ref := range []string{"", ".hidden", "feature..branch", "refs/heads/main.lock", "refs//heads/main", "feature branch", "feature~1", "feature^2", "feature:one", "feature?", "feature*", "feature[1", "feature\\one", "feature\nheader", strings.Repeat("r", 201)} {
+	for _, ref := range []string{"", ".hidden", "feature..branch", "refs/heads/main.lock", "refs//heads/main", "feature branch", "feature~1", "feature^2", "feature:one", "feature?", "feature*", "feature[1", "feature\\one", "feature\nheader", "feature\u202eright-to-left", string([]byte{'r', 0xff}), strings.Repeat("r", 201)} {
 		if _, err := GitHubArchiveURL("https://github.com/acme/catalog", ref); err == nil {
 			t.Errorf("accepted invalid ref %q", ref)
 		}
@@ -51,10 +53,21 @@ func TestNormalizeCatalogPath(t *testing.T) {
 			t.Errorf("NormalizeCatalogPath(%q) = %q, %v; want %q", raw, got, err, want)
 		}
 	}
-	for _, raw := range []string{".", "..", "../catalog", "catalog/../other", "catalog//blueprints", `catalog\blueprints`, "catalog\x00blueprints", "catalog\nblueprints", strings.Repeat("a", maxCatalogPathBytes+1), strings.Repeat("a/", maxCatalogPathDepth) + "end"} {
+	for _, raw := range []string{".", "..", "../catalog", "catalog/../other", "catalog//blueprints", `catalog\blueprints`, "catalog\x00blueprints", "catalog\nblueprints", "catalog/\u202eblueprints", string([]byte{'c', 0xff}), strings.Repeat("a", maxCatalogPathBytes+1), strings.Repeat("a/", maxCatalogPathDepth) + "end"} {
 		if _, err := NormalizeCatalogPath(raw); err == nil {
 			t.Errorf("unsafe catalog path %q was accepted", raw)
 		}
+	}
+}
+
+func TestBoundedSyncErrorPreservesValidUTF8(t *testing.T) {
+	message := boundedSyncError(errors.New(strings.Repeat("é", 600)))
+	if len(message) > 1000 || !utf8.ValidString(message) {
+		t.Fatalf("bounded error has length %d and valid UTF-8=%t", len(message), utf8.ValidString(message))
+	}
+	message = boundedSyncError(errors.New(string([]byte{'x', 0xff, 'y'})))
+	if !utf8.ValidString(message) {
+		t.Fatal("invalid UTF-8 survived sync error normalization")
 	}
 }
 
@@ -147,6 +160,7 @@ func TestFetchCatalogArchiveRejectsUnsafeStructure(t *testing.T) {
 		"duplicate separator":  {{name: "catalog-main//blueprints/demo", directory: true}},
 		"backslash path":       {{name: `catalog-main\blueprints`, directory: true}},
 		"control character":    {{name: "catalog-main/blueprints/bad\nname", directory: true}},
+		"formatting character": {{name: "catalog-main/blueprints/\u202ebad", directory: true}},
 		"oversized segment":    {{name: "catalog-main/" + strings.Repeat("a", 256), directory: true}},
 		"multiple roots": {
 			{name: "catalog-main/blueprints/", directory: true},

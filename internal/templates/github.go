@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bendahma/dokploy-go/internal/cryptox"
 	"github.com/bendahma/dokploy-go/internal/store"
@@ -61,7 +63,7 @@ func NormalizeCatalogPath(raw string) (string, error) {
 	}
 	clean := path.Clean(candidate)
 	parts := strings.Split(clean, "/")
-	if clean != candidate || len(clean) > maxCatalogPathBytes || len(parts) > maxCatalogPathDepth || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsAny(raw, "\\\x00\r\n") {
+	if clean != candidate || len(clean) > maxCatalogPathBytes || len(parts) > maxCatalogPathDepth || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsRune(raw, '\\') || unsafeCatalogText(raw) {
 		return "", errors.New("catalogPath must be a canonical relative path")
 	}
 	for _, part := range parts {
@@ -212,7 +214,7 @@ func fetchCatalogArchive(ctx context.Context, client *http.Client, archiveURL, t
 }
 
 func canonicalCatalogArchivePath(name string, directory bool) (string, []string, error) {
-	if name == "" || len(name) > maxCatalogPathBytes || strings.ContainsRune(name, '\\') || strings.IndexFunc(name, func(char rune) bool { return char < 0x20 || char == 0x7f }) >= 0 {
+	if name == "" || len(name) > maxCatalogPathBytes || strings.ContainsRune(name, '\\') || unsafeCatalogText(name) {
 		return "", nil, errors.New("template repository contains an unsafe path")
 	}
 	candidate := name
@@ -255,7 +257,13 @@ func validGitHubRef(ref string) bool {
 	if ref == "" || len(ref) > 200 || ref == "@" || strings.HasPrefix(ref, ".") || strings.HasPrefix(ref, "/") || strings.HasSuffix(ref, ".") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".lock") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.Contains(ref, "//") {
 		return false
 	}
-	return !strings.ContainsAny(ref, " ~^:?*[\\") && strings.IndexFunc(ref, func(char rune) bool { return char < 0x20 || char == 0x7f }) < 0
+	return !strings.ContainsAny(ref, " ~^:?*[\\") && !unsafeCatalogText(ref)
+}
+
+func unsafeCatalogText(value string) bool {
+	return !utf8.ValidString(value) || strings.IndexFunc(value, func(char rune) bool {
+		return unicode.IsControl(char) || unicode.In(char, unicode.Cf, unicode.Zl, unicode.Zp)
+	}) >= 0
 }
 
 // VerifyRepositoryCatalog applies the repository's trust policy before any
@@ -342,9 +350,12 @@ func repositoryToken(ctx context.Context, db *store.Store, box *cryptox.Box, rep
 }
 
 func boundedSyncError(err error) string {
-	message := err.Error()
+	message := strings.ToValidUTF8(err.Error(), "�")
 	if len(message) > 1000 {
-		return message[:1000]
+		message = message[:1000]
+		for !utf8.ValidString(message) {
+			message = message[:len(message)-1]
+		}
 	}
 	return message
 }
