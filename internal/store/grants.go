@@ -209,6 +209,39 @@ func (s *Store) EffectiveResourceRole(ctx context.Context, principal Principal, 
 	return role, nil
 }
 
+// BindResourceAuthorization evaluates a resource role and, when access relies
+// on a project or environment grant rather than the organization role, carries
+// that scope into the principal for transactional revalidation by the write.
+func (s *Store) BindResourceAuthorization(ctx context.Context, principal Principal, scopeType string, scopeID uuid.UUID, minimumRole string) (Principal, string, error) {
+	if roleValue(minimumRole) == 0 {
+		return principal, "", errors.New("invalid minimum resource role")
+	}
+	role, err := s.EffectiveResourceRole(ctx, principal, scopeType, scopeID)
+	if err != nil || roleValue(role) < roleValue(minimumRole) || principal.ServiceAccountID != nil || roleValue(principal.Role) >= roleValue(minimumRole) {
+		return principal, role, err
+	}
+	claim := ScopedAuthorization{MinimumRole: minimumRole}
+	switch scopeType {
+	case "project":
+		claim.ProjectID = scopeID
+	case "environment", "service", "database", "deployment", "backup", "restore", "migration", "webhook", "route", "volume_backup", "volume_restore":
+		claim.ProjectID, claim.EnvironmentID, err = s.resourceParents(ctx, principal.OrganizationID, scopeType, scopeID)
+		if err != nil {
+			return principal, "", err
+		}
+	default:
+		return principal, "", errors.New("invalid grant scope")
+	}
+	claims := append([]ScopedAuthorization(nil), principal.ScopedAuthorizations...)
+	for _, existing := range claims {
+		if existing == claim {
+			return principal, role, nil
+		}
+	}
+	principal.ScopedAuthorizations = append(claims, claim)
+	return principal, role, nil
+}
+
 func (s *Store) resourceParents(ctx context.Context, organizationID uuid.UUID, resourceType string, id uuid.UUID) (uuid.UUID, uuid.UUID, error) {
 	queries := map[string]string{
 		"environment":    `SELECT p.id,e.id FROM environments e JOIN projects p ON p.id=e.project_id WHERE e.id=$1 AND p.organization_id=$2`,

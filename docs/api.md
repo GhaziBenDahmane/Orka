@@ -255,6 +255,13 @@ The same transaction re-reads the actor after taking the organization identity
 lock, so authorization cached at request entry cannot survive an intervening
 demotion, removal, user disablement, service-account disablement, browser-session
 revocation, or service-account token rotation.
+When a viewer is elevated by a project or environment grant, resource
+middleware binds the resolved parent scopes and required role to the request.
+The audited write transaction locks and revalidates those exact grant rows;
+revocation or downgrade that commits first returns `403 Forbidden` and rolls
+back both the resource change and its audit event. Service moves bind both the
+source resource scope and destination environment scope, and template
+instantiation binds its destination environment in the same way.
 Invitation tokens are returned only at creation and stored as SHA-256 digests.
 Creating another invitation for the same organization and email revokes the
 previous token. Creation, revocation, and one-time acceptance commit atomically

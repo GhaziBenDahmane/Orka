@@ -25,7 +25,7 @@ func (s *Server) moveService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
-	role, err := s.Store.EffectiveResourceRole(r.Context(), p, "environment", input.EnvironmentID)
+	p, role, err := s.Store.BindResourceAuthorization(r.Context(), p, "environment", input.EnvironmentID, "developer")
 	if err != nil {
 		writeStoreError(w, err)
 		return

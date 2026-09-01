@@ -59,6 +59,12 @@ revocation, expiry, or token rotation cannot leave an already-started identity
 administration request able to commit afterward. The common audited mutation
 boundary applies the same exact-credential fence to workload, deployment,
 backup, routing, catalog, and operational changes, not only identity endpoints.
+For requests whose organization role is insufficient, resource middleware
+carries the exact project/environment scopes and minimum role into that
+boundary. The transaction locks and re-evaluates those grants, so a concurrent
+grant downgrade or revocation cannot leave a previously authorized resource
+mutation able to commit. Multi-scope operations such as service moves bind
+both source and destination authorization.
 SCIM directory writes independently carry the exact provisioning-token ID from
 request authentication into the write transaction and lock it after the
 organization row. Concurrent SCIM-token revocation or expiry is therefore a

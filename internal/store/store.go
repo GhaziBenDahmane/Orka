@@ -152,15 +152,25 @@ func openConfiguredPool(ctx context.Context, config *pgxpool.Config) (*pgxpool.P
 }
 
 type Principal struct {
-	UserID                uuid.UUID  `json:"userId"`
-	SessionID             uuid.UUID  `json:"-"`
-	SessionOrganizationID *uuid.UUID `json:"-"`
-	ServiceAccountID      *uuid.UUID `json:"serviceAccountId,omitempty"`
-	ServiceAccountTokenID *uuid.UUID `json:"-"`
-	Email                 string     `json:"email"`
-	OrganizationID        uuid.UUID  `json:"organizationId"`
-	Organization          string     `json:"organization"`
-	Role                  string     `json:"role"`
+	UserID                uuid.UUID             `json:"userId"`
+	SessionID             uuid.UUID             `json:"-"`
+	SessionOrganizationID *uuid.UUID            `json:"-"`
+	ServiceAccountID      *uuid.UUID            `json:"serviceAccountId,omitempty"`
+	ServiceAccountTokenID *uuid.UUID            `json:"-"`
+	Email                 string                `json:"email"`
+	OrganizationID        uuid.UUID             `json:"organizationId"`
+	Organization          string                `json:"organization"`
+	Role                  string                `json:"role"`
+	ScopedAuthorizations  []ScopedAuthorization `json:"-"`
+}
+
+// ScopedAuthorization records the project/environment grant boundary that an
+// HTTP resource authorization depended on. It is intentionally excluded from
+// API serialization and is revalidated by audited write transactions.
+type ScopedAuthorization struct {
+	ProjectID     uuid.UUID
+	EnvironmentID uuid.UUID
+	MinimumRole   string
 }
 
 type Session struct {
@@ -3914,15 +3924,7 @@ func (s *Store) RebindDatabaseDriverIdentity(ctx context.Context, principal Prin
 	if _, err = tx.Exec(ctx, `UPDATE database_instances SET driver_source=$2,driver_artifact_digest=$3,updated_at=now() WHERE id=$1`, id, source, digest); err != nil {
 		return DatabaseInstance{}, err
 	}
-	metadata, err := json.Marshal(map[string]any{"engine": item.Engine, "previousSource": previousSource, "previousDigest": previousDigest, "source": source, "digest": digest})
-	if err != nil {
-		return DatabaseInstance{}, err
-	}
-	var serviceAccountID any
-	if principal.ServiceAccountID != nil {
-		serviceAccountID = *principal.ServiceAccountID
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,'database.driver_rebind','database',$4,$5,$6)`, principal.OrganizationID, nullableUUID(principal.UserID), serviceAccountID, id.String(), remoteAddr, metadata); err != nil {
+	if err = appendPrincipalAudit(ctx, tx, principal, "database.driver_rebind", "database", id.String(), remoteAddr, map[string]any{"engine": item.Engine, "previousSource": previousSource, "previousDigest": previousDigest, "source": source, "digest": digest}); err != nil {
 		return DatabaseInstance{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {

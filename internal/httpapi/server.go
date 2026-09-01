@@ -569,7 +569,7 @@ func (s *Server) requireResourceRole(minimum, resourceType, pathParameter string
 			writeError(w, 400, "invalid_id", "invalid resource id")
 			return
 		}
-		role, err := s.Store.EffectiveResourceRole(r.Context(), principal(r), resourceType, id)
+		p, role, err := s.Store.BindResourceAuthorization(r.Context(), principal(r), resourceType, id, minimum)
 		if err != nil {
 			writeStoreError(w, err)
 			return
@@ -578,7 +578,7 @@ func (s *Server) requireResourceRole(minimum, resourceType, pathParameter string
 			writeError(w, 403, "forbidden", "insufficient resource role")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))
 	}))
 }
 func roleRank(role string) int {
@@ -1968,8 +1968,7 @@ func (s *Server) instantiateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_slug", "invalid slug")
 		return
 	}
-	p := principal(r)
-	effectiveRole, err := s.Store.EffectiveResourceRole(r.Context(), p, "environment", in.EnvironmentID)
+	p, effectiveRole, err := s.Store.BindResourceAuthorization(r.Context(), principal(r), "environment", in.EnvironmentID, "developer")
 	if err != nil {
 		writeStoreError(w, err)
 		return

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -122,7 +123,10 @@ func lockAuthenticatedPrincipalCredential(ctx context.Context, tx pgx.Tx, princi
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInsufficientRole
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return lockScopedAuthorizations(ctx, tx, principal, role)
 	}
 	if principal.SessionID != uuid.Nil {
 		if principal.ServiceAccountID != nil || principal.UserID == uuid.Nil {
@@ -148,7 +152,55 @@ func lockAuthenticatedPrincipalCredential(ctx context.Context, tx pgx.Tx, princi
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInsufficientRole
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return lockScopedAuthorizations(ctx, tx, principal, role)
+	}
+	if len(principal.ScopedAuthorizations) != 0 {
+		return ErrInsufficientRole
+	}
+	return nil
+}
+
+func lockScopedAuthorizations(ctx context.Context, tx pgx.Tx, principal Principal, currentRole string) error {
+	if len(principal.ScopedAuthorizations) == 0 {
+		return nil
+	}
+	if principal.ServiceAccountID != nil || principal.UserID == uuid.Nil {
+		return ErrInsufficientRole
+	}
+	claims := append([]ScopedAuthorization(nil), principal.ScopedAuthorizations...)
+	sort.Slice(claims, func(i, j int) bool {
+		left, right := claims[i].ProjectID.String()+claims[i].EnvironmentID.String(), claims[j].ProjectID.String()+claims[j].EnvironmentID.String()
+		return left < right
+	})
+	for _, claim := range claims {
+		if roleValue(claim.MinimumRole) == 0 || claim.ProjectID == uuid.Nil {
+			return ErrInsufficientRole
+		}
+		effectiveRole := currentRole
+		var projectRole string
+		err := tx.QueryRow(ctx, `SELECT role FROM project_grants WHERE project_id=$1 AND user_id=$2 FOR UPDATE`, claim.ProjectID, principal.UserID).Scan(&projectRole)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil && roleValue(projectRole) > roleValue(effectiveRole) {
+			effectiveRole = projectRole
+		}
+		if claim.EnvironmentID != uuid.Nil {
+			var environmentRole string
+			err = tx.QueryRow(ctx, `SELECT role FROM environment_grants WHERE environment_id=$1 AND user_id=$2 FOR UPDATE`, claim.EnvironmentID, principal.UserID).Scan(&environmentRole)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if err == nil && roleValue(environmentRole) > roleValue(effectiveRole) {
+				effectiveRole = environmentRole
+			}
+		}
+		if roleValue(effectiveRole) < roleValue(claim.MinimumRole) {
+			return ErrInsufficientRole
+		}
 	}
 	return nil
 }

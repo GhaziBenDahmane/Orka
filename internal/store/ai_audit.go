@@ -2170,11 +2170,7 @@ func (s *Store) UpdateAIAuditFindingDisposition(ctx context.Context, principal P
 	if err != nil {
 		return AIAuditFinding{}, err
 	}
-	metadata, err := json.Marshal(map[string]any{"runId": item.RunID})
-	if err != nil {
-		return AIAuditFinding{}, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO audit_events(organization_id,actor_user_id,actor_service_account_id,action,resource_type,resource_id,remote_addr,metadata) VALUES($1,$2,$3,$4,'ai_audit_finding',$5,$6,$7)`, principal.OrganizationID, nullableUUID(principal.UserID), serviceAccountID, "ai_audit_finding."+disposition, findingID.String(), remoteAddr, metadata); err != nil {
+	if err = appendPrincipalAudit(ctx, tx, principal, "ai_audit_finding."+disposition, "ai_audit_finding", findingID.String(), remoteAddr, map[string]any{"runId": item.RunID}); err != nil {
 		return AIAuditFinding{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
