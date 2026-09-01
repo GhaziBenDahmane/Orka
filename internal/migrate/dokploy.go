@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,11 @@ type DokployOptions struct {
 	DryRun                bool
 	EncryptionKeys        [][]byte
 }
+
+const (
+	maxDokployEncryptionKeyInputBytes = 64 << 10
+	maxDokployEncryptionKeys          = 256
+)
 
 type DokployReport struct {
 	DryRun                bool                    `json:"dryRun"`
@@ -1454,7 +1460,11 @@ func decryptDokploy(value string, keys [][]byte) (string, error) {
 	return "", errors.New("no Dokploy encryption key could decrypt the value")
 }
 func ParseDokployKeys(data []byte) ([][]byte, error) {
+	if len(data) == 0 || len(data) > maxDokployEncryptionKeyInputBytes {
+		return nil, fmt.Errorf("Dokploy encryption key input must contain between 1 and %d bytes", maxDokployEncryptionKeyInputBytes)
+	}
 	keys := [][]byte{}
+	seen := map[[sha256.Size]byte]struct{}{}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -1465,10 +1475,21 @@ func ParseDokployKeys(data []byte) ([][]byte, error) {
 		if err != nil || len(key) != 32 {
 			return nil, errors.New("Dokploy encryption keys must be 32-byte hex values")
 		}
+		fingerprint := sha256.Sum256(key)
+		if _, duplicate := seen[fingerprint]; duplicate {
+			return nil, errors.New("Dokploy encryption keys must not contain duplicates")
+		}
+		if len(keys) >= maxDokployEncryptionKeys {
+			return nil, fmt.Errorf("Dokploy encryption key input exceeds %d keys", maxDokployEncryptionKeys)
+		}
+		seen[fingerprint] = struct{}{}
 		keys = append(keys, key)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, errors.New("Dokploy encryption key input contains no keys")
 	}
 	return keys, nil
 }

@@ -43,6 +43,12 @@ import (
 var version = "dev"
 var revision = "unknown"
 
+const (
+	maxDokployEncryptionKeyFileBytes int64 = 64 << 10
+	maxDokployConnectionFileBytes    int64 = 1 << 20
+	maxDatabaseURLFileBytes          int64 = 64 << 10
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, dockyardUsage)
@@ -392,9 +398,9 @@ func resolveDatabaseURL(flagValue string) (string, error) {
 		return "", errors.New("DOCKYARD_DATABASE_URL and DOCKYARD_DATABASE_URL_FILE cannot both be configured")
 	}
 	if path != "" {
-		data, err := os.ReadFile(path)
+		data, err := readStableFile(path, "DOCKYARD_DATABASE_URL_FILE", maxDatabaseURLFileBytes, false)
 		if err != nil {
-			return "", fmt.Errorf("read DOCKYARD_DATABASE_URL_FILE: %w", err)
+			return "", err
 		}
 		defer clear(data)
 		value = string(data)
@@ -407,39 +413,60 @@ func resolveDatabaseURL(flagValue string) (string, error) {
 }
 
 func readRestrictedMasterKey(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("key file must be a regular file with no group or other permissions")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	openedInfo, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !os.SameFile(info, openedInfo) {
-		return nil, errors.New("key file changed while it was being opened")
-	}
-	encoded, err := io.ReadAll(io.LimitReader(file, 1025))
+	encoded, err := readRestrictedFile(path, "key file", 1024)
 	if err != nil {
 		return nil, err
 	}
 	defer clear(encoded)
-	if len(encoded) > 1024 {
-		return nil, errors.New("key file exceeds 1 KiB")
-	}
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(encoded)))
 	if err != nil || len(key) != 32 {
 		clear(key)
 		return nil, errors.New("key file must contain one base64-encoded 32-byte key")
 	}
 	return key, nil
+}
+
+func readRestrictedFile(path, label string, maximum int64) ([]byte, error) {
+	return readStableFile(path, label, maximum, true)
+}
+
+func readStableFile(path, label string, maximum int64, restrictedPermissions bool) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must be a regular file, not a symbolic link or directory", label)
+	}
+	if restrictedPermissions && before.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s must have no group or other permissions", label)
+	}
+	if before.Size() < 1 || before.Size() > maximum {
+		return nil, fmt.Errorf("%s must contain between 1 and %d bytes", label, maximum)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return nil, fmt.Errorf("%s changed while it was being opened", label)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+	after, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
+		clear(data)
+		return nil, fmt.Errorf("%s changed while it was being read", label)
+	}
+	if int64(len(data)) > maximum {
+		clear(data)
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maximum)
+	}
+	return data, nil
 }
 
 func runAgent() error {
@@ -491,10 +518,11 @@ func migrateDokploy(arguments []string) error {
 	}
 	keys := [][]byte{}
 	if *keyFile != "" {
-		data, readErr := os.ReadFile(*keyFile)
+		data, readErr := readRestrictedFile(*keyFile, "Dokploy encryption key file", maxDokployEncryptionKeyFileBytes)
 		if readErr != nil {
 			return readErr
 		}
+		defer clear(data)
 		keys, err = dockyardmigrate.ParseDokployKeys(data)
 		if err != nil {
 			return err
@@ -544,22 +572,12 @@ func migrateDokployData(arguments []string) error {
 	if *connectionsFile == "" {
 		return errors.New("--connections-file is required")
 	}
-	info, err := os.Lstat(*connectionsFile)
+	data, err := readRestrictedFile(*connectionsFile, "connections file", maxDokployConnectionFileBytes)
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return errors.New("connections file must be a regular file with no group or other permissions")
-	}
-	data, err := os.ReadFile(*connectionsFile)
-	if err != nil {
-		return err
-	}
-	if len(data) > 1<<20 {
-		return errors.New("connections file exceeds 1 MiB")
-	}
+	defer clear(data)
 	manifest, err := dockyardmigrate.ParseDokployDatabaseTransferManifest(data)
-	clear(data)
 	if err != nil {
 		return err
 	}

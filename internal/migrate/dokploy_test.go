@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -37,6 +38,24 @@ func TestParseDokployKeys(t *testing.T) {
 	}
 	if _, err = ParseDokployKeys([]byte("not-a-key")); err == nil {
 		t.Fatal("expected invalid key error")
+	}
+	for name, input := range map[string][]byte{
+		"empty":     {},
+		"duplicate": []byte(strings.Repeat("30", 32) + "\n" + strings.Repeat("30", 32) + "\n"),
+		"oversized": []byte(strings.Repeat("x", maxDokployEncryptionKeyInputBytes+1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, parseErr := ParseDokployKeys(input); parseErr == nil {
+				t.Fatalf("%s key input was accepted", name)
+			}
+		})
+	}
+	var tooMany strings.Builder
+	for index := 1; index <= maxDokployEncryptionKeys+1; index++ {
+		fmt.Fprintf(&tooMany, "%064x\n", index)
+	}
+	if _, err = ParseDokployKeys([]byte(tooMany.String())); err == nil || !strings.Contains(err.Error(), "exceeds 256 keys") {
+		t.Fatalf("unbounded key input error=%v", err)
 	}
 }
 

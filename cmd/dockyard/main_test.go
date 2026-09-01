@@ -267,4 +267,32 @@ func TestReadRestrictedMasterKeyRejectsUnsafeInput(t *testing.T) {
 	if _, err := readRestrictedMasterKey(symlink); err == nil || !strings.Contains(err.Error(), "regular file") {
 		t.Fatalf("symlink key error=%v", err)
 	}
+	oversized := filepath.Join(directory, "oversized")
+	if err := os.WriteFile(oversized, []byte(strings.Repeat("x", 1025)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readRestrictedMasterKey(oversized); err == nil || !strings.Contains(err.Error(), "between 1 and 1024 bytes") {
+		t.Fatalf("oversized key error=%v", err)
+	}
+}
+
+func TestResolveDatabaseURLRejectsUnsafeFile(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "database-url")
+	link := filepath.Join(directory, "database-url-link")
+	if err := os.WriteFile(target, []byte("postgres://dockyard@example.test/dockyard"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKYARD_DATABASE_URL", "")
+	t.Setenv("DOCKYARD_DATABASE_URL_FILE", link)
+	if _, err := resolveDatabaseURL(""); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlinked database URL error=%v", err)
+	}
+	t.Setenv("DOCKYARD_DATABASE_URL_FILE", target)
+	if value, err := resolveDatabaseURL(""); err != nil || value != "postgres://dockyard@example.test/dockyard" {
+		t.Fatalf("database URL=%q error=%v", value, err)
+	}
 }

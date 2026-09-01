@@ -46,11 +46,14 @@ duplicating them.
 
 Dokploy environment columns may use AES-256-GCM encryption. Export the derived
 keys using Dokploy's `exportEncryptionKeys()` facility, place the resulting
-hex lines in a mode-0600 file, then pass:
+hex lines in a mode-0600 regular file, then pass:
 
 ```sh
 --encryption-key-file /secure/path/dokploy-encryption.keys
 ```
+
+The file must not be a symbolic link, is limited to 64 KiB and 256 distinct
+keys, and is checked for replacement while it is read.
 
 After reviewing the report, run with `--dry-run=false`. The command decrypts
 the source environment only in memory and immediately re-encrypts it with
@@ -166,7 +169,9 @@ queuing data transfers. The target Swarm manager performs both the source dump
 and target restore on the target stack's attachable overlay network, so every
 source `host` and `port` in the manifest must be reachable from that network.
 
-Create a mode-0600 connection manifest outside the repository:
+Create a mode-0600 connection manifest outside the repository. It must be a
+regular, non-symlink file no larger than 1 MiB; the migration command checks
+that it is not replaced while being read:
 
 ```json
 {
