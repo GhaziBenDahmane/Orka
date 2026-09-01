@@ -76,6 +76,7 @@ jq -e '
   .clusterCapacityPostureAudited and
   .localClusterPostureAudited and
   .databaseAvailabilityAudited and
+  .databaseRecoveryPostureAudited and
   .managedNetworkPostureAudited and
   .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and

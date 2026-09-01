@@ -136,7 +136,8 @@ links for every item below.
   template tags from digest-pinned effective runtime snapshots, reports a
   mutable deployed image, and keeps runtime image identities outside the model
   boundary. It also proves deterministic detection of a managed database left
-  in an error state, an expired custom TLS certificate, and a missing edge
+  in an error state, its missing successful backup and restore drill, an
+  expired custom TLS certificate, and a missing edge
   reconciliation target while keeping encrypted certificate and private-key
   material outside the model boundary. A failed managed network must also
   produce a deterministic finding without exposing its raw Docker/agent error.
