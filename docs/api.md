@@ -152,6 +152,8 @@ enrollment details.
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
 | GET | `/v1/notification-deliveries?status=…&event=…&limit=…` | Inspect bounded tenant-scoped notification history; payloads, endpoint secrets, and raw transport errors are redacted |
 | POST | `/v1/notification-deliveries/{id}/retry` | Audit and redrive an exhausted failed delivery through its currently enabled endpoint |
+| GET | `/v1/commit-status-deliveries?status=…&provider=…&state=…&limit=…` | Inspect bounded tenant-scoped provider callback history without repository, revision, credential, or raw transport details |
+| POST | `/v1/commit-status-deliveries/{id}/retry` | Audit and redrive an exhausted callback using its immutable provider and credential snapshot |
 | GET | `/v1/migration-resources?sourceOrganizationId=…&limit=…&cursor=…` | Page through persisted, secret-safe Dokploy parity records with an opaque stable cursor |
 | POST | `/v1/migration-resources/verify` | Run and audit fail-closed mapping or operational Dokploy cutover verification with per-resource acknowledgements |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |

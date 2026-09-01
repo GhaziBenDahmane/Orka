@@ -538,6 +538,13 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodPost, "/v1/notification-deliveries/" + args[1] + "/retry", nil, nil
+	case "commit-status-deliveries":
+		return http.MethodGet, "/v1/commit-status-deliveries", nil, require(1)
+	case "retry-commit-status-delivery":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/commit-status-deliveries/" + args[1] + "/retry", nil, nil
 	case "databases":
 		if err := require(2); err != nil {
 			return "", "", nil, err

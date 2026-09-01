@@ -159,6 +159,15 @@ groups:
           summary: A Dockyard notification delivery exhausted all retries
           description: Organization {{ $labels.organization }} has an unresolved {{ $labels.event }} delivery; inspect notification delivery history and use audited retry after restoring the destination.
 
+      - alert: DockyardCommitStatusDeliveryExhausted
+        expr: max without (instance) (dockyard_commit_status_delivery_exhausted) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Dockyard commit status callback exhausted all retries
+          description: Organization {{ $labels.organization }} has an unresolved {{ $labels.provider }} {{ $labels.state }} callback; inspect commit status callback history and use audited retry after restoring provider connectivity.
+
       - alert: DockyardBackupStale
         expr: max without (instance) (dockyard_database_backup_last_success_age_seconds{scope="all"}) > 86400
         for: 15m

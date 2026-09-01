@@ -114,6 +114,8 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"delete-notification-endpoint", "endpoint-id"}, http.MethodDelete, "/v1/notification-endpoints/endpoint-id"},
 		{[]string{"notification-deliveries"}, http.MethodGet, "/v1/notification-deliveries"},
 		{[]string{"retry-notification-delivery", "delivery-id"}, http.MethodPost, "/v1/notification-deliveries/delivery-id/retry"},
+		{[]string{"commit-status-deliveries"}, http.MethodGet, "/v1/commit-status-deliveries"},
+		{[]string{"retry-commit-status-delivery", "delivery-id"}, http.MethodPost, "/v1/commit-status-deliveries/delivery-id/retry"},
 		{[]string{"databases", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/databases"},
 		{[]string{"database", "database-id"}, http.MethodGet, "/v1/databases/database-id"},
 		{[]string{"link-database", "service-id", `{}`}, http.MethodPost, "/v1/services/service-id/databases"},

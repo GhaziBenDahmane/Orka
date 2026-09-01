@@ -71,7 +71,8 @@ paths:
 			isSCIMList := op.method == "get" && (op.path == "/scim/v2/Users" || op.path == "/scim/v2/Groups")
 			isMigrationList := op.method == "get" && op.path == "/v1/migration-resources"
 			isNotificationDeliveryList := op.method == "get" && op.path == "/v1/notification-deliveries"
-			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList || isNotificationDeliveryList {
+			isCommitStatusDeliveryList := op.method == "get" && op.path == "/v1/commit-status-deliveries"
+			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList || isNotificationDeliveryList || isCommitStatusDeliveryList {
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
@@ -91,6 +92,9 @@ paths:
 				}
 				if isNotificationDeliveryList {
 					output.WriteString("        - name: status\n          in: query\n          schema: {type: string, enum: [pending, running, succeeded, failed]}\n        - name: event\n          in: query\n          schema: {type: string}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n")
+				}
+				if isCommitStatusDeliveryList {
+					output.WriteString("        - name: status\n          in: query\n          schema: {type: string, enum: [pending, running, succeeded, failed]}\n        - name: provider\n          in: query\n          schema: {type: string, enum: [github, gitlab, gitea, bitbucket]}\n        - name: state\n          in: query\n          schema: {type: string, enum: [pending, success, failure, error]}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n")
 				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {

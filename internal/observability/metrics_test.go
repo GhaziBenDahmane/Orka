@@ -223,7 +223,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_backup_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_restore_active_age_seconds", "dockyard_volume_restore_last_failure_age_seconds", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_integrity_issues", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_notification_delivery_exhausted", "dockyard_notification_delivery_oldest_exhausted_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_node_count", "dockyard_cluster_ready_node_count", "dockyard_cluster_active_node_count", "dockyard_cluster_schedulable_node_count", "dockyard_cluster_manager_count", "dockyard_cluster_cpu_capacity_nanocpus", "dockyard_cluster_memory_capacity_bytes", "dockyard_cluster_docker_swarm_capable", "dockyard_cluster_docker_compose_capable", "dockyard_cluster_edge_proxy_ready", "dockyard_environment_cluster_capacity_satisfied", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_backup_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_restore_active_age_seconds", "dockyard_volume_restore_last_failure_age_seconds", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_integrity_issues", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_notification_delivery_exhausted", "dockyard_notification_delivery_oldest_exhausted_age_seconds", "dockyard_commit_status_delivery_exhausted", "dockyard_commit_status_delivery_oldest_exhausted_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_node_count", "dockyard_cluster_ready_node_count", "dockyard_cluster_active_node_count", "dockyard_cluster_schedulable_node_count", "dockyard_cluster_manager_count", "dockyard_cluster_cpu_capacity_nanocpus", "dockyard_cluster_memory_capacity_bytes", "dockyard_cluster_docker_swarm_capable", "dockyard_cluster_docker_compose_capable", "dockyard_cluster_edge_proxy_ready", "dockyard_environment_cluster_capacity_satisfied", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -582,6 +582,23 @@ func TestPrometheusAlertsCoverExhaustedNotificationDeliveries(t *testing.T) {
 		"alert: DockyardNotificationDeliveryExhausted",
 		"expr: max without (instance) (dockyard_notification_delivery_exhausted) > 0",
 		"inspect notification delivery history and use audited retry",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverExhaustedCommitStatusDeliveries(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardCommitStatusDeliveryExhausted",
+		"expr: max without (instance) (dockyard_commit_status_delivery_exhausted) > 0",
+		"inspect commit status callback history and use audited retry",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

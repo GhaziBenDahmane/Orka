@@ -64,6 +64,7 @@ export type AuditArchive = { id: string; backupDestinationId: string; name: stri
 export type AuditArchiveBatch = { id: string; destinationId: string; firstEventId: number; lastEventId: number; previousSha256: string; sha256?: string; objectKey: string; sizeBytes?: number; status: string; lastError?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type NotificationEndpoint = { id: string; name: string; kind: "webhook" | "slack" | "smtp" | "pagerduty" | "opsgenie"; events: string[]; enabled: boolean; updatedAt: string };
 export type NotificationDelivery = { id: string; endpointId: string; endpointName: string; endpointKind: string; eventType: string; resourceType: string; resourceId: string; status: "pending" | "running" | "succeeded" | "failed"; responseCode?: number; lastError?: string; inProgress: boolean; retryable: boolean; createdAt: string; startedAt?: string; finishedAt?: string };
+export type CommitStatusDelivery = { id: string; deploymentId: string; serviceId: string; serviceName: string; state: "pending" | "success" | "failure" | "error"; provider: "github" | "gitlab" | "gitea" | "bitbucket"; status: "pending" | "running" | "succeeded" | "failed"; responseCode?: number; lastError?: string; inProgress: boolean; retryable: boolean; createdAt: string; startedAt?: string; finishedAt?: string };
 export type ServiceAccount = { id: string; name: string; role: string; enabled: boolean; tokenExpiresAt?: string; lastUsedAt?: string; createdAt: string; updatedAt: string };
 export type SCIMToken = { id: string; organizationId: string; name: string; defaultRole: "admin" | "developer" | "viewer"; createdAt: string; expiresAt: string; revokedAt?: string };
 export type OrganizationMember = { userId: string; email: string; displayName: string; role: Role; active: boolean; managedByScim: boolean; createdAt: string };
@@ -306,6 +307,14 @@ export const api = {
     return request<Envelope<NotificationDelivery>>(`/v1/notification-deliveries?${query}`);
   },
   retryNotificationDelivery: (id: string) => request<NotificationDelivery>(`/v1/notification-deliveries/${id}/retry`, { method: "POST" }),
+  commitStatusDeliveries: (status = "", provider = "", state = "", limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status) query.set("status", status);
+    if (provider) query.set("provider", provider);
+    if (state) query.set("state", state);
+    return request<Envelope<CommitStatusDelivery>>(`/v1/commit-status-deliveries?${query}`);
+  },
+  retryCommitStatusDelivery: (id: string) => request<CommitStatusDelivery>(`/v1/commit-status-deliveries/${id}/retry`, { method: "POST" }),
   serviceAccounts: () => request<Envelope<ServiceAccount>>("/v1/service-accounts"),
   createServiceAccount: (name: string, role: "admin" | "developer" | "viewer", expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role, expiresInDays }) }),
   createAuditorAccount: (name: string, expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role: "auditor", expiresInDays }) }),

@@ -55,6 +55,7 @@ type AIAuditSnapshot struct {
 	DeployTokenPosture   AIAuditDeployTokenPosture        `json:"deployTokenPosture"`
 	SAMLPosture          []AIAuditSAMLProviderPosture     `json:"samlPosture"`
 	NotificationPosture  []AIAuditNotificationPosture     `json:"notificationPosture"`
+	CommitStatusPosture  []AIAuditCommitStatusPosture     `json:"commitStatusPosture"`
 	WebhookPosture       []AIAuditWebhookPosture          `json:"webhookPosture"`
 	BackupDestinations   []AIAuditBackupDestinationInfo   `json:"backupDestinations"`
 	TemplateRepositories []AIAuditTemplateRepositoryInfo  `json:"templateRepositories"`
@@ -511,6 +512,15 @@ type AIAuditNotificationPosture struct {
 	OldestExhaustedFailureAt *time.Time `json:"oldestExhaustedFailureAt,omitempty"`
 }
 
+type AIAuditCommitStatusPosture struct {
+	DeploymentID             uuid.UUID `json:"deploymentId"`
+	ServiceID                uuid.UUID `json:"serviceId"`
+	Provider                 string    `json:"provider"`
+	State                    string    `json:"state"`
+	ExhaustedFailures        int64     `json:"exhaustedFailures"`
+	OldestExhaustedFailureAt time.Time `json:"oldestExhaustedFailureAt"`
+}
+
 type AIAuditWebhookPosture struct {
 	ID               uuid.UUID `json:"id"`
 	ComposeServiceID uuid.UUID `json:"composeServiceId"`
@@ -593,7 +603,7 @@ type AIAuditFinalizerPosture struct {
 // environment values, credentials, and backup contents never enter the agent
 // context. The snapshot is broad but remains read-only and secret-free.
 func (s *Store) BuildAIAuditSnapshot(ctx context.Context, organizationID uuid.UUID) (AIAuditSnapshot, error) {
-	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, VolumeRestorePosture: []AIAuditVolumeRestorePosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, SourceCredentials: []AIAuditSourceCredentialPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
+	snapshot := AIAuditSnapshot{GeneratedAt: time.Now().UTC(), Organization: organizationID, Projects: []AIAuditProjectInfo{}, Environments: []AIAuditEnvironmentInfo{}, Services: []AIAuditServiceInfo{}, Routes: []AIAuditRouteInfo{}, Databases: []AIAuditDatabaseInfo{}, DatabaseEngines: []AIAuditDatabaseEngineInfo{}, Clusters: []AIAuditClusterInfo{}, ManagedNetworks: []AIAuditManagedNetworkInfo{}, CustomTLSPosture: []AIAuditCustomTLSPosture{}, EdgeTLSPosture: []AIAuditEdgeTLSPosture{}, AgentUpgradePosture: []AIAuditAgentUpgradePosture{}, AgentCommandPosture: []AIAuditAgentCommandPosture{}, BackupPosture: []AIAuditBackupPosture{}, VolumeBackupPosture: []AIAuditVolumeBackupPosture{}, VolumeRestorePosture: []AIAuditVolumeRestorePosture{}, ResourcePolicies: []AIAuditResourcePolicyPosture{}, WorkloadPosture: []AIAuditWorkloadPosture{}, SourceBuildPosture: []AIAuditSourceBuildPosture{}, SourceCredentials: []AIAuditSourceCredentialPosture{}, AuditLogPosture: AIAuditLogPosture{Destinations: []AIAuditArchivePosture{}}, SAMLPosture: []AIAuditSAMLProviderPosture{}, NotificationPosture: []AIAuditNotificationPosture{}, CommitStatusPosture: []AIAuditCommitStatusPosture{}, WebhookPosture: []AIAuditWebhookPosture{}, BackupDestinations: []AIAuditBackupDestinationInfo{}, TemplateRepositories: []AIAuditTemplateRepositoryInfo{}, MigrationPosture: []AIAuditMigrationPosture{}, MigrationBlockers: []AIAuditMigrationBlocker{}, ServiceDeployments: []AIAuditServiceDeployment{}, ServiceSchedules: []AIAuditServiceSchedulePosture{}, QueuePosture: AIAuditQueuePosture{Coverage: "all-supported-tenant-jobs", Kinds: []AIAuditQueueKindPosture{}}, Reconciliation: []AIAuditReconciliationPosture{}, Signals: []AIAuditSignal{}, AuditEvents: []AIAuditEventInfo{}}
 	projects, err := s.ListProjects(ctx, organizationID)
 	if err != nil {
 		return snapshot, err
@@ -1442,6 +1452,40 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 			return err
 		}
 		snapshot.NotificationPosture = append(snapshot.NotificationPosture, endpoint)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	rows, err = s.Pool.Query(ctx, `
+		SELECT delivery.deployment_id,service.id,
+		       CASE WHEN delivery.provider IN ('github','gitlab','gitea','bitbucket') THEN delivery.provider ELSE 'unknown' END,
+		       CASE WHEN delivery.state IN ('pending','success','failure','error') THEN delivery.state ELSE 'unknown' END,
+		       count(*),min(COALESCE(delivery.finished_at,delivery.created_at))
+		FROM commit_status_deliveries delivery
+		JOIN deployments deployment ON deployment.id=delivery.deployment_id
+		JOIN compose_services service ON service.id=deployment.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE project.organization_id=$1 AND delivery.status='failed' AND NOT EXISTS(
+		    SELECT 1 FROM jobs job WHERE job.kind='commit.status'
+		      AND job.payload->>'deliveryId'=delivery.id::text AND job.status IN ('pending','running')
+		)
+		GROUP BY delivery.deployment_id,service.id,
+		         CASE WHEN delivery.provider IN ('github','gitlab','gitea','bitbucket') THEN delivery.provider ELSE 'unknown' END,
+		         CASE WHEN delivery.state IN ('pending','success','failure','error') THEN delivery.state ELSE 'unknown' END
+		ORDER BY min(COALESCE(delivery.finished_at,delivery.created_at)),delivery.deployment_id`, organizationID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var posture AIAuditCommitStatusPosture
+		if err = rows.Scan(&posture.DeploymentID, &posture.ServiceID, &posture.Provider, &posture.State, &posture.ExhaustedFailures, &posture.OldestExhaustedFailureAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.CommitStatusPosture = append(snapshot.CommitStatusPosture, posture)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()

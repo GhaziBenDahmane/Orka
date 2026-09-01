@@ -4,23 +4,146 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 type CommitStatusDelivery struct {
-	ID                  uuid.UUID
-	DeploymentID        uuid.UUID
-	State               string
-	RepositoryURL       string
-	CommitSHA           string
-	Provider            string
-	Context             string
-	CredentialServer    string
-	CredentialUsername  string
-	CredentialID        *uuid.UUID
-	EncryptedCredential string
+	ID                  uuid.UUID  `json:"id"`
+	DeploymentID        uuid.UUID  `json:"deploymentId"`
+	ServiceID           uuid.UUID  `json:"serviceId,omitempty"`
+	ServiceName         string     `json:"serviceName,omitempty"`
+	State               string     `json:"state"`
+	Provider            string     `json:"provider"`
+	Status              string     `json:"status"`
+	ResponseCode        *int       `json:"responseCode,omitempty"`
+	LastError           string     `json:"lastError,omitempty"`
+	InProgress          bool       `json:"inProgress"`
+	Retryable           bool       `json:"retryable"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	StartedAt           *time.Time `json:"startedAt,omitempty"`
+	FinishedAt          *time.Time `json:"finishedAt,omitempty"`
+	RepositoryURL       string     `json:"-"`
+	CommitSHA           string     `json:"-"`
+	Context             string     `json:"-"`
+	CredentialServer    string     `json:"-"`
+	CredentialUsername  string     `json:"-"`
+	CredentialID        *uuid.UUID `json:"-"`
+	EncryptedCredential string     `json:"-"`
+}
+
+type CommitStatusDeliveryFilter struct {
+	Status   string
+	Provider string
+	State    string
+	Limit    int
+}
+
+func (s *Store) ListCommitStatusDeliveries(ctx context.Context, organizationID uuid.UUID, filter CommitStatusDeliveryFilter) ([]CommitStatusDelivery, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 100
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT delivery.id,delivery.deployment_id,service.id,service.name,delivery.state,delivery.provider,
+		       delivery.status,delivery.response_code,CASE
+		           WHEN delivery.last_error='' THEN ''
+		           WHEN delivery.response_code IS NOT NULL THEN 'provider returned HTTP ' || delivery.response_code::text
+		           ELSE 'delivery failed; inspect controller logs using the delivery ID'
+		       END,delivery.created_at,delivery.started_at,delivery.finished_at,state.active,
+		       delivery.status='failed' AND NOT state.active AS retryable
+		FROM commit_status_deliveries delivery
+		JOIN deployments deployment ON deployment.id=delivery.deployment_id
+		JOIN compose_services service ON service.id=deployment.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		CROSS JOIN LATERAL (
+		    SELECT EXISTS(
+		        SELECT 1 FROM jobs job
+		        WHERE job.kind='commit.status' AND job.payload->>'deliveryId'=delivery.id::text
+		          AND job.status IN ('pending','running')
+		    ) AS active
+		) state
+		WHERE project.organization_id=$1 AND ($2='' OR delivery.status=$2)
+		  AND ($3='' OR delivery.provider=$3) AND ($4='' OR delivery.state=$4)
+		ORDER BY delivery.created_at DESC,delivery.id DESC
+		LIMIT $5`, organizationID, filter.Status, filter.Provider, filter.State, filter.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CommitStatusDelivery{}
+	for rows.Next() {
+		var item CommitStatusDelivery
+		if err = rows.Scan(&item.ID, &item.DeploymentID, &item.ServiceID, &item.ServiceName, &item.State, &item.Provider, &item.Status, &item.ResponseCode, &item.LastError, &item.CreatedAt, &item.StartedAt, &item.FinishedAt, &item.InProgress, &item.Retryable); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) RetryCommitStatusDeliveryWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) (CommitStatusDelivery, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	defer tx.Rollback(ctx)
+	var item CommitStatusDelivery
+	err = tx.QueryRow(ctx, `
+		SELECT delivery.id,delivery.deployment_id,service.id,service.name,delivery.state,delivery.provider,
+		       delivery.status,delivery.response_code,delivery.last_error,delivery.created_at,delivery.started_at,delivery.finished_at
+		FROM commit_status_deliveries delivery
+		JOIN deployments deployment ON deployment.id=delivery.deployment_id
+		JOIN compose_services service ON service.id=deployment.compose_service_id
+		JOIN environments environment ON environment.id=service.environment_id
+		JOIN projects project ON project.id=environment.project_id
+		WHERE delivery.id=$1 AND project.organization_id=$2
+		FOR UPDATE OF delivery`, id, principal.OrganizationID).Scan(
+		&item.ID, &item.DeploymentID, &item.ServiceID, &item.ServiceName, &item.State, &item.Provider,
+		&item.Status, &item.ResponseCode, &item.LastError, &item.CreatedAt, &item.StartedAt, &item.FinishedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CommitStatusDelivery{}, ErrNotFound
+	}
+	if err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='commit.status' AND payload->>'deliveryId'=$1 AND status IN ('pending','running'))`, id.String()).Scan(&active); err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	if active || item.Status == "pending" || item.Status == "running" {
+		return CommitStatusDelivery{}, ErrBusy
+	}
+	if item.Status != "failed" {
+		return CommitStatusDelivery{}, ErrCommitStatusDeliveryNotRetryable
+	}
+	if _, err = tx.Exec(ctx, `UPDATE commit_status_deliveries SET status='pending',response_code=NULL,last_error='',started_at=NULL,finished_at=NULL WHERE id=$1`, id); err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	jobPayload, _ := json.Marshal(map[string]string{"deliveryId": id.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'commit.status',$2,8)`, uuid.New(), jobPayload); err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "commit_status_delivery.retry", "commit_status_delivery", id.String(), remoteAddr, map[string]any{"deploymentId": item.DeploymentID, "serviceId": item.ServiceID, "provider": item.Provider, "state": item.State}); err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return CommitStatusDelivery{}, err
+	}
+	item.Status = "pending"
+	item.ResponseCode = nil
+	item.LastError = ""
+	item.StartedAt = nil
+	item.FinishedAt = nil
+	item.InProgress = true
+	item.Retryable = false
+	return item, nil
 }
 
 func queueCommitStatusTx(ctx context.Context, tx pgx.Tx, deploymentID uuid.UUID, state string) error {

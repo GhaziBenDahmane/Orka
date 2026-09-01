@@ -1335,6 +1335,21 @@ func TestDeterministicAuditDetectsExhaustedNotificationDelivery(t *testing.T) {
 	}
 }
 
+func TestDeterministicAuditDetectsExhaustedCommitStatusDelivery(t *testing.T) {
+	now := time.Now().UTC()
+	deploymentID, serviceID := uuid.New(), uuid.New()
+	snapshot := store.AIAuditSnapshot{
+		Organization:        uuid.New(),
+		IdentityPosture:     store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1},
+		NotificationPosture: fullyCoveredNotifications(),
+		CommitStatusPosture: []store.AIAuditCommitStatusPosture{{DeploymentID: deploymentID, ServiceID: serviceID, Provider: "github", State: "failure", ExhaustedFailures: 1, OldestExhaustedFailureAt: now.Add(-time.Hour)}},
+	}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Commit status delivery requires intervention" || findings[0].Severity != "high" || findings[0].ResourceType != "deployment" || findings[0].ResourceID != deploymentID.String() || findings[0].Evidence["serviceId"] != serviceID.String() {
+		t.Fatalf("commit status delivery findings=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

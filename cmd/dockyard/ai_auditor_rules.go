@@ -595,6 +595,9 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 		}
 		add(modelFinding{Severity: "high", Category: "operations", Title: "Notification delivery requires intervention", Description: "One or more notification deliveries exhausted every durable retry without succeeding.", ResourceType: "notification_endpoint", ResourceID: endpoint.ID.String(), Evidence: evidence, Remediation: "Inspect tenant delivery history, restore or replace the destination, and use the audited retry action for eligible failures."})
 	}
+	for _, delivery := range snapshot.CommitStatusPosture {
+		add(modelFinding{Severity: "high", Category: "operations", Title: "Commit status delivery requires intervention", Description: "A source-provider commit status callback exhausted every durable retry without succeeding.", ResourceType: "deployment", ResourceID: delivery.DeploymentID.String(), Evidence: map[string]any{"serviceId": delivery.ServiceID.String(), "provider": delivery.Provider, "state": delivery.State, "exhaustedFailures": delivery.ExhaustedFailures, "oldestExhaustedFailureAt": delivery.OldestExhaustedFailureAt.UTC().Format(time.RFC3339)}, Remediation: "Inspect tenant commit status callback history, restore provider connectivity, and use the audited retry action."})
+	}
 	for _, deployment := range snapshot.ServiceDeployments {
 		if deployment.DesiredState == "stopped" {
 			continue

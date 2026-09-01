@@ -267,6 +267,10 @@ Recent tenant-scoped attempts are available with `notification-deliveries`;
 after durable retries are exhausted, administrators can queue an audited
 redrive with `retry-notification-delivery DELIVERY_ID` while preserving the
 delivery identity used by downstream idempotency controls.
+Commit-provider callbacks have the same recovery path through
+`commit-status-deliveries` and `retry-commit-status-delivery DELIVERY_ID`.
+Their tenant-scoped history redacts repository, revision, credential, and raw
+transport details, while redrive preserves the immutable callback snapshot.
 
 Expiring service-account credentials can be managed with
 `dockyard_service_account`. Terraform/OpenTofu retains the one-time bearer

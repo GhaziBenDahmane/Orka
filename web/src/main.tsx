@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditArchiveBatch, AuditEvent, BackupDestination, Cluster, ClusterCommand, CustomTLSCertificate, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, DokployVerification, Environment, LinkedDatabaseInput, ManagedNetwork, MFAStatus, MigrationResource, NotificationDelivery, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourceGrant, ResourcePolicy, Role, Route, RouteBasicAuthUser, RouteInput, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceSchedule, ServiceScheduleExecution, ServiceScheduleInput, ServiceVolume, SessionInfo, SourceCredential, session, Tag, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore, WebhookIntegration } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditArchiveBatch, AuditEvent, BackupDestination, Cluster, ClusterCommand, CommitStatusDelivery, CustomTLSCertificate, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, DokployVerification, Environment, LinkedDatabaseInput, ManagedNetwork, MFAStatus, MigrationResource, NotificationDelivery, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourceGrant, ResourcePolicy, Role, Route, RouteBasicAuthUser, RouteInput, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceSchedule, ServiceScheduleExecution, ServiceScheduleInput, ServiceVolume, SessionInfo, SourceCredential, session, Tag, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore, WebhookIntegration } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -900,17 +900,18 @@ const notificationEvents = ["deployment.failed", "service.stop.failed", "service
 function Notifications({ flash, setError }: { flash: (s: string) => void; setError: (s: string) => void }) {
   const [items, setItems] = useState<NotificationEndpoint[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
+  const [commitStatusDeliveries, setCommitStatusDeliveries] = useState<CommitStatusDelivery[]>([]);
   const [deliveryStatus, setDeliveryStatus] = useState("");
   const [deliveryEvent, setDeliveryEvent] = useState("");
   const [input, setInput] = useState({ name: "", kind: "webhook", url: "https://", pagerDutyIntegrationKey: "", opsgenieApiKey: "", opsgenieRegion: "us", smtpHost: "", smtpPort: 587, smtpMode: "starttls", smtpUsername: "", smtpPassword: "", from: "", to: "", events: [...notificationEvents] });
   const [signingSecret, setSigningSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(async () => {
-    const [endpointResult, deliveryResult] = await Promise.all([api.notificationEndpoints(), api.notificationDeliveries(deliveryStatus, deliveryEvent)]);
-    setItems(endpointResult.items); setDeliveries(deliveryResult.items);
+    const [endpointResult, deliveryResult, commitStatusResult] = await Promise.all([api.notificationEndpoints(), api.notificationDeliveries(deliveryStatus, deliveryEvent), api.commitStatusDeliveries(deliveryStatus)]);
+    setItems(endpointResult.items); setDeliveries(deliveryResult.items); setCommitStatusDeliveries(commitStatusResult.items);
   }, [deliveryStatus, deliveryEvent]);
   useEffect(() => { refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
-  const activeDelivery = deliveries.some(item => item.inProgress || item.status === "pending" || item.status === "running");
+  const activeDelivery = [...deliveries, ...commitStatusDeliveries].some(item => item.inProgress || item.status === "pending" || item.status === "running");
   useEffect(() => { if (!activeDelivery) return; const timer = window.setInterval(() => void refresh().catch(reason => setError(message(reason))), 3000); return () => window.clearInterval(timer); }, [activeDelivery, refresh, setError]);
   async function create(event: FormEvent) {
     event.preventDefault(); setBusy(true); setSigningSecret("");
@@ -920,6 +921,11 @@ function Notifications({ flash, setError }: { flash: (s: string) => void; setErr
   async function retry(delivery: NotificationDelivery) {
     if (!window.confirm(`Retry ${delivery.eventType} delivery to ${delivery.endpointName}?`)) return;
     setBusy(true); try { await api.retryNotificationDelivery(delivery.id); await refresh(); flash("Notification delivery queued for retry"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
+  async function retryCommitStatus(delivery: CommitStatusDelivery) {
+    if (!window.confirm(`Retry ${delivery.provider} commit status for ${delivery.serviceName}?`)) return;
+    setBusy(true); try { await api.retryCommitStatusDelivery(delivery.id); await refresh(); flash("Commit status delivery queued for retry"); }
     catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
   const toggleEvent = (value: string) => setInput({ ...input, events: input.events.includes(value) ? input.events.filter(x => x !== value) : [...input.events, value] });
@@ -932,6 +938,8 @@ function Notifications({ flash, setError }: { flash: (s: string) => void; setErr
     <section><div className="grid">{items.map(item => <article className="card database-card" key={item.id}><div><h3>{item.name}</h3><p>{item.kind} · {item.events.join(", ")}</p></div><Status value={item.enabled ? "active" : "disabled"} />{item.enabled && <button className="danger-button" disabled={busy} onClick={() => window.confirm(`Disable ${item.name}?`) && void api.disableNotificationEndpoint(item.id).then(refresh).then(() => flash("Notification endpoint disabled")).catch(reason => setError(message(reason)))}>Disable</button>}</article>)}</div>{!items.length && <Empty title="No notification endpoints" text="Add a durable delivery target for deployment, backup, restore, and audit failures." />}{signingSecret && <section className="card credential-card signing-secret"><p className="eyebrow">Save now</p><h2>Webhook signing secret</h2><p className="muted">This secret is shown once and signs each request with HMAC-SHA256.</p><code>{signingSecret}</code></section>}
       <section className="section-head spaced"><div><h2>Delivery history</h2><p className="muted">Recent attempts are tenant-scoped. Failed deliveries become retryable only after durable attempts are exhausted.</p></div><div className="delivery-filters"><select aria-label="Delivery status" value={deliveryStatus} onChange={event => setDeliveryStatus(event.target.value)}><option value="">All statuses</option><option value="pending">Pending</option><option value="running">Running</option><option value="succeeded">Succeeded</option><option value="failed">Failed</option></select><select aria-label="Delivery event" value={deliveryEvent} onChange={event => setDeliveryEvent(event.target.value)}><option value="">All events</option>{notificationEvents.map(value => <option value={value} key={value}>{value}</option>)}</select></div></section>
       <section className="card audit-table"><div className="table-scroll"><table><thead><tr><th>Time</th><th>Endpoint</th><th>Event</th><th>Resource</th><th>Result</th><th></th></tr></thead><tbody>{deliveries.map(delivery => <tr key={delivery.id}><td>{new Date(delivery.createdAt).toLocaleString()}</td><td>{delivery.endpointName}<small>{delivery.endpointKind}</small></td><td><code>{delivery.eventType}</code></td><td>{delivery.resourceType}<small>{delivery.resourceId}</small></td><td><Status value={delivery.inProgress ? "running" : delivery.status} /><small>{delivery.lastError || (delivery.responseCode ? `HTTP ${delivery.responseCode}` : "—")}</small></td><td>{delivery.retryable && <button disabled={busy} onClick={() => void retry(delivery)}>Retry</button>}</td></tr>)}</tbody></table></div>{!deliveries.length && <p className="muted padded">No matching notification deliveries.</p>}</section>
+      <section className="section-head spaced"><div><h2>Commit status callbacks</h2><p className="muted">Provider callback history is tenant-scoped and excludes repository, revision, and credential material.</p></div></section>
+      <section className="card audit-table"><div className="table-scroll"><table><thead><tr><th>Time</th><th>Service</th><th>Provider</th><th>State</th><th>Result</th><th></th></tr></thead><tbody>{commitStatusDeliveries.map(delivery => <tr key={delivery.id}><td>{new Date(delivery.createdAt).toLocaleString()}</td><td>{delivery.serviceName}<small>{delivery.deploymentId}</small></td><td>{delivery.provider}</td><td><Status value={delivery.state} /></td><td><Status value={delivery.inProgress ? "running" : delivery.status} /><small>{delivery.lastError || (delivery.responseCode ? `HTTP ${delivery.responseCode}` : "—")}</small></td><td>{delivery.retryable && <button disabled={busy} onClick={() => void retryCommitStatus(delivery)}>Retry</button>}</td></tr>)}</tbody></table></div>{!commitStatusDeliveries.length && <p className="muted padded">No matching commit status callbacks.</p>}</section>
     </section>
   </div>;
 }
