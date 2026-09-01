@@ -709,21 +709,22 @@ func recoveryAgeEvidence(now time.Time, completedAt *time.Time, intervalSeconds 
 
 func missingNotificationCoverage(endpoints []store.AIAuditNotificationPosture) []string {
 	required := map[string]bool{
-		"deployment.failed":         false,
-		"service.stop.failed":       false,
-		"service.schedule.failed":   false,
-		"backup.failed":             false,
-		"restore.failed":            false,
-		"restore.drill.failed":      false,
-		"database.migration.failed": false,
-		"network.provision.failed":  false,
-		"network.delete.failed":     false,
-		"resource.delete.failed":    false,
-		"template.sync.failed":      false,
-		"agent.upgrade.failed":      false,
-		"audit.archive.failed":      false,
-		"ai.audit.failed":           false,
-		"ai.finding.critical":       false,
+		"deployment.failed":                 false,
+		"service.stop.failed":               false,
+		"service.schedule.failed":           false,
+		"backup.failed":                     false,
+		"restore.failed":                    false,
+		"restore.drill.failed":              false,
+		"database.migration.failed":         false,
+		"network.provision.failed":          false,
+		"network.delete.failed":             false,
+		"resource.delete.failed":            false,
+		"edge.certificate.reconcile.failed": false,
+		"template.sync.failed":              false,
+		"agent.upgrade.failed":              false,
+		"audit.archive.failed":              false,
+		"ai.audit.failed":                   false,
+		"ai.finding.critical":               false,
 	}
 	for _, endpoint := range endpoints {
 		if !endpoint.Enabled {

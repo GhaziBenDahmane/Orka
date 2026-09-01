@@ -170,6 +170,9 @@ links for every item below.
   service, volume, mode, and target-node context. It also forces notification
   outbox insertion to fail and proves the terminal workload-job transition
   rolls back, so a committed terminal failure cannot lose its operator alert.
+  Shared local-edge certificate failures fan out once to every affected tenant,
+  including after the last custom-certificate route has been removed, without
+  notifying an unrelated tenant.
   The release attaches
   `notification-conformance.json`; real provider credentials remain a staging
   requirement.

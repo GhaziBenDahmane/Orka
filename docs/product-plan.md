@@ -225,6 +225,10 @@ durable provider build-status callbacks implemented.
   Routes can select either an ACME resolver or an organization custom
   certificate, never both. Deployment waits for the selected target's edge-TLS
   generation to converge and fails closed when the proxy capability is stale.
+  Exhausted edge-certificate reconciliation retries emit a generation-specific
+  durable alert to every affected tenant; local shared-edge ownership survives
+  route removal until successful cleanup, without leaking another tenant's
+  certificate inventory.
   Service-wide HTTP basic-auth rules are managed through the same surfaces;
   only bcrypt hashes reach PostgreSQL and deployment snapshots, and Traefik
   strips the credential header before proxying upstream.

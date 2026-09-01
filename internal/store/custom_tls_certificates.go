@@ -210,37 +210,41 @@ func deleteCustomTLSCertificateTx(ctx context.Context, tx pgx.Tx, organizationID
 }
 
 func queueCertificateTargetsForCertificateTx(ctx context.Context, tx pgx.Tx, certificateID uuid.UUID) error {
-	rows, err := tx.Query(ctx, `SELECT DISTINCT environment.cluster_id FROM routes route JOIN compose_services service ON service.id=route.compose_service_id JOIN environments environment ON environment.id=service.environment_id WHERE route.custom_certificate_id=$1`, certificateID)
+	rows, err := tx.Query(ctx, `SELECT DISTINCT environment.cluster_id,certificate.organization_id FROM routes route JOIN compose_services service ON service.id=route.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN custom_tls_certificates certificate ON certificate.id=route.custom_certificate_id WHERE route.custom_certificate_id=$1`, certificateID)
 	if err != nil {
 		return err
 	}
-	var targets []*uuid.UUID
+	type affectedTarget struct {
+		clusterID      *uuid.UUID
+		organizationID uuid.UUID
+	}
+	var targets []affectedTarget
 	for rows.Next() {
-		var clusterID *uuid.UUID
-		if err = rows.Scan(&clusterID); err != nil {
+		var target affectedTarget
+		if err = rows.Scan(&target.clusterID, &target.organizationID); err != nil {
 			rows.Close()
 			return err
 		}
-		targets = append(targets, clusterID)
+		targets = append(targets, target)
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return err
 	}
-	for _, clusterID := range targets {
-		if err = queueEdgeCertificateReconciliationTx(ctx, tx, clusterID); err != nil {
+	for _, target := range targets {
+		if err = queueEdgeCertificateReconciliationTx(ctx, tx, target.clusterID, target.organizationID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func queueEdgeCertificateReconciliationTx(ctx context.Context, tx pgx.Tx, clusterID *uuid.UUID) error {
+func queueEdgeCertificateReconciliationTx(ctx context.Context, tx pgx.Tx, clusterID *uuid.UUID, organizationID uuid.UUID) error {
 	targetKey := "local"
 	if clusterID != nil {
 		targetKey = clusterID.String()
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO edge_certificate_targets(target_key,cluster_id) VALUES($1,$2) ON CONFLICT(target_key) DO UPDATE SET generation=edge_certificate_targets.generation+1,status='pending',last_error='',updated_at=now()`, targetKey, clusterID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO edge_certificate_targets(target_key,cluster_id,affected_organization_ids) VALUES($1,$2,ARRAY[$3::uuid]) ON CONFLICT(target_key) DO UPDATE SET generation=edge_certificate_targets.generation+1,status='pending',last_error='',affected_organization_ids=CASE WHEN $3=ANY(edge_certificate_targets.affected_organization_ids) THEN edge_certificate_targets.affected_organization_ids ELSE array_append(edge_certificate_targets.affected_organization_ids,$3::uuid) END,updated_at=now()`, targetKey, clusterID, organizationID); err != nil {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]string{"targetKey": targetKey})
@@ -250,10 +254,11 @@ func queueEdgeCertificateReconciliationTx(ctx context.Context, tx pgx.Tx, cluste
 
 func queueEdgeCertificateReconciliationForEnvironmentTx(ctx context.Context, tx pgx.Tx, environmentID uuid.UUID) error {
 	var clusterID *uuid.UUID
-	if err := tx.QueryRow(ctx, `SELECT cluster_id FROM environments WHERE id=$1`, environmentID).Scan(&clusterID); err != nil {
+	var organizationID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT environment.cluster_id,project.organization_id FROM environments environment JOIN projects project ON project.id=environment.project_id WHERE environment.id=$1`, environmentID).Scan(&clusterID, &organizationID); err != nil {
 		return err
 	}
-	return queueEdgeCertificateReconciliationTx(ctx, tx, clusterID)
+	return queueEdgeCertificateReconciliationTx(ctx, tx, clusterID, organizationID)
 }
 
 func (s *Store) GetEdgeCertificateTarget(ctx context.Context, targetKey string) (EdgeCertificateTarget, error) {
@@ -266,11 +271,35 @@ func (s *Store) GetEdgeCertificateTarget(ctx context.Context, targetKey string) 
 }
 
 func (s *Store) QueueAllEdgeCertificateReconciliations(ctx context.Context) (int, error) {
-	tag, err := s.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE edge_certificate_targets target SET affected_organization_ids=ARRAY(
+		SELECT DISTINCT owner.organization_id FROM (
+			SELECT unnest(target.affected_organization_ids) AS organization_id
+			UNION ALL
+			SELECT certificate.organization_id FROM routes route
+			JOIN custom_tls_certificates certificate ON certificate.id=route.custom_certificate_id
+			JOIN compose_services service ON service.id=route.compose_service_id
+			JOIN environments environment ON environment.id=service.environment_id
+			WHERE (target.cluster_id IS NULL AND environment.cluster_id IS NULL) OR target.cluster_id=environment.cluster_id
+		) owner ORDER BY owner.organization_id
+	)`); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,resource_key,max_attempts)
 		SELECT gen_random_uuid(),'edge-certificates.reconcile',jsonb_build_object('targetKey',target.target_key),'edge-certificates:' || target.target_key,10
 		FROM edge_certificate_targets target
 		WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind='edge-certificates.reconcile' AND payload->>'targetKey'=target.target_key AND status IN ('pending','running'))`)
-	return int(tag.RowsAffected()), err
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (s *Store) ListDesiredEdgeCertificates(ctx context.Context, target EdgeCertificateTarget) ([]CustomTLSCertificate, error) {

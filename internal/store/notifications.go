@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -187,6 +188,9 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 // caller's transaction. Workers use this to make a terminal job failure and
 // its operator notification one atomic state transition.
 func (s *Store) QueueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobKind string, rawPayload []byte, cause error) error {
+	if jobKind == "edge-certificates.reconcile" {
+		return queueEdgeCertificateFailureNotificationsTx(ctx, tx, rawPayload, cause)
+	}
 	eventType, resourceType, resourceID, organizationID, err := s.failureResource(ctx, tx, jobKind, rawPayload)
 	if errors.Is(err, ErrNotFound) {
 		return nil
@@ -216,6 +220,74 @@ func (s *Store) QueueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobK
 	}
 	payload, _ := json.Marshal(notification)
 	return queueNotificationDeliveries(ctx, tx, organizationID, eventType, resourceType, resourceID, payload)
+}
+
+func queueEdgeCertificateFailureNotificationsTx(ctx context.Context, tx pgx.Tx, rawPayload []byte, cause error) error {
+	var input struct {
+		TargetKey string `json:"targetKey"`
+	}
+	if err := json.Unmarshal(rawPayload, &input); err != nil || input.TargetKey == "" {
+		if err != nil {
+			return err
+		}
+		return errors.New("edge certificate notification target is required")
+	}
+	var generation int64
+	var clusterID *uuid.UUID
+	var affected []uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT generation,cluster_id,affected_organization_ids FROM edge_certificate_targets WHERE target_key=$1`, input.TargetKey).Scan(&generation, &clusterID, &affected); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	owners := make(map[uuid.UUID]struct{}, len(affected)+1)
+	for _, organizationID := range affected {
+		owners[organizationID] = struct{}{}
+	}
+	if clusterID != nil {
+		var organizationID uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT organization_id FROM clusters WHERE id=$1`, *clusterID).Scan(&organizationID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		} else if err == nil {
+			owners[organizationID] = struct{}{}
+		}
+	} else {
+		rows, err := tx.Query(ctx, `SELECT DISTINCT certificate.organization_id FROM routes route JOIN custom_tls_certificates certificate ON certificate.id=route.custom_certificate_id JOIN compose_services service ON service.id=route.compose_service_id JOIN environments environment ON environment.id=service.environment_id WHERE environment.cluster_id IS NULL`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var organizationID uuid.UUID
+			if err = rows.Scan(&organizationID); err != nil {
+				rows.Close()
+				return err
+			}
+			owners[organizationID] = struct{}{}
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+	resourceID := input.TargetKey + ":" + strconv.FormatInt(generation, 10)
+	payload, _ := json.Marshal(map[string]any{
+		"event":        "edge.certificate.reconcile.failed",
+		"operation":    "edge-certificates.reconcile",
+		"resourceType": "edge_certificate_target",
+		"resourceId":   resourceID,
+		"targetKey":    input.TargetKey,
+		"generation":   generation,
+		"error":        truncateStore(cause.Error(), 8192),
+		"occurredAt":   time.Now().UTC(),
+		"text":         "Dockyard edge.certificate.reconcile.failed for edge target " + input.TargetKey,
+	})
+	for organizationID := range owners {
+		if err := queueNotificationDeliveries(ctx, tx, organizationID, "edge.certificate.reconcile.failed", "edge_certificate_target", resourceID, payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, eventType, resourceType, resourceID string, payload json.RawMessage) error {

@@ -15,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var notificationEvents = []string{"deployment.failed", "service.stop.failed", "service.schedule.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "network.provision.failed", "network.delete.failed", "resource.delete.failed", "template.sync.failed", "agent.upgrade.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical"}
+var notificationEvents = []string{"deployment.failed", "service.stop.failed", "service.schedule.failed", "backup.failed", "restore.failed", "restore.drill.failed", "database.migration.failed", "network.provision.failed", "network.delete.failed", "resource.delete.failed", "edge.certificate.reconcile.failed", "template.sync.failed", "agent.upgrade.failed", "audit.archive.failed", "ai.audit.failed", "ai.finding.critical"}
 
 const (
 	maxNotificationNameBytes     = 120

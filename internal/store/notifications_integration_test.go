@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,88 @@ func TestDeletionFinalizerFailuresUseDedicatedTenantEvent(t *testing.T) {
 	var deliveries, jobs int
 	if err = db.Pool.QueryRow(ctx, `SELECT count(*),(SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1)) FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&deliveries, &jobs); err != nil || deliveries != len(tests) || jobs != len(tests) {
 		t.Fatalf("finalizer deliveries=%d jobs=%d err=%v", deliveries, jobs, err)
+	}
+}
+
+func TestEdgeCertificateFailureNotificationsFanOutToAffectedTenants(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	endpointIDs := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	var routeIDs []uuid.UUID
+	for index, organizationID := range organizationIDs {
+		projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New()
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO organizations(id,name,slug) VALUES($1,$2,$3)`, []any{organizationID, "Edge tenant " + strconv.Itoa(index), "edge-tenant-" + organizationID.String()}},
+			{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+			{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+			{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Web','web',$3,'services: {}')`, []any{serviceID, environmentID, "edge-notify-" + serviceID.String()}},
+			{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Edge on-call','webhook','url','secret',ARRAY['edge.certificate.reconcile.failed'])`, []any{endpointIDs[index], organizationID}},
+		} {
+			if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if index == len(organizationIDs)-1 {
+			continue
+		}
+		certificateID := uuid.New()
+		if _, err := pool.Exec(ctx, `INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,dns_names,not_before,not_after) VALUES($1,$2,$3,'encrypted-certificate','encrypted-private-key',$4,$5,now()-interval '1 day',now()+interval '30 days')`, certificateID, organizationID, "Certificate "+strconv.Itoa(index), "sha256:"+strings.Repeat(strconv.Itoa(index+1), 64), []string{"app-" + strconv.Itoa(index) + ".example.test"}); err != nil {
+			t.Fatal(err)
+		}
+		route, err := db.AddRoute(ctx, organizationID, Route{ComposeServiceID: serviceID, ServiceName: "web", Host: "app-" + strconv.Itoa(index) + ".example.test", PathPrefix: "/", InternalPath: "/", TargetPort: 80, TLS: true, CustomCertificateID: &certificateID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		routeIDs = append(routeIDs, route.ID)
+	}
+	for index, routeID := range routeIDs {
+		if err := db.DeleteRoute(ctx, organizationIDs[index], routeID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var jobPayload []byte
+	if err := pool.QueryRow(ctx, `SELECT payload FROM jobs WHERE kind='edge-certificates.reconcile' AND status='pending'`).Scan(&jobPayload); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := db.QueueFailureNotifications(ctx, "edge-certificates.reconcile", jobPayload, errors.New("edge provider unavailable")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var generation int64
+	if err := pool.QueryRow(ctx, `SELECT generation FROM edge_certificate_targets WHERE target_key='local'`).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	for index, endpointID := range endpointIDs {
+		var deliveries int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE endpoint_id=$1 AND event_type='edge.certificate.reconcile.failed' AND resource_type='edge_certificate_target' AND resource_id=$2`, endpointID, "local:"+strconv.FormatInt(generation, 10)).Scan(&deliveries); err != nil {
+			t.Fatal(err)
+		}
+		want := 1
+		if index == len(endpointIDs)-1 {
+			want = 0
+		}
+		if deliveries != want {
+			t.Fatalf("tenant %d deliveries=%d want=%d", index, deliveries, want)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM jobs WHERE kind='edge-certificates.reconcile'`); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := db.QueueAllEdgeCertificateReconciliations(ctx)
+	if err != nil || queued != 1 {
+		t.Fatalf("periodic edge reconciliation queued=%d err=%v", queued, err)
+	}
+	var affectedOrganizations int
+	if err = pool.QueryRow(ctx, `SELECT cardinality(affected_organization_ids) FROM edge_certificate_targets WHERE target_key='local'`).Scan(&affectedOrganizations); err != nil || affectedOrganizations != 2 {
+		t.Fatalf("retained affected organizations=%d err=%v", affectedOrganizations, err)
 	}
 }
 

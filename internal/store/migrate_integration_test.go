@@ -1121,3 +1121,25 @@ func TestMigrateUpgradeFrom118PreservesSCIMResources(t *testing.T) {
 		t.Fatalf("existing SCIM resource deleted_at=%v err=%v", deletedAt, err)
 	}
 }
+
+func TestMigrateUpgradeFrom119PreservesEdgeCertificateTargets(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "119_scim_user_tombstones.sql"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO edge_certificate_targets(target_key,generation,applied_generation,status,last_error) VALUES('local',4,3,'error','provider unavailable')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var generation, appliedGeneration int64
+	var status, lastError string
+	var affected []uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT generation,applied_generation,status,last_error,affected_organization_ids FROM edge_certificate_targets WHERE target_key='local'`).Scan(&generation, &appliedGeneration, &status, &lastError, &affected); err != nil {
+		t.Fatal(err)
+	}
+	if generation != 4 || appliedGeneration != 3 || status != "error" || lastError != "provider unavailable" || len(affected) != 0 {
+		t.Fatalf("migrated edge target generation=%d applied=%d status=%q error=%q affected=%v", generation, appliedGeneration, status, lastError, affected)
+	}
+}

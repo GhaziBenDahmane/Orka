@@ -67,7 +67,7 @@ func (w *Worker) reconcileEdgeCertificates(ctx context.Context, job job) error {
 		w.recordEdgeCertificateFailure(context.WithoutCancel(ctx), job, target, err)
 		return err
 	}
-	return w.updateResourceForJob(ctx, job, `UPDATE edge_certificate_targets SET applied_generation=$2,status=CASE WHEN generation=$2 THEN 'ready' ELSE 'pending' END,last_error='',updated_at=now() WHERE target_key=$1`, target.TargetKey, target.Generation)
+	return w.updateResourceForJob(ctx, job, `UPDATE edge_certificate_targets SET applied_generation=$2,status=CASE WHEN generation=$2 THEN 'ready' ELSE 'pending' END,last_error='',affected_organization_ids=CASE WHEN generation=$2 THEN '{}'::uuid[] ELSE affected_organization_ids END,updated_at=now() WHERE target_key=$1`, target.TargetKey, target.Generation)
 }
 
 func (w *Worker) edgeProxyForTarget(ctx context.Context, target store.EdgeCertificateTarget) (EdgeProxySpec, error) {
