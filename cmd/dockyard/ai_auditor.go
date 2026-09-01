@@ -44,7 +44,18 @@ type modelReport struct {
 	Findings []modelFinding `json:"findings"`
 }
 
+type auditorResponseError struct {
+	Path       string
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func (e *auditorResponseError) Error() string {
+	return fmt.Sprintf("dockyard %s returned HTTP %d", e.Path, e.StatusCode)
+}
+
 const (
+	defaultAIAuditTimeout      = 10 * time.Minute
 	maxAuditModelResponseBytes = 4 << 20
 	maxAuditSnapshotBytes      = 8 << 20
 	maxAuditModelChunkBytes    = 512 << 10
@@ -79,7 +90,7 @@ func runAIAuditor(arguments []string) error {
 	if err != nil || retryInterval < time.Minute || retryInterval > interval {
 		return errors.New("DOCKYARD_AI_AUDIT_RETRY_INTERVAL must be at least one minute and no longer than DOCKYARD_AI_AUDIT_INTERVAL")
 	}
-	timeout, err := time.ParseDuration(envDefault("DOCKYARD_AI_AUDIT_TIMEOUT", "10m"))
+	timeout, err := time.ParseDuration(envDefault("DOCKYARD_AI_AUDIT_TIMEOUT", defaultAIAuditTimeout.String()))
 	if err != nil || timeout < time.Minute || timeout > 23*time.Hour {
 		return errors.New("DOCKYARD_AI_AUDIT_TIMEOUT must be between one minute and 23 hours")
 	}
@@ -120,7 +131,7 @@ func runAIAuditor(arguments []string) error {
 		delay := cfg.Interval
 		if err != nil {
 			failures++
-			delay = aiAuditRetryDelay(failures, cfg.RetryInterval, cfg.Interval)
+			delay = aiAuditFailureDelay(err, failures, cfg.RetryInterval, cfg.Interval)
 			slog.Error("AI audit failed", "error", err, "consecutive_failures", failures, "retry_after", delay)
 		} else {
 			failures = 0
@@ -151,6 +162,22 @@ func aiAuditRetryDelay(consecutiveFailures int, base, maximum time.Duration) tim
 		return maximum
 	}
 	return delay
+}
+
+func aiAuditFailureDelay(err error, consecutiveFailures int, base, maximum time.Duration) time.Duration {
+	delay := aiAuditRetryDelay(consecutiveFailures, base, maximum)
+	var responseErr *auditorResponseError
+	if !errors.As(err, &responseErr) || responseErr.RetryAfter <= 0 {
+		return delay
+	}
+	retryAfter := responseErr.RetryAfter
+	if retryAfter < time.Minute {
+		retryAfter = time.Minute
+	}
+	if retryAfter > maximum {
+		retryAfter = maximum
+	}
+	return retryAfter
 }
 
 func normalizedAuditorEndpoint(name, raw string, allowPath bool) (string, error) {
@@ -294,7 +321,7 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	var run struct {
 		ID string `json:"id"`
 	}
-	leaseSeconds := int64((cfg.Timeout + 30*time.Second + time.Second - 1) / time.Second)
+	leaseSeconds := aiAuditLeaseSeconds(cfg.Timeout)
 	if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs", map[string]any{"agentName": cfg.AgentName, "agentVersion": cfg.AgentVersion, "model": cfg.Model, "leaseSeconds": leaseSeconds, "scope": map[string]any{"kind": "platform", "focus": cfg.Focus, "snapshotChunks": len(modelChunks)}}, &run); err != nil {
 		return err
 	}
@@ -354,6 +381,16 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	}
 	finalized = true
 	return nil
+}
+
+func aiAuditLeaseSeconds(timeout time.Duration) int64 {
+	if timeout < time.Minute {
+		timeout = defaultAIAuditTimeout
+	}
+	if timeout > 23*time.Hour {
+		timeout = 23 * time.Hour
+	}
+	return int64((timeout + 30*time.Second + time.Second - 1) / time.Second)
 }
 
 func modelSeverityRank(severity string) int {
@@ -548,12 +585,20 @@ func auditorRequest(ctx context.Context, client *http.Client, cfg auditorConfig,
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Never persist an upstream response body in a failed-run summary. The
 		// body is outside the auditor trust boundary and may contain secrets.
-		return fmt.Errorf("dockyard %s returned HTTP %d", path, resp.StatusCode)
+		return &auditorResponseError{Path: path, StatusCode: resp.StatusCode, RetryAfter: parseAuditorRetryAfter(resp.Header.Get("Retry-After"))}
 	}
 	if output != nil && len(data) > 0 {
 		return json.Unmarshal(data, output)
 	}
 	return nil
+}
+
+func parseAuditorRetryAfter(value string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds < 1 || seconds > 3600 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func requestAuditModel(ctx context.Context, client *http.Client, cfg auditorConfig, snapshot json.RawMessage) (modelReport, error) {

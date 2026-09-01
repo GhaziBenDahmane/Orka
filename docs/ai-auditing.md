@@ -421,7 +421,10 @@ volume before dropping to its unprivileged Node user.
 After a failed run, the auditor retries after
 `DOCKYARD_AI_AUDIT_RETRY_INTERVAL` (five minutes by default, or the normal
 interval when it is shorter), doubles that delay after consecutive failures,
-and caps it at the normal audit interval.
+and caps it at the normal audit interval. When the control plane reports a
+fresh run lease, its bounded `Retry-After` hint replaces the exponential delay
+(with a one-minute floor), allowing stop-first replacements to resume promptly
+after either completion or lease expiry without a tight polling loop.
 A successful run resets the backoff. The retry interval must be between one
 minute and `DOCKYARD_AI_AUDIT_INTERVAL` so a configuration error cannot create
 a tight failure loop.

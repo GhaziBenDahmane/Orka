@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -137,6 +138,62 @@ func TestAIAuditRetryDelay(t *testing.T) {
 		if got := aiAuditRetryDelay(test.failures, base, maximum); got != test.want {
 			t.Errorf("aiAuditRetryDelay(%d)=%s, want %s", test.failures, got, test.want)
 		}
+	}
+}
+
+func TestAIAuditFailureDelayHonorsBoundedServerRetry(t *testing.T) {
+	base, maximum := 5*time.Minute, 24*time.Hour
+	for _, test := range []struct {
+		name     string
+		err      error
+		failures int
+		want     time.Duration
+	}{
+		{name: "ordinary exponential retry", err: errors.New("gateway unavailable"), failures: 2, want: 10 * time.Minute},
+		{name: "active lease retry", err: &auditorResponseError{RetryAfter: 75 * time.Second}, failures: 2, want: 75 * time.Second},
+		{name: "minimum retry floor", err: &auditorResponseError{RetryAfter: time.Second}, failures: 1, want: time.Minute},
+		{name: "interval ceiling", err: &auditorResponseError{RetryAfter: time.Hour}, failures: 1, want: 30 * time.Minute},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			limit := maximum
+			if test.name == "interval ceiling" {
+				limit = 30 * time.Minute
+			}
+			if got := aiAuditFailureDelay(test.err, test.failures, base, limit); got != test.want {
+				t.Fatalf("delay=%s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAIAuditLeaseSecondsUsesSafeBounds(t *testing.T) {
+	for _, test := range []struct {
+		timeout time.Duration
+		want    int64
+	}{
+		{timeout: 0, want: 630},
+		{timeout: 2 * time.Minute, want: 150},
+		{timeout: 48 * time.Hour, want: 23*60*60 + 30},
+	} {
+		if got := aiAuditLeaseSeconds(test.timeout); got != test.want {
+			t.Errorf("aiAuditLeaseSeconds(%s)=%d, want %d", test.timeout, got, test.want)
+		}
+	}
+}
+
+func TestAuditorRequestPreservesRetryAfterWithoutResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "75")
+		http.Error(w, "do-not-copy-this-response", http.StatusConflict)
+	}))
+	defer server.Close()
+	err := auditorRequest(context.Background(), server.Client(), auditorConfig{DockyardURL: server.URL, DockyardToken: "token"}, http.MethodPost, "/v1/ai/audit-runs", map[string]any{}, nil)
+	var responseErr *auditorResponseError
+	if !errors.As(err, &responseErr) || responseErr.StatusCode != http.StatusConflict || responseErr.RetryAfter != 75*time.Second {
+		t.Fatalf("response error=%#v", err)
+	}
+	if strings.Contains(err.Error(), "do-not-copy-this-response") {
+		t.Fatalf("response body leaked through error: %v", err)
 	}
 }
 
