@@ -2,7 +2,9 @@ package database
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -61,6 +63,7 @@ type EngineInfo struct {
 var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 const (
+	builtInDriverGeneration           = "v1"
 	maxDatabaseConfigEntries          = 16
 	maxDatabaseIdentityBytes          = 1024
 	maxDatabasePasswordBytes          = 64 << 10
@@ -96,7 +99,7 @@ func (r *Registry) Names() []string {
 }
 
 // Engines returns stable, public metadata for every registered database
-// driver. It deliberately reports only the driver's trust source and never
+// driver. It reports the trust source and implementation identity, but never
 // exposes the executable path used by an external driver.
 func (r *Registry) Engines() []EngineInfo {
 	engines := make([]EngineInfo, 0, len(r.drivers))
@@ -119,8 +122,18 @@ func (r *Registry) Engine(name string) (EngineInfo, bool) {
 		info.Source = "external"
 		info.ArtifactDigest = external.digest
 		info.PersistentConfigKeys = append([]string(nil), external.description.PersistentConfigKeys...)
+	} else {
+		info.ArtifactDigest = builtInDriverDigest(name)
 	}
 	return info, true
+}
+
+// builtInDriverDigest is the durable compatibility identity for code-backed
+// drivers. Bump builtInDriverGeneration whenever a built-in render or utility
+// contract changes so mixed controller revisions fail closed during recovery.
+func builtInDriverDigest(name string) string {
+	sum := sha256.Sum256([]byte("orka.database.builtin." + builtInDriverGeneration + "\x00" + name))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 func (r *Registry) Render(engine string, request Request) (Result, error) {
 	driver, ok := r.drivers[engine]

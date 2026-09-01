@@ -415,7 +415,8 @@ or other incident receiver.
 Every controller also publishes a path-free database-driver inventory fingerprint
 and one `dockyard_database_driver_info` series per loaded engine. The
 `DockyardDatabaseDriverFleetMismatch` alert fires when HA replicas expose
-different inventories, including when an engine is absent from one replica.
+different inventories, including when an engine is absent from one replica or
+when their versioned built-in implementation identities differ.
 `dockyard_database_driver_binding_issues` counts persisted databases by engine
 and the bounded reason `unbound`, `unavailable`, or `identity_mismatch`; its
 critical alert means recovery and migration work may fail closed. First compare

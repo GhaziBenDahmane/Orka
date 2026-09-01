@@ -25,7 +25,7 @@ func TestComposeLinkedDatabaseIdentityAndDeletionSafety(t *testing.T) {
 		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
 		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'Application','application',$3,'services: {db: {image: postgres:17}}')`, []any{serviceID, environmentID, "linked-" + serviceID.String()}},
-		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,management_kind,connection_service_name,compose_service_id,encrypted_credentials,status) VALUES($1,$2,'Application database','application-db','postgres','17','built-in','compose','db',$3,'encrypted','running')`, []any{databaseID, environmentID, serviceID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,management_kind,connection_service_name,compose_service_id,encrypted_credentials,status) VALUES($1,$2,'Application database','application-db','postgres','17','built-in',$4,'compose','db',$3,'encrypted','running')`, []any{databaseID, environmentID, serviceID, testPostgresDriverDigest}},
 	} {
 		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)

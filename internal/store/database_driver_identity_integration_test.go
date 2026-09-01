@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const testPostgresDriverDigest = "sha256:45d02068e52234173729994da8d091dba83fa904dd78b9661bdf4418008009f1"
+
 func TestDatabaseDriverIdentityBindsAtomically(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {

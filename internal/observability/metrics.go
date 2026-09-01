@@ -109,7 +109,7 @@ func boundedBuildIdentity(value, fallback string) string {
 }
 
 // SetDatabaseDrivers replaces the immutable startup inventory used to detect
-// inconsistent external driver artifacts across HA controller replicas. It
+// inconsistent database driver implementations across HA controller replicas. It
 // accepts metadata rather than paths so local filesystem details can never
 // leak into metrics.
 func (m *Metrics) SetDatabaseDrivers(drivers []DatabaseDriverInfo) {
@@ -120,9 +120,7 @@ func (m *Metrics) SetDatabaseDrivers(drivers []DatabaseDriverInfo) {
 			continue
 		}
 		switch driver.Source {
-		case "built-in":
-			driver.Digest = "built-in"
-		case "external":
+		case "built-in", "external":
 			if !validSHA256Digest(driver.Digest) {
 				driver.Digest = "invalid"
 			}

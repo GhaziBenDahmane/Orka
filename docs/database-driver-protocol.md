@@ -22,13 +22,18 @@ matches that startup digest.
 The digest, but never the host path, is exposed in engine inventory and AI
 audit snapshots for release provenance.
 
-New managed databases persist the driver source and artifact digest used to
-render them. Recovery and migration workers compare that identity before
-calling a driver, so HA controllers with different external binaries fail
-closed instead of processing the same database inconsistently. Databases that
-predate this metadata are marked `unbound`; the first leased recovery or
-migration job atomically binds them to that worker's installed driver, and a
-different worker cannot race in with another artifact.
+New managed databases persist the driver source and implementation digest used
+to render them. External identities hash the executable artifact. Built-in
+identities hash a versioned per-engine compatibility contract, which must be
+bumped whenever built-in render or utility behavior changes. Recovery and
+migration workers compare that identity before calling a driver, so HA
+controllers with different built-in code or external binaries fail closed
+instead of processing the same database inconsistently. Schema upgrades bind
+known legacy built-ins to the current contract and reject future built-in rows
+without a digest. Other databases that predate this metadata remain `unbound`;
+the first leased recovery or migration job atomically binds them to that
+worker's installed driver, and a different worker cannot race in with another
+implementation.
 
 To adopt a reviewed driver update, an administrator uses
 `POST /v1/databases/{id}/driver-rebind` and confirms the database slug. The
@@ -39,7 +44,7 @@ rebind; a worker that still has the previous digest will fail closed.
 
 Prometheus exposes `dockyard_database_driver_info` for each loaded engine and a
 controller-wide `dockyard_database_driver_inventory_info` fingerprint. The
-fingerprint includes only engine, source, artifact identity, and recovery
+fingerprint includes only engine, source, implementation identity, and recovery
 capability—not executable paths. In HA, every replica must report the same
 fingerprint. `dockyard_database_driver_binding_issues` aggregates databases
 that are still `unbound`, whose driver is `unavailable`, or whose persisted

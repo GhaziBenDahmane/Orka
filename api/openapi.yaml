@@ -6009,7 +6009,7 @@ components:
           items: {$ref: '#/components/schemas/DatabaseMigration'}
     DatabaseEngine:
       type: object
-      required: [name, defaultVersion, source, backupCapable, backupExtension]
+      required: [name, defaultVersion, source, artifactDigest, backupCapable, backupExtension]
       properties:
         name: {type: string}
         defaultVersion: {type: string}

@@ -63,6 +63,22 @@ func TestWorkersRejectDifferentExternalDriverForBoundDatabase(t *testing.T) {
 	}
 }
 
+func TestWorkerRejectsDifferentBuiltinDriverImplementation(t *testing.T) {
+	registry := database.NewRegistry()
+	postgres, ok := registry.Engine("postgres")
+	if !ok || postgres.Source != "built-in" || postgres.ArtifactDigest == "" {
+		t.Fatalf("PostgreSQL driver identity=%#v", postgres)
+	}
+	worker := &Worker{Databases: registry}
+	if err := worker.ensureDatabaseDriver(context.Background(), uuid.New(), "postgres", postgres.Source, postgres.ArtifactDigest); err != nil {
+		t.Fatalf("matching built-in driver rejected: %v", err)
+	}
+	oldDigest := "sha256:" + strings.Repeat("f", 64)
+	if err := worker.ensureDatabaseDriver(context.Background(), uuid.New(), "postgres", "built-in", oldDigest); err == nil || !strings.Contains(err.Error(), "does not match this worker") {
+		t.Fatalf("different built-in driver error=%v", err)
+	}
+}
+
 func externalDriverRegistry(t *testing.T, marker string) *database.Registry {
 	t.Helper()
 	directory := t.TempDir()

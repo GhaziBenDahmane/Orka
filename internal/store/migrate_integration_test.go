@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -379,11 +380,62 @@ func TestMigrateUpgradeFrom079BindsKnownDatabaseDrivers(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT driver_source,driver_artifact_digest FROM database_instances WHERE environment_id=$1 AND engine='cockroach'`, environmentID).Scan(&externalSource, &externalDigest); err != nil {
 		t.Fatal(err)
 	}
-	if builtInSource != "built-in" || builtInDigest != "" || externalSource != "unbound" || externalDigest != "" {
+	if builtInSource != "built-in" || builtInDigest != "sha256:45d02068e52234173729994da8d091dba83fa904dd78b9661bdf4418008009f1" || externalSource != "unbound" || externalDigest != "" {
 		t.Fatalf("migrated identities built-in=%s/%q external=%s/%q", builtInSource, builtInDigest, externalSource, externalDigest)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE database_instances SET driver_source='external' WHERE environment_id=$1 AND engine='cockroach'`, environmentID); err == nil {
 		t.Fatal("external source without a digest passed the consistency constraint")
+	}
+}
+
+func TestMigrateUpgradeFrom125BindsBuiltinDriverImplementation(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "125_ai_audit_run_leases.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	unknownID := uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Built-in identity',$2)`, []any{organizationID, "built-in-identity-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Environment','environment')`, []any{environmentID, projectID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Unknown','unknown','removed-built-in','1','built-in','','encrypted')`, []any{unknownID, environmentID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engineIDs := make(map[string]uuid.UUID)
+	for _, engine := range database.NewRegistry().Engines() {
+		id := uuid.New()
+		engineIDs[engine.Name] = id
+		if _, err := pool.Exec(ctx, `INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,$3,$3,$3,$4,'built-in','','encrypted')`, id, environmentID, engine.Name, engine.DefaultVersion); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var source, digest string
+	for _, engine := range database.NewRegistry().Engines() {
+		if err := pool.QueryRow(ctx, `SELECT driver_source,driver_artifact_digest FROM database_instances WHERE id=$1`, engineIDs[engine.Name]).Scan(&source, &digest); err != nil {
+			t.Fatal(err)
+		}
+		if source != "built-in" || digest != engine.ArtifactDigest {
+			t.Errorf("migrated %s identity=%s/%q, want %q", engine.Name, source, digest, engine.ArtifactDigest)
+		}
+	}
+	if err := pool.QueryRow(ctx, `SELECT driver_source,driver_artifact_digest FROM database_instances WHERE id=$1`, unknownID).Scan(&source, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if source != "unbound" || digest != "" {
+		t.Fatalf("unknown built-in identity=%s/%q, want unbound", source, digest)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE database_instances SET driver_source='built-in',driver_artifact_digest='' WHERE id=$1`, unknownID); err == nil {
+		t.Fatal("built-in identity without an implementation digest passed the consistency constraint")
 	}
 }
 
@@ -537,7 +589,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql", "115_database_utility_image_evidence.sql", "116_backup_artifact_validity.sql", "125_ai_audit_run_leases.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql", "115_database_utility_image_evidence.sql", "116_backup_artifact_validity.sql", "125_ai_audit_run_leases.sql", "126_builtin_database_driver_identity.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)

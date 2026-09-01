@@ -89,7 +89,7 @@ func TestDatabaseDriverInventoryIsStableAndDoesNotExposePaths(t *testing.T) {
 	text := output.String()
 	for _, expected := range []string{
 		`dockyard_database_driver_inventory_info{digest="sha256:`,
-		`dockyard_database_driver_info{engine="postgres",source="built-in",digest="built-in",backup_capable="true"} 1`,
+		`dockyard_database_driver_info{engine="postgres",source="built-in",digest="invalid",backup_capable="true"} 1`,
 		`dockyard_database_driver_info{engine="cockroach",source="external",digest="sha256:` + strings.Repeat("a", 64) + `",backup_capable="true"} 1`,
 		`dockyard_database_driver_info{engine="unsafe",source="external",digest="invalid",backup_capable="false"} 1`,
 	} {
@@ -216,7 +216,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	metricSet := NewMetrics()
 	metricSet.SetDatabaseDrivers([]DatabaseDriverInfo{
-		{Engine: "postgres", Source: "built-in", BackupCapable: true},
+		{Engine: "postgres", Source: "built-in", Digest: "sha256:" + strings.Repeat("b", 64), BackupCapable: true},
 		{Engine: "cockroach", Source: "external", Digest: databaseDigest, BackupCapable: true},
 	})
 	metricSet.Handler(tx).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))

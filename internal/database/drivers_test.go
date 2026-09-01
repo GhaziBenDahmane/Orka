@@ -70,12 +70,16 @@ func TestRegistryEngineMetadataIsSortedAndComplete(t *testing.T) {
 		if index > 0 && engines[index-1].Name >= engine.Name {
 			t.Fatalf("engine metadata is not sorted: %#v", engines)
 		}
-		if engine.Name == "" || engine.DefaultVersion == "" || engine.Source != "built-in" {
+		if engine.Name == "" || engine.DefaultVersion == "" || engine.Source != "built-in" || !strings.HasPrefix(engine.ArtifactDigest, "sha256:") || len(engine.ArtifactDigest) != 71 {
 			t.Fatalf("incomplete built-in metadata: %#v", engine)
 		}
 		if !engine.BackupCapable || engine.BackupExtension == "" {
 			t.Fatalf("built-in recovery metadata is incomplete: %#v", engine)
 		}
+	}
+	postgres, ok := NewRegistry().Engine("postgres")
+	if !ok || postgres.ArtifactDigest != "sha256:45d02068e52234173729994da8d091dba83fa904dd78b9661bdf4418008009f1" {
+		t.Fatalf("unexpected PostgreSQL built-in identity: %#v", postgres)
 	}
 }
 

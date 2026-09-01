@@ -36,7 +36,7 @@ func TestDatabaseLifecycleCommitsWithAudit(t *testing.T) {
 	failedDatabaseID, failedServiceID := uuid.New(), uuid.New()
 	createAuditFailureTrigger(t, pool, ctx)
 	if _, err := db.CreateDatabaseWithAudit(ctx, principal,
-		DatabaseInstance{ID: failedDatabaseID, EnvironmentID: environmentID, Name: "Failed", Slug: "failed", Engine: "postgres", Version: "17", DriverSource: "built-in"},
+		DatabaseInstance{ID: failedDatabaseID, EnvironmentID: environmentID, Name: "Failed", Slug: "failed", Engine: "postgres", Version: "17", DriverSource: "built-in", DriverDigest: testPostgresDriverDigest},
 		ComposeService{ID: failedServiceID, Name: "Failed", Slug: "db-failed", StackName: "db-failed", ComposeYAML: "services: {}"},
 		"encrypted", "127.0.0.1:1234"); err == nil {
 		t.Fatal("database creation succeeded after audit rejection")
@@ -46,7 +46,7 @@ func TestDatabaseLifecycleCommitsWithAudit(t *testing.T) {
 
 	databaseID, databaseServiceID := uuid.New(), uuid.New()
 	instance, err := db.CreateDatabaseWithAudit(ctx, principal,
-		DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: "Postgres", Slug: "postgres", Engine: "postgres", Version: "17", DriverSource: "built-in"},
+		DatabaseInstance{ID: databaseID, EnvironmentID: environmentID, Name: "Postgres", Slug: "postgres", Engine: "postgres", Version: "17", DriverSource: "built-in", DriverDigest: testPostgresDriverDigest},
 		ComposeService{ID: databaseServiceID, Name: "Postgres", Slug: "db-postgres", StackName: "db-postgres", ComposeYAML: "services: {}"},
 		"encrypted", "127.0.0.1:1234")
 	if err != nil {
