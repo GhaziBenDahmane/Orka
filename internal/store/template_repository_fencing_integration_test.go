@@ -53,6 +53,58 @@ func TestTemplateRepositorySyncTakeoverFencesStaleAttempt(t *testing.T) {
 	}
 }
 
+func TestFailedTemplateRepositorySyncQueuesNotificationAtomically(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, endpointID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Catalog failure notification',$2)`, organizationID, "catalog-failure-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Catalog on-call','webhook','encrypted-url','encrypted-secret',ARRAY['template.sync.failed'])`, endpointID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := db.CreateTemplateRepository(ctx, TemplateRepository{OrganizationID: organizationID, Name: "Catalog", Slug: "catalog", RepositoryURL: "https://github.com/acme/catalog", GitRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.QueueTemplateRepositorySync(ctx, organizationID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := db.ClaimDueTemplateRepository(ctx)
+	if err != nil || attempt.SyncAttemptID == nil {
+		t.Fatalf("sync attempt=%#v err=%v", attempt, err)
+	}
+	if err = db.FinishTemplateRepositorySyncWithAudit(ctx, attempt, "failed", "catalog signature rejected", "scheduler", map[string]any{"failed": 1}); err != nil {
+		t.Fatal(err)
+	}
+	var eventType, resourceType, resourceID string
+	var payload []byte
+	if err = pool.QueryRow(ctx, `SELECT event_type,resource_type,resource_id,payload FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&eventType, &resourceType, &resourceID, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err = json.Unmarshal(payload, &body); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "template.sync.failed" || resourceType != "template_repository_sync" || resourceID != attempt.SyncAttemptID.String() || body["templateRepositoryId"] != repository.ID.String() || body["error"] != "catalog signature rejected" {
+		t.Fatalf("notification event=%q resource=%q/%q payload=%s", eventType, resourceType, resourceID, payload)
+	}
+	var jobs int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1)`, endpointID).Scan(&jobs); err != nil || jobs != 1 {
+		t.Fatalf("notification jobs=%d err=%v", jobs, err)
+	}
+	if err = db.FinishTemplateRepositorySync(ctx, attempt, "failed", "stale retry"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("stale sync completion=%v, want busy", err)
+	}
+	var deliveries int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&deliveries); err != nil || deliveries != 1 {
+		t.Fatalf("notification deliveries=%d err=%v", deliveries, err)
+	}
+}
+
 func TestTemplateRepositorySignerRotationWithdrawsAndFencesCatalog(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {

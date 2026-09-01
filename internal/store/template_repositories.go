@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -349,6 +350,23 @@ func (s *Store) finishTemplateRepositorySync(ctx context.Context, repository Tem
 	}
 	if audit {
 		if err = s.AuditOrganizationTx(ctx, tx, repository.OrganizationID, "template_repository.sync", "template_repository", repository.ID.String(), remoteAddr, metadata); err != nil {
+			return err
+		}
+	}
+	if status == "failed" {
+		payload, marshalErr := json.Marshal(map[string]any{
+			"event":                "template.sync.failed",
+			"resourceType":         "template_repository_sync",
+			"resourceId":           repository.SyncAttemptID.String(),
+			"templateRepositoryId": repository.ID.String(),
+			"error":                truncateStore(message, 8192),
+			"occurredAt":           time.Now().UTC(),
+			"text":                 "Dockyard template.sync.failed for template repository " + repository.ID.String(),
+		})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if err = queueNotificationDeliveries(ctx, tx, repository.OrganizationID, "template.sync.failed", "template_repository_sync", repository.SyncAttemptID.String(), payload); err != nil {
 			return err
 		}
 	}
