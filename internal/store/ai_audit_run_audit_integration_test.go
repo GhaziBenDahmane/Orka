@@ -23,7 +23,8 @@ func TestAIAuditRunLifecycleCommitsWithServiceAccountAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
-	account, err := db.CreateServiceAccount(ctx, organizationID, userID, "platform-auditor", "auditor", []byte("ai-audit-lifecycle-token"), time.Now().Add(time.Hour))
+	tokenHash := []byte("ai-audit-lifecycle-token")
+	account, err := db.CreateServiceAccount(ctx, organizationID, userID, "platform-auditor", "auditor", tokenHash, time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,10 @@ func TestAIAuditRunLifecycleCommitsWithServiceAccountAudit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	principal := Principal{OrganizationID: organizationID, ServiceAccountID: &account.ID, Role: "auditor"}
+	principal, err := db.Authenticate(ctx, tokenHash, &organizationID)
+	if err != nil || principal.ServiceAccountID == nil || *principal.ServiceAccountID != account.ID || principal.ServiceAccountTokenID == nil {
+		t.Fatalf("authenticate auditor principal=%#v err=%v", principal, err)
+	}
 	invalidPrincipal := principal
 	invalidPrincipal.UserID = uuid.New()
 	scope := json.RawMessage(`{"kind":"platform"}`)

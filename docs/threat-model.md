@@ -59,6 +59,10 @@ revocation, expiry, or token rotation cannot leave an already-started identity
 administration request able to commit afterward. The common audited mutation
 boundary applies the same exact-credential fence to workload, deployment,
 backup, routing, catalog, and operational changes, not only identity endpoints.
+AI run creation, finding ingestion, and run completion also revalidate the
+exact auditor service-account token in their write transaction. Rotating or
+revoking an auditor credential therefore rolls back queued agent output rather
+than accepting findings after the credential cutoff.
 For requests whose organization role is insufficient, resource middleware
 carries the exact project/environment scopes and minimum role into that
 boundary. The transaction locks and re-evaluates those grants, so a concurrent

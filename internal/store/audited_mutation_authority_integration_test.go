@@ -95,6 +95,54 @@ func TestLateAuditedMutationsRollbackAfterSessionRevocation(t *testing.T) {
 	})
 }
 
+func TestAIAuditFindingIngestionRollsBackAfterTokenRotation(t *testing.T) {
+	db, ctx, organizationID, ownerID, _ := authorityFenceFixture(t)
+	tokenHash := []byte("finding-token-" + uuid.NewString())
+	auditor, err := db.CreateServiceAccount(ctx, organizationID, ownerID, "finding-auditor", "auditor", tokenHash, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := db.Authenticate(ctx, tokenHash, &organizationID)
+	if err != nil || principal.ServiceAccountTokenID == nil {
+		t.Fatalf("authenticate auditor principal=%#v err=%v", principal, err)
+	}
+	run, err := db.CreateAIAuditRun(ctx, organizationID, auditor.ID, "authority", "v1", "test", json.RawMessage(`{"kind":"platform"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotation, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rotation.Rollback(context.Background()) })
+	if err = rotateServiceAccountTokenTx(ctx, rotation, organizationID, auditor.ID, []byte("replacement-"+uuid.NewString()), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, addErr := db.AddAuthenticatedAIAuditFinding(ctx, principal, AIAuditFinding{
+			RunID: run.ID, Severity: "critical", Category: "authority", Title: "Stale auditor",
+			Description: "rotated auditor credentials must not publish findings", Evidence: json.RawMessage(`{}`), Fingerprint: "authority:auditor-token",
+		})
+		result <- addErr
+	}()
+	assertAuthorityMutationBlocked(t, result)
+	if err = rotation.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertInsufficientRoleResult(t, result)
+
+	items, err := db.ListAIAuditFindings(ctx, organizationID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("rotated auditor token retained findings: %#v", items)
+	}
+}
+
 func insertAuthenticatedSession(t *testing.T, ctx context.Context, db *Store, sessionID, userID uuid.UUID) {
 	t.Helper()
 	if _, err := db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local')`, sessionID, userID, []byte("late-audit-session-"+uuid.NewString())); err != nil {

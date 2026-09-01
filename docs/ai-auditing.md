@@ -158,7 +158,10 @@ keys make it a privileged service.
   outside the model boundary. Expiring, unrevoked expired, and stale never-used
   credentials produce deterministic rotation and cleanup findings.
 - Auditors may only create runs, add findings to their own active runs, and
-  complete those runs. Administrators read results.
+  complete those runs. Each write revalidates the exact service-account token
+  inside the same transaction, so token rotation, revocation, account
+  disablement, or role changes form a hard cutoff for in-flight agent output.
+  Administrators read results.
 - AI output is advisory. It never becomes a deployment, shell command, policy
   change, or remediation without a separate human-approved workflow.
 - Organization administrators can acknowledge, resolve, or reopen individual

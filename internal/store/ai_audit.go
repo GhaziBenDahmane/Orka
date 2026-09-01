@@ -1894,19 +1894,22 @@ func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID 
 }
 
 func (s *Store) CreateAIAuditRunWithAudit(ctx context.Context, principal Principal, agentName, agentVersion, model string, scope json.RawMessage, remoteAddr string) (AIAuditRun, error) {
-	if principal.ServiceAccountID == nil {
-		return AIAuditRun{}, ErrNotFound
+	if principal.ServiceAccountID == nil || principal.ServiceAccountTokenID == nil || principal.Role != "auditor" {
+		return AIAuditRun{}, ErrInsufficientRole
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return AIAuditRun{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockAuthenticatedPrincipalCredential(ctx, tx, principal); err != nil {
+		return AIAuditRun{}, err
+	}
 	item, err := createAIAuditRunTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, agentName, agentVersion, model, scope)
 	if err != nil {
 		return AIAuditRun{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "ai_audit.start", "ai_audit_run", item.ID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "ai_audit.start", "ai_audit_run", item.ID.String(), remoteAddr, nil); err != nil {
 		return AIAuditRun{}, err
 	}
 	return item, tx.Commit(ctx)
@@ -1962,6 +1965,38 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 		return AIAuditFinding{}, err
 	}
 	defer tx.Rollback(ctx)
+	item, err = addAIAuditFindingTx(ctx, tx, organizationID, accountID, item)
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+// AddAuthenticatedAIAuditFinding binds finding ingestion to the exact auditor
+// token that authenticated the request. Token rotation, revocation, account
+// disablement, or role changes that commit first roll back the finding and any
+// notification delivery created with it.
+func (s *Store) AddAuthenticatedAIAuditFinding(ctx context.Context, principal Principal, item AIAuditFinding) (AIAuditFinding, error) {
+	if principal.ServiceAccountID == nil || principal.ServiceAccountTokenID == nil || principal.Role != "auditor" {
+		return AIAuditFinding{}, ErrInsufficientRole
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockAuthenticatedPrincipalCredential(ctx, tx, principal); err != nil {
+		return AIAuditFinding{}, err
+	}
+	item, err = addAIAuditFindingTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, item)
+	if err != nil {
+		return AIAuditFinding{}, err
+	}
+	return item, tx.Commit(ctx)
+}
+
+func addAIAuditFindingTx(ctx context.Context, tx pgx.Tx, organizationID, accountID uuid.UUID, item AIAuditFinding) (AIAuditFinding, error) {
+	var err error
 	var runID uuid.UUID
 	var agentName string
 	err = tx.QueryRow(ctx, `SELECT id,agent_name FROM ai_audit_runs WHERE id=$1 AND organization_id=$2 AND service_account_id=$3 AND status='running' FOR UPDATE`, item.RunID, organizationID, accountID).Scan(&runID, &agentName)
@@ -2023,7 +2058,7 @@ func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID
 			return AIAuditFinding{}, err
 		}
 	}
-	return item, tx.Commit(ctx)
+	return item, nil
 }
 
 func (s *Store) FinishAIAuditRun(ctx context.Context, organizationID, accountID, runID uuid.UUID, status, summary string) error {
@@ -2039,18 +2074,21 @@ func (s *Store) FinishAIAuditRun(ctx context.Context, organizationID, accountID,
 }
 
 func (s *Store) FinishAIAuditRunWithAudit(ctx context.Context, principal Principal, runID uuid.UUID, status, summary, remoteAddr string) error {
-	if principal.ServiceAccountID == nil {
-		return ErrNotFound
+	if principal.ServiceAccountID == nil || principal.ServiceAccountTokenID == nil || principal.Role != "auditor" {
+		return ErrInsufficientRole
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockAuthenticatedPrincipalCredential(ctx, tx, principal); err != nil {
+		return err
+	}
 	if err = finishAIAuditRunTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, runID, status, summary); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "ai_audit."+status, "ai_audit_run", runID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "ai_audit."+status, "ai_audit_run", runID.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

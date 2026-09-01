@@ -124,7 +124,7 @@ func (s *Server) createAIAuditFinding(w http.ResponseWriter, r *http.Request) {
 		in.Fingerprint = hex.EncodeToString(sum[:])
 	}
 	p := principal(r)
-	item, err := s.Store.AddAIAuditFinding(r.Context(), p.OrganizationID, *p.ServiceAccountID, in)
+	item, err := s.Store.AddAuthenticatedAIAuditFinding(r.Context(), p, in)
 	if err != nil {
 		writeStoreError(w, err)
 		return
