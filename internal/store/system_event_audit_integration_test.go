@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func TestWebhookDeploymentCommitsWithSystemAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	failedDeliveryID := "delivery-failed"
-	if _, err = db.QueueWebhookDeploymentWithAudit(ctx, integration.ID, failedDeliveryID, "abcdef0", "127.0.0.1:1234"); err == nil {
+	if _, err = db.QueueWebhookDeploymentWithAudit(ctx, integration, failedDeliveryID, "abcdef0", "127.0.0.1:1234"); err == nil {
 		t.Fatal("webhook deployment queued without audit evidence")
 	}
 	var deployments, deliveries, jobs int
@@ -120,13 +121,90 @@ func TestWebhookDeploymentCommitsWithSystemAudit(t *testing.T) {
 	if _, err = pool.Exec(ctx, `DROP TRIGGER reject_deployment_webhook_audit ON audit_events`); err != nil {
 		t.Fatal(err)
 	}
-	deployment, err := db.QueueWebhookDeploymentWithAudit(ctx, integration.ID, "delivery-success", "abcdef0", "127.0.0.1:1234")
+	deployment, err := db.QueueWebhookDeploymentWithAudit(ctx, integration, "delivery-success", "abcdef0", "127.0.0.1:1234")
 	if err != nil || deployment.Status != "queued" {
 		t.Fatalf("audited webhook deployment=%#v err=%v", deployment, err)
 	}
 	var count int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id IS NULL AND actor_service_account_id IS NULL AND action='deployment.webhook' AND resource_id=$2`, organizationID, deployment.ID.String()).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("webhook deployment audit count=%d err=%v", count, err)
+	}
+}
+
+func TestWebhookDeploymentRejectsStaleVerifiedConfiguration(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Webhook configuration fence',$2)`, []any{organizationID, "webhook-configuration-fence-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,desired_state) VALUES($1,$2,'API','api',$3,'services: {}','stopped')`, []any{serviceID, environmentID, "webhook-configuration-fence-" + serviceID.String()}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	integration, err := db.CreateWebhookIntegration(ctx, organizationID, WebhookIntegration{ID: uuid.New(), ComposeServiceID: serviceID, Name: "GitHub", Provider: "github", Branch: "main", EncryptedSecret: "verified-secret-revision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	replacement, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = replacement.Rollback(context.Background()) })
+	if _, err = replacement.Exec(ctx, `UPDATE webhook_integrations SET encrypted_secret='replacement-secret-revision',updated_at=now() WHERE id=$1`, integration.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, queueErr := db.QueueWebhookDeploymentWithAudit(ctx, integration, "stale-verified-delivery", "abcdef0", "127.0.0.1:1234")
+		result <- queueErr
+	}()
+	waitForBlockedStoreQuery(t, ctx, db, "SELECT s.id,s.revision,s.compose_yaml")
+	if err = replacement.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case queueErr := <-result:
+		if !errors.Is(queueErr, ErrNotFound) {
+			t.Fatalf("stale verified webhook error=%v, want not found", queueErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale verified webhook did not resume after configuration replacement")
+	}
+
+	var deployments, deliveries, jobs, audits int
+	var desiredState string
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM deployments WHERE compose_service_id=$1`, serviceID).Scan(&deployments); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM webhook_deliveries WHERE integration_id=$1`, integration.ID).Scan(&deliveries); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE resource_key=$1`, "service:"+serviceID.String()).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='deployment.webhook'`, organizationID).Scan(&audits); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT desired_state FROM compose_services WHERE id=$1`, serviceID).Scan(&desiredState); err != nil {
+		t.Fatal(err)
+	}
+	if deployments != 0 || deliveries != 0 || jobs != 0 || audits != 0 || desiredState != "stopped" {
+		t.Fatalf("stale verified webhook retained state: deployments=%d deliveries=%d jobs=%d audits=%d desired=%q", deployments, deliveries, jobs, audits, desiredState)
 	}
 }
 

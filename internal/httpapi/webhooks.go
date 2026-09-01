@@ -145,7 +145,7 @@ func (s *Server) providerWebhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	deployment, err := s.Store.QueueWebhookDeploymentWithAudit(r.Context(), integration.ID, deliveryID, commitSHA, r.RemoteAddr)
+	deployment, err := s.Store.QueueWebhookDeploymentWithAudit(r.Context(), integration, deliveryID, commitSHA, r.RemoteAddr)
 	if errors.Is(err, store.ErrDuplicateDelivery) {
 		writeError(w, 409, "duplicate_delivery", err.Error())
 		return

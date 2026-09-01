@@ -2916,14 +2916,18 @@ func disableWebhookIntegrationTx(ctx context.Context, tx pgx.Tx, organizationID,
 }
 
 func (s *Store) QueueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA string) (Deployment, error) {
-	return s.queueWebhookDeployment(ctx, integrationID, deliveryID, commitSHA, "", false)
+	return s.queueWebhookDeployment(ctx, integrationID, nil, deliveryID, commitSHA, "", false)
 }
 
-func (s *Store) QueueWebhookDeploymentWithAudit(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA, remoteAddr string) (Deployment, error) {
-	return s.queueWebhookDeployment(ctx, integrationID, deliveryID, commitSHA, remoteAddr, true)
+// QueueWebhookDeploymentWithAudit revalidates the exact immutable
+// configuration used to authenticate the provider request before it queues
+// work. A concurrent disablement or configuration replacement therefore wins
+// cleanly instead of allowing a stale verified request to deploy.
+func (s *Store) QueueWebhookDeploymentWithAudit(ctx context.Context, expected WebhookIntegration, deliveryID, commitSHA, remoteAddr string) (Deployment, error) {
+	return s.queueWebhookDeployment(ctx, expected.ID, &expected, deliveryID, commitSHA, remoteAddr, true)
 }
 
-func (s *Store) queueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, deliveryID, commitSHA, remoteAddr string, audit bool) (Deployment, error) {
+func (s *Store) queueWebhookDeployment(ctx context.Context, integrationID uuid.UUID, expected *WebhookIntegration, deliveryID, commitSHA, remoteAddr string, audit bool) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
@@ -2932,7 +2936,12 @@ func (s *Store) queueWebhookDeployment(ctx context.Context, integrationID uuid.U
 	var serviceID, organizationID, projectID, environmentID uuid.UUID
 	var revision int64
 	var compose, environment, provider string
-	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider,p.organization_id,p.id,e.id FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.id=$1 AND i.enabled AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF i,s`, integrationID).Scan(&serviceID, &revision, &compose, &environment, &provider, &organizationID, &projectID, &environmentID)
+	bindConfiguration := expected != nil
+	expectedProvider, expectedBranch, expectedSecret := "", "", ""
+	if expected != nil {
+		expectedProvider, expectedBranch, expectedSecret = expected.Provider, expected.Branch, expected.EncryptedSecret
+	}
+	err = tx.QueryRow(ctx, `SELECT s.id,s.revision,s.compose_yaml,s.encrypted_env,i.provider,p.organization_id,p.id,e.id FROM webhook_integrations i JOIN compose_services s ON s.id=i.compose_service_id JOIN environments e ON e.id=s.environment_id JOIN projects p ON p.id=e.project_id WHERE i.id=$1 AND i.enabled AND (NOT $2 OR (i.provider=$3 AND i.branch=$4 AND i.encrypted_secret=$5)) AND s.deletion_requested_at IS NULL AND e.deletion_requested_at IS NULL AND p.deletion_requested_at IS NULL FOR UPDATE OF i,s`, integrationID, bindConfiguration, expectedProvider, expectedBranch, expectedSecret).Scan(&serviceID, &revision, &compose, &environment, &provider, &organizationID, &projectID, &environmentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}

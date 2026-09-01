@@ -683,7 +683,10 @@ stack-namespace label, after the stack has been removed.
 Provider integrations support GitHub, GitLab, Gitea, and Bitbucket. Secrets are
 shown once, encrypted at rest, and used to authenticate the raw request body.
 Only pushes to the configured branch are deployed; delivery IDs are retained
-for 30 days to reject replays. A service source can also set `statusProvider`,
+for 30 days to reject replays. Deployment admission locks the integration and
+requires the provider, branch, and encrypted secret revision to match the
+configuration that verified the request, so concurrent replacement or
+disablement rejects stale callbacks without queuing work. A service source can also set `statusProvider`,
 `statusCredentialId`, and `statusContext`. Matching webhook deployments then
 publish ordered pending and terminal commit statuses through durable retrying
 jobs. The status credential must be a Git-token credential pinned to the

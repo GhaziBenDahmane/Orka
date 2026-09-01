@@ -30,7 +30,7 @@ new mutations instead of weakening authentication or silently skipping checks.
 | Template repositories | pinned Ed25519 public keys, scoped GitHub token | archives, Compose and template metadata | GitHub-only fetches, bounded extraction, signature verification, atomic catalog replacement, safe compiler |
 | Build sources and registries | Git/OCI credentials | repositories, submodules, Dockerfiles, ZIP files | host-bound credentials, pinned SSH host keys, hardened extraction, BuildKit secret mounts, no shell interpolation |
 | Backup/object storage | encrypted destination credentials, per-backup keys | remote objects and checksums | client-side authenticated encryption, mandatory transport TLS in HA, presigned single-operation transfers, size/hash verification, restore drills |
-| Notifications and webhooks | signing/provider secrets | provider requests, callbacks, receiver URLs | HMAC verification, delivery replay protection, encrypted storage, bounded retries, redacted errors |
+| Notifications and webhooks | signing/provider secrets | provider requests, callbacks, receiver URLs | HMAC verification, exact configuration revalidation at deployment admission, delivery replay protection, encrypted storage, bounded retries, redacted errors |
 | AI auditors and model gateway | separate short-lived auditor tokens plus a model token | platform snapshot strings and model output | independently authenticated auditor identities, dedicated encrypted model overlay, secret-free snapshot, least-privilege role, prompt trust markers, bounded whole-platform chunking, cross-chunk deduplication, validated findings, no remediation capability |
 | External database drivers | root-owned reviewed executable | driver output and utility plans | no inherited controller environment, startup-digest binding, file-descriptor execution, owner/mode revalidation, size/timeout/output bounds, plan validation |
 
@@ -213,7 +213,10 @@ labels. Expiry and stalled/failed convergence are monitored independently.
 ### Replay, stale work, and split brain
 
 Webhook delivery IDs, SAML assertions, OIDC state, invitation tokens, and agent
-enrollment tokens are one-time or replay-protected. OIDC and SAML login states
+enrollment tokens are one-time or replay-protected. Provider webhook deployment
+admission additionally locks and matches the exact provider, branch, and
+encrypted signing-secret revision used to validate the request, so a concurrent
+configuration replacement or disablement is a fail-closed cutoff. OIDC and SAML login states
 also bind the exact provider configuration revision; JIT provisioning and
 session issuance revalidate it while holding database locks, preventing an
 in-flight callback from crossing a provider update or disable/re-enable cycle.
