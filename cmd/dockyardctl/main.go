@@ -26,6 +26,8 @@ type config struct {
 	OrganizationID string `json:"organizationId,omitempty"`
 }
 
+const maxConfigBytes int64 = 1 << 20
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "dockyardctl:", err)
@@ -1021,43 +1023,97 @@ func loadConfig() (config, string, error) {
 		return config{}, "", err
 	}
 	path := filepath.Join(directory, "dockyard", "config.json")
-	data, err := os.ReadFile(path)
+	stored, err := readConfig(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return config{URL: "http://localhost:8080"}, path, nil
 	}
 	if err != nil {
 		return config{}, path, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return config{}, path, err
-	}
-	if info.Mode().Perm()&0077 != 0 {
-		return config{}, path, errors.New("CLI config permissions are too broad; run chmod 600 " + path)
-	}
-	var stored config
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return config{}, path, fmt.Errorf("decode CLI config: %w", err)
-	}
 	return stored, path, nil
 }
 
+func readConfig(path string) (config, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return config{}, err
+	}
+	if !before.Mode().IsRegular() {
+		return config{}, errors.New("CLI config must be a regular file, not a symbolic link")
+	}
+	if before.Mode().Perm()&0077 != 0 {
+		return config{}, errors.New("CLI config permissions are too broad; run chmod 600 " + path)
+	}
+	if before.Size() < 0 || before.Size() > maxConfigBytes {
+		return config{}, errors.New("CLI config exceeds 1 MiB")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return config{}, err
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil || !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		return config{}, errors.New("CLI config changed while it was opened")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
+	if err != nil {
+		return config{}, err
+	}
+	if int64(len(data)) > maxConfigBytes {
+		return config{}, errors.New("CLI config exceeds 1 MiB")
+	}
+	var stored config
+	if err = json.Unmarshal(data, &stored); err != nil {
+		return config{}, fmt.Errorf("decode CLI config: %w", err)
+	}
+	return stored, nil
+}
+
 func saveConfig(path string, value config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
-	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
+	directoryInfo, err := os.Lstat(directory)
+	if err != nil || !directoryInfo.IsDir() {
+		return errors.New("CLI config directory must be a directory, not a symbolic link")
+	}
+	if err = os.Chmod(directory, 0700); err != nil {
 		return err
 	}
-	data, _ := json.MarshalIndent(value, "", "  ")
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0600); err != nil {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(temporary, 0600); err != nil {
+	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+".*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err = temporary.Chmod(0600); err == nil {
+		_, err = temporary.Write(data)
+	}
+	if err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	directoryHandle, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	syncErr := directoryHandle.Sync()
+	closeErr := directoryHandle.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 func envOr(name, fallback string) string {

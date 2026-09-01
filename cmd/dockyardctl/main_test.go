@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -476,5 +478,81 @@ func TestSearchTemplatesRequiresNonEmptyBoundedArguments(t *testing.T) {
 		if _, _, _, err := commandRequest(args, strings.NewReader("")); err == nil {
 			t.Errorf("commandRequest(%q) accepted invalid search arguments", args)
 		}
+	}
+}
+
+func TestConfigFileIsBoundedPrivateAndSymlinkSafe(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "dockyard")
+	if err := os.Mkdir(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("do not overwrite"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "config.json")
+	if err := os.Symlink(victim, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, path+".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	want := config{URL: "https://orka.example.test", Token: "secret-token", OrganizationID: "organization-id"}
+	if err := saveConfig(path, want); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(victim)
+	if err != nil || string(contents) != "do not overwrite" {
+		t.Fatalf("config write followed a symlink: contents=%q err=%v", contents, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("saved config mode=%v err=%v", info, err)
+	}
+	got, err := readConfig(path)
+	if err != nil || got != want {
+		t.Fatalf("read config=%#v err=%v, want %#v", got, err, want)
+	}
+	linkedPath := filepath.Join(directory, "linked.json")
+	if err = os.Symlink(path, linkedPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readConfig(linkedPath); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlinked config error=%v", err)
+	}
+	if err = os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readConfig(path); err == nil || !strings.Contains(err.Error(), "permissions") {
+		t.Fatalf("broad config permissions error=%v", err)
+	}
+	oversized := filepath.Join(directory, "oversized.json")
+	file, err := os.OpenFile(oversized, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Truncate(maxConfigBytes + 1); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readConfig(oversized); err == nil || !strings.Contains(err.Error(), "exceeds 1 MiB") {
+		t.Fatalf("oversized config error=%v", err)
+	}
+}
+
+func TestSaveConfigRejectsSymlinkDirectory(t *testing.T) {
+	realDirectory := filepath.Join(t.TempDir(), "real")
+	if err := os.Mkdir(realDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDirectory := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(realDirectory, linkedDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveConfig(filepath.Join(linkedDirectory, "config.json"), config{Token: "secret"}); err == nil || !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("symlinked config directory error=%v", err)
 	}
 }
