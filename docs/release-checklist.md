@@ -161,6 +161,9 @@ links for every item below.
   and signing posture; the gate requires deterministic findings for an
   unsigned repository whose latest synchronization failed while excluding its
   webhook secret and raw synchronization error from the model boundary.
+  An exhausted notification delivery must likewise appear only as aggregate
+  endpoint posture and produce an intervention finding without exposing its
+  encrypted destination, payload, or raw provider error.
   A failed or thirty-minute-stalled offline named-volume recovery must produce
   a critical deterministic finding with service, volume, and target-node
   context while excluding the raw restore error from the model boundary.
