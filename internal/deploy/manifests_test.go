@@ -536,6 +536,22 @@ func TestReleaseWorkflowAssignsVersionTagOnlyAfterPromotionGates(t *testing.T) {
 	if !strings.Contains(promotionBlock, `imagetools inspect --raw "$IMAGE:$VERSION"`) || !strings.Contains(promotionBlock, `existing_digest`) || !strings.Contains(promotionBlock, "instead of verified digest") || !strings.Contains(promotionBlock, "already points to the verified digest; resuming promotion") {
 		t.Fatal("release workflow does not safely resume an exact existing version tag or reject a mismatched tag")
 	}
+	soakContents, err := os.ReadFile("../../scripts/ci/test-release-soak.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	soak := string(soakContents)
+	for _, databaseDriverEvidence := range []string{
+		`/v1/database-engines`,
+		`["clickhouse","libsql","mariadb","meilisearch","mongo","mysql","postgres","qdrant","redis","timescaledb","valkey"]`,
+		`databaseDriverInventoryVerified:true`,
+		`databaseDriverCount:11`,
+		`.databaseDriverInventoryVerified and .databaseDriverCount == 11`,
+	} {
+		if !strings.Contains(soak, databaseDriverEvidence) || !strings.Contains(workflow, databaseDriverEvidence) && strings.HasPrefix(databaseDriverEvidence, ".databaseDriver") {
+			t.Errorf("release soak is missing database-driver evidence contract %q", databaseDriverEvidence)
+		}
+	}
 }
 
 func TestSSOConformanceEvidenceIsEmittedByTheHarness(t *testing.T) {

@@ -478,6 +478,7 @@ jobs:
             .image == $image and .sourceCommit == $sourceCommit and .status == "passed" and
             .configuredSoakSeconds >= 60 and .observedSoakSeconds >= .configuredSoakSeconds and .healthChecks >= 1 and .healthVerified and
             .readinessVerified and .authenticationVerified and .metricsVerified and
+            .databaseDriverInventoryVerified and .databaseDriverCount == 11 and
             .replicaConvergenceVerified and .failedHealthCheckInjected and
             .automaticRollbackVerified and .originalHealthcheckRestored and .imageIdentityRestored and .failedTaskIsolated and
             (.observations.baselineImageId | test("^sha256:[a-f0-9]{64}$")) and

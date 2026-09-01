@@ -90,7 +90,9 @@ links for every item below.
 - The exact public, signed candidate digest runs in a disposable Swarm through
   a configurable soak window (five minutes by default). Health, readiness,
   authenticated API access, Prometheus output, and replica convergence must
-  remain healthy. The gate then deploys a deliberately failing health check and
+  remain healthy. The authenticated engine inventory must contain exactly the
+  eleven built-in database drivers, each with a distinct SHA-256 implementation
+  identity. The gate then deploys a deliberately failing health check and
   requires Swarm to report `rollback_completed`, restore the signed digest and
   original health configuration, and preserve the authenticated session. Its
   evidence records measured soak duration, baseline/failed/recovered task IDs,
