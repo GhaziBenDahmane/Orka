@@ -167,7 +167,10 @@ links for every item below.
   PagerDuty, Opsgenie, and authenticated implicit-TLS SMTP. It proves retry
   recovery, delivery/job completion, tenant isolation, event deduplication,
   encrypted-at-rest provider material, and offline recovery notifications with
-  service, volume, mode, and target-node context. The release attaches
+  service, volume, mode, and target-node context. It also forces notification
+  outbox insertion to fail and proves the terminal workload-job transition
+  rolls back, so a committed terminal failure cannot lose its operator alert.
+  The release attaches
   `notification-conformance.json`; real provider credentials remain a staging
   requirement.
 - `make test-migration-conformance` imports a representative Dokploy fixture

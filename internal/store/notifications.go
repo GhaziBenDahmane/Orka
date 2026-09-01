@@ -172,7 +172,22 @@ func (s *Store) FinishNotificationDeliveryForJob(ctx context.Context, jobID, lea
 }
 
 func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, rawPayload []byte, cause error) error {
-	eventType, resourceType, resourceID, organizationID, err := s.failureResource(ctx, jobKind, rawPayload)
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = s.QueueFailureNotificationsTx(ctx, tx, jobKind, rawPayload, cause); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// QueueFailureNotificationsTx writes the notification outbox records in the
+// caller's transaction. Workers use this to make a terminal job failure and
+// its operator notification one atomic state transition.
+func (s *Store) QueueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobKind string, rawPayload []byte, cause error) error {
+	eventType, resourceType, resourceID, organizationID, err := s.failureResource(ctx, tx, jobKind, rawPayload)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -184,7 +199,7 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 		var offline bool
 		var serviceID uuid.UUID
 		var volumeName, targetStorageNodeID string
-		if err = s.Pool.QueryRow(ctx, `SELECT restore.offline,service.id,backup.volume_name,restore.target_storage_node_id FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id WHERE restore.id=$1`, resourceID).Scan(&offline, &serviceID, &volumeName, &targetStorageNodeID); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT restore.offline,service.id,backup.volume_name,restore.target_storage_node_id FROM volume_restores restore JOIN volume_backups backup ON backup.id=restore.volume_backup_id JOIN compose_services service ON service.id=backup.compose_service_id WHERE restore.id=$1`, resourceID).Scan(&offline, &serviceID, &volumeName, &targetStorageNodeID); err != nil {
 			return err
 		}
 		mode := "online"
@@ -200,15 +215,7 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 		}
 	}
 	payload, _ := json.Marshal(notification)
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if err = queueNotificationDeliveries(ctx, tx, organizationID, eventType, resourceType, resourceID, payload); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return queueNotificationDeliveries(ctx, tx, organizationID, eventType, resourceType, resourceID, payload)
 }
 
 func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, eventType, resourceType, resourceID string, payload json.RawMessage) error {
@@ -244,7 +251,7 @@ func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID 
 	return nil
 }
 
-func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload []byte) (string, string, string, uuid.UUID, error) {
+func (s *Store) failureResource(ctx context.Context, tx pgx.Tx, jobKind string, rawPayload []byte) (string, string, string, uuid.UUID, error) {
 	var payload map[string]string
 	if err := json.Unmarshal(rawPayload, &payload); err != nil {
 		return "", "", "", uuid.Nil, err
@@ -274,7 +281,7 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 		}
 		var organizationID uuid.UUID
 		var restoreKind string
-		err = s.Pool.QueryRow(ctx, `SELECT p.organization_id,r.kind FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1`, id).Scan(&organizationID, &restoreKind)
+		err = tx.QueryRow(ctx, `SELECT p.organization_id,r.kind FROM database_restores r JOIN database_backups b ON b.id=r.database_backup_id JOIN database_instances d ON d.id=b.database_instance_id JOIN environments e ON e.id=d.environment_id JOIN projects p ON p.id=e.project_id WHERE r.id=$1`, id).Scan(&organizationID, &restoreKind)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", "", "", uuid.Nil, ErrNotFound
 		}
@@ -325,7 +332,7 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 		return "", "", "", uuid.Nil, err
 	}
 	var organizationID uuid.UUID
-	if err := s.Pool.QueryRow(ctx, query, id).Scan(&organizationID); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, query, id).Scan(&organizationID); errors.Is(err, pgx.ErrNoRows) {
 		return "", "", "", uuid.Nil, ErrNotFound
 	} else if err != nil {
 		return "", "", "", uuid.Nil, err

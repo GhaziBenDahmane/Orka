@@ -56,6 +56,76 @@ func recoveryTestStore(t *testing.T) (*store.Store, context.Context) {
 	return &store.Store{Pool: pool}, ctx
 }
 
+func TestTerminalFailureAndNotificationOutboxAreAtomic(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	endpointID := uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Atomic notifications',$2)`, []any{organizationID, "atomic-notifications-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'App','app',$3,'services: {}')`, []any{serviceID, environmentID, "atomic-" + serviceID.String()}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'On-call','webhook','encrypted-url','encrypted-secret',ARRAY['deployment.failed'])`, []any{endpointID, organizationID}},
+	} {
+		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	finishFailure := func(deploymentID, jobID, leaseID uuid.UUID) error {
+		payload, _ := json.Marshal(map[string]string{"deploymentId": deploymentID.String()})
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','failed','manual')`, deploymentID, serviceID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,status,attempts,max_attempts,locked_at,locked_by,lease_id) VALUES($1,'deploy.compose',$2,'running',1,1,now(),'atomic-worker',$3)`, jobID, payload, leaseID); err != nil {
+			t.Fatal(err)
+		}
+		return (&Worker{Store: db, ID: "atomic-worker"}).finish(ctx, job{ID: jobID, Kind: "deploy.compose", Payload: payload, Attempts: 0, MaxAttempts: 1, LeaseID: leaseID}, errors.New("scheduler unavailable"))
+	}
+
+	firstDeploymentID, firstJobID, firstLeaseID := uuid.New(), uuid.New(), uuid.New()
+	if err := finishFailure(firstDeploymentID, firstJobID, firstLeaseID); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var deliveries, notificationJobs int
+	if err := db.Pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, firstJobID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE endpoint_id=$1 AND resource_id=$2`, endpointID, firstDeploymentID.String()).Scan(&deliveries); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1 AND resource_id=$2)`, endpointID, firstDeploymentID.String()).Scan(&notificationJobs); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || deliveries != 1 || notificationJobs != 1 {
+		t.Fatalf("status=%q deliveries=%d notification_jobs=%d", status, deliveries, notificationJobs)
+	}
+
+	if _, err := db.Pool.Exec(ctx, `CREATE FUNCTION reject_notification_delivery() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'outbox unavailable'; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `CREATE TRIGGER reject_notification_delivery BEFORE INSERT ON notification_deliveries FOR EACH ROW EXECUTE FUNCTION reject_notification_delivery()`); err != nil {
+		t.Fatal(err)
+	}
+	secondDeploymentID, secondJobID, secondLeaseID := uuid.New(), uuid.New(), uuid.New()
+	if err := finishFailure(secondDeploymentID, secondJobID, secondLeaseID); err == nil || !strings.Contains(err.Error(), "outbox unavailable") {
+		t.Fatalf("finish error=%v, want outbox failure", err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, secondJobID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE endpoint_id=$1 AND resource_id=$2`, endpointID, secondDeploymentID.String()).Scan(&deliveries); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || deliveries != 0 {
+		t.Fatalf("rolled-back status=%q deliveries=%d", status, deliveries)
+	}
+}
+
 func TestClaimSerializesJobsWithTheSameResourceKey(t *testing.T) {
 	db, ctx := recoveryTestStore(t)
 	firstID, secondID, cancelledID := uuid.New(), uuid.New(), uuid.New()

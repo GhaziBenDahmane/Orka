@@ -189,7 +189,9 @@ durable provider build-status callbacks implemented.
 - GitHub, GitLab, Gitea, and Bitbucket callbacks publish ordered pending and
   terminal statuses using snapshotted, host-pinned encrypted credentials.
 - Failure notification rules and durable providers for TLS email,
-  Slack-compatible webhooks, PagerDuty, and Opsgenie are implemented.
+  Slack-compatible webhooks, PagerDuty, and Opsgenie are implemented. Terminal
+  workload-job failures and their notification outbox records commit in one
+  PostgreSQL transaction, preventing a controller crash from losing the alert.
 - OpenTelemetry HTTP and worker traces, request/log correlation, and richer
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
   implemented. Hierarchical maintenance mode and transactionally enforced

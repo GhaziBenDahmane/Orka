@@ -2681,6 +2681,11 @@ func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
 			return err
 		}
 	}
+	if jobErr != nil && j.Attempts+1 >= j.MaxAttempts && j.Kind != "notify.webhook" {
+		if err = w.Store.QueueFailureNotificationsTx(ctx, tx, j.Kind, j.Payload, jobErr); err != nil {
+			return fmt.Errorf("queue failure notification: %w", err)
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -2692,11 +2697,6 @@ func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
 					w.Logger.Error("queue cancelled deployment status", "deployment", deploymentID, "error", statusErr)
 				}
 			}
-		}
-	}
-	if jobErr != nil && j.Attempts+1 >= j.MaxAttempts && j.Kind != "notify.webhook" {
-		if notificationErr := w.Store.QueueFailureNotifications(ctx, j.Kind, j.Payload, jobErr); notificationErr != nil {
-			w.Logger.Error("queue failure notification", "job", j.ID, "error", notificationErr)
 		}
 	}
 	return nil
