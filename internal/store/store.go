@@ -4911,13 +4911,21 @@ func (s *Store) JITSAMLUser(ctx context.Context, p SAMLProvider, subject, email,
 }
 
 func (s *Store) AuthenticateSCIM(ctx context.Context, hash []byte) (uuid.UUID, string, error) {
-	var orgID uuid.UUID
-	var role string
-	err := s.Pool.QueryRow(ctx, `SELECT organization_id,default_role FROM scim_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hash).Scan(&orgID, &role)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, "", ErrNotFound
-	}
+	_, orgID, role, err := s.AuthenticateSCIMWithID(ctx, hash)
 	return orgID, role, err
+}
+
+// AuthenticateSCIMWithID returns the exact credential that authorized a SCIM
+// request. Mutation handlers carry this ID into their write transaction so a
+// concurrent revocation can be serialized with the authorized change.
+func (s *Store) AuthenticateSCIMWithID(ctx context.Context, hash []byte) (uuid.UUID, uuid.UUID, string, error) {
+	var tokenID, orgID uuid.UUID
+	var role string
+	err := s.Pool.QueryRow(ctx, `SELECT id,organization_id,default_role FROM scim_tokens WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hash).Scan(&tokenID, &orgID, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, uuid.Nil, "", ErrNotFound
+	}
+	return tokenID, orgID, role, err
 }
 
 func nullableUUID(id uuid.UUID) any {

@@ -199,6 +199,11 @@ the secret mutation.
 SCIM user resources are bound to the organization that provisioned them.
 SCIM bearer tokens default to a 90-day lifetime, are shown only at creation,
 and stop authenticating immediately after expiration or explicit revocation.
+Every user or group write revalidates and locks the exact bearer credential
+inside its mutation transaction. A revocation that commits first therefore
+rejects an already-authenticated write with `401 Unauthorized`; a write that
+has already crossed that boundary commits before revocation, providing a
+deterministic cutoff without partial directory or audit state.
 User and group collection reads support the SCIM `filter`, one-based
 `startIndex`, and bounded `count` parameters (default and maximum 100), and
 return the full matching `totalResults` independently of the current page.

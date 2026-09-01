@@ -59,6 +59,10 @@ revocation, expiry, or token rotation cannot leave an already-started identity
 administration request able to commit afterward. The common audited mutation
 boundary applies the same exact-credential fence to workload, deployment,
 backup, routing, catalog, and operational changes, not only identity endpoints.
+SCIM directory writes independently carry the exact provisioning-token ID from
+request authentication into the write transaction and lock it after the
+organization row. Concurrent SCIM-token revocation or expiry is therefore a
+linearizable cutoff for user and group mutation and its audit record.
 Each local, OIDC, or SAML session is issued atomically with its tenant
 audit event; unscoped local logins append evidence to every organization the
 identity can enter, while federated sessions remain bound to one tenant.

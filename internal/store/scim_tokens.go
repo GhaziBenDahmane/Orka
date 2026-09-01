@@ -114,3 +114,23 @@ func revokeSCIMTokenTx(ctx context.Context, tx pgx.Tx, organizationID, tokenID u
 	}
 	return err
 }
+
+// LockActiveSCIMTokenTx establishes the authorization boundary for a SCIM
+// mutation. The organization is locked before the credential to match
+// administrator revocation ordering. Once this returns, either the mutation
+// commits before a revocation, or a completed revocation/expiry is observed
+// and the mutation is rejected.
+func LockActiveSCIMTokenTx(ctx context.Context, tx pgx.Tx, organizationID, tokenID uuid.UUID) error {
+	var lockedOrganizationID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	var lockedTokenID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM scim_tokens WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, tokenID, organizationID).Scan(&lockedTokenID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else {
+		return err
+	}
+}

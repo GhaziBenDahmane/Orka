@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,12 +126,19 @@ func (s *Server) revokeSCIMToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) scimPrincipal(r *http.Request) (uuid.UUID, string, error) {
+type scimCredential struct {
+	tokenID        uuid.UUID
+	organizationID uuid.UUID
+	defaultRole    string
+}
+
+func (s *Server) scimPrincipal(r *http.Request) (scimCredential, error) {
 	token, ok := bearerToken(r)
 	if !ok {
-		return uuid.Nil, "", store.ErrNotFound
+		return scimCredential{}, store.ErrNotFound
 	}
-	return s.Store.AuthenticateSCIM(r.Context(), cryptox.Digest(token))
+	tokenID, organizationID, role, err := s.Store.AuthenticateSCIMWithID(r.Context(), cryptox.Digest(token))
+	return scimCredential{tokenID: tokenID, organizationID: organizationID, defaultRole: role}, err
 }
 
 func (s *Server) rateLimitSCIM(next http.Handler) http.Handler {
@@ -259,16 +265,16 @@ func (s *Server) scimServiceProviderConfig(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) scimUsers(w http.ResponseWriter, r *http.Request) {
-	orgID, role, err := s.scimPrincipal(r)
+	credential, err := s.scimPrincipal(r)
 	if err != nil {
 		scimError(w, 401, "invalid SCIM token")
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		s.listSCIMUsers(w, r, orgID)
+		s.listSCIMUsers(w, r, credential.organizationID)
 	case http.MethodPost:
-		s.createSCIMUser(w, r, orgID, role)
+		s.createSCIMUser(w, r, credential)
 	default:
 		scimError(w, 405, "method not allowed")
 	}
@@ -336,7 +342,8 @@ func (s *Server) listSCIMUsers(w http.ResponseWriter, r *http.Request, orgID uui
 	}
 	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": total, "startIndex": startIndex, "itemsPerPage": len(resources), "Resources": resources})
 }
-func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, role string) {
+func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, credential scimCredential) {
+	orgID, role := credential.organizationID, credential.defaultRole
 	var in scimUserInput
 	if !decodeSCIM(w, r, &in) {
 		return
@@ -363,12 +370,7 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 		return
 	}
 	defer tx.Rollback(r.Context())
-	var lockedOrganizationID uuid.UUID
-	if err = tx.QueryRow(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, orgID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
-		scimError(w, 404, "organization not found")
-		return
-	} else if err != nil {
-		scimError(w, 500, "create failed")
+	if !lockSCIMMutation(w, r, tx, credential, "create failed") {
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email); err != nil {
@@ -427,11 +429,12 @@ func (s *Server) createSCIMUser(w http.ResponseWriter, r *http.Request, orgID uu
 	scimJSON(w, 201, item)
 }
 func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
-	orgID, role, err := s.scimPrincipal(r)
+	credential, err := s.scimPrincipal(r)
 	if err != nil {
 		scimError(w, 401, "invalid SCIM token")
 		return
 	}
+	orgID, role := credential.organizationID, credential.defaultRole
 	userID, err := uuid.Parse(r.PathValue("userID"))
 	if err != nil {
 		scimError(w, 404, "user not found")
@@ -470,8 +473,7 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer tx.Rollback(r.Context())
-		if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-			scimError(w, 500, "delete failed")
+		if !lockSCIMMutation(w, r, tx, credential, "delete failed") {
 			return
 		}
 		var currentRole *string
@@ -523,15 +525,16 @@ func (s *Server) scimUser(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(204)
 	case http.MethodPut:
-		s.replaceSCIMUser(w, r, orgID, userID, role)
+		s.replaceSCIMUser(w, r, credential, userID)
 	case http.MethodPatch:
-		s.patchSCIMUser(w, r, orgID, userID, role)
+		s.patchSCIMUser(w, r, credential, userID)
 	default:
 		scimError(w, 405, "method not allowed")
 	}
 }
 
-func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, userID uuid.UUID, fallbackRole string) {
+func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, credential scimCredential, userID uuid.UUID) {
+	orgID, fallbackRole := credential.organizationID, credential.defaultRole
 	var in scimUserInput
 	if !decodeSCIM(w, r, &in) {
 		return
@@ -559,8 +562,7 @@ func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, 
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-		scimError(w, http.StatusInternalServerError, "replace failed")
+	if !lockSCIMMutation(w, r, tx, credential, "replace failed") {
 		return
 	}
 	var currentEmail, currentDisplayName string
@@ -659,7 +661,8 @@ func (s *Server) replaceSCIMUser(w http.ResponseWriter, r *http.Request, orgID, 
 	scimJSON(w, http.StatusOK, item)
 }
 
-func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, userID uuid.UUID, role string) {
+func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, credential scimCredential, userID uuid.UUID) {
+	orgID, role := credential.organizationID, credential.defaultRole
 	var in struct {
 		Schemas    []string                 `json:"schemas"`
 		Operations []scimUserPatchOperation `json:"Operations"`
@@ -678,8 +681,7 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-		scimError(w, 500, "patch failed")
+	if !lockSCIMMutation(w, r, tx, credential, "patch failed") {
 		return
 	}
 	var currentEmail string
@@ -824,13 +826,19 @@ func (s *Server) patchSCIMUser(w http.ResponseWriter, r *http.Request, orgID, us
 	w.WriteHeader(204)
 }
 
-// lockSCIMOrganization preserves the organization -> user lock order shared
-// with federated JIT provisioning. Without it, a directory mutation can hold
-// the user row while JIT holds the organization row, causing a deadlock when
-// either transaction reaches its audit or membership write.
-func lockSCIMOrganization(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID) error {
-	var lockedOrganizationID uuid.UUID
-	return tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID)
+// lockSCIMMutation preserves the organization -> credential -> resource lock
+// order shared with administrator revocation and federated JIT provisioning.
+func lockSCIMMutation(w http.ResponseWriter, r *http.Request, tx pgx.Tx, credential scimCredential, failureDetail string) bool {
+	err := store.LockActiveSCIMTokenTx(r.Context(), tx, credential.organizationID, credential.tokenID)
+	if errors.Is(err, store.ErrNotFound) {
+		scimError(w, http.StatusUnauthorized, "invalid SCIM token")
+		return false
+	}
+	if err != nil {
+		scimError(w, http.StatusInternalServerError, failureDetail)
+		return false
+	}
+	return true
 }
 
 func normalizeSCIMUserPatchOperations(input []scimUserPatchOperation) ([]scimUserPatchOperation, error) {

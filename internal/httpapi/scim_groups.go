@@ -48,16 +48,16 @@ type scimGroupPatchOperation struct {
 }
 
 func (s *Server) scimGroups(w http.ResponseWriter, r *http.Request) {
-	orgID, _, err := s.scimPrincipal(r)
+	credential, err := s.scimPrincipal(r)
 	if err != nil {
 		scimError(w, 401, "invalid SCIM token")
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		s.listSCIMGroups(w, r, orgID)
+		s.listSCIMGroups(w, r, credential.organizationID)
 	case http.MethodPost:
-		s.createSCIMGroup(w, r, orgID)
+		s.createSCIMGroup(w, r, credential)
 	default:
 		scimError(w, 405, "method not allowed")
 	}
@@ -119,7 +119,8 @@ func (s *Server) listSCIMGroups(w http.ResponseWriter, r *http.Request, orgID uu
 	scimJSON(w, 200, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:ListResponse"}, "totalResults": total, "startIndex": startIndex, "itemsPerPage": len(items), "Resources": items})
 }
 
-func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID uuid.UUID) {
+func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, credential scimCredential) {
+	orgID := credential.organizationID
 	var in scimGroupInput
 	if !decodeSCIM(w, r, &in) {
 		return
@@ -148,8 +149,7 @@ func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID u
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-		scimError(w, 500, "create failed")
+	if !lockSCIMMutation(w, r, tx, credential, "create failed") {
 		return
 	}
 	id := uuid.New()
@@ -184,11 +184,12 @@ func (s *Server) createSCIMGroup(w http.ResponseWriter, r *http.Request, orgID u
 }
 
 func (s *Server) scimGroup(w http.ResponseWriter, r *http.Request) {
-	orgID, _, err := s.scimPrincipal(r)
+	credential, err := s.scimPrincipal(r)
 	if err != nil {
 		scimError(w, 401, "invalid SCIM token")
 		return
 	}
+	orgID := credential.organizationID
 	id, err := uuid.Parse(r.PathValue("groupID"))
 	if err != nil {
 		scimError(w, 404, "group not found")
@@ -205,17 +206,18 @@ func (s *Server) scimGroup(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", item.Meta.Version)
 		scimJSON(w, 200, item)
 	case http.MethodPut:
-		s.replaceSCIMGroup(w, r, orgID, id)
+		s.replaceSCIMGroup(w, r, credential, id)
 	case http.MethodPatch:
-		s.patchSCIMGroup(w, r, orgID, id)
+		s.patchSCIMGroup(w, r, credential, id)
 	case http.MethodDelete:
-		s.deleteSCIMGroup(w, r, orgID, id)
+		s.deleteSCIMGroup(w, r, credential, id)
 	default:
 		scimError(w, 405, "method not allowed")
 	}
 }
 
-func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, groupID uuid.UUID) {
+func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, credential scimCredential, groupID uuid.UUID) {
+	orgID := credential.organizationID
 	var in scimGroupInput
 	if !decodeSCIM(w, r, &in) {
 		return
@@ -242,8 +244,7 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-		scimError(w, http.StatusInternalServerError, "replace failed")
+	if !lockSCIMMutation(w, r, tx, credential, "replace failed") {
 		return
 	}
 	var currentRole string
@@ -303,7 +304,8 @@ func (s *Server) replaceSCIMGroup(w http.ResponseWriter, r *http.Request, orgID,
 	scimJSON(w, http.StatusOK, item)
 }
 
-func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, groupID uuid.UUID) {
+func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, credential scimCredential, groupID uuid.UUID) {
+	orgID := credential.organizationID
 	var in struct {
 		Operations []scimGroupPatchOperation `json:"Operations"`
 	}
@@ -321,8 +323,7 @@ func (s *Server) patchSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, g
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-		scimError(w, 500, "patch failed")
+	if !lockSCIMMutation(w, r, tx, credential, "patch failed") {
 		return
 	}
 	var lockedGroupID uuid.UUID
@@ -529,15 +530,15 @@ func decodeSCIMMembers(raw json.RawMessage) ([]scimMember, error) {
 	return wrapper.Members, nil
 }
 
-func (s *Server) deleteSCIMGroup(w http.ResponseWriter, r *http.Request, orgID, groupID uuid.UUID) {
+func (s *Server) deleteSCIMGroup(w http.ResponseWriter, r *http.Request, credential scimCredential, groupID uuid.UUID) {
+	orgID := credential.organizationID
 	tx, err := s.Store.Pool.Begin(r.Context())
 	if err != nil {
 		scimError(w, 500, "delete failed")
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if err = lockSCIMOrganization(r.Context(), tx, orgID); err != nil {
-		scimError(w, 500, "delete failed")
+	if !lockSCIMMutation(w, r, tx, credential, "delete failed") {
 		return
 	}
 	var revision int64
