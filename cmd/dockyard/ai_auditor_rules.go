@@ -585,6 +585,16 @@ func deterministicAuditFindings(snapshot store.AIAuditSnapshot, now time.Time) [
 	if missing := missingNotificationCoverage(snapshot.NotificationPosture); len(missing) > 0 {
 		add(modelFinding{Severity: "medium", Category: "operations", Title: "Failure notifications have coverage gaps", Description: "No enabled notification endpoint subscribes to one or more supported failure events.", ResourceType: "organization", ResourceID: snapshot.Organization.String(), Evidence: map[string]any{"missingEvents": missing}, Remediation: "Enable at least one tested notification destination for every supported failure event."})
 	}
+	for _, endpoint := range snapshot.NotificationPosture {
+		if endpoint.ExhaustedFailures == 0 {
+			continue
+		}
+		evidence := map[string]any{"kind": endpoint.Kind, "enabled": endpoint.Enabled, "exhaustedFailures": endpoint.ExhaustedFailures, "activeDeliveries": endpoint.ActiveDeliveries}
+		if endpoint.OldestExhaustedFailureAt != nil {
+			evidence["oldestExhaustedFailureAt"] = endpoint.OldestExhaustedFailureAt.UTC().Format(time.RFC3339)
+		}
+		add(modelFinding{Severity: "high", Category: "operations", Title: "Notification delivery requires intervention", Description: "One or more notification deliveries exhausted every durable retry without succeeding.", ResourceType: "notification_endpoint", ResourceID: endpoint.ID.String(), Evidence: evidence, Remediation: "Inspect tenant delivery history, restore or replace the destination, and use the audited retry action for eligible failures."})
+	}
 	for _, deployment := range snapshot.ServiceDeployments {
 		if deployment.DesiredState == "stopped" {
 			continue

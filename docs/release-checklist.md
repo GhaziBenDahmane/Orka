@@ -174,6 +174,11 @@ links for every item below.
   against the same resource each produce a delivery.
   Exhausted commit-status callback retries resolve through the deployment and
   notify only its tenant.
+  Exhausted notification deliveries are listed without payloads or endpoint
+  secrets, cannot be retried across tenants or through disabled destinations,
+  and an audited concurrent redrive creates exactly one active job while
+  clearing prior attempt state. Prometheus and the deterministic AI baseline
+  must report the exhausted state but suppress it while a durable retry is active.
   Shared local-edge certificate failures fan out once to every affected tenant,
   including after the last custom-certificate route has been removed, without
   notifying an unrelated tenant.

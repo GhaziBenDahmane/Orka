@@ -1312,6 +1312,29 @@ func TestDeterministicAuditDetectsElevatedOperationalFailureRates(t *testing.T) 
 	}
 }
 
+func TestDeterministicAuditDetectsExhaustedNotificationDelivery(t *testing.T) {
+	now := time.Now().UTC()
+	endpointID := uuid.New()
+	posture := fullyCoveredNotifications()
+	posture[0].ID = endpointID
+	posture[0].Kind = "webhook"
+	posture[0].ExhaustedFailures = 2
+	oldest := now.Add(-time.Hour)
+	posture[0].OldestExhaustedFailureAt = &oldest
+	snapshot := store.AIAuditSnapshot{Organization: uuid.New(), IdentityPosture: store.AIAuditIdentityPosture{RequireSSO: true, ActiveOwners: 1}, NotificationPosture: posture}
+	findings := deterministicAuditFindings(snapshot, now)
+	if len(findings) != 1 || findings[0].Title != "Notification delivery requires intervention" || findings[0].Severity != "high" || findings[0].ResourceType != "notification_endpoint" || findings[0].ResourceID != endpointID.String() || findings[0].Evidence["exhaustedFailures"] != int64(2) {
+		t.Fatalf("notification delivery findings=%#v", findings)
+	}
+	posture[0].ExhaustedFailures = 0
+	posture[0].ActiveDeliveries = 1
+	posture[0].OldestExhaustedFailureAt = nil
+	snapshot.NotificationPosture = posture
+	if findings = deterministicAuditFindings(snapshot, now); len(findings) != 0 {
+		t.Fatalf("active retry produced terminal finding=%#v", findings)
+	}
+}
+
 func TestDeterministicAuditDetectsUnavailableAndUnprotectedDatabaseEngines(t *testing.T) {
 	now := time.Now().UTC()
 	unsupportedID, missingID, protectedID := uuid.New(), uuid.New(), uuid.New()

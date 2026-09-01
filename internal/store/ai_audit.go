@@ -501,11 +501,14 @@ type AIAuditSAMLProviderPosture struct {
 }
 
 type AIAuditNotificationPosture struct {
-	ID      uuid.UUID `json:"id"`
-	Name    string    `json:"name"`
-	Kind    string    `json:"kind"`
-	Events  []string  `json:"events"`
-	Enabled bool      `json:"enabled"`
+	ID                       uuid.UUID  `json:"id"`
+	Name                     string     `json:"name"`
+	Kind                     string     `json:"kind"`
+	Events                   []string   `json:"events"`
+	Enabled                  bool       `json:"enabled"`
+	ActiveDeliveries         int64      `json:"activeDeliveries"`
+	ExhaustedFailures        int64      `json:"exhaustedFailures"`
+	OldestExhaustedFailureAt *time.Time `json:"oldestExhaustedFailureAt,omitempty"`
 }
 
 type AIAuditWebhookPosture struct {
@@ -1406,13 +1409,45 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 		return err
 	}
 
-	endpoints, err := s.ListNotificationEndpoints(ctx, organizationID)
+	rows, err = s.Pool.Query(ctx, `
+		SELECT endpoint.id,endpoint.name,endpoint.kind,endpoint.events,endpoint.enabled,
+		       (SELECT count(*) FROM notification_deliveries delivery
+		        WHERE delivery.endpoint_id=endpoint.id AND EXISTS(
+		            SELECT 1 FROM jobs job
+		            WHERE job.kind='notify.webhook' AND job.payload->>'deliveryId'=delivery.id::text
+		              AND job.status IN ('pending','running')
+		        )),
+		       (SELECT count(*) FROM notification_deliveries delivery
+		        WHERE delivery.endpoint_id=endpoint.id AND delivery.status='failed' AND NOT EXISTS(
+		            SELECT 1 FROM jobs job
+		            WHERE job.kind='notify.webhook' AND job.payload->>'deliveryId'=delivery.id::text
+		              AND job.status IN ('pending','running')
+		        )),
+		       (SELECT min(COALESCE(delivery.finished_at,delivery.created_at)) FROM notification_deliveries delivery
+		        WHERE delivery.endpoint_id=endpoint.id AND delivery.status='failed' AND NOT EXISTS(
+		            SELECT 1 FROM jobs job
+		            WHERE job.kind='notify.webhook' AND job.payload->>'deliveryId'=delivery.id::text
+		              AND job.status IN ('pending','running')
+		        ))
+		FROM notification_endpoints endpoint
+		WHERE endpoint.organization_id=$1
+		ORDER BY endpoint.name,endpoint.id`, organizationID)
 	if err != nil {
 		return err
 	}
-	for _, endpoint := range endpoints {
-		snapshot.NotificationPosture = append(snapshot.NotificationPosture, AIAuditNotificationPosture{ID: endpoint.ID, Name: endpoint.Name, Kind: endpoint.Kind, Events: endpoint.Events, Enabled: endpoint.Enabled})
+	for rows.Next() {
+		var endpoint AIAuditNotificationPosture
+		if err = rows.Scan(&endpoint.ID, &endpoint.Name, &endpoint.Kind, &endpoint.Events, &endpoint.Enabled, &endpoint.ActiveDeliveries, &endpoint.ExhaustedFailures, &endpoint.OldestExhaustedFailureAt); err != nil {
+			rows.Close()
+			return err
+		}
+		snapshot.NotificationPosture = append(snapshot.NotificationPosture, endpoint)
 	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	repositories, err := s.ListTemplateRepositories(ctx, organizationID)
 	if err != nil {
 		return err

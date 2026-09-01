@@ -220,6 +220,11 @@ keys make it a privileged service.
   incomplete Dokploy migrations. Failed offline named-volume recovery and
   recovery that remains queued or running for more than thirty minutes are
   critical deterministic findings even when the backup policy was later removed.
+  A notification delivery that has exhausted every durable retry produces a
+  high-severity endpoint finding with only the bounded provider kind, counts,
+  and oldest failure time. Payloads, endpoint addresses, signing material, and
+  provider errors remain outside the model boundary; administrators remediate
+  through the tenant delivery-history and audited retry APIs.
   It also reports a missing immutable audit
   archive, a failed latest archive delivery, or tenant events left unarchived
   for more than five minutes, backup destinations that permit plaintext
@@ -470,6 +475,10 @@ labels so user-controlled values cannot create unbounded Prometheus series.
 Referenced source credentials and backup destinations also expose secret-free
 rotation-age series; the supplied rules warn after 180 days even if the AI
 audit schedule is down.
+`dockyard_notification_delivery_exhausted` and its oldest-age companion expose
+only organization IDs and supported event names. The alert pack keeps a
+persistent exhausted delivery distinct from ordinary attempts that are still
+inside the durable retry budget.
 
 The supplied Prometheus rules warn when an audit fails, remains running for
 more than ten minutes, or an organization with an active auditor token has no

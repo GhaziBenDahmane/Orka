@@ -542,7 +542,7 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	if len(snapshot.SAMLPosture) != 1 || snapshot.SAMLPosture[0].ID != samlProviderID || snapshot.SAMLPosture[0].CertificateConfigurationOK || snapshot.SAMLPosture[0].SPCertificateNotAfter != nil || snapshot.SAMLPosture[0].IDPCertificateNotAfter != nil {
 		t.Fatalf("SAML posture=%#v", snapshot.SAMLPosture)
 	}
-	if len(snapshot.NotificationPosture) != 1 || snapshot.NotificationPosture[0].Name != "On-call" {
+	if len(snapshot.NotificationPosture) != 1 || snapshot.NotificationPosture[0].Name != "On-call" || snapshot.NotificationPosture[0].ExhaustedFailures != 3 || snapshot.NotificationPosture[0].ActiveDeliveries != 0 || snapshot.NotificationPosture[0].OldestExhaustedFailureAt == nil {
 		t.Fatalf("notification posture=%#v", snapshot.NotificationPosture)
 	}
 	webhookPosture := map[uuid.UUID]AIAuditWebhookPosture{}

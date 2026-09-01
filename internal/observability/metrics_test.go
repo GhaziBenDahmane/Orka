@@ -129,6 +129,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	expiredSCIMToken := uuid.New()
 	samlProvider := uuid.New()
 	templatePending, templateRunning, templateFailed := uuid.New(), uuid.New(), uuid.New()
+	notificationEndpointA, notificationEndpointB := uuid.New(), uuid.New()
+	exhaustedNotification, activeNotification, unknownNotification, foreignNotification := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	samlMetadata, samlCertificate := testSAMLMetricMaterial(t, time.Now().Add(90*24*time.Hour))
 	projectID, environmentID, serviceID, malformedServiceID, unboundServiceID, destinationID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	volumePolicyID, missingVolumePolicyID, disabledVolumePolicyID, unboundVolumePolicyID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -142,6 +144,13 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	}{
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics A',$2)`, []any{organizationA, "metrics-a-" + organizationA.String()}},
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Metrics B',$2)`, []any{organizationB, "metrics-b-" + organizationB.String()}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Metrics notification A','webhook','encrypted','encrypted',ARRAY['backup.failed'])`, []any{notificationEndpointA, organizationA}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Metrics notification B','webhook','encrypted','encrypted',ARRAY['backup.failed'])`, []any{notificationEndpointB, organizationB}},
+		{`INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload,status,finished_at) VALUES($1,$2,'backup.failed','database','exhausted','{}','failed',now()-interval '10 minutes')`, []any{exhaustedNotification, notificationEndpointA}},
+		{`INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload,status,finished_at) VALUES($1,$2,'backup.failed','database','retrying','{}','failed',now()-interval '1 minute')`, []any{activeNotification, notificationEndpointA}},
+		{`INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload,status,finished_at) VALUES($1,$2,'untrusted.dynamic.event','database','unknown','{}','failed',now()-interval '3 minutes')`, []any{unknownNotification, notificationEndpointA}},
+		{`INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload,status,finished_at) VALUES($1,$2,'backup.failed','database','foreign','{}','failed',now()-interval '2 minutes')`, []any{foreignNotification, notificationEndpointB}},
+		{`INSERT INTO jobs(id,kind,payload,status,run_after) VALUES($1,'notify.webhook',$2,'pending',now()+interval '1 minute')`, []any{uuid.New(), `{"deliveryId":"` + activeNotification.String() + `"}`}},
 		{`INSERT INTO managed_networks(id,organization_id,name,driver,status,last_error) VALUES($1,$2,'failed-overlay','overlay','error','metrics-network-error')`, []any{failedNetworkID, organizationA}},
 		{`INSERT INTO managed_networks(id,organization_id,name,driver,status,deletion_requested_at) VALUES($1,$2,'deleting-overlay','overlay','deleting',now()-interval '25 minutes')`, []any{deletingNetworkID, organizationA}},
 		{`INSERT INTO jobs(id,kind,payload,status,last_error,finished_at) VALUES($1,'network.delete',$2,'failed','metrics-network-finalizer-error',now()-interval '10 minutes')`, []any{uuid.New(), `{"networkId":"` + deletingNetworkID.String() + `"}`}},
@@ -214,7 +223,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("metrics status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
-	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_backup_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_restore_active_age_seconds", "dockyard_volume_restore_last_failure_age_seconds", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_integrity_issues", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_node_count", "dockyard_cluster_ready_node_count", "dockyard_cluster_active_node_count", "dockyard_cluster_schedulable_node_count", "dockyard_cluster_manager_count", "dockyard_cluster_cpu_capacity_nanocpus", "dockyard_cluster_memory_capacity_bytes", "dockyard_cluster_docker_swarm_capable", "dockyard_cluster_docker_compose_capable", "dockyard_cluster_edge_proxy_ready", "dockyard_environment_cluster_capacity_satisfied", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
+	for _, metric := range []string{"dockyard_restore_drill_last_duration_seconds", "dockyard_restore_drill_overdue", "dockyard_database_backup_overdue", "dockyard_database_migrations", "dockyard_database_migration_active_age_seconds", "dockyard_database_migration_last_duration_seconds", "dockyard_database_migration_last_failure_age_seconds", "dockyard_volume_backups", "dockyard_volume_restores", "dockyard_volume_restore_active_age_seconds", "dockyard_volume_restore_last_failure_age_seconds", "dockyard_volume_backup_last_success_age_seconds", "dockyard_volume_restore_last_success_age_seconds", "dockyard_volume_backup_overdue", "dockyard_volume_restore_rehearsal_overdue", "dockyard_backup_artifact_integrity_issues", "dockyard_backup_artifact_deletions", "dockyard_backup_artifact_deletion_oldest_age_seconds", "dockyard_database_driver_inventory_info", "dockyard_database_driver_info", "dockyard_database_driver_binding_issues", "dockyard_service_reconciliation", "dockyard_service_reconciliation_age_seconds", "dockyard_managed_networks", "dockyard_managed_network_provisioning_age_seconds", "dockyard_notification_delivery_exhausted", "dockyard_notification_delivery_oldest_exhausted_age_seconds", "dockyard_cluster_heartbeat_missing", "dockyard_cluster_node_count", "dockyard_cluster_ready_node_count", "dockyard_cluster_active_node_count", "dockyard_cluster_schedulable_node_count", "dockyard_cluster_manager_count", "dockyard_cluster_cpu_capacity_nanocpus", "dockyard_cluster_memory_capacity_bytes", "dockyard_cluster_docker_swarm_capable", "dockyard_cluster_docker_compose_capable", "dockyard_cluster_edge_proxy_ready", "dockyard_environment_cluster_capacity_satisfied", "dockyard_cluster_agent_update_failure", "dockyard_agent_upgrade_verification_overdue", "dockyard_agent_upgrade_active_age_seconds", "dockyard_cluster_certificate_expiry_seconds", "dockyard_cluster_certificate_rotation_pending_age_seconds", "dockyard_service_account_token_expiry_seconds", "dockyard_scim_token_expiry_seconds", "dockyard_expired_credential_backlog", "dockyard_saml_certificate_rotation_pending_age_seconds", "dockyard_saml_certificate_expiry_seconds", "dockyard_saml_certificate_valid", "dockyard_ai_audit_runs", "dockyard_ai_audit_last_completed_age_seconds", "dockyard_ai_audit_last_failure_age_seconds", "dockyard_ai_audit_running_age_seconds", "dockyard_ai_audit_completion_overdue", "dockyard_template_repositories", "dockyard_template_repository_sync_pending_age_seconds", "dockyard_template_repository_sync_running_age_seconds", "dockyard_template_repository_sync_failed"} {
 		if !strings.Contains(recorder.Body.String(), "# HELP "+metric) {
 			t.Errorf("missing metric family %s", metric)
 		}
@@ -243,6 +252,10 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_source_credential_rotation_age_seconds{organization="` + organizationA.String() + `",credential="` + sourceCredentialID.String() + `",kind="registry"}`,
 		`dockyard_backup_destination_credential_rotation_age_seconds{organization="` + organizationA.String() + `",destination="` + destinationID.String() + `"}`,
 		`dockyard_backup_destination_tls{organization="` + organizationA.String() + `",destination="` + destinationID.String() + `"} 0`,
+		`dockyard_notification_delivery_exhausted{organization="` + organizationA.String() + `",event="backup.failed"} 1`,
+		`dockyard_notification_delivery_exhausted{organization="` + organizationA.String() + `",event="unknown"} 1`,
+		`dockyard_notification_deliveries{event="unknown",status="failed"} 1`,
+		`dockyard_notification_delivery_oldest_exhausted_age_seconds{organization="` + organizationA.String() + `",event="backup.failed"}`,
 		`dockyard_database_backup_policy_status{database="` + healthyDatabaseID.String() + `",state="enabled"} 1`,
 		`dockyard_database_backup_policy_status{database="` + disabledDatabaseID.String() + `",state="disabled"} 1`,
 		`dockyard_database_backup_policy_status{database="` + unprotectedDatabaseID.String() + `",state="missing"} 1`,
@@ -552,6 +565,23 @@ func TestPrometheusAlertsCoverAIAuditHealth(t *testing.T) {
 		"expr: max without (instance) (dockyard_ai_audit_completion_overdue) == 1",
 		"alert: DockyardAIAuditStuck",
 		"expr: max without (instance) (dockyard_ai_audit_running_age_seconds) > 600",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Errorf("missing alert configuration %q", expected)
+		}
+	}
+}
+
+func TestPrometheusAlertsCoverExhaustedNotificationDeliveries(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "prometheus-alerts.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, expected := range []string{
+		"alert: DockyardNotificationDeliveryExhausted",
+		"expr: max without (instance) (dockyard_notification_delivery_exhausted) > 0",
+		"inspect notification delivery history and use audited retry",
 	} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing alert configuration %q", expected)

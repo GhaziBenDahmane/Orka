@@ -195,6 +195,10 @@ durable provider build-status callbacks implemented.
   PostgreSQL transaction, preventing a controller crash from losing the alert.
   Delivery deduplication is scoped to the durable job, so retries cannot create
   duplicates while a later failed operation on the same resource alerts again.
+  Administrators can inspect secret-free tenant delivery history and perform
+  an audited redrive after the durable attempt budget is exhausted. PostgreSQL
+  enforces one active job per delivery; Prometheus and the deterministic AI
+  auditor distinguish exhausted failures from transient retries.
 - OpenTelemetry HTTP and worker traces, request/log correlation, and richer
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
   implemented. Hierarchical maintenance mode and transactionally enforced
