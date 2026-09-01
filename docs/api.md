@@ -303,7 +303,7 @@ once. All providers use the same idempotent delivery records and retry queue
 for `deployment.failed`, `service.stop.failed`, `service.schedule.failed`,
 `backup.failed`, `restore.failed`, `restore.drill.failed`,
 `database.migration.failed`, `network.provision.failed`,
-`network.delete.failed`, `template.sync.failed`, `agent.upgrade.failed`,
+`network.delete.failed`, `resource.delete.failed`, `template.sync.failed`, `agent.upgrade.failed`,
 `audit.archive.failed`, `ai.audit.failed`, and
 `ai.finding.critical`. Offline named-volume failures use `restore.failed` and
 include `mode`, `serviceId`, `volumeName`, and the snapshotted

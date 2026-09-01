@@ -214,6 +214,89 @@ func TestManagedNetworkFailuresUseDedicatedEvents(t *testing.T) {
 	}
 }
 
+func TestDeletionFinalizerFailuresUseDedicatedTenantEvent(t *testing.T) {
+	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DOCKYARD_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Pool.Close)
+	organizationID, projectID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	serviceID, databaseID, clusterID, endpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Finalizer notifications',$2)`, []any{organizationID, "finalizer-notifications-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug,deletion_requested_at) VALUES($1,$2,'Project','project',now())`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug,deletion_requested_at) VALUES($1,$2,'Production','production',now())`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,deletion_requested_at) VALUES($1,$2,'App','app',$3,'services: {}',now())`, []any{serviceID, environmentID, "finalizer-" + serviceID.String()}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,management_kind,connection_service_name,encrypted_credentials,compose_service_id,deletion_requested_at) VALUES($1,$2,'Linked DB','linked-db','postgres','17','compose','postgres','encrypted',$3,now())`, []any{databaseID, environmentID, serviceID}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,deletion_requested_at) VALUES($1,$2,'Retired cluster','retired','disabled',now())`, []any{clusterID, organizationID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Finalizer on-call','webhook','url','secret',ARRAY['resource.delete.failed'])`, []any{endpointID, organizationID}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
+	})
+	tests := []struct {
+		kind         string
+		payloadKey   string
+		resourceID   uuid.UUID
+		resourceType string
+	}{
+		{kind: "delete.compose", payloadKey: "serviceId", resourceID: serviceID, resourceType: "compose_service"},
+		{kind: "delete.database-link", payloadKey: "databaseId", resourceID: databaseID, resourceType: "database"},
+		{kind: "delete.environment", payloadKey: "environmentId", resourceID: environmentID, resourceType: "environment"},
+		{kind: "delete.project", payloadKey: "projectId", resourceID: projectID, resourceType: "project"},
+		{kind: "delete.cluster", payloadKey: "clusterId", resourceID: clusterID, resourceType: "cluster"},
+	}
+	for _, test := range tests {
+		payload, _ := json.Marshal(map[string]string{test.payloadKey: test.resourceID.String()})
+		for range 2 {
+			if err = db.QueueFailureNotifications(ctx, test.kind, payload, errors.New("finalizer failed")); err != nil {
+				t.Fatalf("%s notification: %v", test.kind, err)
+			}
+		}
+	}
+	rows, err := db.Pool.Query(ctx, `SELECT resource_id,resource_type,payload->>'operation' FROM notification_deliveries WHERE endpoint_id=$1 AND event_type='resource.delete.failed'`, endpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[uuid.UUID]string{}
+	for rows.Next() {
+		var resourceID uuid.UUID
+		var resourceType, operation string
+		if err = rows.Scan(&resourceID, &resourceType, &operation); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		seen[resourceID] = resourceType + ":" + operation
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	for _, test := range tests {
+		if got, want := seen[test.resourceID], test.resourceType+":"+test.kind; got != want {
+			t.Fatalf("%s failure mapping=%q, want %q", test.kind, got, want)
+		}
+	}
+	var deliveries, jobs int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*),(SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1)) FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&deliveries, &jobs); err != nil || deliveries != len(tests) || jobs != len(tests) {
+		t.Fatalf("finalizer deliveries=%d jobs=%d err=%v", deliveries, jobs, err)
+	}
+}
+
 func TestFailedAIAuditsQueueTenantNotifications(t *testing.T) {
 	databaseURL := os.Getenv("DOCKYARD_TEST_DATABASE_URL")
 	if databaseURL == "" {

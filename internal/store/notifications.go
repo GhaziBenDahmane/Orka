@@ -302,6 +302,21 @@ func (s *Store) failureResource(ctx context.Context, jobKind string, rawPayload 
 	case "network.delete":
 		resourceID, resourceType, eventType = payload["networkId"], "managed_network", "network.delete.failed"
 		query = `SELECT organization_id FROM managed_networks WHERE id=$1`
+	case "delete.compose":
+		resourceID, resourceType, eventType = payload["serviceId"], "compose_service", "resource.delete.failed"
+		query = `SELECT project.organization_id FROM compose_services service JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE service.id=$1`
+	case "delete.database-link":
+		resourceID, resourceType, eventType = payload["databaseId"], "database", "resource.delete.failed"
+		query = `SELECT project.organization_id FROM database_instances database JOIN environments environment ON environment.id=database.environment_id JOIN projects project ON project.id=environment.project_id WHERE database.id=$1`
+	case "delete.environment":
+		resourceID, resourceType, eventType = payload["environmentId"], "environment", "resource.delete.failed"
+		query = `SELECT project.organization_id FROM environments environment JOIN projects project ON project.id=environment.project_id WHERE environment.id=$1`
+	case "delete.project":
+		resourceID, resourceType, eventType = payload["projectId"], "project", "resource.delete.failed"
+		query = `SELECT organization_id FROM projects WHERE id=$1`
+	case "delete.cluster":
+		resourceID, resourceType, eventType = payload["clusterId"], "cluster", "resource.delete.failed"
+		query = `SELECT organization_id FROM clusters WHERE id=$1`
 	default:
 		return "", "", "", uuid.Nil, ErrNotFound
 	}
