@@ -156,6 +156,7 @@ type Principal struct {
 	SessionID             uuid.UUID  `json:"-"`
 	SessionOrganizationID *uuid.UUID `json:"-"`
 	ServiceAccountID      *uuid.UUID `json:"serviceAccountId,omitempty"`
+	ServiceAccountTokenID *uuid.UUID `json:"-"`
 	Email                 string     `json:"email"`
 	OrganizationID        uuid.UUID  `json:"organizationId"`
 	Organization          string     `json:"organization"`
@@ -611,14 +612,15 @@ func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organization
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return Principal{}, err
 		}
-		serviceQuery := `SELECT a.id,a.name,o.id,o.name,a.role FROM service_account_tokens t JOIN service_accounts a ON a.id=t.service_account_id JOIN organizations o ON o.id=a.organization_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND a.enabled`
+		serviceQuery := `SELECT a.id,t.id,a.name,o.id,o.name,a.role FROM service_account_tokens t JOIN service_accounts a ON a.id=t.service_account_id JOIN organizations o ON o.id=a.organization_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND a.enabled`
 		serviceArgs := []any{tokenHash}
 		if organizationID != nil {
 			serviceQuery += ` AND o.id=$2`
 			serviceArgs = append(serviceArgs, *organizationID)
 		}
 		var serviceAccountID uuid.UUID
-		if err = s.Pool.QueryRow(ctx, serviceQuery, serviceArgs...).Scan(&serviceAccountID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
+		var serviceAccountTokenID uuid.UUID
+		if err = s.Pool.QueryRow(ctx, serviceQuery, serviceArgs...).Scan(&serviceAccountID, &serviceAccountTokenID, &p.Email, &p.OrganizationID, &p.Organization, &p.Role); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return Principal{}, ErrNotFound
 			}
@@ -626,6 +628,7 @@ func (s *Store) Authenticate(ctx context.Context, tokenHash []byte, organization
 		}
 		p.Email = "service-account:" + p.Email
 		p.ServiceAccountID = &serviceAccountID
+		p.ServiceAccountTokenID = &serviceAccountTokenID
 		_, _ = s.Pool.Exec(ctx, `UPDATE service_account_tokens SET last_used_at=now() WHERE token_hash=$1`, tokenHash)
 		return p, nil
 	}

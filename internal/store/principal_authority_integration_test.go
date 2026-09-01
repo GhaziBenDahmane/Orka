@@ -278,6 +278,85 @@ func TestAdministrativeMutationsRevalidateActorAuthorityAfterOrganizationLock(t 
 			_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, targetID)
 		})
 	})
+
+	t.Run("invitation after browser session revocation", func(t *testing.T) {
+		db, ctx, organizationID, _, actorID := authorityFenceFixture(t)
+		sessionID := uuid.New()
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local')`, sessionID, actorID, []byte("authority-session-"+uuid.NewString())); err != nil {
+			t.Fatal(err)
+		}
+		principal := Principal{OrganizationID: organizationID, UserID: actorID, SessionID: sessionID, Role: "admin"}
+
+		revocation, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer revocation.Rollback(ctx)
+		if err = lockPrincipalSession(ctx, revocation, principal); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = revocation.Exec(ctx, `DELETE FROM sessions WHERE id=$1`, sessionID); err != nil {
+			t.Fatal(err)
+		}
+
+		email := "revoked-session-" + uuid.NewString() + "@example.test"
+		result := make(chan error, 1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, createErr := db.CreateOrganizationInvitationWithAudit(ctx, principal, email, "viewer", []byte(uuid.NewString()), time.Now().Add(time.Hour), "127.0.0.1:1234")
+			result <- createErr
+		}()
+		<-started
+		assertAuthorityMutationBlocked(t, result)
+		if err = revocation.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertInsufficientRoleResult(t, result)
+		assertNoInvitationOrAudit(t, db, ctx, organizationID, email, "actor_user_id", actorID)
+	})
+
+	t.Run("invitation after service account token rotation", func(t *testing.T) {
+		db, ctx, organizationID, ownerID, _ := authorityFenceFixture(t)
+		accountID, tokenID := uuid.New(), uuid.New()
+		originalHash := []byte("authority-service-token-" + uuid.NewString())
+		replacementHash := []byte("authority-service-replacement-" + uuid.NewString())
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO service_accounts(id,organization_id,name,role,created_by) VALUES($1,$2,'rotating-admin','admin',$3)`, accountID, organizationID, ownerID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')`, tokenID, accountID, originalHash); err != nil {
+			t.Fatal(err)
+		}
+		principal, err := db.Authenticate(ctx, originalHash, &organizationID)
+		if err != nil || principal.ServiceAccountTokenID == nil || *principal.ServiceAccountTokenID != tokenID {
+			t.Fatalf("service-account authentication principal=%#v err=%v", principal, err)
+		}
+
+		rotation, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rotation.Rollback(ctx)
+		if err = rotateServiceAccountTokenTx(ctx, rotation, organizationID, accountID, replacementHash, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+
+		email := "rotated-service-token-" + uuid.NewString() + "@example.test"
+		result := make(chan error, 1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, createErr := db.CreateOrganizationInvitationWithAudit(ctx, principal, email, "viewer", []byte(uuid.NewString()), time.Now().Add(time.Hour), "127.0.0.1:1234")
+			result <- createErr
+		}()
+		<-started
+		assertAuthorityMutationBlocked(t, result)
+		if err = rotation.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertInsufficientRoleResult(t, result)
+		assertNoInvitationOrAudit(t, db, ctx, organizationID, email, "actor_service_account_id", accountID)
+	})
 }
 
 func authorityFenceFixture(t *testing.T) (*Store, context.Context, uuid.UUID, uuid.UUID, uuid.UUID) {
@@ -330,5 +409,20 @@ func assertNoAuthorityMutationAudit(t *testing.T, db *Store, ctx context.Context
 	var audits int
 	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action=$3`, organizationID, actorID, action).Scan(&audits); err != nil || audits != 0 {
 		t.Fatalf("rejected mutation retained audit events=%d err=%v", audits, err)
+	}
+}
+
+func assertNoInvitationOrAudit(t *testing.T, db *Store, ctx context.Context, organizationID uuid.UUID, email, actorColumn string, actorID uuid.UUID) {
+	t.Helper()
+	var invitations int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM organization_invitations WHERE organization_id=$1 AND email=$2`, organizationID, email).Scan(&invitations); err != nil || invitations != 0 {
+		t.Fatalf("revoked credential created invitations=%d err=%v", invitations, err)
+	}
+	if actorColumn != "actor_user_id" && actorColumn != "actor_service_account_id" {
+		t.Fatal("invalid audit actor column")
+	}
+	var audits int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND `+actorColumn+`=$2 AND action='invitation.create'`, organizationID, actorID).Scan(&audits); err != nil || audits != 0 {
+		t.Fatalf("revoked credential retained audit events=%d err=%v", audits, err)
 	}
 }

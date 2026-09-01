@@ -219,6 +219,12 @@ func (s *Store) RevokeOtherSessionsWithAudit(ctx context.Context, principal Prin
 }
 
 func lockPrincipalSession(ctx context.Context, tx pgx.Tx, principal Principal) error {
+	var organizationID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, principal.OrganizationID).Scan(&organizationID); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
 	var exists bool
 	err := tx.QueryRow(ctx, `SELECT true
 		FROM sessions session

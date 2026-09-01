@@ -37,6 +37,16 @@ func lockOrganizationAndRequirePrincipalRole(ctx context.Context, tx pgx.Tx, pri
 		if err != nil {
 			return "", err
 		}
+		if principal.ServiceAccountTokenID != nil {
+			var tokenID uuid.UUID
+			err = tx.QueryRow(ctx, `SELECT id FROM service_account_tokens WHERE id=$1 AND service_account_id=$2 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, *principal.ServiceAccountTokenID, *principal.ServiceAccountID).Scan(&tokenID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", ErrInsufficientRole
+			}
+			if err != nil {
+				return "", err
+			}
+		}
 	} else {
 		if principal.UserID == uuid.Nil {
 			return "", ErrInsufficientRole
@@ -51,6 +61,16 @@ func lockOrganizationAndRequirePrincipalRole(ctx context.Context, tx pgx.Tx, pri
 		}
 		if err != nil {
 			return "", err
+		}
+		if principal.SessionID != uuid.Nil {
+			var sessionID uuid.UUID
+			err = tx.QueryRow(ctx, `SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND expires_at>now() AND (organization_id IS NULL OR organization_id=$3) FOR UPDATE`, principal.SessionID, principal.UserID, principal.OrganizationID).Scan(&sessionID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", ErrInsufficientRole
+			}
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	if organizationRoleRank(role) < minimumRank {
