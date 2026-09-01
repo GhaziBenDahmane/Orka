@@ -173,7 +173,10 @@ links for every item below.
   Retries of one operation remain idempotent while distinct failed operations
   against the same resource each produce a delivery.
   Exhausted commit-status callback retries resolve through the deployment and
-  notify only its tenant.
+  notify only its tenant. Their history and audited redrive are also exercised
+  through the real administrator API, including viewer denial, cross-tenant
+  concealment, immutable callback identity, concurrency fencing, secret
+  redaction, Prometheus signals, and deterministic AI findings.
   Exhausted notification deliveries are listed without payloads, endpoint
   secrets, or raw transport errors, cannot be retried across tenants or through disabled destinations,
   and an audited concurrent redrive creates exactly one active job while

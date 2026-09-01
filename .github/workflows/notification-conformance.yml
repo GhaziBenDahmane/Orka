@@ -29,6 +29,8 @@ jobs:
             .atomicTerminalOutbox and .operationScopedDeduplication and
             .edgeCertificateFailureFanout and .commitStatusFailureNotification and
             .auditedDeliveryRedrive and .exhaustedDeliverySignals and .httpAPIContract and
+            .commitStatusAuditedRedrive and .commitStatusExhaustedSignals and
+            .commitStatusHTTPAPIContract and
             .deliveries == 6 and .jobAttempts == 7
           ' notification-conformance.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
