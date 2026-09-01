@@ -160,6 +160,26 @@ content = "API_TOKEN=${api_token} PASSWORD=${password}"
 	if status != http.StatusBadRequest {
 		t.Fatalf("invalid template cursor status = %d", status)
 	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates?query=VARIABLE-TEST", viewerToken, orgID, http.MethodGet, nil)
+	var searchPage struct {
+		Items      []store.Template `json:"items"`
+		NextCursor string           `json:"nextCursor"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &searchPage) != nil || len(searchPage.Items) != 1 || searchPage.Items[0].ID != orgTemplate.ID {
+		t.Fatalf("template key search status = %d: %s", status, body)
+	}
+	status, body = scopedAPIRequest(t, server.URL+"/v1/templates?limit=1&query=test", viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusOK || json.Unmarshal(body, &searchPage) != nil || len(searchPage.Items) != 1 || searchPage.NextCursor == "" {
+		t.Fatalf("template search first page status = %d: %s", status, body)
+	}
+	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates?limit=1&query=other&cursor="+searchPage.NextCursor, viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("template cursor accepted under a different query: status = %d", status)
+	}
+	status, _ = scopedAPIRequest(t, server.URL+"/v1/templates?query="+strings.Repeat("x", 201), viewerToken, orgID, http.MethodGet, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("oversized template search status = %d", status)
+	}
 	status, body = scopedAPIRequest(t, server.URL+"/v1/templates/"+restrictedTemplate.ID.String()+"/preview", viewerToken, orgID, http.MethodPost, map[string]any{})
 	if status != http.StatusBadRequest || !bytes.Contains(body, []byte("privileged")) {
 		t.Fatalf("restricted template preview status = %d: %s", status, body)

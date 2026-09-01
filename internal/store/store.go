@@ -4054,6 +4054,13 @@ func (s *Store) UpsertGlobalTemplates(ctx context.Context, items []Template) err
 }
 
 func (s *Store) ListTemplatesPage(ctx context.Context, organizationID uuid.UUID, after *TemplatePageCursor, limit int) ([]Template, bool, error) {
+	return s.SearchTemplatesPage(ctx, organizationID, "", after, limit)
+}
+
+// SearchTemplatesPage searches the complete catalog rather than only a page
+// already loaded by a client. The key is included so repository namespaces are
+// discoverable without exposing repository records to non-administrators.
+func (s *Store) SearchTemplatesPage(ctx context.Context, organizationID uuid.UUID, search string, after *TemplatePageCursor, limit int) ([]Template, bool, error) {
 	if limit < 1 || limit > 200 {
 		return nil, false, errors.New("template page limit must be between 1 and 200")
 	}
@@ -4061,9 +4068,15 @@ func (s *Store) ListTemplatesPage(ctx context.Context, organizationID uuid.UUID,
 		FROM templates
 		WHERE (organization_id IS NULL OR organization_id=$1)`
 	args := []any{organizationID}
+	if search != "" {
+		args = append(args, strings.ToLower(search))
+		placeholder := fmt.Sprintf("$%d", len(args))
+		query += ` AND (strpos(lower(name),` + placeholder + `)>0 OR strpos(lower(description),` + placeholder + `)>0 OR strpos(lower(template_key),` + placeholder + `)>0)`
+	}
 	if after != nil {
-		query += ` AND (name>$2 OR (name=$2 AND version<$3) OR (name=$2 AND version=$3 AND id>$4))`
 		args = append(args, after.Name, after.Version, after.ID)
+		name, version, id := len(args)-2, len(args)-1, len(args)
+		query += fmt.Sprintf(` AND (name>$%d OR (name=$%d AND version<$%d) OR (name=$%d AND version=$%d AND id>$%d))`, name, name, version, name, version, id)
 	}
 	args = append(args, limit+1)
 	query += fmt.Sprintf(` ORDER BY name,version DESC,id LIMIT $%d`, len(args))

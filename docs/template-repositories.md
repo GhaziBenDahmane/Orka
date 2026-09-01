@@ -165,7 +165,9 @@ GET    /v1/templates
 
 The catalog endpoint returns at most 100 entries by default (200 maximum).
 Pass its opaque `nextCursor` back as `?cursor=...`; an empty cursor means the
-catalog is exhausted. Ordering is stable by name, descending version, and ID.
+catalog is exhausted. Use `?query=...` to search the complete visible catalog
+by name, description, or namespaced key; subsequent pages must repeat the same
+query. Ordering is stable by name, descending version, and ID.
 
 Set `credentialId` on `POST` or `PATCH` to the ID returned when creating a
 `git` source credential for `github.com`. Omit it or send an empty string for a

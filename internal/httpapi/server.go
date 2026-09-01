@@ -1772,6 +1772,13 @@ func (s *Server) getDatabaseRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
+	search := strings.TrimSpace(r.URL.Query().Get("query"))
+	if len(search) > 200 || !utf8.ValidString(search) || strings.IndexFunc(search, func(char rune) bool {
+		return unicode.IsControl(char) || unicode.In(char, unicode.Cf, unicode.Zl, unicode.Zp)
+	}) >= 0 {
+		writeError(w, 400, "invalid_search", "template query must be at most 200 bytes of UTF-8 text without control or formatting characters")
+		return
+	}
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -1792,14 +1799,15 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 			Name    string    `json:"n"`
 			Version string    `json:"v"`
 			ID      uuid.UUID `json:"i"`
+			Query   string    `json:"q,omitempty"`
 		}
-		if err != nil || json.Unmarshal(decoded, &payload) != nil || payload.Name == "" || payload.Version == "" || payload.ID == uuid.Nil {
+		if err != nil || json.Unmarshal(decoded, &payload) != nil || payload.Name == "" || payload.Version == "" || payload.ID == uuid.Nil || payload.Query != search {
 			writeError(w, 400, "invalid_cursor", "template cursor is invalid")
 			return
 		}
 		cursor = &store.TemplatePageCursor{Name: payload.Name, Version: payload.Version, ID: payload.ID}
 	}
-	items, hasMore, err := s.Store.ListTemplatesPage(r.Context(), principal(r).OrganizationID, cursor, limit)
+	items, hasMore, err := s.Store.SearchTemplatesPage(r.Context(), principal(r).OrganizationID, search, cursor, limit)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1840,7 +1848,8 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 			Name    string    `json:"n"`
 			Version string    `json:"v"`
 			ID      uuid.UUID `json:"i"`
-		}{Name: last.Name, Version: last.Version, ID: last.ID})
+			Query   string    `json:"q,omitempty"`
+		}{Name: last.Name, Version: last.Version, ID: last.ID, Query: search})
 		if marshalErr != nil {
 			s.writeInternalError(w, r, 500, "cursor_failed", "template page cursor could not be created", marshalErr)
 			return

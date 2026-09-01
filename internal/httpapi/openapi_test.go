@@ -200,7 +200,7 @@ func TestOpenAPIDocumentsTemplatePagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(specification)
-	for _, expected := range []string{"#/components/schemas/TemplateCatalogPage", "name: cursor", "maximum: 200", "required: [items, nextCursor]"} {
+	for _, expected := range []string{"#/components/schemas/TemplateCatalogPage", "name: cursor", "name: query", "Case-insensitive search across template name, description, and namespaced key.", "maximum: 200", "required: [items, nextCursor]"} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("OpenAPI is missing %q", expected)
 		}

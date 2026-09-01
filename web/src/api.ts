@@ -212,7 +212,7 @@ export const api = {
   restoreVolumeBackup: (backupId: string, confirm: string, offline = false) => request<VolumeRestore>(`/v1/volume-backups/${backupId}/restore`, { method: "POST", body: JSON.stringify({ confirm, offline }) }),
   volumeRestore: (restoreId: string) => request<VolumeRestore>(`/v1/volume-restores/${restoreId}`),
   cancelVolumeRestore: (restoreId: string) => request<{ status: string }>(`/v1/volume-restores/${restoreId}/cancel`, { method: "POST", body: "{}" }),
-  templates: (cursor = "") => request<PaginatedEnvelope<Template>>(`/v1/templates?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`),
+  templates: (cursor = "", query = "") => request<PaginatedEnvelope<Template>>(`/v1/templates?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${query.trim() ? `&query=${encodeURIComponent(query.trim())}` : ""}`),
   templateRepositories: () => request<Envelope<TemplateRepository>>("/v1/template-repositories"),
   createTemplateRepository: (body: { name: string; slug: string; repositoryUrl: string; gitRef: string; catalogPath: string; trustedPublicKey: string; requireSignature: boolean; credentialId: string; syncIntervalSeconds: number }) => request<TemplateRepository>("/v1/template-repositories", { method: "POST", body: JSON.stringify(body) }),
   updateTemplateRepository: (id: string, body: { trustedPublicKey: string; requireSignature: boolean; credentialId: string; syncIntervalSeconds: number }) => request<void>(`/v1/template-repositories/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
