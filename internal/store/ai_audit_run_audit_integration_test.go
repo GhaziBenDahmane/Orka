@@ -81,6 +81,22 @@ func TestAIAuditRunLifecycleCommitsWithServiceAccountAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAIAuditRunState(t, pool, ctx, completed.ID, "completed", "no findings", true)
+	stale, err := db.CreateLeasedAIAuditRunWithAudit(ctx, principal, "lease-recovery", "v1", "test", scope, time.Minute, "127.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ai_audit_runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1`, stale.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := db.CreateAIAuditRunWithAudit(ctx, principal, "lease-recovery", "v2", "test", scope, "127.0.0.1:1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAIAuditRunState(t, pool, ctx, stale.ID, "failed", "audit run lease expired before completion", true)
+	if err = db.FinishAIAuditRunWithAudit(ctx, principal, replacement.ID, "completed", "recovered", "127.0.0.1:1234"); err != nil {
+		t.Fatal(err)
+	}
+	assertAIAuditNotificationCounts(t, pool, ctx, organizationID, 2, 2)
 
 	var starts, failures, completions int
 	if err = pool.QueryRow(ctx, `SELECT
@@ -91,7 +107,7 @@ func TestAIAuditRunLifecycleCommitsWithServiceAccountAudit(t *testing.T) {
 		WHERE organization_id=$1 AND actor_service_account_id=$2 AND actor_user_id IS NULL`, organizationID, account.ID).Scan(&starts, &failures, &completions); err != nil {
 		t.Fatal(err)
 	}
-	if starts != 2 || failures != 1 || completions != 1 {
+	if starts != 4 || failures != 2 || completions != 2 {
 		t.Fatalf("AI audit evidence counts: starts=%d failures=%d completions=%d", starts, failures, completions)
 	}
 }

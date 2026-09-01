@@ -80,8 +80,8 @@ func runAIAuditor(arguments []string) error {
 		return errors.New("DOCKYARD_AI_AUDIT_RETRY_INTERVAL must be at least one minute and no longer than DOCKYARD_AI_AUDIT_INTERVAL")
 	}
 	timeout, err := time.ParseDuration(envDefault("DOCKYARD_AI_AUDIT_TIMEOUT", "10m"))
-	if err != nil || timeout < time.Minute {
-		return errors.New("DOCKYARD_AI_AUDIT_TIMEOUT must be at least one minute")
+	if err != nil || timeout < time.Minute || timeout > 23*time.Hour {
+		return errors.New("DOCKYARD_AI_AUDIT_TIMEOUT must be between one minute and 23 hours")
 	}
 	controlPlaneURL, err := normalizedAuditorEndpoint("DOCKYARD_CONTROL_PLANE_URL", os.Getenv("DOCKYARD_CONTROL_PLANE_URL"), false)
 	if err != nil {
@@ -294,7 +294,8 @@ func performAIAudit(ctx context.Context, client *http.Client, cfg auditorConfig)
 	var run struct {
 		ID string `json:"id"`
 	}
-	if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs", map[string]any{"agentName": cfg.AgentName, "agentVersion": cfg.AgentVersion, "model": cfg.Model, "scope": map[string]any{"kind": "platform", "focus": cfg.Focus, "snapshotChunks": len(modelChunks)}}, &run); err != nil {
+	leaseSeconds := int64((cfg.Timeout + 30*time.Second + time.Second - 1) / time.Second)
+	if err := auditorRequest(ctx, client, cfg, http.MethodPost, "/v1/ai/audit-runs", map[string]any{"agentName": cfg.AgentName, "agentVersion": cfg.AgentVersion, "model": cfg.Model, "leaseSeconds": leaseSeconds, "scope": map[string]any{"kind": "platform", "focus": cfg.Focus, "snapshotChunks": len(modelChunks)}}, &run); err != nil {
 		return err
 	}
 	finalized := false

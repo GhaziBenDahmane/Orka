@@ -273,6 +273,12 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.CreateAIAuditRun(ctx, organizationID, account.ID, "reliability", "v2", "test", json.RawMessage(`{"kind":"platform"}`)); !errors.Is(err, ErrAIAuditRunActive) {
+		t.Fatalf("overlapping audit error=%v, want ErrAIAuditRunActive", err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE ai_audit_runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1`, previous.ID); err != nil {
+		t.Fatal(err)
+	}
 	replacementRun, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "reliability", "v2", "test", json.RawMessage(`{"kind":"platform"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +288,7 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT status,summary,completed_at FROM ai_audit_runs WHERE id=$1`, previous.ID).Scan(&previousStatus, &previousSummary, &previousCompletedAt); err != nil {
 		t.Fatal(err)
 	}
-	if previousStatus != "failed" || previousCompletedAt == nil || previousSummary != "superseded by a newer run for the same auditor identity" {
+	if previousStatus != "failed" || previousCompletedAt == nil || previousSummary != "audit run lease expired before completion" {
 		t.Fatalf("superseded run status=%q summary=%q completed=%v", previousStatus, previousSummary, previousCompletedAt)
 	}
 	parallelRun, err := db.CreateAIAuditRun(ctx, organizationID, account.ID, "security", "v2", "test", json.RawMessage(`{"kind":"platform"}`))

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
 	"github.com/GhaziBenDahmane/Orka/internal/store"
@@ -69,6 +70,7 @@ func (s *Server) createAIAuditRun(w http.ResponseWriter, r *http.Request) {
 		AgentVersion string          `json:"agentVersion"`
 		Model        string          `json:"model"`
 		Scope        json.RawMessage `json:"scope"`
+		LeaseSeconds int             `json:"leaseSeconds"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -79,12 +81,15 @@ func (s *Server) createAIAuditRun(w http.ResponseWriter, r *http.Request) {
 	if len(in.Scope) == 0 {
 		in.Scope = json.RawMessage(`{}`)
 	}
-	if !validDisplayLabel(in.AgentName, 120) || len(in.AgentVersion) > 200 || len(in.Model) > 300 || !validAuditObject(in.Scope, 64<<10) {
+	if in.LeaseSeconds == 0 {
+		in.LeaseSeconds = int(store.DefaultAIAuditRunLease / time.Second)
+	}
+	if !validDisplayLabel(in.AgentName, 120) || len(in.AgentVersion) > 200 || len(in.Model) > 300 || !validAuditObject(in.Scope, 64<<10) || in.LeaseSeconds < 60 || in.LeaseSeconds > 24*60*60 {
 		writeError(w, 400, "invalid_audit_run", "audit run metadata is invalid or exceeds safety limits")
 		return
 	}
 	p := principal(r)
-	item, err := s.Store.CreateAIAuditRunWithAudit(r.Context(), p, in.AgentName, in.AgentVersion, in.Model, in.Scope, r.RemoteAddr)
+	item, err := s.Store.CreateLeasedAIAuditRunWithAudit(r.Context(), p, in.AgentName, in.AgentVersion, in.Model, in.Scope, time.Duration(in.LeaseSeconds)*time.Second, r.RemoteAddr)
 	if err != nil {
 		writeStoreError(w, err)
 		return

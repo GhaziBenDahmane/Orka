@@ -20,6 +20,7 @@ func TestWriteStoreErrorClassifiesRemoteClusterAvailability(t *testing.T) {
 		{name: "partitioned", err: store.ErrClusterUnavailable, status: http.StatusServiceUnavailable, code: "cluster_unavailable", retryAfter: "30"},
 		{name: "capacity", err: store.ErrNoCapacity, status: http.StatusConflict, code: "no_cluster_capacity"},
 		{name: "AI finding limit", err: store.ErrAIAuditFindingLimit, status: http.StatusConflict, code: "ai_audit_finding_limit"},
+		{name: "AI audit active", err: store.ErrAIAuditRunActive, status: http.StatusConflict, code: "ai_audit_run_active", retryAfter: "60"},
 		{name: "rollback unavailable", err: store.ErrRollbackUnavailable, status: http.StatusConflict, code: "rollback_unavailable"},
 		{name: "SSO provider required", err: store.ErrSSOProviderRequired, status: http.StatusConflict, code: "sso_provider_required"},
 		{name: "stale authority", err: store.ErrInsufficientRole, status: http.StatusForbidden, code: "forbidden"},

@@ -20,6 +20,7 @@ import (
 func TestPerformAIAuditLifecycle(t *testing.T) {
 	var mutex sync.Mutex
 	paths := []string{}
+	leaseSeconds := 0
 	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer auditor-token" {
 			t.Errorf("missing auditor token")
@@ -31,6 +32,13 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 		case "/v1/ai/audit-snapshot":
 			_ = json.NewEncoder(w).Encode(map[string]any{"projects": []any{}, "identityPosture": map[string]any{"requireSso": true, "activeOwners": 1}, "notificationPosture": fullyCoveredNotifications()})
 		case "/v1/ai/audit-runs":
+			var input struct {
+				LeaseSeconds int `json:"leaseSeconds"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Error(err)
+			}
+			leaseSeconds = input.LeaseSeconds
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]string{"id": "00000000-0000-0000-0000-000000000001"})
 		default:
@@ -60,7 +68,7 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"healthy","findings":[{"severity":"low","category":"capacity","title":"No projects","description":"Inventory is empty","resourceType":"organization","resourceId":"org","evidence":{},"remediation":"Create a project"}]}`}}}})
 	}))
 	defer model.Close()
-	cfg := auditorConfig{DockyardURL: platform.URL, DockyardToken: "auditor-token", ModelURL: model.URL + "/v1", Model: "test", AgentName: "test-agent", Focus: "capacity", Interval: time.Hour}
+	cfg := auditorConfig{DockyardURL: platform.URL, DockyardToken: "auditor-token", ModelURL: model.URL + "/v1", Model: "test", AgentName: "test-agent", Focus: "capacity", Interval: time.Hour, Timeout: 2 * time.Minute}
 	if err := performAIAudit(context.Background(), &http.Client{Timeout: time.Second}, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +80,9 @@ func TestPerformAIAuditLifecycle(t *testing.T) {
 		if paths[i] != want[i] {
 			t.Fatalf("paths=%v", paths)
 		}
+	}
+	if leaseSeconds != 150 {
+		t.Fatalf("leaseSeconds=%d, want 150", leaseSeconds)
 	}
 }
 

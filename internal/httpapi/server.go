@@ -3352,6 +3352,11 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "ai_audit_finding_limit", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrAIAuditRunActive) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusConflict, "ai_audit_run_active", err.Error())
+		return
+	}
 	if errors.Is(err, store.ErrRollbackUnavailable) {
 		writeError(w, http.StatusConflict, "rollback_unavailable", err.Error())
 		return

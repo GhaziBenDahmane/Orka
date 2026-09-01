@@ -476,6 +476,9 @@ func TestFailedAIAuditsQueueTenantNotifications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE ai_audit_runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1`, orphanedRun.ID); err != nil {
+		t.Fatal(err)
+	}
 	replacementRun, err := db.CreateAIAuditRun(ctx, organizationID, accountID, "reliability", "v2", "test", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)

@@ -396,9 +396,12 @@ Headroom are intentionally absent from
 reaching the model gateway directly. Separate replicas can use different
 `DOCKYARD_AI_AGENT_NAME` and `DOCKYARD_AI_AUDIT_FOCUS` values. The supplied manifest runs security and reliability specialists daily
 and limits each complete audit lifecycle to ten minutes with
-`DOCKYARD_AI_AUDIT_TIMEOUT`. A replacement process with the same service
-account and agent name marks its predecessor failed before starting, while
-different named specialists remain independent.
+`DOCKYARD_AI_AUDIT_TIMEOUT`. Every run receives a server-enforced lease thirty
+seconds longer than that timeout. A second process with the same service
+account and agent name receives `409 ai_audit_run_active` while the lease is
+fresh; after expiry, exactly one contender atomically marks the abandoned run
+failed and starts its replacement. Late findings or completion from the old
+run are rejected. Different named specialists remain independent.
 The overlay also applies configurable CPU and memory reservations and limits
 to 9Router, Headroom, and both auditor services. Override the corresponding
 `NINEROUTER_*`, `HEADROOM_*`, or `DOCKYARD_AI_AUDITOR_*` resource variables
@@ -452,7 +455,10 @@ to record failures and retries on its configured interval.
 1. Fetch `GET /v1/ai/audit-snapshot`. Third-party agents should partition
    large model prompts while retaining complete deterministic coverage; the
    built-in runner uses 512 KiB chunks and permits at most 64.
-2. Create `POST /v1/ai/audit-runs` with identity, model, and scope metadata.
+2. Create `POST /v1/ai/audit-runs` with identity, model, scope metadata, and a
+   `leaseSeconds` value from 60 through 86400. If omitted, the lease defaults
+   to fifteen minutes. Retry a `409 ai_audit_run_active` response after its
+   `Retry-After` delay; do not replace a healthy run.
 3. Submit normalized findings to
    `POST /v1/ai/audit-runs/{runID}/findings`.
 4. Mark the run `completed` or `failed` with

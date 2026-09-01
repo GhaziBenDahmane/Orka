@@ -537,7 +537,7 @@ func TestMigrateUpgradeFrom034PreservesResources(t *testing.T) {
 			t.Errorf("expected upgraded table %s: exists=%v err=%v", table, exists, err)
 		}
 	}
-	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql", "115_database_utility_image_evidence.sql", "116_backup_artifact_validity.sql"} {
+	for _, version := range []string{"035_commit_statuses.sql", "041_dokploy_migration_metadata.sql", "046_oidc_nonce.sql", "047_application_build_settings.sql", "048_application_build_types.sql", "049_nixpacks_builds.sql", "050_railpack_builds.sql", "051_buildpack_builds.sql", "052_application_artifacts.sql", "053_custom_buildpack_builders.sql", "054_database_migrations.sql", "055_cluster_database_transfers.sql", "056_database_operation_serialization.sql", "057_preserve_cancelled_database_jobs.sql", "067_service_reconciliation.sql", "074_pending_agent_certificate_rotation.sql", "075_ai_audit_observability.sql", "076_ai_audit_single_flight.sql", "077_saml_certificate_rotation.sql", "081_database_storage_node.sql", "082_volume_artifact_command.sql", "086_template_repository_sync_started.sql", "093_scim_user_external_ids.sql", "094_scim_resource_versions.sql", "098_deployment_registry_credentials.sql", "099_user_totp_mfa.sql", "112_ai_audit_account_history_index.sql", "113_federated_session_provider.sql", "114_sso_provider_revisions.sql", "115_database_utility_image_evidence.sql", "116_backup_artifact_validity.sql", "125_ai_audit_run_leases.sql"} {
 		var checksum string
 		if err := pool.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version=$1`, version).Scan(&checksum); err != nil || checksum == "" {
 			t.Errorf("migration %s lacks checksum: %q err=%v", version, checksum, err)
@@ -660,9 +660,16 @@ func TestMigrateAIAuditSingleFlightReconcilesExistingRuns(t *testing.T) {
 	if olderStatus != "failed" || newerStatus != "running" {
 		t.Fatalf("migration statuses older=%q newer=%q", olderStatus, newerStatus)
 	}
+	var leaseSeconds float64
+	if err := pool.QueryRow(ctx, `SELECT extract(epoch FROM lease_expires_at-started_at) FROM ai_audit_runs WHERE id=$1`, newerID).Scan(&leaseSeconds); err != nil || leaseSeconds != 900 {
+		t.Fatalf("migrated active lease seconds=%v err=%v", leaseSeconds, err)
+	}
 	var indexExists bool
 	if err := pool.QueryRow(ctx, `SELECT to_regclass('ai_audit_runs_active_agent_idx') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
 		t.Fatalf("single-flight index exists=%v err=%v", indexExists, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('ai_audit_runs_running_lease_idx') IS NOT NULL`).Scan(&indexExists); err != nil || !indexExists {
+		t.Fatalf("lease recovery index exists=%v err=%v", indexExists, err)
 	}
 }
 

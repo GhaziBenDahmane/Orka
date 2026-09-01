@@ -22,7 +22,10 @@ import (
 
 const MaxAIAuditFindingsPerRun = 100
 
+const DefaultAIAuditRunLease = 15 * time.Minute
+
 var ErrAIAuditFindingLimit = errors.New("AI audit run finding limit reached")
+var ErrAIAuditRunActive = errors.New("an AI audit run is already active for this auditor identity")
 
 var aiAuditGitCommit = regexp.MustCompile(`^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$`)
 
@@ -1951,6 +1954,7 @@ type AIAuditRun struct {
 	Scope            json.RawMessage `json:"scope"`
 	Summary          string          `json:"summary"`
 	StartedAt        time.Time       `json:"startedAt"`
+	LeaseExpiresAt   time.Time       `json:"leaseExpiresAt"`
 	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
 }
 
@@ -1979,12 +1983,16 @@ type AIAuditFinding struct {
 }
 
 func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage) (AIAuditRun, error) {
+	return s.CreateLeasedAIAuditRun(ctx, organizationID, accountID, agentName, agentVersion, model, scope, DefaultAIAuditRunLease)
+}
+
+func (s *Store) CreateLeasedAIAuditRun(ctx context.Context, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage, leaseDuration time.Duration) (AIAuditRun, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return AIAuditRun{}, err
 	}
 	defer tx.Rollback(ctx)
-	item, err := createAIAuditRunTx(ctx, tx, organizationID, accountID, agentName, agentVersion, model, scope)
+	item, err := createAIAuditRunTx(ctx, tx, organizationID, accountID, agentName, agentVersion, model, scope, leaseDuration)
 	if err != nil {
 		return AIAuditRun{}, err
 	}
@@ -1992,6 +2000,10 @@ func (s *Store) CreateAIAuditRun(ctx context.Context, organizationID, accountID 
 }
 
 func (s *Store) CreateAIAuditRunWithAudit(ctx context.Context, principal Principal, agentName, agentVersion, model string, scope json.RawMessage, remoteAddr string) (AIAuditRun, error) {
+	return s.CreateLeasedAIAuditRunWithAudit(ctx, principal, agentName, agentVersion, model, scope, DefaultAIAuditRunLease, remoteAddr)
+}
+
+func (s *Store) CreateLeasedAIAuditRunWithAudit(ctx context.Context, principal Principal, agentName, agentVersion, model string, scope json.RawMessage, leaseDuration time.Duration, remoteAddr string) (AIAuditRun, error) {
 	if principal.ServiceAccountID == nil || principal.ServiceAccountTokenID == nil || principal.Role != "auditor" {
 		return AIAuditRun{}, ErrInsufficientRole
 	}
@@ -2003,9 +2015,14 @@ func (s *Store) CreateAIAuditRunWithAudit(ctx context.Context, principal Princip
 	if err = lockAuthenticatedPrincipalCredential(ctx, tx, principal); err != nil {
 		return AIAuditRun{}, err
 	}
-	item, err := createAIAuditRunTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, agentName, agentVersion, model, scope)
+	item, expiredRunIDs, err := createAIAuditRunWithRecoveryTx(ctx, tx, principal.OrganizationID, *principal.ServiceAccountID, agentName, agentVersion, model, scope, leaseDuration)
 	if err != nil {
 		return AIAuditRun{}, err
+	}
+	for _, expiredRunID := range expiredRunIDs {
+		if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "ai_audit.failed", "ai_audit_run", expiredRunID.String(), remoteAddr, map[string]any{"reason": "lease_expired"}); err != nil {
+			return AIAuditRun{}, err
+		}
 	}
 	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "ai_audit.start", "ai_audit_run", item.ID.String(), remoteAddr, nil); err != nil {
 		return AIAuditRun{}, err
@@ -2013,48 +2030,64 @@ func (s *Store) CreateAIAuditRunWithAudit(ctx context.Context, principal Princip
 	return item, tx.Commit(ctx)
 }
 
-func createAIAuditRunTx(ctx context.Context, tx pgx.Tx, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage) (AIAuditRun, error) {
+func createAIAuditRunTx(ctx context.Context, tx pgx.Tx, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage, leaseDuration time.Duration) (AIAuditRun, error) {
+	item, _, err := createAIAuditRunWithRecoveryTx(ctx, tx, organizationID, accountID, agentName, agentVersion, model, scope, leaseDuration)
+	return item, err
+}
+
+func createAIAuditRunWithRecoveryTx(ctx context.Context, tx pgx.Tx, organizationID, accountID uuid.UUID, agentName, agentVersion, model string, scope json.RawMessage, leaseDuration time.Duration) (AIAuditRun, []uuid.UUID, error) {
 	if len(scope) == 0 {
 		scope = json.RawMessage(`{}`)
+	}
+	if leaseDuration < time.Minute || leaseDuration > 24*time.Hour {
+		return AIAuditRun{}, nil, errors.New("AI audit run lease must be between one minute and 24 hours")
 	}
 	var accountOrganizationID uuid.UUID
 	err := tx.QueryRow(ctx, `SELECT organization_id FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled AND role='auditor' FOR UPDATE`, accountID, organizationID).Scan(&accountOrganizationID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return AIAuditRun{}, ErrNotFound
+		return AIAuditRun{}, nil, ErrNotFound
 	}
 	if err != nil {
-		return AIAuditRun{}, err
+		return AIAuditRun{}, nil, err
 	}
-	const supersededSummary = "superseded by a newer run for the same auditor identity"
-	rows, err := tx.Query(ctx, `UPDATE ai_audit_runs SET status='failed',summary=$3,completed_at=now() WHERE service_account_id=$1 AND agent_name=$2 AND status='running' RETURNING id`, accountID, agentName, supersededSummary)
+	var activeRunID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM ai_audit_runs WHERE service_account_id=$1 AND agent_name=$2 AND status='running' AND lease_expires_at>now()`, accountID, agentName).Scan(&activeRunID)
+	if err == nil {
+		return AIAuditRun{}, nil, ErrAIAuditRunActive
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return AIAuditRun{}, nil, err
+	}
+	const expiredSummary = "audit run lease expired before completion"
+	rows, err := tx.Query(ctx, `UPDATE ai_audit_runs SET status='failed',summary=$3,completed_at=now() WHERE service_account_id=$1 AND agent_name=$2 AND status='running' AND lease_expires_at<=now() RETURNING id`, accountID, agentName, expiredSummary)
 	if err != nil {
-		return AIAuditRun{}, err
+		return AIAuditRun{}, nil, err
 	}
-	var supersededIDs []uuid.UUID
+	var expiredIDs []uuid.UUID
 	for rows.Next() {
-		var supersededID uuid.UUID
-		if err = rows.Scan(&supersededID); err != nil {
+		var expiredID uuid.UUID
+		if err = rows.Scan(&expiredID); err != nil {
 			rows.Close()
-			return AIAuditRun{}, err
+			return AIAuditRun{}, nil, err
 		}
-		supersededIDs = append(supersededIDs, supersededID)
+		expiredIDs = append(expiredIDs, expiredID)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
-		return AIAuditRun{}, err
+		return AIAuditRun{}, nil, err
 	}
 	rows.Close()
-	for _, supersededID := range supersededIDs {
-		if err = queueAIAuditFailureNotifications(ctx, tx, organizationID, supersededID, agentName, supersededSummary); err != nil {
-			return AIAuditRun{}, err
+	for _, expiredID := range expiredIDs {
+		if err = queueAIAuditFailureNotifications(ctx, tx, organizationID, expiredID, agentName, expiredSummary); err != nil {
+			return AIAuditRun{}, nil, err
 		}
 	}
 	item := AIAuditRun{ID: uuid.New(), OrganizationID: organizationID, ServiceAccountID: accountID, AgentName: agentName, AgentVersion: agentVersion, Model: model, Status: "running", Scope: scope}
-	err = tx.QueryRow(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,agent_version,model,scope) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING started_at`, item.ID, accountOrganizationID, accountID, agentName, agentVersion, model, scope).Scan(&item.StartedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO ai_audit_runs(id,organization_id,service_account_id,agent_name,agent_version,model,scope,lease_expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+($8::bigint * interval '1 millisecond')) RETURNING started_at,lease_expires_at`, item.ID, accountOrganizationID, accountID, agentName, agentVersion, model, scope, leaseDuration.Milliseconds()).Scan(&item.StartedAt, &item.LeaseExpiresAt)
 	if err != nil {
-		return AIAuditRun{}, err
+		return AIAuditRun{}, nil, err
 	}
-	return item, nil
+	return item, expiredIDs, nil
 }
 
 func (s *Store) AddAIAuditFinding(ctx context.Context, organizationID, accountID uuid.UUID, item AIAuditFinding) (AIAuditFinding, error) {
@@ -2215,12 +2248,12 @@ func queueAIAuditFailureNotifications(ctx context.Context, tx pgx.Tx, organizati
 }
 
 func (s *Store) ListAIAuditRuns(ctx context.Context, organizationID uuid.UUID) ([]AIAuditRun, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,service_account_id,agent_name,agent_version,model,status,scope,summary,started_at,completed_at FROM ai_audit_runs WHERE organization_id=$1 ORDER BY started_at DESC LIMIT 200`, organizationID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,service_account_id,agent_name,agent_version,model,status,scope,summary,started_at,lease_expires_at,completed_at FROM ai_audit_runs WHERE organization_id=$1 ORDER BY started_at DESC LIMIT 200`, organizationID)
 	return scanAIAuditRuns(rows, err)
 }
 
 func (s *Store) ListOwnAIAuditRuns(ctx context.Context, organizationID, serviceAccountID uuid.UUID) ([]AIAuditRun, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,service_account_id,agent_name,agent_version,model,status,scope,summary,started_at,completed_at FROM ai_audit_runs WHERE organization_id=$1 AND service_account_id=$2 ORDER BY started_at DESC LIMIT 200`, organizationID, serviceAccountID)
+	rows, err := s.Pool.Query(ctx, `SELECT id,organization_id,service_account_id,agent_name,agent_version,model,status,scope,summary,started_at,lease_expires_at,completed_at FROM ai_audit_runs WHERE organization_id=$1 AND service_account_id=$2 ORDER BY started_at DESC LIMIT 200`, organizationID, serviceAccountID)
 	return scanAIAuditRuns(rows, err)
 }
 
@@ -2232,7 +2265,7 @@ func scanAIAuditRuns(rows pgx.Rows, err error) ([]AIAuditRun, error) {
 	items := []AIAuditRun{}
 	for rows.Next() {
 		var item AIAuditRun
-		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.ServiceAccountID, &item.AgentName, &item.AgentVersion, &item.Model, &item.Status, &item.Scope, &item.Summary, &item.StartedAt, &item.CompletedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.OrganizationID, &item.ServiceAccountID, &item.AgentName, &item.AgentVersion, &item.Model, &item.Status, &item.Scope, &item.Summary, &item.StartedAt, &item.LeaseExpiresAt, &item.CompletedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
