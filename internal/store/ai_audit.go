@@ -1235,6 +1235,25 @@ func (s *Store) loadAIAuditOperationalPosture(ctx context.Context, organizationI
 			WHERE job.kind='audit.archive' AND destination.organization_id=$1
 			UNION
 			SELECT job.id FROM jobs job
+			JOIN managed_networks network ON network.id::text=job.payload->>'networkId'
+			WHERE job.kind IN ('network.create','network.delete') AND network.organization_id=$1
+			UNION
+			SELECT job.id FROM jobs job
+			JOIN edge_certificate_targets target ON target.target_key=job.payload->>'targetKey'
+			LEFT JOIN clusters cluster ON cluster.id=target.cluster_id
+			WHERE job.kind='edge-certificates.reconcile' AND (
+				cluster.organization_id=$1 OR (
+					target.cluster_id IS NULL AND EXISTS (
+						SELECT 1 FROM routes route
+						JOIN custom_tls_certificates certificate ON certificate.id=route.custom_certificate_id
+						JOIN compose_services service ON service.id=route.compose_service_id
+						JOIN environments environment ON environment.id=service.environment_id
+						WHERE certificate.organization_id=$1 AND environment.cluster_id IS NULL
+					)
+				)
+			)
+			UNION
+			SELECT job.id FROM jobs job
 			JOIN compose_services service ON service.id::text=job.payload->>'serviceId'
 			JOIN environments environment ON environment.id=service.environment_id
 			JOIN projects project ON project.id=environment.project_id

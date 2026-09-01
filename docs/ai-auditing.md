@@ -210,8 +210,9 @@ keys make it a privileged service.
   unrevoked expired deployment hooks, abandoned source credentials, referenced source
   credentials not rotated for more than 180 days, agent identities signed
   by a non-active CA, lingering dual-trust rollovers, stalled tenant queues or
-  stale running-job lease heartbeats, unclaimed remote commands, expired remote
-  command leases that are not recovering,
+  stale running-job lease heartbeats—including managed-network and
+  edge-certificate reconciliation work—unclaimed remote commands, expired
+  remote command leases that are not recovering,
   notification coverage gaps, unavailable, unbound, mismatched, or
   recovery-incapable database drivers, successful database recovery evidence
   without digest-pinned utility images, unhealthy reconciliation, unsigned,

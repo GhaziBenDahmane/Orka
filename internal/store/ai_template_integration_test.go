@@ -10,6 +10,49 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestAIAuditQueueScopesLocalEdgeCertificateJobsToAffectedTenants(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, otherOrganizationID := uuid.New(), uuid.New()
+	projectID, otherProjectID := uuid.New(), uuid.New()
+	environmentID, otherEnvironmentID := uuid.New(), uuid.New()
+	serviceID, otherServiceID, certificateID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Edge tenant',$2),($3,'Other edge tenant',$4)`, []any{organizationID, "edge-" + organizationID.String(), otherOrganizationID, "other-edge-" + otherOrganizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project'),($3,$4,'Other','other')`, []any{projectID, organizationID, otherProjectID, otherOrganizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production'),($3,$4,'Production','production')`, []any{environmentID, projectID, otherEnvironmentID, otherProjectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'App','app',$3,'services: {}'),($4,$5,'Other app','other-app',$6,'services: {}')`, []any{serviceID, environmentID, "edge-" + serviceID.String(), otherServiceID, otherEnvironmentID, "other-edge-" + otherServiceID.String()}},
+		{`INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,dns_names,not_before,not_after) VALUES($1,$2,'Certificate','encrypted-certificate','encrypted-private-key',$3,ARRAY['app.example.test'],now()-interval '1 day',now()+interval '30 days')`, []any{certificateID, organizationID, "sha256:" + strings.Repeat("a", 64)}},
+		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,target_port,tls,certificate_resolver,custom_certificate_id) VALUES($1,$2,'app','app.example.test','/',8080,true,'',$3)`, []any{uuid.New(), serviceID, certificateID}},
+		{`INSERT INTO edge_certificate_targets(target_key,status) VALUES('local','pending')`, nil},
+		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'edge-certificates.reconcile','{"targetKey":"local"}','pending','edge-certificates:local',now()-interval '10 minutes')`, []any{uuid.New()}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target, err := db.BuildAIAuditSnapshot(ctx, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.QueuePosture.PendingJobs != 1 || len(target.QueuePosture.Kinds) != 1 || target.QueuePosture.Kinds[0].Kind != "edge-certificates.reconcile" || target.QueuePosture.Kinds[0].PendingJobs != 1 {
+		t.Fatalf("target queue posture=%#v", target.QueuePosture)
+	}
+	other, err := db.BuildAIAuditSnapshot(ctx, otherOrganizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.QueuePosture.PendingJobs != 0 || other.QueuePosture.RunningJobs != 0 || len(other.QueuePosture.Kinds) != 0 {
+		t.Fatalf("cross-tenant queue posture=%#v", other.QueuePosture)
+	}
+}
+
 func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {
@@ -307,8 +350,8 @@ func TestAIAuditsAndTemplateRepositories(t *testing.T) {
 	if err != nil || len(currentFindings) != 2 {
 		t.Fatalf("current findings after retention=%#v err=%v", currentFindings, err)
 	}
-	projectID, environmentID, serviceID, deletingServiceID, databaseID, clusterID, upgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, deletingServiceID, databaseID, clusterID, upgradeID, networkID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	otherProjectID, otherEnvironmentID, otherServiceID, otherDatabaseID, otherClusterID, otherUpgradeID, otherNetworkID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	backupID, policyID := uuid.New(), uuid.New()
 	routeID, otherRouteID := uuid.New(), uuid.New()
 	samlProviderID, otherSAMLProviderID := uuid.New(), uuid.New()
@@ -353,6 +396,8 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,path,size_bytes,sha256,encrypted,plaintext_sha256,encrypted_data_key,finished_at) VALUES($1,$2,'succeeded','dump',$3,42,$4,true,$5,'wrapped-key',now())`, []any{backupID, databaseID, "/var/lib/dockyard/backups/" + backupID.String() + "/" + backupID.String() + ".dump.enc", strings.Repeat("a", 64), strings.Repeat("b", 64)}},
 		{`INSERT INTO database_restores(id,database_backup_id,status,kind,finished_at) VALUES($1,$2,'succeeded','drill',now())`, []any{uuid.New(), backupID}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,labels,capacity,capabilities,agent_image,agent_update_state,deletion_requested_at) VALUES($1,$2,'Paris','paris','active','{"secret":"target-cluster-label-secret"}','{"secret":"target-cluster-capacity-secret","nodes":3,"readyNodes":2,"activeNodes":2,"schedulableNodes":2,"managers":1,"nanoCpus":6000000000,"memoryBytes":12884901888}','{"protocolVersion":1,"dockerSwarm":true,"dockerCompose":true,"edgeProxy":{"provider":"traefik","managementMode":"external","serviceName":"target-edge-service-secret","publicNetwork":"target-edge-network-secret","dynamicConfigurationMode":"file","dynamicConfigurationPath":"/target-edge-path-secret","ready":false,"status":"network_missing","supportsCustomCertificates":false}}',$3,'updating',now()-interval '20 minutes')`, []any{clusterID, organizationID, "registry.example/dockyard@sha256:" + strings.Repeat("a", 64)}},
+		{`INSERT INTO managed_networks(id,organization_id,cluster_id,name,status) VALUES($1,$2,$3,'applications','provisioning')`, []any{networkID, organizationID, clusterID}},
+		{`INSERT INTO edge_certificate_targets(target_key,cluster_id,status) VALUES($1,$2,'pending')`, []any{clusterID.String(), clusterID}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,attempts,target_image,last_error,run_after) VALUES($1,$2,'agent.upgrade','agent-command-secret','verifying',1,$3,'target-agent-error-secret',now()-interval '1 minute')`, []any{upgradeID, clusterID, "registry.example/dockyard@sha256:" + strings.Repeat("b", 64)}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,run_after,created_at) VALUES($1,$2,'swarm.logs','target-pending-command-secret','pending',now()-interval '3 minutes',now()-interval '4 minutes')`, []any{uuid.New(), clusterID}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,lease_id,lease_expires_at,created_at) VALUES($1,$2,'swarm.status','target-leased-command-secret','leased',$3,now()-interval '4 minutes',now()-interval '5 minutes')`, []any{uuid.New(), clusterID, uuid.New()}},
@@ -384,6 +429,8 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Other primary','other-primary','postgres','17','other-database-secret','ready')`, []any{otherDatabaseID, otherEnvironmentID}},
 		{`INSERT INTO resource_policies(organization_id,scope_type,scope_id,maintenance_enabled,maintenance_reason,max_projects) VALUES($1,'organization',$1,true,'other-policy-secret',1)`, []any{otherOrganizationID}},
 		{`INSERT INTO clusters(id,organization_id,name,slug,state,deletion_requested_at) VALUES($1,$2,'Other cluster','other-cluster','active',now()-interval '1 day')`, []any{otherClusterID, otherOrganizationID}},
+		{`INSERT INTO managed_networks(id,organization_id,cluster_id,name,status) VALUES($1,$2,$3,'other-applications','provisioning')`, []any{otherNetworkID, otherOrganizationID, otherClusterID}},
+		{`INSERT INTO edge_certificate_targets(target_key,cluster_id,status) VALUES($1,$2,'pending')`, []any{otherClusterID.String(), otherClusterID}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,attempts,target_image,last_error,finished_at) VALUES($1,$2,'agent.upgrade','other-agent-command-secret','failed',1,$3,'other tenant failure',now())`, []any{otherUpgradeID, otherClusterID, "registry.example/dockyard@sha256:" + strings.Repeat("c", 64)}},
 		{`INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,status,run_after,created_at) VALUES($1,$2,'swarm.logs','other-pending-command-secret','pending',now()-interval '1 day',now()-interval '1 day')`, []any{uuid.New(), otherClusterID}},
 		{`INSERT INTO jobs(id,kind,payload,status) VALUES($1,'delete.cluster',$2,'pending')`, []any{uuid.New(), `{"clusterId":"` + otherClusterID.String() + `"}`}},
@@ -391,8 +438,12 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'deploy.compose','{}','running',$2,now())`, []any{uuid.New(), "service:" + serviceID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'backup.database','{}','pending',$2,$3::timestamptz + interval '30 minutes')`, []any{uuid.New(), "database:" + databaseID.String(), oldestPendingAt}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'restore.database','{}','running',$2,now())`, []any{uuid.New(), "database:" + databaseID.String()}},
+		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'network.create',$2,'pending',$3,$4::timestamptz + interval '45 minutes')`, []any{uuid.New(), `{"networkId":"` + networkID.String() + `"}`, "network:" + networkID.String(), oldestPendingAt}},
+		{`INSERT INTO jobs(id,kind,payload,status,resource_key,locked_at,created_at) VALUES($1,'edge-certificates.reconcile',$2,'running',$3,now(),now())`, []any{uuid.New(), `{"targetKey":"` + clusterID.String() + `"}`, "edge-certificates:" + clusterID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'deploy.compose','{}','pending',$2,now() - interval '1 day')`, []any{uuid.New(), "service:" + otherServiceID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'backup.database','{}','running',$2,now())`, []any{uuid.New(), "database:" + otherDatabaseID.String()}},
+		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'network.create',$2,'pending',$3,now()-interval '1 day')`, []any{uuid.New(), `{"networkId":"` + otherNetworkID.String() + `"}`, "network:" + otherNetworkID.String()}},
+		{`INSERT INTO jobs(id,kind,payload,status,resource_key,locked_at,created_at) VALUES($1,'edge-certificates.reconcile',$2,'running',$3,now()-interval '1 day',now()-interval '1 day')`, []any{uuid.New(), `{"targetKey":"` + otherClusterID.String() + `"}`, "edge-certificates:" + otherClusterID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,status,resource_key,created_at) VALUES($1,'unknown','{}','pending','service:not-a-uuid',now() - interval '2 days')`, []any{uuid.New()}},
 	} {
 		if _, err = pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -541,10 +592,10 @@ volumes: {uploads: {}}','encrypted-service-env',3)`, []any{serviceID, environmen
 	for _, item := range snapshot.QueuePosture.Kinds {
 		queueKinds[item.Kind] = item
 	}
-	if snapshot.QueuePosture.Coverage != "all-supported-tenant-jobs" || snapshot.QueuePosture.PendingJobs != 3 || snapshot.QueuePosture.RunningJobs != 2 || snapshot.QueuePosture.PendingServiceJobs != 1 || snapshot.QueuePosture.RunningServiceJobs != 1 || snapshot.QueuePosture.PendingDatabaseJobs != 1 || snapshot.QueuePosture.RunningDatabaseJobs != 1 || snapshot.QueuePosture.OldestPendingAt == nil || !snapshot.QueuePosture.OldestPendingAt.Equal(oldestPendingAt) || snapshot.QueuePosture.OldestRunningHeartbeatAt == nil {
+	if snapshot.QueuePosture.Coverage != "all-supported-tenant-jobs" || snapshot.QueuePosture.PendingJobs != 4 || snapshot.QueuePosture.RunningJobs != 3 || snapshot.QueuePosture.PendingServiceJobs != 1 || snapshot.QueuePosture.RunningServiceJobs != 1 || snapshot.QueuePosture.PendingDatabaseJobs != 1 || snapshot.QueuePosture.RunningDatabaseJobs != 1 || snapshot.QueuePosture.OldestPendingAt == nil || !snapshot.QueuePosture.OldestPendingAt.Equal(oldestPendingAt) || snapshot.QueuePosture.OldestRunningHeartbeatAt == nil {
 		t.Fatalf("queue posture=%#v", snapshot.QueuePosture)
 	}
-	if len(queueKinds) != 4 || queueKinds["delete.compose"].PendingJobs != 1 || queueKinds["deploy.compose"].PendingJobs != 1 || queueKinds["deploy.compose"].RunningJobs != 1 || queueKinds["backup.database"].PendingJobs != 1 || queueKinds["restore.database"].RunningJobs != 1 {
+	if len(queueKinds) != 6 || queueKinds["delete.compose"].PendingJobs != 1 || queueKinds["deploy.compose"].PendingJobs != 1 || queueKinds["deploy.compose"].RunningJobs != 1 || queueKinds["backup.database"].PendingJobs != 1 || queueKinds["restore.database"].RunningJobs != 1 || queueKinds["network.create"].PendingJobs != 1 || queueKinds["edge-certificates.reconcile"].RunningJobs != 1 {
 		t.Fatalf("queue kind posture=%#v", queueKinds)
 	}
 	if snapshot.FinalizerPosture.DeletingProjects != 0 || snapshot.FinalizerPosture.DeletingEnvironments != 0 || snapshot.FinalizerPosture.DeletingServices != 1 || snapshot.FinalizerPosture.DeletingClusters != 1 || snapshot.FinalizerPosture.PendingJobs != 1 || snapshot.FinalizerPosture.RunningJobs != 0 || snapshot.FinalizerPosture.FailedJobs != 1 || snapshot.FinalizerPosture.ResourcesWithoutActiveJob != 1 || snapshot.FinalizerPosture.OldestRequestedAt == nil {
