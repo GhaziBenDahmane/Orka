@@ -157,6 +157,10 @@ links for every item below.
   backup must appear in the bounded model snapshot, and a failed latest restore
   must produce the deterministic `Volume restore has not been validated`
   finding.
+  An enabled federated template repository must expose only secret-free sync
+  and signing posture; the gate requires deterministic findings for an
+  unsigned repository whose latest synchronization failed while excluding its
+  webhook secret and raw synchronization error from the model boundary.
   A failed or thirty-minute-stalled offline named-volume recovery must produce
   a critical deterministic finding with service, volume, and target-node
   context while excluding the raw restore error from the model boundary.

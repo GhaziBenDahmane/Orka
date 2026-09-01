@@ -46,6 +46,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	staleDeployTokenID := uuid.New()
 	staleSourceCredentialID, overdueSourceCredentialID := uuid.New(), uuid.New()
 	overdueBackupDestinationID := uuid.New()
+	templateRepositoryID := uuid.New()
 	volumeBackupPolicyID, offlineVolumeBackupID, offlineVolumeRestoreID := uuid.New(), uuid.New(), uuid.New()
 	customTLSHost := "ai-" + customTLSCertificateID.String() + ".example.test"
 	auditorToken := "dky_ai_conformance_" + uuid.NewString()
@@ -93,6 +94,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO source_credentials(id,organization_id,kind,name,server,username,encrypted_secret,created_at,updated_at) VALUES
 			($1,$2,'registry','stale-conformance-credential','registry.example.test','robot',$3,now()-interval '31 days',now()-interval '31 days'),
 			($4,$2,'registry','overdue-conformance-credential','registry.example.test','builder',$5,now()-interval '1 year',now()-interval '181 days')`, []any{staleSourceCredentialID, organizationID, "source-credential:" + secretMarker, overdueSourceCredentialID, "overdue-source-credential:" + secretMarker}},
+		{`INSERT INTO template_repositories(id,organization_id,name,slug,repository_url,git_ref,enabled,last_sync_status,last_sync_error,encrypted_webhook_secret,sync_interval_seconds) VALUES($1,$2,'Unsigned failing catalog','unsigned-failing-catalog','https://github.com/example/private-catalog','main',true,'failed',$3,$4,3600)`, []any{templateRepositoryID, organizationID, "template-sync-error:" + secretMarker, "template-webhook:" + secretMarker}},
 		{`INSERT INTO application_sources(compose_service_id,repository_url,target_service,registry_image,registry_credential_id) VALUES($1,'https://example.test/conformance.git','app','registry.example.test/conformance/app',$2)`, []any{serviceID, overdueSourceCredentialID}},
 		{`INSERT INTO custom_tls_certificates(id,organization_id,name,encrypted_certificate,encrypted_private_key,fingerprint,common_name,dns_names,not_before,not_after) VALUES($1,$2,'Expired conformance certificate',$3,$4,$5,$6,ARRAY[$6],now()-interval '90 days',now()-interval '1 hour')`, []any{customTLSCertificateID, organizationID, "encrypted-certificate:" + secretMarker, "encrypted-private-key:" + secretMarker, "sha256:" + strings.Repeat("c", 64), customTLSHost}},
 		{`INSERT INTO routes(id,compose_service_id,service_name,host,path_prefix,internal_path,enabled,target_port,tls,certificate_resolver,custom_certificate_id) VALUES($1,$2,'app',$4,'/','/',true,8080,true,'',$3)`, []any{customTLSRouteID, serviceID, customTLSCertificateID, customTLSHost}},
@@ -150,7 +152,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			http.Error(w, "invalid model request", http.StatusBadRequest)
 			return
 		}
-		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueBackupDestinationID.String()) || !strings.Contains(modelRequest.Messages[1].Content, offlineVolumeRestoreID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"backupPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeBackupPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeName":"uploads"`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastBackupArtifactValid":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRestoreStatus":"failed"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeRestorePosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"finalizerPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"failedJobs":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"localCluster"`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":4`) || !strings.Contains(modelRequest.Messages[1].Content, `"nanoCpus":6000000000`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":3`) || !strings.Contains(modelRequest.Messages[1].Content, `"readyNodes":2`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyConfigured":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyStatus":"network_missing"`) || !strings.Contains(modelRequest.Messages[1].Content, `"minimumNodes":2`) {
+		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueBackupDestinationID.String()) || !strings.Contains(modelRequest.Messages[1].Content, offlineVolumeRestoreID.String()) || !strings.Contains(modelRequest.Messages[1].Content, templateRepositoryID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"backupPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeBackupPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeName":"uploads"`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastBackupArtifactValid":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRestoreStatus":"failed"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeRestorePosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"templateRepositories"`) || !strings.Contains(modelRequest.Messages[1].Content, `"requireSignature":false`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastSyncStatus":"failed"`) || !strings.Contains(modelRequest.Messages[1].Content, `"finalizerPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"failedJobs":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"localCluster"`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":4`) || !strings.Contains(modelRequest.Messages[1].Content, `"nanoCpus":6000000000`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":3`) || !strings.Contains(modelRequest.Messages[1].Content, `"readyNodes":2`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyConfigured":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyStatus":"network_missing"`) || !strings.Contains(modelRequest.Messages[1].Content, `"minimumNodes":2`) {
 			t.Error("model request did not contain the bounded platform snapshot and trust instruction")
 			http.Error(w, "incomplete prompt", http.StatusBadRequest)
 			return
@@ -233,7 +235,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Database lacks a successful backup", "Database lacks a successful restore drill", "Managed network provisioning failed", "Resource deletion finalizer requires intervention", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Volume restore has not been validated", "Offline volume recovery failed", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Database lacks a successful backup", "Database lacks a successful restore drill", "Managed network provisioning failed", "Resource deletion finalizer requires intervention", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Volume restore has not been validated", "Offline volume recovery failed", "Template repository does not require signatures", "Template repository synchronization failed", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -326,38 +328,39 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	}
 
 	evidence, _ := json.Marshal(map[string]any{
-		"status":                          "passed",
-		"realPlatformAPI":                 true,
-		"openAICompatibleGateway":         true,
-		"snapshotSecretsRedacted":         true,
-		"promptInjectionBoundaryPresent":  true,
-		"deterministicFindingsPersisted":  true,
-		"deployedImageProvenanceAudited":  true,
-		"agentCAMismatchDetected":         true,
-		"agentImageProvenanceAudited":     true,
-		"clusterCapacityPostureAudited":   true,
-		"localClusterPostureAudited":      true,
-		"databaseAvailabilityAudited":     true,
-		"databaseRecoveryPostureAudited":  true,
-		"volumeRecoveryPostureAudited":    true,
-		"managedNetworkPostureAudited":    true,
-		"deletionFinalizerPostureAudited": true,
-		"staleDeployCredentialAudited":    true,
-		"staleServiceAccountAudited":      true,
-		"staleSourceCredentialAudited":    true,
-		"customTLSValidityAudited":        true,
-		"edgeTLSConvergenceAudited":       true,
-		"offlineVolumeRecoveryAudited":    true,
-		"modelFindingsPersisted":          true,
-		"durableRunCompleted":             true,
-		"lifecycleAudited":                true,
-		"auditorLeastPrivilege":           true,
-		"auditorOwnRunVerification":       true,
-		"findingTriageAudited":            true,
-		"findingTriageAtomic":             true,
-		"criticalFindingNotified":         true,
-		"auditorTriageDenied":             true,
-		"triageTenantIsolated":            true,
+		"status":                           "passed",
+		"realPlatformAPI":                  true,
+		"openAICompatibleGateway":          true,
+		"snapshotSecretsRedacted":          true,
+		"promptInjectionBoundaryPresent":   true,
+		"deterministicFindingsPersisted":   true,
+		"deployedImageProvenanceAudited":   true,
+		"agentCAMismatchDetected":          true,
+		"agentImageProvenanceAudited":      true,
+		"clusterCapacityPostureAudited":    true,
+		"localClusterPostureAudited":       true,
+		"databaseAvailabilityAudited":      true,
+		"databaseRecoveryPostureAudited":   true,
+		"volumeRecoveryPostureAudited":     true,
+		"templateRepositoryPostureAudited": true,
+		"managedNetworkPostureAudited":     true,
+		"deletionFinalizerPostureAudited":  true,
+		"staleDeployCredentialAudited":     true,
+		"staleServiceAccountAudited":       true,
+		"staleSourceCredentialAudited":     true,
+		"customTLSValidityAudited":         true,
+		"edgeTLSConvergenceAudited":        true,
+		"offlineVolumeRecoveryAudited":     true,
+		"modelFindingsPersisted":           true,
+		"durableRunCompleted":              true,
+		"lifecycleAudited":                 true,
+		"auditorLeastPrivilege":            true,
+		"auditorOwnRunVerification":        true,
+		"findingTriageAudited":             true,
+		"findingTriageAtomic":              true,
+		"criticalFindingNotified":          true,
+		"auditorTriageDenied":              true,
+		"triageTenantIsolated":             true,
 	})
 	fmt.Printf("AI_AUDIT_EVIDENCE %s\n", evidence)
 }

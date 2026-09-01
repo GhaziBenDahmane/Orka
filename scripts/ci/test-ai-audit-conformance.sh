@@ -78,6 +78,7 @@ jq -e '
   .databaseAvailabilityAudited and
   .databaseRecoveryPostureAudited and
   .volumeRecoveryPostureAudited and
+  .templateRepositoryPostureAudited and
   .managedNetworkPostureAudited and
   .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and
