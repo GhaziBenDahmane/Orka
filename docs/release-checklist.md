@@ -142,6 +142,7 @@ links for every item below.
   configuration, and registry coordinates remain outside the model boundary.
   It also proves deterministic detection of a managed database left
   in an error state, its missing successful backup and restore drill, an
+  unavailable, unbound, and implementation-mismatched database driver, an
   expired custom TLS certificate, and a missing edge
   reconciliation target while keeping encrypted certificate and private-key
   material outside the model boundary. A failed managed network must also

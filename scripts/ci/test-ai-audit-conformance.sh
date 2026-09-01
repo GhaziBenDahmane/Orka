@@ -76,6 +76,7 @@ jq -e '
   .clusterCapacityPostureAudited and
   .localClusterPostureAudited and
   .databaseAvailabilityAudited and
+  .databaseDriverIdentityAudited and
   .databaseRecoveryPostureAudited and
   .volumeRecoveryPostureAudited and
   .templateRepositoryPostureAudited and

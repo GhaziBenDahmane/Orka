@@ -16,6 +16,7 @@ import (
 	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
 	"github.com/GhaziBenDahmane/Orka/internal/clustercontract"
 	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
 	"github.com/GhaziBenDahmane/Orka/internal/httpapi"
 	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
@@ -40,7 +41,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	organizationID, accountID, staleServiceAccountID, clusterID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	ownerID, ownerSessionID, insecureAdminID := uuid.New(), uuid.New(), uuid.New()
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedFinalizerServiceID, failedDatabaseID, notificationEndpointID, failedNotificationDeliveryID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedFinalizerServiceID, failedDatabaseID, unboundDatabaseID, mismatchedDatabaseID, unavailableDatabaseID, notificationEndpointID, failedNotificationDeliveryID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	customTLSCertificateID, customTLSRouteID := uuid.New(), uuid.New()
 	managedNetworkID := uuid.New()
 	staleDeployTokenID := uuid.New()
@@ -65,6 +66,11 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	previousAgentCAFingerprint, err := agentpki.CertificateFingerprint(previousAgentCA)
 	if err != nil {
 		t.Fatal(err)
+	}
+	databaseRegistry := database.NewRegistry()
+	postgresDriver, ok := databaseRegistry.Engine("postgres")
+	if !ok || postgresDriver.ArtifactDigest == "" {
+		t.Fatal("PostgreSQL driver identity is unavailable")
 	}
 	t.Cleanup(func() {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
@@ -110,7 +116,10 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,effective_compose,env_snapshot,status,trigger,created_at,finished_at) VALUES($1,$2,1,$3,$3,'','succeeded','manual',now()-interval '2 minutes',now()-interval '1 minute')`, []any{uuid.New(), mutableRuntimeServiceID, "services: {app: {image: example.invalid/" + runtimeImageMarker + ":latest}}"}},
 		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml,deletion_requested_at) VALUES($1,$2,'Failed finalizer service','failed-finalizer',$3,'services: {app: {image: example.invalid/finalizer:v1}}',now()-interval '20 minutes')`, []any{failedFinalizerServiceID, environmentID, "ai-finalizer-" + failedFinalizerServiceID.String()}},
 		{`INSERT INTO jobs(id,kind,payload,resource_key,status,attempts,max_attempts,last_error,finished_at) VALUES($1,'delete.compose',$2,$3,'failed',10,10,$4,now()-interval '19 minutes')`, []any{uuid.New(), `{"serviceId":"` + failedFinalizerServiceID.String() + `","stackName":"failed-finalizer","deleteVolumes":false}`, "service:" + failedFinalizerServiceID.String(), "finalizer-error:" + secretMarker}},
-		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,encrypted_credentials,status) VALUES($1,$2,'Failed database','failed-database','postgres','17','encrypted','error')`, []any{failedDatabaseID, environmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials,status) VALUES($1,$2,'Failed database','failed-database','postgres','17','built-in',$3,'encrypted','error')`, []any{failedDatabaseID, environmentID, postgresDriver.ArtifactDigest}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials,status) VALUES($1,$2,'Unbound database','unbound-database','postgres','17','unbound','','encrypted','running')`, []any{unboundDatabaseID, environmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials,status) VALUES($1,$2,'Mismatched database','mismatched-database','postgres','17','built-in',$3,'encrypted','running')`, []any{mismatchedDatabaseID, environmentID, "sha256:" + strings.Repeat("e", 64)}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials,status) VALUES($1,$2,'Unavailable database','unavailable-database','removed','1','external',$3,'encrypted','running')`, []any{unavailableDatabaseID, environmentID, "sha256:" + strings.Repeat("f", 64)}},
 		{`INSERT INTO backup_destinations(id,organization_id,name,endpoint,bucket,use_tls,encrypted_credentials,created_at,updated_at) VALUES($1,$2,'Conformance backup','https://s3.example.test','conformance',true,$3,now()-interval '1 year',now()-interval '181 days')`, []any{overdueBackupDestinationID, organizationID, "backup-destination:" + secretMarker}},
 		{`INSERT INTO audit_archive_destinations(id,organization_id,backup_destination_id,name,object_prefix,retention_days,enabled,last_chain_hash) VALUES($1,$2,$3,'Immutable audit archive',$4,365,true,$5)`, []any{auditArchiveID, organizationID, overdueBackupDestinationID, "audit-prefix:" + secretMarker, "audit-chain:" + secretMarker}},
 		{`INSERT INTO audit_archive_batches(id,destination_id,first_event_id,last_event_id,previous_sha256,object_key,status,last_error,created_at,finished_at) VALUES($1,$2,1,1,$3,$4,'failed',$5,now()-interval '10 minutes',now()-interval '9 minutes')`, []any{uuid.New(), auditArchiveID, "previous-chain:" + secretMarker, "audit-object:" + secretMarker, "audit-archive-error:" + secretMarker}},
@@ -125,7 +134,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		}
 	}
 	localObservedAt := time.Now().UTC()
-	platform := httptest.NewServer((&httpapi.Server{Store: db, AgentCACertificate: activeAgentCA, AgentPreviousCACertificate: previousAgentCA, LocalClusterPosture: func() clustercontract.LocalPosture {
+	platform := httptest.NewServer((&httpapi.Server{Store: db, Databases: databaseRegistry, AgentCACertificate: activeAgentCA, AgentPreviousCACertificate: previousAgentCA, LocalClusterPosture: func() clustercontract.LocalPosture {
 		return clustercontract.LocalPosture{ObservedAt: localObservedAt, InspectionStatus: clustercontract.LocalInspectionReady, Nodes: 4, ReadyNodes: 3, ActiveNodes: 2, SchedulableNodes: 1, Managers: 0, NanoCPUs: 6_000_000_000, MemoryBytes: 12_884_901_888, DockerCompose: true}
 	}}).Handler())
 	defer platform.Close()
@@ -168,6 +177,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		requiredSnapshotFragments := []string{
 			serviceID.String(), customTLSCertificateID.String(), managedNetworkID.String(), staleSourceCredentialID.String(), overdueSourceCredentialID.String(),
 			overdueBackupDestinationID.String(), offlineVolumeRestoreID.String(), templateRepositoryID.String(), notificationEndpointID.String(), auditArchiveID.String(),
+			unboundDatabaseID.String(), mismatchedDatabaseID.String(), unavailableDatabaseID.String(), `"databaseEngines"`, `"driverArtifactDigest":"` + postgresDriver.ArtifactDigest + `"`,
 			`"lastRotatedAt"`, `"runtimeDigestPinnedImages":1`, `"runtimeMutableImages":1`, `"customTlsPosture"`, `"edgeTlsPosture"`,
 			`"managedNetworks"`, `"sourceCredentialPosture"`, `"backupPosture"`, `"volumeBackupPosture"`, `"volumeName":"uploads"`,
 			`"lastBackupArtifactValid":true`, `"lastRestoreStatus":"failed"`, `"volumeRestorePosture"`, `"templateRepositories"`, `"requireSignature":false`,
@@ -264,7 +274,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Privileged local accounts lack MFA", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Source deployment lacks commit provenance", "Managed database deployment is unhealthy", "Database lacks a successful backup", "Database lacks a successful restore drill", "Managed network provisioning failed", "Resource deletion finalizer requires intervention", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Volume restore has not been validated", "Offline volume recovery failed", "Template repository does not require signatures", "Template repository synchronization failed", "Failure notifications have coverage gaps", "Notification delivery requires intervention", "Immutable audit archive delivery failed", "Platform job queue is stalled", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Privileged local accounts lack MFA", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Source deployment lacks commit provenance", "Managed database deployment is unhealthy", "Database driver identity is unbound", "Database driver identity mismatch", "Database engine is unavailable", "Database lacks a successful backup", "Database lacks a successful restore drill", "Managed network provisioning failed", "Resource deletion finalizer requires intervention", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Volume restore has not been validated", "Offline volume recovery failed", "Template repository does not require signatures", "Template repository synchronization failed", "Failure notifications have coverage gaps", "Notification delivery requires intervention", "Immutable audit archive delivery failed", "Platform job queue is stalled", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -369,6 +379,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"clusterCapacityPostureAudited":     true,
 		"localClusterPostureAudited":        true,
 		"databaseAvailabilityAudited":       true,
+		"databaseDriverIdentityAudited":     true,
 		"databaseRecoveryPostureAudited":    true,
 		"volumeRecoveryPostureAudited":      true,
 		"templateRepositoryPostureAudited":  true,
