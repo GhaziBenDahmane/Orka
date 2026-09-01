@@ -69,7 +69,9 @@ only for a dedicated, isolated cluster whose workloads are fully trusted.
 - `dockyardctl` stores its bearer token only in a mode-0600 regular file under
   a mode-0700 configuration directory. It rejects symbolic links, oversized
   files, and replacement races while reading, and uses a randomized, fsynced
-  atomic replacement while writing.
+  atomic replacement while writing. Secret-bearing JSON and login input are
+  size bounded and must contain exactly one complete value; oversized input is
+  rejected rather than silently truncated.
 - SCIM tokens expire after at most 365 days (90 days by default). Inventory
   their metadata through the administration API, rotate them before expiry,
   and revoke superseded credentials immediately.

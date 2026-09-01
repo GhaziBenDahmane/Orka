@@ -28,6 +28,11 @@ type config struct {
 
 const maxConfigBytes int64 = 1 << 20
 
+const (
+	maxJSONInputBytes  int64 = 4 << 20
+	maxLoginInputBytes int64 = 4 << 10
+)
+
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "dockyardctl:", err)
@@ -52,15 +57,15 @@ func run(arguments []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
 		return usageError()
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	if args[0] == "login" {
-		return login(context.Background(), *urlFlag, *orgFlag, args[1:], stdin, stdout, path)
+		return login(ctx, *urlFlag, *orgFlag, args[1:], stdin, stdout, path)
 	}
 	client, err := apiclient.New(*urlFlag, *tokenFlag, *orgFlag)
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	method, apiPath, input, err := commandRequest(args, stdin)
 	if err != nil {
 		return err
@@ -958,19 +963,22 @@ func parseJSONArgument(argument string, stdin io.Reader) (any, error) {
 	if argument == "-" {
 		reader = stdin
 	}
+	data, err := readBoundedInput(reader, maxJSONInputBytes, "JSON input")
+	if err != nil {
+		return nil, err
+	}
 	var value any
-	decoder := json.NewDecoder(io.LimitReader(reader, 4<<20))
-	if err := decoder.Decode(&value); err != nil {
+	if err = json.Unmarshal(data, &value); err != nil {
 		return nil, fmt.Errorf("decode JSON input: %w", err)
 	}
 	return value, nil
 }
 
-func login(_ context.Context, rawURL, organizationID string, args []string, stdin io.Reader, stdout io.Writer, path string) error {
+func login(ctx context.Context, rawURL, organizationID string, args []string, stdin io.Reader, stdout io.Writer, path string) error {
 	if len(args) != 1 {
 		return errors.New("usage: dockyardctl [flags] login EMAIL < password")
 	}
-	payload, err := io.ReadAll(io.LimitReader(stdin, 4096))
+	payload, err := readBoundedInput(stdin, maxLoginInputBytes, "login input")
 	if err != nil {
 		return err
 	}
@@ -994,7 +1002,7 @@ func login(_ context.Context, rawURL, organizationID string, args []string, stdi
 	} else {
 		input["password"] = strings.TrimSuffix(strings.TrimSuffix(string(payload), "\n"), "\r")
 	}
-	if err := client.Do(context.Background(), http.MethodPost, "/v1/auth/login", input, &response); err != nil {
+	if err := client.Do(ctx, http.MethodPost, "/v1/auth/login", input, &response); err != nil {
 		return err
 	}
 	var envelope struct {
@@ -1015,6 +1023,17 @@ func login(_ context.Context, rawURL, organizationID string, args []string, stdi
 	}
 	_, err = fmt.Fprintln(stdout, "Login succeeded; credentials saved to", path)
 	return err
+}
+
+func readBoundedInput(reader io.Reader, maximum int64, label string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maximum {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maximum)
+	}
+	return data, nil
 }
 
 func loadConfig() (config, string, error) {

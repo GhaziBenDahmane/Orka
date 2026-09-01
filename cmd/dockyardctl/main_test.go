@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -466,6 +468,25 @@ func TestJSONFromStdin(t *testing.T) {
 	value := input.(map[string]any)
 	if value["name"] != "demo" {
 		t.Fatalf("input=%#v", input)
+	}
+}
+
+func TestJSONInputRejectsTrailingAndOversizedData(t *testing.T) {
+	for _, input := range []string{`{"name":"demo"} {"second":true}`, `{"name":"demo"} trailing`} {
+		if _, err := parseJSONArgument("-", strings.NewReader(input)); err == nil {
+			t.Errorf("accepted trailing JSON input %q", input)
+		}
+	}
+	oversized := strings.Repeat(" ", int(maxJSONInputBytes)) + "{}"
+	if _, err := parseJSONArgument("-", strings.NewReader(oversized)); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized JSON error=%v", err)
+	}
+}
+
+func TestLoginRejectsOversizedInputBeforeRequest(t *testing.T) {
+	err := login(context.Background(), "http://localhost:1", "", []string{"operator@example.test"}, strings.NewReader(strings.Repeat("x", int(maxLoginInputBytes)+1)), io.Discard, filepath.Join(t.TempDir(), "config.json"))
+	if err == nil || !strings.Contains(err.Error(), "login input exceeds") {
+		t.Fatalf("oversized login input error=%v", err)
 	}
 }
 
