@@ -302,7 +302,7 @@ encrypted and never returned. Generic webhook signing secrets are revealed
 once. All providers use the same idempotent delivery records and retry queue
 for `deployment.failed`, `service.stop.failed`, `service.schedule.failed`,
 `backup.failed`, `restore.failed`, `restore.drill.failed`,
-`database.migration.failed`, `network.provision.failed`,
+`database.migration.failed`, `commit.status.failed`, `network.provision.failed`,
 `network.delete.failed`, `resource.delete.failed`,
 `edge.certificate.reconcile.failed`, `template.sync.failed`, `agent.upgrade.failed`,
 `audit.archive.failed`, `ai.audit.failed`, and

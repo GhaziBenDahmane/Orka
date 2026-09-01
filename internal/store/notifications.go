@@ -392,6 +392,9 @@ func (s *Store) failureResource(ctx context.Context, tx pgx.Tx, jobKind string, 
 	case "audit.archive":
 		resourceID, resourceType, eventType = payload["batchId"], "audit_archive_batch", "audit.archive.failed"
 		query = `SELECT a.organization_id FROM audit_archive_batches b JOIN audit_archive_destinations a ON a.id=b.destination_id WHERE b.id=$1`
+	case "commit.status":
+		resourceID, resourceType, eventType = payload["deliveryId"], "commit_status_delivery", "commit.status.failed"
+		query = `SELECT project.organization_id FROM commit_status_deliveries delivery JOIN deployments deployment ON deployment.id=delivery.deployment_id JOIN compose_services service ON service.id=deployment.compose_service_id JOIN environments environment ON environment.id=service.environment_id JOIN projects project ON project.id=environment.project_id WHERE delivery.id=$1`
 	case "network.create":
 		resourceID, resourceType, eventType = payload["networkId"], "managed_network", "network.provision.failed"
 		query = `SELECT organization_id FROM managed_networks WHERE id=$1`

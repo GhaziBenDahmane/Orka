@@ -172,6 +172,8 @@ links for every item below.
   rolls back, so a committed terminal failure cannot lose its operator alert.
   Retries of one operation remain idempotent while distinct failed operations
   against the same resource each produce a delivery.
+  Exhausted commit-status callback retries resolve through the deployment and
+  notify only its tenant.
   Shared local-edge certificate failures fan out once to every affected tenant,
   including after the last custom-certificate route has been removed, without
   notifying an unrelated tenant.

@@ -298,6 +298,53 @@ func TestDeletionFinalizerFailuresUseDedicatedTenantEvent(t *testing.T) {
 	}
 }
 
+func TestCommitStatusFailuresUseDeploymentTenantEvent(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	db := &Store{Pool: pool}
+	organizationID, otherOrganizationID := uuid.New(), uuid.New()
+	projectID, environmentID, serviceID, deploymentID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	deliveryID, endpointID, otherEndpointID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Commit status',$2),($3,'Other',$4)`, []any{organizationID, "commit-status-" + organizationID.String(), otherOrganizationID, "other-commit-status-" + otherOrganizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'App','app',$3,'services: {}')`, []any{serviceID, environmentID, "commit-status-" + serviceID.String()}},
+		{`INSERT INTO deployments(id,compose_service_id,revision,compose_snapshot,status,trigger) VALUES($1,$2,1,'services: {}','succeeded','manual')`, []any{deploymentID, serviceID}},
+		{`INSERT INTO commit_status_deliveries(id,deployment_id,state,status,last_error) VALUES($1,$2,'success','failed','provider unavailable')`, []any{deliveryID, deploymentID}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Status on-call','webhook','url','secret',ARRAY['commit.status.failed']),($3,$4,'Other status on-call','webhook','url','secret',ARRAY['commit.status.failed'])`, []any{endpointID, organizationID, otherEndpointID, otherOrganizationID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload, _ := json.Marshal(map[string]string{"deliveryId": deliveryID.String()})
+	for range 2 {
+		if err := db.QueueFailureNotifications(ctx, "commit.status", payload, errors.New("provider unavailable")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var eventType, resourceType, resourceID, operation string
+	if err := pool.QueryRow(ctx, `SELECT event_type,resource_type,resource_id,payload->>'operation' FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&eventType, &resourceType, &resourceID, &operation); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "commit.status.failed" || resourceType != "commit_status_delivery" || resourceID != deliveryID.String() || operation != "commit.status" {
+		t.Fatalf("event=%q resource_type=%q resource_id=%q operation=%q", eventType, resourceType, resourceID, operation)
+	}
+	var targetDeliveries, otherDeliveries int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE endpoint_id=$1),count(*) FILTER (WHERE endpoint_id=$2) FROM notification_deliveries`, endpointID, otherEndpointID).Scan(&targetDeliveries, &otherDeliveries); err != nil {
+		t.Fatal(err)
+	}
+	if targetDeliveries != 1 || otherDeliveries != 0 {
+		t.Fatalf("target deliveries=%d other deliveries=%d", targetDeliveries, otherDeliveries)
+	}
+}
+
 func TestEdgeCertificateFailureNotificationsFanOutToAffectedTenants(t *testing.T) {
 	pool, ctx := migrationTestPool(t)
 	if err := Migrate(ctx, pool); err != nil {

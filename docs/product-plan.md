@@ -187,7 +187,8 @@ durable provider build-status callbacks implemented.
   managers with `--with-registry-auth`; remote credentials remain inside the
   encrypted command envelope.
 - GitHub, GitLab, Gitea, and Bitbucket callbacks publish ordered pending and
-  terminal statuses using snapshotted, host-pinned encrypted credentials.
+  terminal statuses using snapshotted, host-pinned encrypted credentials;
+  exhausted callback retries emit a tenant-scoped durable failure alert.
 - Failure notification rules and durable providers for TLS email,
   Slack-compatible webhooks, PagerDuty, and Opsgenie are implemented. Terminal
   workload-job failures and their notification outbox records commit in one
