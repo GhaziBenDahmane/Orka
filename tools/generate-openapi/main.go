@@ -83,7 +83,7 @@ paths:
 					fmt.Fprintf(&output, "        - name: %s\n          in: path\n          required: true\n          schema:\n            type: string%s\n", parameter[1], format)
 				}
 				if op.method == "get" && op.path == "/v1/templates" {
-					output.WriteString("        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n        - name: cursor\n          in: query\n          schema: {type: string}\n")
+					output.WriteString("        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n        - name: cursor\n          in: query\n          schema: {type: string}\n        - name: query\n          in: query\n          description: Case-insensitive search across template name, description, and namespaced key.\n          schema: {type: string, maxLength: 200}\n")
 				}
 				if isSCIMList {
 					output.WriteString("        - name: filter\n          in: query\n          schema: {type: string}\n        - name: startIndex\n          in: query\n          schema: {type: integer, minimum: 1, default: 1}\n        - name: count\n          in: query\n          schema: {type: integer, minimum: 0, maximum: 100, default: 100}\n")
@@ -420,7 +420,7 @@ paths:
           items: {$ref: '#/components/schemas/DatabaseMigration'}
     DatabaseEngine:
       type: object
-      required: [name, defaultVersion, source, backupCapable, backupExtension]
+      required: [name, defaultVersion, source, artifactDigest, backupCapable, backupExtension]
       properties:
         name: {type: string}
         defaultVersion: {type: string}

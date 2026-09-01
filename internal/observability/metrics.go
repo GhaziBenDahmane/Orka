@@ -468,9 +468,7 @@ func (m *Metrics) renderDatabaseDriverMetrics(ctx context.Context, w io.Writer, 
 			reason = "unavailable"
 		case source != driver.Source:
 			reason = "identity_mismatch"
-		case source == "external" && digest != driver.Digest:
-			reason = "identity_mismatch"
-		case source == "built-in" && digest != "":
+		case digest != driver.Digest:
 			reason = "identity_mismatch"
 		}
 		if reason != "" {

@@ -138,6 +138,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	healthyDatabaseID, overdueDatabaseID, disabledDatabaseID, unprotectedDatabaseID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	healthyDatabasePolicyID, overdueDatabasePolicyID, disabledDatabasePolicyID, healthyDatabaseBackupID, corruptDatabaseBackupID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	databaseDigest := "sha256:" + strings.Repeat("a", 64)
+	builtInDatabaseDigest := "sha256:" + strings.Repeat("d", 64)
 	statements := []struct {
 		query string
 		args  []any
@@ -187,6 +188,8 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		{`INSERT INTO database_backups(id,database_instance_id,status,format,destination_id,finished_at) VALUES($1,$2,'succeeded','native',$3,now())`, []any{corruptDatabaseBackupID, unprotectedDatabaseID, destinationID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Matching','matching','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, databaseDigest}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Mismatch','mismatch','cockroach','v25.2','external',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("b", 64)}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Matching built-in','matching-built-in','postgres','17','built-in',$3,'encrypted')`, []any{uuid.New(), environmentID, builtInDatabaseDigest}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Mismatched built-in','mismatched-built-in','postgres','17','built-in',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("e", 64)}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Unbound','unbound','legacy','1','unbound','','encrypted')`, []any{uuid.New(), environmentID}},
 		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,driver_source,driver_artifact_digest,encrypted_credentials) VALUES($1,$2,'Unavailable','unavailable','missing','1','external',$3,'encrypted')`, []any{uuid.New(), environmentID, "sha256:" + strings.Repeat("c", 64)}},
 		{`INSERT INTO service_reconciliations(compose_service_id,state,consecutive_failures,detail,last_checked_at) VALUES($1,'degraded',2,'replica shortfall',now()-interval '30 seconds')`, []any{serviceID}},
@@ -216,7 +219,7 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	metricSet := NewMetrics()
 	metricSet.SetDatabaseDrivers([]DatabaseDriverInfo{
-		{Engine: "postgres", Source: "built-in", Digest: "sha256:" + strings.Repeat("b", 64), BackupCapable: true},
+		{Engine: "postgres", Source: "built-in", Digest: builtInDatabaseDigest, BackupCapable: true},
 		{Engine: "cockroach", Source: "external", Digest: databaseDigest, BackupCapable: true},
 	})
 	metricSet.Handler(tx).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -329,7 +332,9 @@ func TestDatabaseMetricsQueriesRemainValid(t *testing.T) {
 		`dockyard_template_repository_sync_running_age_seconds{organization="` + organizationB.String() + `",repository="` + templateRunning.String() + `"}`,
 		`dockyard_template_repository_sync_failed{organization="` + organizationA.String() + `",repository="` + templateFailed.String() + `"} 1`,
 		`dockyard_database_driver_info{engine="cockroach",source="external",digest="` + databaseDigest + `",backup_capable="true"} 1`,
+		`dockyard_database_driver_info{engine="postgres",source="built-in",digest="` + builtInDatabaseDigest + `",backup_capable="true"} 1`,
 		`dockyard_database_driver_binding_issues{engine="cockroach",reason="identity_mismatch"} 1`,
+		`dockyard_database_driver_binding_issues{engine="postgres",reason="identity_mismatch"} 1`,
 		`dockyard_database_driver_binding_issues{engine="legacy",reason="unbound"} 1`,
 		`dockyard_database_driver_binding_issues{engine="missing",reason="unavailable"} 1`,
 		`dockyard_volume_backups{status="succeeded"} 2`,
