@@ -254,6 +254,54 @@ func TestLoadRejectsAmbiguousSecretSources(t *testing.T) {
 	}
 }
 
+func TestSecretEnvRejectsUnsafeSecretFiles(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		make func(*testing.T, string) string
+		want string
+	}{
+		{
+			name: "symbolic link",
+			make: func(t *testing.T, directory string) string {
+				target := filepath.Join(directory, "target")
+				link := filepath.Join(directory, "secret")
+				if err := os.WriteFile(target, []byte("secret"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+				return link
+			},
+			want: "regular file",
+		},
+		{
+			name: "directory",
+			make: func(_ *testing.T, directory string) string { return directory },
+			want: "regular file",
+		},
+		{
+			name: "oversized",
+			make: func(t *testing.T, directory string) string {
+				path := filepath.Join(directory, "secret")
+				if err := os.WriteFile(path, []byte(strings.Repeat("x", int(maxConfigSecretFileBytes)+1)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			want: "between 1 and",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("DOCKYARD_TEST_SECRET", "")
+			t.Setenv("DOCKYARD_TEST_SECRET_FILE", test.make(t, t.TempDir()))
+			if _, err := secretEnv("DOCKYARD_TEST_SECRET"); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadRequiresBoundedMetricsToken(t *testing.T) {
 	for name, value := range map[string]string{
 		"missing":   "",

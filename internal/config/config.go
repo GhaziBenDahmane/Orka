@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
@@ -58,6 +59,8 @@ type Config struct {
 
 var swarmNetworkName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
 var publicHostnameLabel = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
+
+const maxConfigSecretFileBytes int64 = 1 << 20
 
 func Load() (Config, error) {
 	ttl, err := time.ParseDuration(env("DOCKYARD_SESSION_TTL", "24h"))
@@ -224,14 +227,16 @@ func Load() (Config, error) {
 		}
 	}
 	if agentListenAddr != "" {
-		serverCertificate, readErr := os.ReadFile(agentServerCertFile)
+		serverCertificate, readErr := readStableConfigFile("DOCKYARD_AGENT_SERVER_CERT_FILE", agentServerCertFile, maxConfigSecretFileBytes)
 		if readErr != nil {
-			return Config{}, fmt.Errorf("read DOCKYARD_AGENT_SERVER_CERT_FILE: %w", readErr)
+			return Config{}, readErr
 		}
-		serverKey, readErr := os.ReadFile(agentServerKeyFile)
+		defer clear(serverCertificate)
+		serverKey, readErr := readStableConfigFile("DOCKYARD_AGENT_SERVER_KEY_FILE", agentServerKeyFile, maxConfigSecretFileBytes)
 		if readErr != nil {
-			return Config{}, fmt.Errorf("read DOCKYARD_AGENT_SERVER_KEY_FILE: %w", readErr)
+			return Config{}, readErr
 		}
+		defer clear(serverKey)
 		authority, server, validationErr := agentpki.ValidateServerCredentialsWithTrust([]byte(agentCACertificate), []byte(agentCAKey), agentCATrustBundle, serverCertificate, serverKey, time.Now())
 		if validationErr != nil {
 			return Config{}, fmt.Errorf("validate agent TLS credentials: %w", validationErr)
@@ -381,13 +386,50 @@ func secretEnv(key string) (string, error) {
 		return strings.TrimSpace(value), nil
 	}
 	if path != "" {
-		value, err := os.ReadFile(path)
+		contents, err := readStableConfigFile(key+"_FILE", path, maxConfigSecretFileBytes)
 		if err != nil {
-			return "", fmt.Errorf("read %s_FILE: %w", key, err)
+			return "", err
 		}
-		return strings.TrimSpace(string(value)), nil
+		defer clear(contents)
+		return strings.TrimSpace(string(contents)), nil
 	}
 	return "", nil
+}
+
+func readStableConfigFile(name, path string, maximum int64) ([]byte, error) {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", name, err)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must name a regular file, not a symbolic link or directory", name)
+	}
+	if before.Size() < 1 || before.Size() > maximum {
+		return nil, fmt.Errorf("%s must contain between 1 and %d bytes", name, maximum)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", name, err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return nil, fmt.Errorf("%s changed while it was opened", name)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", name, err)
+	}
+	after, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
+		clear(contents)
+		return nil, fmt.Errorf("%s changed while it was read", name)
+	}
+	if int64(len(contents)) > maximum {
+		clear(contents)
+		return nil, fmt.Errorf("%s exceeds %d bytes", name, maximum)
+	}
+	return contents, nil
 }
 
 func env(key, fallback string) string {
