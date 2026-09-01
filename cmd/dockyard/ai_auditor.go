@@ -254,16 +254,34 @@ func auditorSecretValue(name string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", name, err)
+	}
+	if !before.Mode().IsRegular() {
+		return "", fmt.Errorf("%s_FILE must name a regular file, not a symbolic link", name)
+	}
+	if before.Size() < 1 || before.Size() > maxAuditorSecretBytes+1 {
+		return "", fmt.Errorf("%s_FILE size is outside the allowed range", name)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s_FILE: %w", name, err)
 	}
 	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return "", fmt.Errorf("%s_FILE changed while it was opened", name)
+	}
 	data, err := io.ReadAll(io.LimitReader(file, maxAuditorSecretBytes+2))
 	if err != nil {
 		return "", fmt.Errorf("read %s_FILE: %w", name, err)
 	}
 	defer clear(data)
+	after, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
+		return "", fmt.Errorf("%s_FILE changed while it was read", name)
+	}
 	if len(data) > maxAuditorSecretBytes+1 {
 		return "", fmt.Errorf("%s_FILE exceeds the maximum secret size", name)
 	}

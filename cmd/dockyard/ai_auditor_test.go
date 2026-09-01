@@ -368,6 +368,29 @@ func TestAuditorSecretValueFailsClosed(t *testing.T) {
 			t.Fatalf("error=%v", err)
 		}
 	})
+	t.Run("symbolic link", func(t *testing.T) {
+		directory := t.TempDir()
+		target := directory + "/target"
+		link := directory + "/secret"
+		if err := os.WriteFile(target, []byte("file-secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", "")
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", link)
+		if _, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET"); err == nil || !strings.Contains(err.Error(), "regular file, not a symbolic link") {
+			t.Fatalf("error=%v", err)
+		}
+	})
+	t.Run("directory", func(t *testing.T) {
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET", "")
+		t.Setenv("DOCKYARD_TEST_AUDITOR_SECRET_FILE", t.TempDir())
+		if _, err := auditorSecretValue("DOCKYARD_TEST_AUDITOR_SECRET"); err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("error=%v", err)
+		}
+	})
 }
 
 func TestRunAIAuditorRejectsInvalidSecretConfiguration(t *testing.T) {
