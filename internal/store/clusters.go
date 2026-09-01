@@ -14,7 +14,7 @@ import (
 
 var ErrLeaseLost = errors.New("command lease is no longer valid")
 
-const expireAgentUpgradeVerifications = `UPDATE cluster_commands SET status='failed',last_error='replacement agent did not confirm the requested image before the verification deadline',finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' AND run_after<=now()`
+const agentUpgradeVerificationTimeout = "replacement agent did not confirm the requested image before the verification deadline"
 
 type Cluster struct {
 	ID                                     uuid.UUID                    `json:"id"`
@@ -313,7 +313,7 @@ func (s *Store) recordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
+	if err = expireAgentUpgradeVerificationsTx(ctx, tx, clusterID, nil); err != nil {
 		return err
 	}
 	if agentUpdateState == "completed" {
@@ -321,11 +321,35 @@ func (s *Store) recordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 			return err
 		}
 	} else if agentUpdateState == "paused" || agentUpdateState == "rollback_started" || agentUpdateState == "rollback_paused" || agentUpdateState == "rollback_completed" {
-		if _, err = tx.Exec(ctx, `UPDATE cluster_commands SET status='failed',last_error='agent Swarm update entered ' || $2 || '; reported image ' || $3,finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying'`, clusterID, agentUpdateState, agentImage); err != nil {
-			return err
+		reason := "agent Swarm update entered " + agentUpdateState + "; reported image " + agentImage
+		rows, updateErr := tx.Query(ctx, `UPDATE cluster_commands SET status='failed',last_error=$2,finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' RETURNING id`, clusterID, reason)
+		if updateErr != nil {
+			return updateErr
+		}
+		commandIDs, collectErr := collectUUIDRows(rows)
+		if collectErr != nil {
+			return collectErr
+		}
+		for _, commandID := range commandIDs {
+			if err = queueAgentUpgradeFailureNotificationTx(ctx, tx, clusterID, commandID, reason); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func collectUUIDRows(rows pgx.Rows) ([]uuid.UUID, error) {
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) EnqueueClusterCommand(ctx context.Context, clusterID, commandID uuid.UUID, kind, encryptedPayload string) (ClusterCommand, error) {
@@ -402,7 +426,7 @@ func (s *Store) EnqueueAgentUpgradeWithAudit(ctx context.Context, principal Prin
 func enqueueAgentUpgradeTx(ctx context.Context, tx pgx.Tx, organizationID, clusterID, commandID uuid.UUID, encryptedPayload, targetImage string) (ClusterCommand, error) {
 	item := ClusterCommand{ID: commandID, ClusterID: clusterID, Kind: "agent.upgrade", TargetImage: targetImage, Status: "pending"}
 	var err error
-	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
+	if err = expireAgentUpgradeVerificationsTx(ctx, tx, clusterID, nil); err != nil {
 		return ClusterCommand{}, err
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO cluster_commands(id,cluster_id,kind,encrypted_payload,target_image) SELECT $1,c.id,'agent.upgrade',$3,$4 FROM clusters c WHERE c.id=$2 AND ($5::uuid='00000000-0000-0000-0000-000000000000' OR c.organization_id=$5) AND c.state='active' AND c.last_seen_at>now()-interval '2 minutes' RETURNING created_at`, commandID, clusterID, encryptedPayload, targetImage, organizationID).Scan(&item.CreatedAt)
@@ -444,7 +468,7 @@ func (s *Store) GetClusterCommand(ctx context.Context, clusterID, commandID uuid
 		return ClusterCommand{}, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications+` AND id=$2`, clusterID, commandID); err != nil {
+	if err = expireAgentUpgradeVerificationsTx(ctx, tx, clusterID, &commandID); err != nil {
 		return ClusterCommand{}, err
 	}
 	err = tx.QueryRow(ctx, `SELECT id,cluster_id,kind,status,attempts,target_image,encrypted_result,last_error,created_at,lease_expires_at FROM cluster_commands WHERE id=$1 AND cluster_id=$2`, commandID, clusterID).Scan(&item.ID, &item.ClusterID, &item.Kind, &item.Status, &item.Attempts, &item.TargetImage, &item.EncryptedResult, &item.LastError, &item.CreatedAt, &item.LeaseExpiresAt)
@@ -466,7 +490,7 @@ func (s *Store) ListAgentUpgrades(ctx context.Context, organizationID uuid.UUID,
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `UPDATE cluster_commands command SET status='failed',last_error='replacement agent did not confirm the requested image before the verification deadline',finished_at=now() FROM clusters cluster WHERE command.cluster_id=cluster.id AND cluster.organization_id=$1 AND command.kind='agent.upgrade' AND command.status='verifying' AND command.run_after<=now()`, organizationID); err != nil {
+	if err = expireOrganizationAgentUpgradeVerificationsTx(ctx, tx, organizationID); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `SELECT command.id,command.cluster_id,command.kind,command.status,command.attempts,command.target_image,command.last_error,command.created_at,command.lease_expires_at FROM cluster_commands command JOIN clusters cluster ON cluster.id=command.cluster_id WHERE cluster.organization_id=$1 AND command.kind='agent.upgrade' ORDER BY command.created_at DESC,command.id DESC LIMIT $2`, organizationID, limit)
@@ -573,7 +597,7 @@ func (s *Store) claimClusterCommand(ctx context.Context, clusterID uuid.UUID, ce
 			return ClusterCommand{}, err
 		}
 	}
-	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
+	if err = expireAgentUpgradeVerificationsTx(ctx, tx, clusterID, nil); err != nil {
 		return ClusterCommand{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE cluster_commands command SET status='cancelled',lease_id=NULL,lease_expires_at=NULL,last_error='originating worker lease lost',finished_at=now()
@@ -581,9 +605,35 @@ func (s *Store) claimClusterCommand(ctx context.Context, clusterID uuid.UUID, ce
 		AND NOT EXISTS(SELECT 1 FROM jobs job WHERE job.id=command.owner_job_id AND job.status='running' AND job.lease_id=command.owner_job_lease_id AND job.locked_at>=now()-interval '1 minute')`, clusterID); err != nil {
 		return ClusterCommand{}, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'pending' END,lease_id=NULL,lease_expires_at=NULL,run_after=now()+interval '5 seconds',last_error='agent lease expired',finished_at=CASE WHEN attempts>=max_attempts THEN now() ELSE NULL END WHERE cluster_id=$1 AND status='leased' AND lease_expires_at<now()`, clusterID)
+	rows, err := tx.Query(ctx, `UPDATE cluster_commands SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'pending' END,lease_id=NULL,lease_expires_at=NULL,run_after=now()+interval '5 seconds',last_error='agent lease expired',finished_at=CASE WHEN attempts>=max_attempts THEN now() ELSE NULL END WHERE cluster_id=$1 AND status='leased' AND lease_expires_at<now() RETURNING id,kind,status`, clusterID)
 	if err != nil {
 		return ClusterCommand{}, err
+	}
+	type expiredCommand struct {
+		id     uuid.UUID
+		kind   string
+		status string
+	}
+	expired := []expiredCommand{}
+	for rows.Next() {
+		var item expiredCommand
+		if err = rows.Scan(&item.id, &item.kind, &item.status); err != nil {
+			rows.Close()
+			return ClusterCommand{}, err
+		}
+		expired = append(expired, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return ClusterCommand{}, err
+	}
+	rows.Close()
+	for _, item := range expired {
+		if item.kind == "agent.upgrade" && item.status == "failed" {
+			if err = queueAgentUpgradeFailureNotificationTx(ctx, tx, clusterID, item.id, "agent command lease expired after maximum attempts"); err != nil {
+				return ClusterCommand{}, err
+			}
+		}
 	}
 	var item ClusterCommand
 	leaseID := uuid.New()
@@ -671,14 +721,85 @@ func (s *Store) completeClusterCommand(ctx context.Context, clusterID, commandID
 	if err = lockClusterCommandOwner(ctx, tx, clusterID, commandID); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE cluster_commands SET status=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN 'verifying' ELSE $4 END,encrypted_result=$5,last_error=$6,finished_at=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN NULL ELSE now() END,run_after=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN now()+interval '15 minutes' ELSE run_after END,lease_id=NULL,lease_expires_at=NULL WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now()`, commandID, clusterID, leaseID, status, encryptedResult, message)
+	var kind string
+	err = tx.QueryRow(ctx, `UPDATE cluster_commands SET status=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN 'verifying' ELSE $4 END,encrypted_result=$5,last_error=$6,finished_at=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN NULL ELSE now() END,run_after=CASE WHEN $4='succeeded' AND kind='agent.upgrade' THEN now()+interval '15 minutes' ELSE run_after END,lease_id=NULL,lease_expires_at=NULL WHERE id=$1 AND cluster_id=$2 AND status='leased' AND lease_id=$3 AND lease_expires_at>now() RETURNING kind`, commandID, clusterID, leaseID, status, encryptedResult, message).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrLeaseLost
+	}
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrLeaseLost
+	if failed && kind == "agent.upgrade" {
+		if err = queueAgentUpgradeFailureNotificationTx(ctx, tx, clusterID, commandID, message); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
+}
+
+func expireAgentUpgradeVerificationsTx(ctx context.Context, tx pgx.Tx, clusterID uuid.UUID, commandID *uuid.UUID) error {
+	rows, err := tx.Query(ctx, `UPDATE cluster_commands SET status='failed',last_error=$3,finished_at=now() WHERE cluster_id=$1 AND kind='agent.upgrade' AND status='verifying' AND run_after<=now() AND ($2::uuid IS NULL OR id=$2) RETURNING id`, clusterID, commandID, agentUpgradeVerificationTimeout)
+	if err != nil {
+		return err
+	}
+	commandIDs, err := collectUUIDRows(rows)
+	if err != nil {
+		return err
+	}
+	for _, id := range commandIDs {
+		if err = queueAgentUpgradeFailureNotificationTx(ctx, tx, clusterID, id, agentUpgradeVerificationTimeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func expireOrganizationAgentUpgradeVerificationsTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID) error {
+	rows, err := tx.Query(ctx, `UPDATE cluster_commands command SET status='failed',last_error=$2,finished_at=now() FROM clusters cluster WHERE command.cluster_id=cluster.id AND cluster.organization_id=$1 AND command.kind='agent.upgrade' AND command.status='verifying' AND command.run_after<=now() RETURNING command.id,command.cluster_id`, organizationID, agentUpgradeVerificationTimeout)
+	if err != nil {
+		return err
+	}
+	type expiredUpgrade struct{ commandID, clusterID uuid.UUID }
+	items := []expiredUpgrade{}
+	for rows.Next() {
+		var item expiredUpgrade
+		if err = rows.Scan(&item.commandID, &item.clusterID); err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, item := range items {
+		if err = queueAgentUpgradeFailureNotificationTx(ctx, tx, item.clusterID, item.commandID, agentUpgradeVerificationTimeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func queueAgentUpgradeFailureNotificationTx(ctx context.Context, tx pgx.Tx, clusterID, commandID uuid.UUID, reason string) error {
+	var organizationID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT organization_id FROM clusters WHERE id=$1`, clusterID).Scan(&organizationID); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"event":        "agent.upgrade.failed",
+		"resourceType": "agent_upgrade",
+		"resourceId":   commandID.String(),
+		"clusterId":    clusterID.String(),
+		"error":        truncateStore(reason, 8192),
+		"occurredAt":   time.Now().UTC(),
+		"text":         "Dockyard agent.upgrade.failed for cluster " + clusterID.String(),
+	})
+	if err != nil {
+		return err
+	}
+	return queueNotificationDeliveries(ctx, tx, organizationID, "agent.upgrade.failed", "agent_upgrade", commandID.String(), payload)
 }
 
 func lockActiveClusterCertificateTx(ctx context.Context, tx pgx.Tx, clusterID uuid.UUID, certificateSerial string) error {

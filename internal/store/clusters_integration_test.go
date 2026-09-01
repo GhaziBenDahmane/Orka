@@ -274,9 +274,12 @@ func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Pool.Close)
-	organizationID, clusterID := uuid.New(), uuid.New()
+	organizationID, clusterID, notificationEndpointID := uuid.New(), uuid.New(), uuid.New()
 	if _, err = db.Pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Agent upgrade',$2)`, organizationID, "agent-upgrade-"+organizationID.String()); err == nil {
 		_, err = db.Pool.Exec(ctx, `INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, clusterID, organizationID)
+	}
+	if err == nil {
+		_, err = db.Pool.Exec(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'Agent upgrade on-call','webhook','encrypted-url','encrypted-secret',ARRAY['agent.upgrade.failed'])`, notificationEndpointID, organizationID)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -365,8 +368,80 @@ func TestAgentUpgradeRequiresReplacementHeartbeat(t *testing.T) {
 	if err != nil || timedOut.Status != "failed" || !strings.Contains(timedOut.LastError, "verification deadline") {
 		t.Fatalf("timed-out upgrade=%#v err=%v", timedOut, err)
 	}
-	if _, err = db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-after-timeout", rollbackTarget); err != nil {
+	agentFailure, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-agent-failure", rollbackTarget)
+	if err != nil {
 		t.Fatalf("replacement upgrade after timeout: %v", err)
+	}
+	claimed, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != agentFailure.ID || claimed.LeaseID == nil {
+		t.Fatalf("claimed agent-failure upgrade=%#v err=%v", claimed, err)
+	}
+	if err = db.CompleteClusterCommand(ctx, clusterID, agentFailure.ID, *claimed.LeaseID, "encrypted-agent-error", true); err != nil {
+		t.Fatal(err)
+	}
+
+	leaseFailure, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-lease-failure", rollbackTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != leaseFailure.ID || claimed.LeaseID == nil {
+		t.Fatalf("claimed lease-failure upgrade=%#v err=%v", claimed, err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE cluster_commands SET attempts=max_attempts,lease_expires_at=now()-interval '1 second' WHERE id=$1`, leaseFailure.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("claim after exhausted lease=%v, want not found", err)
+	}
+	listTimeout, err := db.EnqueueAgentUpgrade(ctx, clusterID, uuid.New(), "encrypted-list-timeout", rollbackTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err = db.ClaimClusterCommand(ctx, clusterID, time.Minute)
+	if err != nil || claimed.ID != listTimeout.ID || claimed.LeaseID == nil {
+		t.Fatalf("claimed list-timeout upgrade=%#v err=%v", claimed, err)
+	}
+	if err = db.CompleteClusterCommand(ctx, clusterID, listTimeout.ID, *claimed.LeaseID, "encrypted-submission", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Pool.Exec(ctx, `UPDATE cluster_commands SET run_after=now()-interval '1 second' WHERE id=$1`, listTimeout.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ListAgentUpgrades(ctx, organizationID, 20); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.Pool.Query(ctx, `SELECT resource_id,payload->>'clusterId',payload->>'error' FROM notification_deliveries WHERE endpoint_id=$1 AND event_type='agent.upgrade.failed' ORDER BY created_at,id`, notificationEndpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures := map[string]string{}
+	for rows.Next() {
+		var commandID, notifiedClusterID, reason string
+		if err = rows.Scan(&commandID, &notifiedClusterID, &reason); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		if notifiedClusterID != clusterID.String() || strings.Contains(reason, "encrypted-") {
+			rows.Close()
+			t.Fatalf("unsafe agent-upgrade notification command=%s cluster=%s reason=%q", commandID, notifiedClusterID, reason)
+		}
+		failures[commandID] = reason
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+	for id, reasonPart := range map[uuid.UUID]string{rollback.ID: "rollback_completed", timedOut.ID: "verification deadline", agentFailure.ID: "agent reported command failure", leaseFailure.ID: "maximum attempts", listTimeout.ID: "verification deadline"} {
+		if !strings.Contains(failures[id.String()], reasonPart) {
+			t.Fatalf("agent upgrade %s notification reason=%q, want %q", id, failures[id.String()], reasonPart)
+		}
+	}
+	var notificationJobs int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId' IN (SELECT id::text FROM notification_deliveries WHERE endpoint_id=$1)`, notificationEndpointID).Scan(&notificationJobs); err != nil || notificationJobs != 5 {
+		t.Fatalf("agent upgrade notification jobs=%d err=%v", notificationJobs, err)
 	}
 }
 
