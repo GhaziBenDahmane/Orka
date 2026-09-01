@@ -30,6 +30,7 @@ import (
 type clusterContextKey string
 
 const clusterIDKey clusterContextKey = "cluster-id"
+const clusterCertificateSerialKey clusterContextKey = "cluster-certificate-serial"
 
 const maxAgentIdentityRequestBytes = 128 << 10
 
@@ -84,7 +85,12 @@ func (s *Server) agentRotateCertificate(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) agentNextCommand(w http.ResponseWriter, r *http.Request) {
 	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
-	command, err := s.Store.ClaimClusterCommand(r.Context(), clusterID, 45*time.Second)
+	certificateSerial := r.Context().Value(clusterCertificateSerialKey).(string)
+	command, err := s.Store.ClaimAuthenticatedClusterCommand(r.Context(), clusterID, certificateSerial, 45*time.Second)
+	if errors.Is(err, store.ErrAuthenticationStateChanged) {
+		writeError(w, http.StatusUnauthorized, "invalid_agent_certificate", "agent certificate is invalid, expired, or superseded")
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -96,7 +102,7 @@ func (s *Server) agentNextCommand(w http.ResponseWriter, r *http.Request) {
 	payload, err := s.Box.Decrypt(command.EncryptedPayload, "cluster-command:"+command.ID.String())
 	if err != nil {
 		result, _ := s.Box.Encrypt([]byte(`{"error":"command payload cannot be decrypted"}`), "cluster-command-result:"+command.ID.String())
-		_ = s.Store.CompleteClusterCommand(r.Context(), clusterID, command.ID, *command.LeaseID, result, true)
+		_ = s.Store.CompleteAuthenticatedClusterCommand(r.Context(), clusterID, command.ID, *command.LeaseID, certificateSerial, result, true)
 		writeError(w, 500, "command_decryption_failed", "cluster command cannot be decrypted")
 		return
 	}
@@ -105,11 +111,16 @@ func (s *Server) agentNextCommand(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentRenewCommand(w http.ResponseWriter, r *http.Request) {
 	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
+	certificateSerial := r.Context().Value(clusterCertificateSerialKey).(string)
 	commandID, leaseID, ok := commandLeaseIDs(w, r)
 	if !ok {
 		return
 	}
-	if err := s.Store.RenewClusterCommand(r.Context(), clusterID, commandID, leaseID, 45*time.Second); err != nil {
+	if err := s.Store.RenewAuthenticatedClusterCommand(r.Context(), clusterID, commandID, leaseID, certificateSerial, 45*time.Second); err != nil {
+		if errors.Is(err, store.ErrAuthenticationStateChanged) {
+			writeError(w, http.StatusUnauthorized, "invalid_agent_certificate", "agent certificate is invalid, expired, or superseded")
+			return
+		}
 		if errors.Is(err, store.ErrLeaseLost) {
 			writeError(w, http.StatusConflict, "lease_lost", err.Error())
 			return
@@ -122,6 +133,7 @@ func (s *Server) agentRenewCommand(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentCompleteCommand(w http.ResponseWriter, r *http.Request) {
 	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
+	certificateSerial := r.Context().Value(clusterCertificateSerialKey).(string)
 	commandID, leaseID, ok := commandLeaseIDs(w, r)
 	if !ok {
 		return
@@ -143,7 +155,11 @@ func (s *Server) agentCompleteCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "encryption_failed", "command result cannot be encrypted")
 		return
 	}
-	if err := s.Store.CompleteClusterCommand(r.Context(), clusterID, commandID, leaseID, encryptedResult, input.Error != ""); err != nil {
+	if err := s.Store.CompleteAuthenticatedClusterCommand(r.Context(), clusterID, commandID, leaseID, certificateSerial, encryptedResult, input.Error != ""); err != nil {
+		if errors.Is(err, store.ErrAuthenticationStateChanged) {
+			writeError(w, http.StatusUnauthorized, "invalid_agent_certificate", "agent certificate is invalid, expired, or superseded")
+			return
+		}
 		if errors.Is(err, store.ErrLeaseLost) {
 			writeError(w, http.StatusConflict, "lease_lost", err.Error())
 			return
@@ -184,7 +200,9 @@ func (s *Server) requireAgentCertificate(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "invalid_agent_certificate", "agent certificate is invalid, expired, or superseded")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clusterIDKey, clusterID)))
+		ctx := context.WithValue(r.Context(), clusterIDKey, clusterID)
+		ctx = context.WithValue(ctx, clusterCertificateSerialKey, hex.EncodeToString(certificate.SerialNumber.Bytes()))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -212,7 +230,12 @@ func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clusterID := r.Context().Value(clusterIDKey).(uuid.UUID)
-	if err := s.Store.RecordClusterHeartbeat(r.Context(), clusterID, input.AgentVersion, input.AgentImage, input.AgentUpdateState, input.DockerVersion, input.Capacity, input.Capabilities); err != nil {
+	certificateSerial := r.Context().Value(clusterCertificateSerialKey).(string)
+	if err := s.Store.RecordAuthenticatedClusterHeartbeat(r.Context(), clusterID, certificateSerial, input.AgentVersion, input.AgentImage, input.AgentUpdateState, input.DockerVersion, input.Capacity, input.Capabilities); err != nil {
+		if errors.Is(err, store.ErrAuthenticationStateChanged) {
+			writeError(w, http.StatusUnauthorized, "invalid_agent_certificate", "agent certificate is invalid, expired, or superseded")
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}

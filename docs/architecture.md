@@ -187,8 +187,11 @@ Heartbeats use a separate optional TLS listener configured with
 `DOCKYARD_AGENT_LISTEN_ADDR`, `DOCKYARD_AGENT_SERVER_CERT_FILE`, and
 `DOCKYARD_AGENT_SERVER_KEY_FILE`. It requires a CA-verified client certificate
 and matches its serial number against the cluster's current or pending database
-record. Reenrollment with a newly issued token immediately supersedes both
-identities. Controller
+record. Every subsequent agent write revalidates that exact serial while
+holding the cluster row, so certificate promotion, reenrollment, expiry,
+disablement, and deletion are transactionally ordered with heartbeats and
+command state transitions. Reenrollment with a newly issued token immediately
+supersedes both identities. Controller
 startup validates that the configured active CA is current, self-signed,
 signing-capable, and matches its private key. During a bounded CA rollover it
 accepts one different, currently valid previous CA and permits the listener

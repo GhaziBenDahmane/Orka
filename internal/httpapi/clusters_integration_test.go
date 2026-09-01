@@ -226,7 +226,7 @@ func TestAgentUpgradeAPIWaitsForHeartbeatConvergence(t *testing.T) {
 		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, []any{userID, userID.String() + "@example.test"}},
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, []any{organizationID, userID}},
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '5 minutes')`, []any{uuid.New(), userID, cryptox.Digest(token)}},
-		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at) VALUES($1,$2,'Remote','remote','active',now())`, []any{clusterID, organizationID}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,last_seen_at,certificate_serial,certificate_not_after) VALUES($1,$2,'Remote','remote','active',now(),'upgrade-test',now()+interval '1 hour')`, []any{clusterID, organizationID}},
 	} {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
 			t.Fatal(err)
@@ -418,6 +418,10 @@ func clusterUpgradeRequest(t *testing.T, url, token string, organizationID uuid.
 
 func postAgentHeartbeat(t *testing.T, api *Server, clusterID uuid.UUID, payload map[string]any) {
 	t.Helper()
+	var certificateSerial string
+	if err := api.Store.Pool.QueryRow(context.Background(), `SELECT certificate_serial FROM clusters WHERE id=$1`, clusterID).Scan(&certificateSerial); err != nil {
+		t.Fatal(err)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -426,6 +430,7 @@ func postAgentHeartbeat(t *testing.T, api *Server, clusterID uuid.UUID, payload 
 	request := httptest.NewRequest(http.MethodPost, "/v1/agent/heartbeat", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request = request.WithContext(context.WithValue(request.Context(), clusterIDKey, clusterID))
+	request = request.WithContext(context.WithValue(request.Context(), clusterCertificateSerialKey, certificateSerial))
 	api.agentHeartbeat(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("heartbeat status=%d body=%s", recorder.Code, recorder.Body.String())

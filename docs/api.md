@@ -317,7 +317,11 @@ the deletion finalizer. The issued client certificate is bound to the cluster
 ID and expires after seven days by default.
 Heartbeat traffic is accepted only on the optional dedicated agent listener;
 the client certificate must chain to the configured active/previous CA trust
-bundle and its serial must match the cluster's latest enrollment. Enrollment,
+bundle and its serial must match the cluster's latest enrollment. Heartbeat,
+command claim, lease renewal, and result completion transactions re-lock the
+cluster and revalidate that exact certificate serial. Certificate promotion,
+expiry, cluster disablement, and deletion therefore fence requests that passed
+the listener check but had not yet crossed their mutation boundary. Enrollment,
 heartbeat, and rotation responses return the authenticated trust bundle, the
 active signing CA, and its SHA-256 fingerprint. Agents persist broadened trust
 before atomically rotating to the active signer. Cluster list responses expose
@@ -328,7 +332,8 @@ managed cluster converged before retiring the previous CA. See
 Remote environments select a cluster with `clusterId` when they are created.
 Application deploy, removal, logs, and node operations use encrypted-at-rest
 commands claimed by the outbound agent. Expiring leases are retried and every
-renewal/completion is fenced by a per-attempt UUID. Digest-pinned agent-upgrade
+renewal/completion is fenced by both the mTLS certificate serial and a
+per-attempt UUID. Digest-pinned agent-upgrade
 queueing and pre-execution cancellation commit with their operator audit events;
 an evidence failure leaves no command or preserves the pending command.
 Cluster responses also expose the last `capabilities` heartbeat document.

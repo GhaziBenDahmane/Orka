@@ -274,6 +274,17 @@ func (s *Store) RotateClusterCertificate(ctx context.Context, clusterID uuid.UUI
 }
 
 func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity clustercontract.Capacity, capabilities clustercontract.Capabilities) error {
+	return s.recordClusterHeartbeat(ctx, clusterID, "", agentVersion, agentImage, agentUpdateState, dockerVersion, capacity, capabilities)
+}
+
+func (s *Store) RecordAuthenticatedClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, certificateSerial, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity clustercontract.Capacity, capabilities clustercontract.Capabilities) error {
+	if certificateSerial == "" {
+		return ErrAuthenticationStateChanged
+	}
+	return s.recordClusterHeartbeat(ctx, clusterID, certificateSerial, agentVersion, agentImage, agentUpdateState, dockerVersion, capacity, capabilities)
+}
+
+func (s *Store) recordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID, certificateSerial, agentVersion, agentImage, agentUpdateState, dockerVersion string, capacity clustercontract.Capacity, capabilities clustercontract.Capabilities) error {
 	if err := clustercontract.ValidateCapacity(capacity); err != nil {
 		return err
 	}
@@ -290,6 +301,11 @@ func (s *Store) RecordClusterHeartbeat(ctx context.Context, clusterID uuid.UUID,
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if certificateSerial != "" {
+		if err = lockActiveClusterCertificateTx(ctx, tx, clusterID, certificateSerial); err != nil {
+			return err
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE clusters SET agent_version=$2,agent_image=$3,agent_update_state=$4,docker_version=$5,capacity=$6,capabilities=$7,last_seen_at=now(),updated_at=now() WHERE id=$1 AND state IN ('active','draining')`, clusterID, agentVersion, agentImage, agentUpdateState, dockerVersion, encoded, encodedCapabilities)
 	if err != nil {
 		return err
@@ -533,6 +549,17 @@ func (s *Store) CancelClusterCommand(ctx context.Context, clusterID, commandID u
 }
 
 func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, leaseDuration time.Duration) (ClusterCommand, error) {
+	return s.claimClusterCommand(ctx, clusterID, "", leaseDuration)
+}
+
+func (s *Store) ClaimAuthenticatedClusterCommand(ctx context.Context, clusterID uuid.UUID, certificateSerial string, leaseDuration time.Duration) (ClusterCommand, error) {
+	if certificateSerial == "" {
+		return ClusterCommand{}, ErrAuthenticationStateChanged
+	}
+	return s.claimClusterCommand(ctx, clusterID, certificateSerial, leaseDuration)
+}
+
+func (s *Store) claimClusterCommand(ctx context.Context, clusterID uuid.UUID, certificateSerial string, leaseDuration time.Duration) (ClusterCommand, error) {
 	if leaseDuration < 10*time.Second || leaseDuration > 5*time.Minute {
 		return ClusterCommand{}, errors.New("invalid command lease duration")
 	}
@@ -541,6 +568,11 @@ func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, le
 		return ClusterCommand{}, err
 	}
 	defer tx.Rollback(ctx)
+	if certificateSerial != "" {
+		if err = lockActiveClusterCertificateTx(ctx, tx, clusterID, certificateSerial); err != nil {
+			return ClusterCommand{}, err
+		}
+	}
 	if _, err = tx.Exec(ctx, expireAgentUpgradeVerifications, clusterID); err != nil {
 		return ClusterCommand{}, err
 	}
@@ -576,11 +608,27 @@ func (s *Store) ClaimClusterCommand(ctx context.Context, clusterID uuid.UUID, le
 }
 
 func (s *Store) RenewClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, leaseDuration time.Duration) error {
+	return s.renewClusterCommand(ctx, clusterID, commandID, leaseID, "", leaseDuration)
+}
+
+func (s *Store) RenewAuthenticatedClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, certificateSerial string, leaseDuration time.Duration) error {
+	if certificateSerial == "" {
+		return ErrAuthenticationStateChanged
+	}
+	return s.renewClusterCommand(ctx, clusterID, commandID, leaseID, certificateSerial, leaseDuration)
+}
+
+func (s *Store) renewClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, certificateSerial string, leaseDuration time.Duration) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if certificateSerial != "" {
+		if err = lockActiveClusterCertificateTx(ctx, tx, clusterID, certificateSerial); err != nil {
+			return err
+		}
+	}
 	if err = lockClusterCommandOwner(ctx, tx, clusterID, commandID); err != nil {
 		return err
 	}
@@ -595,6 +643,17 @@ func (s *Store) RenewClusterCommand(ctx context.Context, clusterID, commandID, l
 }
 
 func (s *Store) CompleteClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, encryptedResult string, failed bool) error {
+	return s.completeClusterCommand(ctx, clusterID, commandID, leaseID, "", encryptedResult, failed)
+}
+
+func (s *Store) CompleteAuthenticatedClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, certificateSerial, encryptedResult string, failed bool) error {
+	if certificateSerial == "" {
+		return ErrAuthenticationStateChanged
+	}
+	return s.completeClusterCommand(ctx, clusterID, commandID, leaseID, certificateSerial, encryptedResult, failed)
+}
+
+func (s *Store) completeClusterCommand(ctx context.Context, clusterID, commandID, leaseID uuid.UUID, certificateSerial, encryptedResult string, failed bool) error {
 	status, message := "succeeded", ""
 	if failed {
 		status, message = "failed", "agent reported command failure"
@@ -604,6 +663,11 @@ func (s *Store) CompleteClusterCommand(ctx context.Context, clusterID, commandID
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if certificateSerial != "" {
+		if err = lockActiveClusterCertificateTx(ctx, tx, clusterID, certificateSerial); err != nil {
+			return err
+		}
+	}
 	if err = lockClusterCommandOwner(ctx, tx, clusterID, commandID); err != nil {
 		return err
 	}
@@ -615,6 +679,15 @@ func (s *Store) CompleteClusterCommand(ctx context.Context, clusterID, commandID
 		return ErrLeaseLost
 	}
 	return tx.Commit(ctx)
+}
+
+func lockActiveClusterCertificateTx(ctx context.Context, tx pgx.Tx, clusterID uuid.UUID, certificateSerial string) error {
+	var lockedClusterID uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM clusters WHERE id=$1 AND state IN ('active','draining') AND certificate_serial=$2 AND certificate_not_after>now() FOR NO KEY UPDATE`, clusterID, certificateSerial).Scan(&lockedClusterID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrAuthenticationStateChanged
+	}
+	return err
 }
 
 func lockClusterCommandOwner(ctx context.Context, tx pgx.Tx, clusterID, commandID uuid.UUID) error {

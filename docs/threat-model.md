@@ -86,7 +86,11 @@ The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,
 and bounded-cardinality request metrics. Both listeners bound header size and
 header, request, response, and idle durations. Agent authentication still runs
-before any command or heartbeat handler.
+before any command or heartbeat handler. The authenticated cluster and exact
+certificate serial are carried into every agent write transaction and
+revalidated under the cluster row lock. Supersession, expiry, disablement, or
+deletion that wins the lock prevents an already-authenticated heartbeat,
+command claim, lease renewal, or result completion from committing afterward.
 
 The packaged Swarm topology isolates controller ingress from tenant-routed
 services on a dedicated encrypted, stack-scoped Traefik edge network. The
