@@ -71,9 +71,12 @@ master-key rotation. Recovery codes are random, shown once, stored only as
 digests, and atomically consumed. Session issuance locks the user record and
 binds the verified password hash and encrypted TOTP secret to the transaction;
 the accepted TOTP counter is advanced in that same transaction to reject code
-replay and stale-credential races. MFA lifecycle changes require a live local
-session, current password where credential state changes, proof of possession,
-session revocation, and durable tenant audit evidence.
+replay and stale-credential races. MFA enrollment confirmation locks and
+revalidates the exact local session and active user before changing credential
+state, so a concurrent logout, revocation, or deprovisioning wins before the
+confirmation can commit. MFA lifecycle changes require a live local session,
+current password where credential state changes, proof of possession, session
+revocation, and durable tenant audit evidence.
 
 The public and dedicated mTLS agent HTTP surfaces share request correlation,
 security and no-store headers, panic recovery with secret-safe logging, tracing,

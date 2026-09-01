@@ -97,6 +97,9 @@ func (s *Store) PendingMFASecret(ctx context.Context, principal Principal) (stri
 }
 
 func (s *Store) ConfirmMFAEnrollment(ctx context.Context, principal Principal, expectedPending string, acceptedCounter int64, recoveryDigests [][]byte, remoteAddr string) (int64, error) {
+	if principal.ServiceAccountID != nil || principal.UserID == uuid.Nil || principal.SessionID == uuid.Nil {
+		return 0, ErrLocalSessionRequired
+	}
 	if len(recoveryDigests) == 0 {
 		return 0, errors.New("recovery codes are required")
 	}
@@ -105,14 +108,28 @@ func (s *Store) ConfirmMFAEnrollment(ctx context.Context, principal Principal, e
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE users u SET encrypted_totp_secret=$3,pending_encrypted_totp_secret=NULL,totp_last_counter=$4
-		FROM sessions session WHERE u.id=$1 AND session.id=$2 AND session.user_id=u.id AND session.auth_method='local'
-		AND session.expires_at>now() AND u.encrypted_totp_secret IS NULL AND u.pending_encrypted_totp_secret=$3`, principal.UserID, principal.SessionID, expectedPending, acceptedCounter)
+	// Lock the exact credential before changing MFA state. An UPDATE ... FROM
+	// sessions only observes a snapshot of the joined session: a concurrent
+	// logout can delete that row and still let the user update commit. The
+	// explicit row lock makes revocation and confirmation choose one winner.
+	var pending string
+	err = tx.QueryRow(ctx, `SELECT u.pending_encrypted_totp_secret
+		FROM users u JOIN sessions session ON session.user_id=u.id
+		WHERE u.id=$1 AND u.disabled_at IS NULL AND session.id=$2
+		  AND session.auth_method='local' AND session.expires_at>now()
+		  AND u.encrypted_totp_secret IS NULL AND u.pending_encrypted_totp_secret=$3
+		FOR UPDATE OF u,session`, principal.UserID, principal.SessionID, expectedPending).Scan(&pending)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrAuthenticationStateChanged
+	}
 	if err != nil {
 		return 0, err
 	}
-	if tag.RowsAffected() != 1 {
+	if pending != expectedPending {
 		return 0, ErrAuthenticationStateChanged
+	}
+	if _, err = tx.Exec(ctx, `UPDATE users SET encrypted_totp_secret=$2,pending_encrypted_totp_secret=NULL,totp_last_counter=$3 WHERE id=$1`, principal.UserID, expectedPending, acceptedCounter); err != nil {
+		return 0, err
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM user_mfa_recovery_codes WHERE user_id=$1`, principal.UserID); err != nil {
 		return 0, err
@@ -122,7 +139,7 @@ func (s *Store) ConfirmMFAEnrollment(ctx context.Context, principal Principal, e
 			return 0, err
 		}
 	}
-	tag, err = tx.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`, principal.UserID, principal.SessionID)
+	tag, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`, principal.UserID, principal.SessionID)
 	if err != nil {
 		return 0, err
 	}
