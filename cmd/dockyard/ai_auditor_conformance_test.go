@@ -38,7 +38,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	t.Cleanup(db.Pool.Close)
 
 	organizationID, accountID, staleServiceAccountID, clusterID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	ownerID, ownerSessionID := uuid.New(), uuid.New()
+	ownerID, ownerSessionID, insecureAdminID := uuid.New(), uuid.New(), uuid.New()
 	otherOrganizationID, otherAccountID, otherRunID, otherFindingID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	projectID, environmentID, serviceID, mutableRuntimeServiceID, failedFinalizerServiceID, failedDatabaseID, notificationEndpointID, failedNotificationDeliveryID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	customTLSCertificateID, customTLSRouteID := uuid.New(), uuid.New()
@@ -70,6 +70,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, otherOrganizationID)
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, ownerID)
+		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, insecureAdminID)
 	})
 	statements := []struct {
 		query string
@@ -78,6 +79,8 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'AI conformance',$2)`, []any{organizationID, "ai-conformance-" + organizationID.String()}},
 		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Other AI conformance',$2)`, []any{otherOrganizationID, "other-ai-conformance-" + otherOrganizationID.String()}},
 		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!conformance')`, []any{ownerID, ownerID.String() + "@example.test"}},
+		{`INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)`, []any{insecureAdminID, insecureAdminID.String() + "@example.test", "$argon2id$" + secretMarker}},
+		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'admin')`, []any{organizationID, insecureAdminID}},
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 day','local')`, []any{ownerSessionID, ownerID, cryptox.Digest(ownerToken)}},
 		{`INSERT INTO service_accounts(id,organization_id,name,role,enabled) VALUES($1,$2,'conformance-auditor','auditor',true)`, []any{accountID, organizationID}},
 		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 day')`, []any{uuid.New(), accountID, cryptox.Digest(auditorToken)}},
@@ -157,10 +160,29 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 			http.Error(w, "invalid model request", http.StatusBadRequest)
 			return
 		}
-		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") || !strings.Contains(modelRequest.Messages[1].Content, serviceID.String()) || !strings.Contains(modelRequest.Messages[1].Content, customTLSCertificateID.String()) || !strings.Contains(modelRequest.Messages[1].Content, managedNetworkID.String()) || !strings.Contains(modelRequest.Messages[1].Content, staleSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueSourceCredentialID.String()) || !strings.Contains(modelRequest.Messages[1].Content, overdueBackupDestinationID.String()) || !strings.Contains(modelRequest.Messages[1].Content, offlineVolumeRestoreID.String()) || !strings.Contains(modelRequest.Messages[1].Content, templateRepositoryID.String()) || !strings.Contains(modelRequest.Messages[1].Content, notificationEndpointID.String()) || !strings.Contains(modelRequest.Messages[1].Content, auditArchiveID.String()) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRotatedAt"`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeDigestPinnedImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"runtimeMutableImages":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"customTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeTlsPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"managedNetworks"`) || !strings.Contains(modelRequest.Messages[1].Content, `"sourceCredentialPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"backupPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeBackupPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeName":"uploads"`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastBackupArtifactValid":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastRestoreStatus":"failed"`) || !strings.Contains(modelRequest.Messages[1].Content, `"volumeRestorePosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"templateRepositories"`) || !strings.Contains(modelRequest.Messages[1].Content, `"requireSignature":false`) || !strings.Contains(modelRequest.Messages[1].Content, `"lastSyncStatus":"failed"`) || !strings.Contains(modelRequest.Messages[1].Content, `"notificationPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"exhaustedFailures":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"auditLogPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"enabledArchives":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"latestBatchStatus":"failed"`) || !strings.Contains(modelRequest.Messages[1].Content, `"queuePosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"pendingJobs":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"kind":"backup.volume"`) || !strings.Contains(modelRequest.Messages[1].Content, `"finalizerPosture"`) || !strings.Contains(modelRequest.Messages[1].Content, `"failedJobs":1`) || !strings.Contains(modelRequest.Messages[1].Content, `"localCluster"`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":4`) || !strings.Contains(modelRequest.Messages[1].Content, `"nanoCpus":6000000000`) || !strings.Contains(modelRequest.Messages[1].Content, `"nodes":3`) || !strings.Contains(modelRequest.Messages[1].Content, `"readyNodes":2`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyConfigured":true`) || !strings.Contains(modelRequest.Messages[1].Content, `"edgeProxyStatus":"network_missing"`) || !strings.Contains(modelRequest.Messages[1].Content, `"minimumNodes":2`) {
+		if len(modelRequest.Messages) != 2 || !strings.Contains(modelRequest.Messages[0].Content, "untrusted data") || !strings.Contains(modelRequest.Messages[1].Content, "SNAPSHOT_DATA_BEGIN") {
 			t.Error("model request did not contain the bounded platform snapshot and trust instruction")
 			http.Error(w, "incomplete prompt", http.StatusBadRequest)
 			return
+		}
+		requiredSnapshotFragments := []string{
+			serviceID.String(), customTLSCertificateID.String(), managedNetworkID.String(), staleSourceCredentialID.String(), overdueSourceCredentialID.String(),
+			overdueBackupDestinationID.String(), offlineVolumeRestoreID.String(), templateRepositoryID.String(), notificationEndpointID.String(), auditArchiveID.String(),
+			`"lastRotatedAt"`, `"runtimeDigestPinnedImages":1`, `"runtimeMutableImages":1`, `"customTlsPosture"`, `"edgeTlsPosture"`,
+			`"managedNetworks"`, `"sourceCredentialPosture"`, `"backupPosture"`, `"volumeBackupPosture"`, `"volumeName":"uploads"`,
+			`"lastBackupArtifactValid":true`, `"lastRestoreStatus":"failed"`, `"volumeRestorePosture"`, `"templateRepositories"`, `"requireSignature":false`,
+			`"lastSyncStatus":"failed"`, `"notificationPosture"`, `"exhaustedFailures":1`, `"auditLogPosture"`, `"enabledArchives":1`,
+			`"latestBatchStatus":"failed"`, `"queuePosture"`, `"pendingJobs":1`, `"kind":"backup.volume"`, `"identityPosture"`,
+			`"requireSso":false`, `"activeOwners":0`, `"privilegedLocalMembers":1`, `"mfaEnabledPrivilegedLocalMembers":0`,
+			`"finalizerPosture"`, `"failedJobs":1`, `"localCluster"`, `"nodes":4`, `"nanoCpus":6000000000`, `"nodes":3`,
+			`"readyNodes":2`, `"edgeProxyConfigured":true`, `"edgeProxyStatus":"network_missing"`, `"minimumNodes":2`,
+		}
+		for _, fragment := range requiredSnapshotFragments {
+			if !strings.Contains(modelRequest.Messages[1].Content, fragment) {
+				t.Errorf("model request snapshot is missing %q", fragment)
+				http.Error(w, "incomplete prompt", http.StatusBadRequest)
+				return
+			}
 		}
 		modelCalled = true
 		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": `{"summary":"Conformance audit completed","findings":[{"severity":"critical","category":"capacity","title":"Capacity requires review","description":"The service has no recorded deployment capacity evidence.","resourceType":"service","resourceId":"` + serviceID.String() + `","evidence":{"source":"model-conformance"},"remediation":"Record a successful deployment and capacity observation."}]}`}}}})
@@ -240,7 +262,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, title := range []string{"Organization has no active owner", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Database lacks a successful backup", "Database lacks a successful restore drill", "Managed network provisioning failed", "Resource deletion finalizer requires intervention", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Volume restore has not been validated", "Offline volume recovery failed", "Template repository does not require signatures", "Template repository synchronization failed", "Failure notifications have coverage gaps", "Notification delivery requires intervention", "Immutable audit archive delivery failed", "Platform job queue is stalled", "Capacity requires review"} {
+	for _, title := range []string{"Organization has no active owner", "Privileged local accounts lack MFA", "Mandatory SSO is disabled", "Local Swarm has no manager", "Local Swarm nodes are not ready", "Local Swarm nodes are drained", "Local runtime capability is missing", "Remote agent image is not immutable", "Remote cluster uses a non-active certificate authority", "Previous agent certificate authority remains trusted", "Remote cluster has no manager", "Remote cluster has no schedulable node", "Remote cluster nodes are not ready", "Remote cluster nodes are drained", "Remote cluster capability contract is incomplete", "Remote edge proxy is not ready", "Remote cluster does not meet environment capacity requirements", "Desired service revision is not deployed", "Deployed workload uses mutable container images", "Managed database deployment is unhealthy", "Database lacks a successful backup", "Database lacks a successful restore drill", "Managed network provisioning failed", "Resource deletion finalizer requires intervention", "Custom TLS certificate has expired", "Custom TLS edge target is missing", "Unused deployment hook credentials are stale", "Unused service-account credentials are stale", "Unused source credential is stale", "Source credential rotation is overdue", "Backup destination credential rotation is overdue", "Volume restore has not been validated", "Offline volume recovery failed", "Template repository does not require signatures", "Template repository synchronization failed", "Failure notifications have coverage gaps", "Notification delivery requires intervention", "Immutable audit archive delivery failed", "Platform job queue is stalled", "Capacity requires review"} {
 		if !titles[title] {
 			t.Errorf("missing persisted finding %q in %#v", title, titles)
 		}
@@ -351,6 +373,7 @@ func TestAIAuditorEndToEndConformance(t *testing.T) {
 		"notificationFailurePostureAudited": true,
 		"auditArchivePostureAudited":        true,
 		"jobQueuePostureAudited":            true,
+		"identitySecurityPostureAudited":    true,
 		"managedNetworkPostureAudited":      true,
 		"deletionFinalizerPostureAudited":   true,
 		"staleDeployCredentialAudited":      true,

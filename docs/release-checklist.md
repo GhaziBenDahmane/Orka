@@ -141,6 +141,10 @@ links for every item below.
   reconciliation target while keeping encrypted certificate and private-key
   material outside the model boundary. A failed managed network must also
   produce a deterministic finding without exposing its raw Docker/agent error.
+  Identity posture must independently report missing active ownership,
+  disabled mandatory SSO, and a privileged local administrator without MFA;
+  user email, password hash, TOTP material, and session credentials remain
+  outside the model boundary.
   A failed deletion finalizer must appear in the redacted aggregate and produce
   an intervention finding without exposing its job payload or worker error.
   Fresh remote-cluster aggregate capacity and capability posture must produce

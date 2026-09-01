@@ -82,6 +82,7 @@ jq -e '
   .notificationFailurePostureAudited and
   .auditArchivePostureAudited and
   .jobQueuePostureAudited and
+  .identitySecurityPostureAudited and
   .managedNetworkPostureAudited and
   .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and
