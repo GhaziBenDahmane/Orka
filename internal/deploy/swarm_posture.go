@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/clustercontract"
+	"github.com/GhaziBenDahmane/Orka/internal/clustercontract"
 )
 
 // LocalClusterPosture inspects only aggregate local Swarm state. Raw Docker

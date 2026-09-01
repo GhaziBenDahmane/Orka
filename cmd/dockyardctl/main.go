@@ -17,7 +17,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bendahma/dokploy-go/internal/apiclient"
+	"github.com/GhaziBenDahmane/Orka/internal/apiclient"
 )
 
 type config struct {

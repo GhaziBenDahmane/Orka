@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 )
 

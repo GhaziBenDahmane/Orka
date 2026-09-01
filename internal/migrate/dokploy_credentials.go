@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/bendahma/dokploy-go/internal/cryptox"
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

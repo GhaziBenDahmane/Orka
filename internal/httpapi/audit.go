@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	backupstore "github.com/bendahma/dokploy-go/internal/backup"
-	"github.com/bendahma/dokploy-go/internal/store"
+	backupstore "github.com/GhaziBenDahmane/Orka/internal/backup"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 )
 

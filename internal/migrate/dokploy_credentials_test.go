@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
 	"github.com/google/uuid"
 )
 

@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/clustercontract"
-	"github.com/bendahma/dokploy-go/internal/cryptox"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/clustercontract"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )

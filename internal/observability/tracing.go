@@ -24,7 +24,7 @@ type TraceConfig struct {
 }
 
 func StartOperation(ctx context.Context, kind, id string) (context.Context, trace.Span) {
-	return otel.Tracer("github.com/bendahma/dokploy-go/worker").Start(ctx, "job "+kind,
+	return otel.Tracer("github.com/GhaziBenDahmane/Orka/worker").Start(ctx, "job "+kind,
 		trace.WithAttributes(attribute.String("job.kind", kind), attribute.String("job.id", id)))
 }
 

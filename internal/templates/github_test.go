@@ -17,7 +17,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 )
 
 type catalogArchiveEntry struct {

@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/agentpki"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 )
 

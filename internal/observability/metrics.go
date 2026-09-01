@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/auth"
-	"github.com/bendahma/dokploy-go/internal/clustercontract"
-	"github.com/bendahma/dokploy-go/internal/composevolume"
+	"github.com/GhaziBenDahmane/Orka/internal/auth"
+	"github.com/GhaziBenDahmane/Orka/internal/clustercontract"
+	"github.com/GhaziBenDahmane/Orka/internal/composevolume"
 	"github.com/crewjam/saml/samlsp"
 	"github.com/jackc/pgx/v5"
 )

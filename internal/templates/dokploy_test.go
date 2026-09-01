@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
 )
 
 func TestInstantiateDokployTemplate(t *testing.T) {

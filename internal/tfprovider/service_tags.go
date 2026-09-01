@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/bendahma/dokploy-go/internal/apiclient"
+	"github.com/GhaziBenDahmane/Orka/internal/apiclient"
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"

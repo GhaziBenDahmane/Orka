@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/agentpki"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )

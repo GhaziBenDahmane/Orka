@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	dockyardmigrate "github.com/bendahma/dokploy-go/internal/migrate"
-	"github.com/bendahma/dokploy-go/internal/store"
+	dockyardmigrate "github.com/GhaziBenDahmane/Orka/internal/migrate"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 )
 
 func (s *Server) listMigrationResources(w http.ResponseWriter, r *http.Request) {

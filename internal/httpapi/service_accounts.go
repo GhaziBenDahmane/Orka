@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/auth"
-	"github.com/bendahma/dokploy-go/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/auth"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
 	"github.com/google/uuid"
 )
 

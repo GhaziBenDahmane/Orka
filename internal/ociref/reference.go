@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
 )
 
 const maxRepositoryBytes = 255

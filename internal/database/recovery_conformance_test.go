@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/database"
-	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
 	"github.com/google/uuid"
 )
 

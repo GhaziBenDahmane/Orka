@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/cryptox"
-	"github.com/bendahma/dokploy-go/internal/deploy"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

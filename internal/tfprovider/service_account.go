@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/apiclient"
+	"github.com/GhaziBenDahmane/Orka/internal/apiclient"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"

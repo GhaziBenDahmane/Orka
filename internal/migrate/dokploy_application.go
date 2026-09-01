@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/deploy"
-	"github.com/bendahma/dokploy-go/internal/ociref"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gopkg.in/yaml.v3"

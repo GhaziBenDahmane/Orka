@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	jobschedule "github.com/bendahma/dokploy-go/internal/schedule"
+	jobschedule "github.com/GhaziBenDahmane/Orka/internal/schedule"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"gopkg.in/yaml.v3"

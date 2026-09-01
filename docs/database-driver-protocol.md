@@ -90,7 +90,7 @@ operation. Diagnose a driver locally with scrubbed test credentials before
 installing it. The process receives a fixed system `PATH` and no inherited
 controller environment.
 
-Go plugins can import `github.com/bendahma/dokploy-go/pkg/databaseplugin`,
+Go plugins can import `github.com/GhaziBenDahmane/Orka/pkg/databaseplugin`,
 implement `databaseplugin.Driver`, and call:
 
 ```go

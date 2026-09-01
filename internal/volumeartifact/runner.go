@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/cryptox"
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
 )
 
 const (

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/deploy"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 )
 
 func TestValidateDokployCatalogFailsClosedOnInvalidMetadata(t *testing.T) {

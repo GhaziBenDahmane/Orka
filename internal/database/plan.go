@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
 )
 
 const (

@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/auth"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/auth"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 )
 

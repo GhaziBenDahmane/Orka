@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/bendahma/dokploy-go/internal/tfprovider"
+	"github.com/GhaziBenDahmane/Orka/internal/tfprovider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
 

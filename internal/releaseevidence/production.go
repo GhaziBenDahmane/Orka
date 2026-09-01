@@ -17,7 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
 )
 
 const ProductionCertificationSchema = 2

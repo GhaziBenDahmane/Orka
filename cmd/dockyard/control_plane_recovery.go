@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/controlplanerecovery"
+	"github.com/GhaziBenDahmane/Orka/internal/controlplanerecovery"
 )
 
 func verifyControlPlaneRecoveryManifest(arguments []string) error {

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/agentpki"
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
 )
 
 type Config struct {

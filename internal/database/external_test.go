@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
+	"github.com/GhaziBenDahmane/Orka/pkg/databaseplugin"
 )
 
 func TestExternalDriverProtocol(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/database"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
 )
 
 func TestDatabaseEnginesReturnsStructuredExternalMetadataWithoutPaths(t *testing.T) {

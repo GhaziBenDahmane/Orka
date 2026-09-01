@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/clustercontract"
+	"github.com/GhaziBenDahmane/Orka/internal/clustercontract"
 )
 
 func TestNodesIncludesResourceCapacity(t *testing.T) {

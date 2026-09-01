@@ -16,9 +16,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
-	"github.com/bendahma/dokploy-go/internal/ociref"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/cryptox"
-	"github.com/bendahma/dokploy-go/internal/database"
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
-	"github.com/bendahma/dokploy-go/internal/ociref"
-	"github.com/bendahma/dokploy-go/internal/store"
-	"github.com/bendahma/dokploy-go/internal/volumeartifact"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/volumeartifact"
 	"github.com/google/uuid"
 )
 

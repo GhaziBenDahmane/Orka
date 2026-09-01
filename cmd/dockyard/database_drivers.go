@@ -8,8 +8,8 @@ import (
 	"flag"
 	"io"
 
-	"github.com/bendahma/dokploy-go/internal/database"
-	"github.com/bendahma/dokploy-go/pkg/databaseplugin"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
+	"github.com/GhaziBenDahmane/Orka/pkg/databaseplugin"
 )
 
 type externalDriverInventory struct {

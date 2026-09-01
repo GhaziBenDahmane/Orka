@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/database"
-	"github.com/bendahma/dokploy-go/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
 	"gopkg.in/yaml.v3"
 )
 

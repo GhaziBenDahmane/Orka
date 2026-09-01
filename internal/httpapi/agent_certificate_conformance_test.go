@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/agentpki"
-	"github.com/bendahma/dokploy-go/internal/observability"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
+	"github.com/GhaziBenDahmane/Orka/internal/observability"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"github.com/google/uuid"
 )
 

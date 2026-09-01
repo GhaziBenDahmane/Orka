@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bendahma/dokploy-go/internal/composevolume"
-	"github.com/bendahma/dokploy-go/internal/store"
+	"github.com/GhaziBenDahmane/Orka/internal/composevolume"
+	"github.com/GhaziBenDahmane/Orka/internal/store"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )

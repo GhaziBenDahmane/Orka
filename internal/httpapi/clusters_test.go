@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
 )
 
 func TestAgentCommandResultLimitsMatchAgentOutputContract(t *testing.T) {

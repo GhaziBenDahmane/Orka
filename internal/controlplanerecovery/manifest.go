@@ -15,8 +15,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/agentpki"
-	"github.com/bendahma/dokploy-go/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
 )
 
 const (

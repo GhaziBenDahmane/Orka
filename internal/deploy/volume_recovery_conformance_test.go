@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/ociref"
-	"github.com/bendahma/dokploy-go/internal/volumeartifact"
+	"github.com/GhaziBenDahmane/Orka/internal/ociref"
+	"github.com/GhaziBenDahmane/Orka/internal/volumeartifact"
 	"github.com/google/uuid"
 )
 

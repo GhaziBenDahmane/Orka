@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/aigatewayrecovery"
+	"github.com/GhaziBenDahmane/Orka/internal/aigatewayrecovery"
 )
 
 func verifyAIGatewayRecoveryManifest(arguments []string) error {

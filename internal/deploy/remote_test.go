@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bendahma/dokploy-go/internal/volumeartifact"
+	"github.com/GhaziBenDahmane/Orka/internal/volumeartifact"
 )
 
 func validRemoteArtifactJob() RemoteArtifactJob {

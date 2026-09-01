@@ -1,4 +1,4 @@
-module github.com/bendahma/dokploy-go
+module github.com/GhaziBenDahmane/Orka
 
 go 1.26.6
 

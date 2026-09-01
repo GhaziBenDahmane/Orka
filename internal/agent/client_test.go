@@ -21,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bendahma/dokploy-go/internal/agentpki"
-	"github.com/bendahma/dokploy-go/internal/clustercontract"
-	"github.com/bendahma/dokploy-go/internal/cryptox"
-	"github.com/bendahma/dokploy-go/internal/database"
-	"github.com/bendahma/dokploy-go/internal/deploy"
-	"github.com/bendahma/dokploy-go/internal/netpolicy"
-	"github.com/bendahma/dokploy-go/internal/volumeartifact"
+	"github.com/GhaziBenDahmane/Orka/internal/agentpki"
+	"github.com/GhaziBenDahmane/Orka/internal/clustercontract"
+	"github.com/GhaziBenDahmane/Orka/internal/cryptox"
+	"github.com/GhaziBenDahmane/Orka/internal/database"
+	"github.com/GhaziBenDahmane/Orka/internal/deploy"
+	"github.com/GhaziBenDahmane/Orka/internal/netpolicy"
+	"github.com/GhaziBenDahmane/Orka/internal/volumeartifact"
 	"github.com/google/uuid"
 )
 
