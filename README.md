@@ -182,6 +182,8 @@ history.
 Federated catalogs have dedicated `template-repositories`,
 `create-template-repository JSON`, `update-template-repository ID JSON`,
 `sync-template-repository ID`, webhook rotation/disable, and deletion commands.
+Use `dockyardctl search-templates QUERY [nextCursor]` for paginated discovery
+across the built-in and every organization repository.
 Creation and settings JSON can be read from standard input with `-`.
 
 Build credentials have dedicated `source-credentials`,

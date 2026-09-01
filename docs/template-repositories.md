@@ -174,7 +174,8 @@ Set `credentialId` on `POST` or `PATCH` to the ID returned when creating a
 public repository. `syncIntervalSeconds` accepts `0` for manual-only operation
 or a value from `300` through `604800`.
 
-Automation can page the catalog with `dockyardctl templates [nextCursor]` and use `dockyardctl template-repositories`,
+Automation can page the catalog with `dockyardctl templates [nextCursor]`, search
+all configured repositories with `dockyardctl search-templates QUERY [nextCursor]`, and use `dockyardctl template-repositories`,
 `create-template-repository JSON`, `update-template-repository ID JSON`,
 `sync-template-repository ID`, `rotate-template-repository-webhook ID`,
 `disable-template-repository-webhook ID`, and `delete-template-repository ID`.

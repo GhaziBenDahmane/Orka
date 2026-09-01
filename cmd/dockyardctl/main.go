@@ -710,6 +710,15 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			path += "&cursor=" + url.QueryEscape(args[1])
 		}
 		return http.MethodGet, path, nil, nil
+	case "search-templates":
+		if len(args) < 2 || len(args) > 3 || strings.TrimSpace(args[1]) == "" {
+			return "", "", nil, usageError()
+		}
+		query := url.Values{"limit": {"200"}, "query": {args[1]}}
+		if len(args) == 3 && strings.TrimSpace(args[2]) != "" {
+			query.Set("cursor", args[2])
+		}
+		return http.MethodGet, "/v1/templates?" + query.Encode(), nil, nil
 	case "template-repositories":
 		return http.MethodGet, "/v1/template-repositories", nil, require(1)
 	case "create-template-repository":
@@ -1059,7 +1068,7 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules, deletion-finalizers, retry-deletion-finalizer, migration-resources, verify-dokploy-migration)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, templates, search-templates, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules, deletion-finalizers, retry-deletion-finalizer, migration-resources, verify-dokploy-migration)")
 }
 
 func verifyDokployMigrationResult(data []byte) error {

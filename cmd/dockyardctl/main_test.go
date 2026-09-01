@@ -162,6 +162,8 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"service-networks", "service-id"}, http.MethodGet, "/v1/services/service-id/networks"},
 		{[]string{"set-service-networks", "service-id", `{}`}, http.MethodPut, "/v1/services/service-id/networks"},
 		{[]string{"templates", "opaque+/cursor"}, http.MethodGet, "/v1/templates?limit=200&cursor=opaque%2B%2Fcursor"},
+		{[]string{"search-templates", "Postgres & cache"}, http.MethodGet, "/v1/templates?limit=200&query=Postgres+%26+cache"},
+		{[]string{"search-templates", "Postgres & cache", "opaque+/cursor"}, http.MethodGet, "/v1/templates?cursor=opaque%2B%2Fcursor&limit=200&query=Postgres+%26+cache"},
 		{[]string{"template-repositories"}, http.MethodGet, "/v1/template-repositories"},
 		{[]string{"create-template-repository", `{}`}, http.MethodPost, "/v1/template-repositories"},
 		{[]string{"update-template-repository", "repository-id", `{}`}, http.MethodPatch, "/v1/template-repositories/repository-id"},
@@ -462,5 +464,17 @@ func TestJSONFromStdin(t *testing.T) {
 	value := input.(map[string]any)
 	if value["name"] != "demo" {
 		t.Fatalf("input=%#v", input)
+	}
+}
+
+func TestSearchTemplatesRequiresNonEmptyBoundedArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"search-templates"},
+		{"search-templates", "   "},
+		{"search-templates", "postgres", "cursor", "extra"},
+	} {
+		if _, _, _, err := commandRequest(args, strings.NewReader("")); err == nil {
+			t.Errorf("commandRequest(%q) accepted invalid search arguments", args)
+		}
 	}
 }
