@@ -27,16 +27,26 @@ type NotificationEndpoint struct {
 type NotificationDelivery struct {
 	ID           uuid.UUID       `json:"id"`
 	EndpointID   uuid.UUID       `json:"endpointId"`
+	EndpointName string          `json:"endpointName,omitempty"`
+	EndpointKind string          `json:"endpointKind,omitempty"`
 	EventType    string          `json:"eventType"`
 	ResourceType string          `json:"resourceType"`
 	ResourceID   string          `json:"resourceId"`
-	Payload      json.RawMessage `json:"payload"`
+	Payload      json.RawMessage `json:"-"`
 	Status       string          `json:"status"`
 	ResponseCode *int            `json:"responseCode,omitempty"`
 	LastError    string          `json:"lastError,omitempty"`
+	InProgress   bool            `json:"inProgress"`
+	Retryable    bool            `json:"retryable"`
 	CreatedAt    time.Time       `json:"createdAt"`
 	StartedAt    *time.Time      `json:"startedAt,omitempty"`
 	FinishedAt   *time.Time      `json:"finishedAt,omitempty"`
+}
+
+type NotificationDeliveryFilter struct {
+	Status    string
+	EventType string
+	Limit     int
 }
 
 func (s *Store) CreateNotificationEndpoint(ctx context.Context, item NotificationEndpoint) (NotificationEndpoint, error) {
@@ -92,6 +102,106 @@ func (s *Store) ListNotificationEndpoints(ctx context.Context, organizationID uu
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) ListNotificationDeliveries(ctx context.Context, organizationID uuid.UUID, filter NotificationDeliveryFilter) ([]NotificationDelivery, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 100
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT d.id,d.endpoint_id,e.name,e.kind,d.event_type,d.resource_type,d.resource_id,d.status,
+		       d.response_code,d.last_error,d.created_at,d.started_at,d.finished_at,
+		       state.active,
+		       e.enabled AND d.status='failed' AND NOT state.active AS retryable
+		FROM notification_deliveries d
+		JOIN notification_endpoints e ON e.id=d.endpoint_id
+		CROSS JOIN LATERAL (
+		    SELECT EXISTS(
+		        SELECT 1 FROM jobs j
+		        WHERE j.kind='notify.webhook' AND j.payload->>'deliveryId'=d.id::text
+		          AND j.status IN ('pending','running')
+		    ) AS active
+		) state
+		WHERE e.organization_id=$1 AND ($2='' OR d.status=$2) AND ($3='' OR d.event_type=$3)
+		ORDER BY d.created_at DESC,d.id DESC
+		LIMIT $4`, organizationID, filter.Status, filter.EventType, filter.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NotificationDelivery{}
+	for rows.Next() {
+		var item NotificationDelivery
+		if err = rows.Scan(&item.ID, &item.EndpointID, &item.EndpointName, &item.EndpointKind, &item.EventType, &item.ResourceType, &item.ResourceID, &item.Status, &item.ResponseCode, &item.LastError, &item.CreatedAt, &item.StartedAt, &item.FinishedAt, &item.InProgress, &item.Retryable); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) RetryNotificationDeliveryWithAudit(ctx context.Context, principal Principal, id uuid.UUID, remoteAddr string) (NotificationDelivery, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return NotificationDelivery{}, err
+	}
+	defer tx.Rollback(ctx)
+	var item NotificationDelivery
+	var endpointEnabled bool
+	err = tx.QueryRow(ctx, `
+		SELECT d.id,d.endpoint_id,e.name,e.kind,d.event_type,d.resource_type,d.resource_id,d.status,
+		       d.response_code,d.last_error,d.created_at,d.started_at,d.finished_at,e.enabled
+		FROM notification_deliveries d
+		JOIN notification_endpoints e ON e.id=d.endpoint_id
+		WHERE d.id=$1 AND e.organization_id=$2
+		FOR UPDATE OF d,e`, id, principal.OrganizationID).Scan(
+		&item.ID, &item.EndpointID, &item.EndpointName, &item.EndpointKind, &item.EventType,
+		&item.ResourceType, &item.ResourceID, &item.Status, &item.ResponseCode, &item.LastError,
+		&item.CreatedAt, &item.StartedAt, &item.FinishedAt, &endpointEnabled,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NotificationDelivery{}, ErrNotFound
+	}
+	if err != nil {
+		return NotificationDelivery{}, err
+	}
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE kind='notify.webhook' AND payload->>'deliveryId'=$1 AND status IN ('pending','running'))`, id.String()).Scan(&active); err != nil {
+		return NotificationDelivery{}, err
+	}
+	if active || item.Status == "pending" || item.Status == "running" {
+		return NotificationDelivery{}, ErrBusy
+	}
+	if item.Status != "failed" {
+		return NotificationDelivery{}, ErrNotificationDeliveryNotRetryable
+	}
+	if !endpointEnabled {
+		return NotificationDelivery{}, ErrNotificationEndpointDisabled
+	}
+	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status='pending',response_code=NULL,last_error='',started_at=NULL,finished_at=NULL WHERE id=$1`, id); err != nil {
+		return NotificationDelivery{}, err
+	}
+	jobPayload, _ := json.Marshal(map[string]string{"deliveryId": id.String()})
+	if _, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'notify.webhook',$2,8)`, uuid.New(), jobPayload); err != nil {
+		return NotificationDelivery{}, err
+	}
+	if err = appendPrincipalAudit(ctx, tx, principal, "notification_delivery.retry", "notification_delivery", id.String(), remoteAddr, map[string]any{"endpointId": item.EndpointID, "eventType": item.EventType, "resourceType": item.ResourceType, "resourceId": item.ResourceID}); err != nil {
+		return NotificationDelivery{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return NotificationDelivery{}, err
+	}
+	item.Status = "pending"
+	item.ResponseCode = nil
+	item.LastError = ""
+	item.StartedAt = nil
+	item.FinishedAt = nil
+	item.InProgress = true
+	item.Retryable = false
+	return item, nil
 }
 
 func (s *Store) DeleteNotificationEndpoint(ctx context.Context, organizationID, id uuid.UUID) error {

@@ -2864,6 +2864,56 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/notification-deliveries:
+    get:
+      operationId: get_v1_notification_deliveries
+      tags: [notification-deliveries]
+      parameters:
+        - name: status
+          in: query
+          schema: {type: string, enum: [pending, running, succeeded, failed]}
+        - name: event
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/notification-deliveries/{deliveryID}/retry:
+    post:
+      operationId: post_v1_notification_deliveries_deliveryID_retry
+      tags: [notification-deliveries]
+      parameters:
+        - name: deliveryID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/notification-endpoints:
     get:
       operationId: get_v1_notification_endpoints

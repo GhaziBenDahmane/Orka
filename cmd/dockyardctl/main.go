@@ -531,6 +531,13 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodDelete, "/v1/notification-endpoints/" + args[1], nil, nil
+	case "notification-deliveries":
+		return http.MethodGet, "/v1/notification-deliveries", nil, require(1)
+	case "retry-notification-delivery":
+		if err := require(2); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/notification-deliveries/" + args[1] + "/retry", nil, nil
 	case "databases":
 		if err := require(2); err != nil {
 			return "", "", nil, err

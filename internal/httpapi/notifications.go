@@ -161,6 +161,60 @@ func (s *Server) listNotificationEndpoints(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 
+func (s *Server) listNotificationDeliveries(w http.ResponseWriter, r *http.Request) {
+	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	eventType := strings.TrimSpace(r.URL.Query().Get("event"))
+	if status != "" && !contains([]string{"pending", "running", "succeeded", "failed"}, status) {
+		writeError(w, http.StatusBadRequest, "invalid_status", "status must be pending, running, succeeded, or failed")
+		return
+	}
+	if eventType != "" && !contains(notificationEvents, eventType) {
+		writeError(w, http.StatusBadRequest, "invalid_event", "event must be a supported notification event")
+		return
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 200")
+			return
+		}
+		limit = parsed
+	}
+	items, err := s.Store.ListNotificationDeliveries(r.Context(), principal(r).OrganizationID, store.NotificationDeliveryFilter{Status: status, EventType: eventType, Limit: limit})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) retryNotificationDelivery(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("deliveryID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "invalid notification delivery id")
+		return
+	}
+	item, err := s.Store.RetryNotificationDeliveryWithAudit(r.Context(), principal(r), id, r.RemoteAddr)
+	if errors.Is(err, store.ErrBusy) {
+		writeError(w, http.StatusConflict, "delivery_in_progress", "notification delivery still has an active attempt")
+		return
+	}
+	if errors.Is(err, store.ErrNotificationDeliveryNotRetryable) {
+		writeError(w, http.StatusConflict, "delivery_not_retryable", err.Error())
+		return
+	}
+	if errors.Is(err, store.ErrNotificationEndpointDisabled) {
+		writeError(w, http.StatusConflict, "notification_endpoint_disabled", err.Error())
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, item)
+}
+
 func (s *Server) deleteNotificationEndpoint(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("endpointID"))
 	if err != nil {

@@ -263,6 +263,10 @@ Failure notification endpoints can be listed, created, and disabled with
 `delete-notification-endpoint ID`. `dockyard_notification_endpoint` provides
 the same lifecycle in Terraform/OpenTofu while retaining write-only provider
 credentials and generated signing secrets only in sensitive state.
+Recent tenant-scoped attempts are available with `notification-deliveries`;
+after durable retries are exhausted, administrators can queue an audited
+redrive with `retry-notification-delivery DELIVERY_ID` while preserving the
+delivery identity used by downstream idempotency controls.
 
 Expiring service-account credentials can be managed with
 `dockyard_service_account`. Terraform/OpenTofu retains the one-time bearer

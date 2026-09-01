@@ -63,6 +63,7 @@ export type AuditRetention = { organizationId: string; retentionDays: number; up
 export type AuditArchive = { id: string; backupDestinationId: string; name: string; objectPrefix: string; retentionDays: number; enabled: boolean; lastArchivedId: number; lastChainHash?: string; updatedAt: string };
 export type AuditArchiveBatch = { id: string; destinationId: string; firstEventId: number; lastEventId: number; previousSha256: string; sha256?: string; objectKey: string; sizeBytes?: number; status: string; lastError?: string; createdAt: string; startedAt?: string; finishedAt?: string };
 export type NotificationEndpoint = { id: string; name: string; kind: "webhook" | "slack" | "smtp" | "pagerduty" | "opsgenie"; events: string[]; enabled: boolean; updatedAt: string };
+export type NotificationDelivery = { id: string; endpointId: string; endpointName: string; endpointKind: string; eventType: string; resourceType: string; resourceId: string; status: "pending" | "running" | "succeeded" | "failed"; responseCode?: number; lastError?: string; inProgress: boolean; retryable: boolean; createdAt: string; startedAt?: string; finishedAt?: string };
 export type ServiceAccount = { id: string; name: string; role: string; enabled: boolean; tokenExpiresAt?: string; lastUsedAt?: string; createdAt: string; updatedAt: string };
 export type SCIMToken = { id: string; organizationId: string; name: string; defaultRole: "admin" | "developer" | "viewer"; createdAt: string; expiresAt: string; revokedAt?: string };
 export type OrganizationMember = { userId: string; email: string; displayName: string; role: Role; active: boolean; managedByScim: boolean; createdAt: string };
@@ -298,6 +299,13 @@ export const api = {
   notificationEndpoints: () => request<Envelope<NotificationEndpoint>>("/v1/notification-endpoints"),
   createNotificationEndpoint: (body: Record<string, unknown>) => request<{ endpoint: NotificationEndpoint; signingSecret?: string }>("/v1/notification-endpoints", { method: "POST", body: JSON.stringify(body) }),
   disableNotificationEndpoint: (id: string) => request<void>(`/v1/notification-endpoints/${id}`, { method: "DELETE" }),
+  notificationDeliveries: (status = "", event = "", limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status) query.set("status", status);
+    if (event) query.set("event", event);
+    return request<Envelope<NotificationDelivery>>(`/v1/notification-deliveries?${query}`);
+  },
+  retryNotificationDelivery: (id: string) => request<NotificationDelivery>(`/v1/notification-deliveries/${id}/retry`, { method: "POST" }),
   serviceAccounts: () => request<Envelope<ServiceAccount>>("/v1/service-accounts"),
   createServiceAccount: (name: string, role: "admin" | "developer" | "viewer", expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role, expiresInDays }) }),
   createAuditorAccount: (name: string, expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role: "auditor", expiresInDays }) }),

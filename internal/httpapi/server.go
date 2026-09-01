@@ -162,6 +162,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/notification-endpoints", s.requireRole("admin", http.HandlerFunc(s.listNotificationEndpoints)))
 	mux.Handle("POST /v1/notification-endpoints", s.requireRole("admin", http.HandlerFunc(s.createNotificationEndpoint)))
 	mux.Handle("DELETE /v1/notification-endpoints/{endpointID}", s.requireRole("admin", http.HandlerFunc(s.deleteNotificationEndpoint)))
+	mux.Handle("GET /v1/notification-deliveries", s.requireRole("admin", http.HandlerFunc(s.listNotificationDeliveries)))
+	mux.Handle("POST /v1/notification-deliveries/{deliveryID}/retry", s.requireRole("admin", http.HandlerFunc(s.retryNotificationDelivery)))
 	mux.Handle("GET /v1/migration-resources", s.requireRole("admin", http.HandlerFunc(s.listMigrationResources)))
 	mux.Handle("POST /v1/migration-resources/verify", s.requireRole("admin", http.HandlerFunc(s.verifyDokployMigration)))
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))

@@ -70,7 +70,8 @@ paths:
 			parameters := parameterPattern.FindAllStringSubmatch(op.path, -1)
 			isSCIMList := op.method == "get" && (op.path == "/scim/v2/Users" || op.path == "/scim/v2/Groups")
 			isMigrationList := op.method == "get" && op.path == "/v1/migration-resources"
-			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList {
+			isNotificationDeliveryList := op.method == "get" && op.path == "/v1/notification-deliveries"
+			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList || isNotificationDeliveryList {
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
@@ -87,6 +88,9 @@ paths:
 				}
 				if isMigrationList {
 					output.WriteString("        - name: sourceOrganizationId\n          in: query\n          schema: {type: string, maxLength: 255}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 500, default: 250}\n        - name: cursor\n          in: query\n          description: Opaque cursor returned by the previous page. It is bound to the source organization filter.\n          schema: {type: string, maxLength: 8192}\n")
+				}
+				if isNotificationDeliveryList {
+					output.WriteString("        - name: status\n          in: query\n          schema: {type: string, enum: [pending, running, succeeded, failed]}\n        - name: event\n          in: query\n          schema: {type: string}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n")
 				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {

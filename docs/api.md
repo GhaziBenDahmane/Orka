@@ -150,6 +150,8 @@ enrollment details.
 | GET/POST | `/v1/custom-tls-certificates` | List secret-free certificate metadata or upload an encrypted certificate chain and private key |
 | PUT/DELETE | `/v1/custom-tls-certificates/{id}` | Rotate with an optimistic revision or delete an unattached custom certificate |
 | GET/POST/DELETE | `/v1/notification-endpoints…` | Manage durable webhook, Slack, SMTP, PagerDuty, and Opsgenie notifications |
+| GET | `/v1/notification-deliveries?status=…&event=…&limit=…` | Inspect bounded tenant-scoped notification delivery history without endpoint secrets or payloads |
+| POST | `/v1/notification-deliveries/{id}/retry` | Audit and redrive an exhausted failed delivery through its currently enabled endpoint |
 | GET | `/v1/migration-resources?sourceOrganizationId=…&limit=…&cursor=…` | Page through persisted, secret-safe Dokploy parity records with an opaque stable cursor |
 | POST | `/v1/migration-resources/verify` | Run and audit fail-closed mapping or operational Dokploy cutover verification with per-resource acknowledgements |
 | GET/POST | `/v1/clusters` | List or register remote Swarm clusters |
