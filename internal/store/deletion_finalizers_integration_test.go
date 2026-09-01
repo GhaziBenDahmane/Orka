@@ -129,4 +129,51 @@ func TestDeletionFinalizerHistoryAndAuditedRedrive(t *testing.T) {
 	if err = db.Pool.QueryRow(ctx, `SELECT (payload->>'deleteVolumes')::boolean FROM jobs WHERE id=$1`, *missing.JobID).Scan(&missingDeletesVolumes); err != nil || missingDeletesVolumes {
 		t.Fatalf("missing service redrive should conservatively retain volumes: deleteVolumes=%v err=%v", missingDeletesVolumes, err)
 	}
+
+	// Exercise reconstruction for every other advertised resource type. These
+	// jobs have no prior payload to copy, so the generated kind, identity key,
+	// resource serialization, and attempt policy are the recovery contract.
+	databaseID, clusterID, networkID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE projects SET deletion_requested_at=now() WHERE id=$1`, []any{projectID}},
+		{`UPDATE environments SET deletion_requested_at=now() WHERE id=$1`, []any{environmentID}},
+		{`INSERT INTO database_instances(id,environment_id,name,slug,engine,version,management_kind,connection_service_name,encrypted_credentials,compose_service_id,deletion_requested_at) VALUES($1,$2,'Deleting database','deleting-database','postgres','17','compose','postgres','encrypted',$3,now())`, []any{databaseID, environmentID, activeServiceID}},
+		{`INSERT INTO clusters(id,organization_id,name,slug,state,deletion_requested_at) VALUES($1,$2,'Deleting cluster',$3,'disabled',now())`, []any{clusterID, organizationID, "deleting-cluster-" + clusterID.String()}},
+		{`INSERT INTO managed_networks(id,organization_id,name,driver,status,deletion_requested_at) VALUES($1,$2,$3,'overlay','deleting',now())`, []any{networkID, organizationID, "deleting-network-" + networkID.String()}},
+	} {
+		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		resourceType string
+		resourceID   uuid.UUID
+		kind         string
+		payloadKey   string
+		resourceKey  string
+		maxAttempts  int
+	}{
+		{resourceType: "project", resourceID: projectID, kind: "delete.project", payloadKey: "projectId", maxAttempts: 50},
+		{resourceType: "environment", resourceID: environmentID, kind: "delete.environment", payloadKey: "environmentId", maxAttempts: 50},
+		{resourceType: "database", resourceID: databaseID, kind: "delete.database-link", payloadKey: "databaseId", resourceKey: "database:" + databaseID.String(), maxAttempts: 10},
+		{resourceType: "cluster", resourceID: clusterID, kind: "delete.cluster", payloadKey: "clusterId", maxAttempts: 10},
+		{resourceType: "network", resourceID: networkID, kind: "network.delete", payloadKey: "networkId", resourceKey: "network:" + networkID.String(), maxAttempts: 10},
+	} {
+		item, retryErr := db.RetryDeletionFinalizerWithAudit(ctx, principal, test.resourceType, test.resourceID, "127.0.0.1:1")
+		if retryErr != nil || item.JobID == nil || item.Kind != test.kind || item.Status != "pending" || item.MaxAttempts != test.maxAttempts {
+			t.Fatalf("%s missing finalizer reconstruction=%#v err=%v", test.resourceType, item, retryErr)
+		}
+		var payload map[string]any
+		var resourceKey *string
+		var maxAttempts int
+		if err = db.Pool.QueryRow(ctx, `SELECT payload,resource_key,max_attempts FROM jobs WHERE id=$1`, *item.JobID).Scan(&payload, &resourceKey, &maxAttempts); err != nil {
+			t.Fatal(err)
+		}
+		if payload[test.payloadKey] != test.resourceID.String() || maxAttempts != test.maxAttempts || test.resourceKey == "" && resourceKey != nil || test.resourceKey != "" && (resourceKey == nil || *resourceKey != test.resourceKey) {
+			t.Fatalf("%s reconstructed payload=%#v resourceKey=%v maxAttempts=%d", test.resourceType, payload, resourceKey, maxAttempts)
+		}
+	}
 }

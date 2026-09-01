@@ -106,7 +106,7 @@ test "$(wc -l <"$work_dir/evidence.json")" -eq 1
 jq \
   --arg sourceCommit "${GITHUB_SHA:-$(git rev-parse HEAD)}" \
   --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '. + {sourceCommit:$sourceCommit,createdAt:$createdAt,realProviderCredentials:"staging-required",atomicTerminalOutbox:true,operationScopedDeduplication:true,edgeCertificateFailureFanout:true,commitStatusFailureNotification:true,auditedDeliveryRedrive:true,exhaustedDeliverySignals:true,httpAPIContract:true,commitStatusAuditedRedrive:true,commitStatusExhaustedSignals:true,commitStatusHTTPAPIContract:true,deletionFinalizerFailureNotification:true,deletionFinalizerHistoryRedacted:true,deletionFinalizerTenantIsolation:true,deletionFinalizerAuditedRedrive:true,deletionFinalizerIntentPreserved:true,deletionFinalizerConcurrentRedrive:true,deletionFinalizerSignals:true}' \
+  '. + {sourceCommit:$sourceCommit,createdAt:$createdAt,realProviderCredentials:"staging-required",atomicTerminalOutbox:true,operationScopedDeduplication:true,edgeCertificateFailureFanout:true,commitStatusFailureNotification:true,auditedDeliveryRedrive:true,exhaustedDeliverySignals:true,httpAPIContract:true,commitStatusAuditedRedrive:true,commitStatusExhaustedSignals:true,commitStatusHTTPAPIContract:true,deletionFinalizerFailureNotification:true,deletionFinalizerHistoryRedacted:true,deletionFinalizerTenantIsolation:true,deletionFinalizerAuditedRedrive:true,deletionFinalizerIntentPreserved:true,deletionFinalizerConcurrentRedrive:true,deletionFinalizerResourceCoverage:true,deletionFinalizerSignals:true}' \
   "$work_dir/evidence.json" >"$evidence_file"
 
 jq -e '
@@ -130,6 +130,7 @@ jq -e '
   .deletionFinalizerAuditedRedrive and
   .deletionFinalizerIntentPreserved and
   .deletionFinalizerConcurrentRedrive and
+  .deletionFinalizerResourceCoverage and
   .deletionFinalizerSignals and
   .deliveries == 6 and .jobAttempts == 7 and
   (.sourceCommit | test("^[a-f0-9]{40}$"))
