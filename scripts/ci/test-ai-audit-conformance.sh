@@ -77,6 +77,7 @@ jq -e '
   .localClusterPostureAudited and
   .databaseAvailabilityAudited and
   .managedNetworkPostureAudited and
+  .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and
   .staleServiceAccountAudited and
   .customTLSValidityAudited and .edgeTLSConvergenceAudited and

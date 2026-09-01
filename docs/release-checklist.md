@@ -140,6 +140,8 @@ links for every item below.
   reconciliation target while keeping encrypted certificate and private-key
   material outside the model boundary. A failed managed network must also
   produce a deterministic finding without exposing its raw Docker/agent error.
+  A failed deletion finalizer must appear in the redacted aggregate and produce
+  an intervention finding without exposing its job payload or worker error.
   Fresh remote-cluster aggregate capacity and capability posture must produce
   findings for missing managers or schedulable nodes, degraded node inventory,
   missing Swarm/Compose support, an unready edge proxy, and unmet environment
