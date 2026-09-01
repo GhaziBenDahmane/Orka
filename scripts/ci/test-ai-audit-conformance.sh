@@ -81,6 +81,7 @@ jq -e '
   .templateRepositoryPostureAudited and
   .notificationFailurePostureAudited and
   .auditArchivePostureAudited and
+  .jobQueuePostureAudited and
   .managedNetworkPostureAudited and
   .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and

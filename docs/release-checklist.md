@@ -168,6 +168,9 @@ links for every item below.
   only its checkpoint and aggregate status, produce a deterministic delivery
   failure finding, and keep object keys, chain hashes, and raw errors outside
   the model boundary.
+  A tenant-owned durable job left pending beyond ten minutes must appear in the
+  bounded queue aggregate and produce a stalled-queue finding without exposing
+  the job payload.
   A failed or thirty-minute-stalled offline named-volume recovery must produce
   a critical deterministic finding with service, volume, and target-node
   context while excluding the raw restore error from the model boundary.
