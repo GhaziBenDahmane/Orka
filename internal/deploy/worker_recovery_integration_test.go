@@ -126,6 +126,43 @@ func TestTerminalFailureAndNotificationOutboxAreAtomic(t *testing.T) {
 	}
 }
 
+func TestSeparateTerminalOperationsNotifyForTheSameResource(t *testing.T) {
+	db, ctx := recoveryTestStore(t)
+	organizationID, projectID, environmentID, serviceID, endpointID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations(id,name,slug) VALUES($1,'Repeated operations',$2)`, []any{organizationID, "repeated-operations-" + organizationID.String()}},
+		{`INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Project','project')`, []any{projectID, organizationID}},
+		{`INSERT INTO environments(id,project_id,name,slug) VALUES($1,$2,'Production','production')`, []any{environmentID, projectID}},
+		{`INSERT INTO compose_services(id,environment_id,name,slug,stack_name,compose_yaml) VALUES($1,$2,'App','app',$3,'services: {}')`, []any{serviceID, environmentID, "repeated-" + serviceID.String()}},
+		{`INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'On-call','webhook','encrypted-url','encrypted-secret',ARRAY['service.stop.failed'])`, []any{endpointID, organizationID}},
+	} {
+		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload, _ := json.Marshal(map[string]string{"serviceId": serviceID.String()})
+	jobIDs := []uuid.UUID{uuid.New(), uuid.New()}
+	for _, jobID := range jobIDs {
+		leaseID := uuid.New()
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO jobs(id,kind,payload,status,attempts,max_attempts,locked_at,locked_by,lease_id) VALUES($1,'stop.compose',$2,'running',1,1,now(),'operation-worker',$3)`, jobID, payload, leaseID); err != nil {
+			t.Fatal(err)
+		}
+		if err := (&Worker{Store: db, ID: "operation-worker"}).finish(ctx, job{ID: jobID, Kind: "stop.compose", Payload: payload, Attempts: 0, MaxAttempts: 1, LeaseID: leaseID}, errors.New("swarm unavailable")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var deliveries, distinctOperations, attributedPayloads int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*),count(DISTINCT operation_id),count(*) FILTER (WHERE payload->>'jobId'=operation_id AND operation_id<>'') FROM notification_deliveries WHERE endpoint_id=$1 AND event_type='service.stop.failed' AND resource_id=$2`, endpointID, serviceID.String()).Scan(&deliveries, &distinctOperations, &attributedPayloads); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 2 || distinctOperations != 2 || attributedPayloads != 2 {
+		t.Fatalf("deliveries=%d distinct_operations=%d attributed_payloads=%d", deliveries, distinctOperations, attributedPayloads)
+	}
+}
+
 func TestClaimSerializesJobsWithTheSameResourceKey(t *testing.T) {
 	db, ctx := recoveryTestStore(t)
 	firstID, secondID, cancelledID := uuid.New(), uuid.New(), uuid.New()

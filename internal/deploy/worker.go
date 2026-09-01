@@ -2682,7 +2682,7 @@ func (w *Worker) finish(ctx context.Context, j job, jobErr error) error {
 		}
 	}
 	if jobErr != nil && j.Attempts+1 >= j.MaxAttempts && j.Kind != "notify.webhook" {
-		if err = w.Store.QueueFailureNotificationsTx(ctx, tx, j.Kind, j.Payload, jobErr); err != nil {
+		if err = w.Store.QueueJobFailureNotificationsTx(ctx, tx, j.ID, j.Kind, j.Payload, jobErr); err != nil {
 			return fmt.Errorf("queue failure notification: %w", err)
 		}
 	}

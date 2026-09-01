@@ -366,7 +366,7 @@ func (s *Store) finishTemplateRepositorySync(ctx context.Context, repository Tem
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if err = queueNotificationDeliveries(ctx, tx, repository.OrganizationID, "template.sync.failed", "template_repository_sync", repository.SyncAttemptID.String(), payload); err != nil {
+		if err = queueNotificationDeliveries(ctx, tx, repository.OrganizationID, "template.sync.failed", "template_repository_sync", repository.SyncAttemptID.String(), "", payload); err != nil {
 			return err
 		}
 	}

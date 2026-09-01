@@ -2073,7 +2073,7 @@ func addAIAuditFindingTx(ctx context.Context, tx pgx.Tx, organizationID, account
 	shouldNotifyCritical := item.Severity == "critical" && ((fingerprintExists && currentSeverity != "critical") || (!fingerprintExists && (!previousFound || previousSeverity != "critical" || previousDisposition == "resolved")))
 	if shouldNotifyCritical {
 		payload, _ := json.Marshal(map[string]any{"event": "ai.finding.critical", "resourceType": "ai_audit_finding", "resourceId": item.ID.String(), "runId": runID, "agentName": agentName, "category": item.Category, "title": item.Title, "occurredAt": time.Now().UTC(), "text": "Dockyard ai.finding.critical: " + item.Title})
-		if err = queueNotificationDeliveries(ctx, tx, organizationID, "ai.finding.critical", "ai_audit_finding", item.ID.String(), payload); err != nil {
+		if err = queueNotificationDeliveries(ctx, tx, organizationID, "ai.finding.critical", "ai_audit_finding", item.ID.String(), "", payload); err != nil {
 			return AIAuditFinding{}, err
 		}
 	}
@@ -2132,7 +2132,7 @@ func finishAIAuditRunTx(ctx context.Context, tx pgx.Tx, organizationID, accountI
 
 func queueAIAuditFailureNotifications(ctx context.Context, tx pgx.Tx, organizationID, runID uuid.UUID, agentName, summary string) error {
 	payload, _ := json.Marshal(map[string]any{"event": "ai.audit.failed", "resourceType": "ai_audit_run", "resourceId": runID.String(), "agentName": agentName, "error": truncateStore(summary, 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard ai.audit.failed for AI audit run " + runID.String()})
-	return queueNotificationDeliveries(ctx, tx, organizationID, "ai.audit.failed", "ai_audit_run", runID.String(), payload)
+	return queueNotificationDeliveries(ctx, tx, organizationID, "ai.audit.failed", "ai_audit_run", runID.String(), "", payload)
 }
 
 func (s *Store) ListAIAuditRuns(ctx context.Context, organizationID uuid.UUID) ([]AIAuditRun, error) {

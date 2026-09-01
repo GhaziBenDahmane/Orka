@@ -192,6 +192,8 @@ durable provider build-status callbacks implemented.
   Slack-compatible webhooks, PagerDuty, and Opsgenie are implemented. Terminal
   workload-job failures and their notification outbox records commit in one
   PostgreSQL transaction, preventing a controller crash from losing the alert.
+  Delivery deduplication is scoped to the durable job, so retries cannot create
+  duplicates while a later failed operation on the same resource alerts again.
 - OpenTelemetry HTTP and worker traces, request/log correlation, and richer
   Prometheus HTTP, deployment, queue, backup, restore, and drill metrics are
   implemented. Hierarchical maintenance mode and transactionally enforced

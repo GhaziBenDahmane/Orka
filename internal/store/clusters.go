@@ -799,7 +799,7 @@ func queueAgentUpgradeFailureNotificationTx(ctx context.Context, tx pgx.Tx, clus
 	if err != nil {
 		return err
 	}
-	return queueNotificationDeliveries(ctx, tx, organizationID, "agent.upgrade.failed", "agent_upgrade", commandID.String(), payload)
+	return queueNotificationDeliveries(ctx, tx, organizationID, "agent.upgrade.failed", "agent_upgrade", commandID.String(), "", payload)
 }
 
 func lockActiveClusterCertificateTx(ctx context.Context, tx pgx.Tx, clusterID uuid.UUID, certificateSerial string) error {

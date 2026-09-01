@@ -178,18 +178,28 @@ func (s *Store) QueueFailureNotifications(ctx context.Context, jobKind string, r
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err = s.QueueFailureNotificationsTx(ctx, tx, jobKind, rawPayload, cause); err != nil {
+	if err = s.queueFailureNotificationsTx(ctx, tx, "", jobKind, rawPayload, cause); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
 
-// QueueFailureNotificationsTx writes the notification outbox records in the
-// caller's transaction. Workers use this to make a terminal job failure and
-// its operator notification one atomic state transition.
+// QueueFailureNotificationsTx writes resource-scoped notification outbox
+// records in the caller's transaction. Durable workers should use
+// QueueJobFailureNotificationsTx so later operations may notify independently.
 func (s *Store) QueueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobKind string, rawPayload []byte, cause error) error {
+	return s.queueFailureNotificationsTx(ctx, tx, "", jobKind, rawPayload, cause)
+}
+
+// QueueJobFailureNotificationsTx scopes delivery idempotency to one durable
+// job. A later operation against the same resource can therefore alert again.
+func (s *Store) QueueJobFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobID uuid.UUID, jobKind string, rawPayload []byte, cause error) error {
+	return s.queueFailureNotificationsTx(ctx, tx, jobID.String(), jobKind, rawPayload, cause)
+}
+
+func (s *Store) queueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, operationID, jobKind string, rawPayload []byte, cause error) error {
 	if jobKind == "edge-certificates.reconcile" {
-		return queueEdgeCertificateFailureNotificationsTx(ctx, tx, rawPayload, cause)
+		return queueEdgeCertificateFailureNotificationsTx(ctx, tx, operationID, rawPayload, cause)
 	}
 	eventType, resourceType, resourceID, organizationID, err := s.failureResource(ctx, tx, jobKind, rawPayload)
 	if errors.Is(err, ErrNotFound) {
@@ -199,6 +209,9 @@ func (s *Store) QueueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobK
 		return err
 	}
 	notification := map[string]any{"event": eventType, "operation": jobKind, "resourceType": resourceType, "resourceId": resourceID, "error": truncateStore(cause.Error(), 8192), "occurredAt": time.Now().UTC(), "text": "Dockyard " + eventType + " for " + resourceType + " " + resourceID}
+	if operationID != "" {
+		notification["jobId"] = operationID
+	}
 	if jobKind == "restore.volume" {
 		var offline bool
 		var serviceID uuid.UUID
@@ -219,10 +232,10 @@ func (s *Store) QueueFailureNotificationsTx(ctx context.Context, tx pgx.Tx, jobK
 		}
 	}
 	payload, _ := json.Marshal(notification)
-	return queueNotificationDeliveries(ctx, tx, organizationID, eventType, resourceType, resourceID, payload)
+	return queueNotificationDeliveries(ctx, tx, organizationID, eventType, resourceType, resourceID, operationID, payload)
 }
 
-func queueEdgeCertificateFailureNotificationsTx(ctx context.Context, tx pgx.Tx, rawPayload []byte, cause error) error {
+func queueEdgeCertificateFailureNotificationsTx(ctx context.Context, tx pgx.Tx, operationID string, rawPayload []byte, cause error) error {
 	var input struct {
 		TargetKey string `json:"targetKey"`
 	}
@@ -271,7 +284,7 @@ func queueEdgeCertificateFailureNotificationsTx(ctx context.Context, tx pgx.Tx, 
 		rows.Close()
 	}
 	resourceID := input.TargetKey + ":" + strconv.FormatInt(generation, 10)
-	payload, _ := json.Marshal(map[string]any{
+	notification := map[string]any{
 		"event":        "edge.certificate.reconcile.failed",
 		"operation":    "edge-certificates.reconcile",
 		"resourceType": "edge_certificate_target",
@@ -281,16 +294,20 @@ func queueEdgeCertificateFailureNotificationsTx(ctx context.Context, tx pgx.Tx, 
 		"error":        truncateStore(cause.Error(), 8192),
 		"occurredAt":   time.Now().UTC(),
 		"text":         "Dockyard edge.certificate.reconcile.failed for edge target " + input.TargetKey,
-	})
+	}
+	if operationID != "" {
+		notification["jobId"] = operationID
+	}
+	payload, _ := json.Marshal(notification)
 	for organizationID := range owners {
-		if err := queueNotificationDeliveries(ctx, tx, organizationID, "edge.certificate.reconcile.failed", "edge_certificate_target", resourceID, payload); err != nil {
+		if err := queueNotificationDeliveries(ctx, tx, organizationID, "edge.certificate.reconcile.failed", "edge_certificate_target", resourceID, operationID, payload); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, eventType, resourceType, resourceID string, payload json.RawMessage) error {
+func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, eventType, resourceType, resourceID, operationID string, payload json.RawMessage) error {
 	rows, err := tx.Query(ctx, `SELECT id FROM notification_endpoints WHERE organization_id=$1 AND enabled AND $2=ANY(events)`, organizationID, eventType)
 	if err != nil {
 		return err
@@ -311,7 +328,7 @@ func queueNotificationDeliveries(ctx context.Context, tx pgx.Tx, organizationID 
 	rows.Close()
 	for _, endpointID := range endpointIDs {
 		deliveryID := uuid.New()
-		tag, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, deliveryID, endpointID, eventType, resourceType, resourceID, payload)
+		tag, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,operation_id,payload) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, deliveryID, endpointID, eventType, resourceType, resourceID, operationID, payload)
 		if err == nil && tag.RowsAffected() == 1 {
 			jobPayload, _ := json.Marshal(map[string]string{"deliveryId": deliveryID.String()})
 			_, err = tx.Exec(ctx, `INSERT INTO jobs(id,kind,payload,max_attempts) VALUES($1,'notify.webhook',$2,8)`, uuid.New(), jobPayload)

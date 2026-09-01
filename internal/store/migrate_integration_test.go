@@ -1143,3 +1143,39 @@ func TestMigrateUpgradeFrom119PreservesEdgeCertificateTargets(t *testing.T) {
 		t.Fatalf("migrated edge target generation=%d applied=%d status=%q error=%q affected=%v", generation, appliedGeneration, status, lastError, affected)
 	}
 }
+
+func TestMigrateUpgradeFrom120PreservesNotificationDeduplication(t *testing.T) {
+	pool, ctx := migrationTestPool(t)
+	if err := migrateThrough(ctx, pool, "120_edge_certificate_notification_owners.sql"); err != nil {
+		t.Fatal(err)
+	}
+	organizationID, endpointID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations(id,name,slug) VALUES($1,'Notification migration',$2)`, organizationID, "notification-migration-"+organizationID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_endpoints(id,organization_id,name,kind,encrypted_url,encrypted_secret,events) VALUES($1,$2,'On-call','webhook','url','secret',ARRAY['service.stop.failed'])`, endpointID, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload) VALUES($1,$2,'service.stop.failed','compose_service','service-1','{}')`, uuid.New(), endpointID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var operationID string
+	if err := pool.QueryRow(ctx, `SELECT operation_id FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&operationID); err != nil || operationID != "" {
+		t.Fatalf("legacy operation id=%q err=%v", operationID, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,payload) VALUES($1,$2,'service.stop.failed','compose_service','service-1','{}')`, uuid.New(), endpointID); err == nil {
+		t.Fatal("legacy duplicate delivery was accepted")
+	}
+	for _, jobID := range []uuid.UUID{uuid.New(), uuid.New()} {
+		if _, err := pool.Exec(ctx, `INSERT INTO notification_deliveries(id,endpoint_id,event_type,resource_type,resource_id,operation_id,payload) VALUES($1,$2,'service.stop.failed','compose_service','service-1',$3,'{}')`, uuid.New(), endpointID, jobID.String()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var deliveries int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE endpoint_id=$1`, endpointID).Scan(&deliveries); err != nil || deliveries != 3 {
+		t.Fatalf("operation-scoped deliveries=%d err=%v", deliveries, err)
+	}
+}
