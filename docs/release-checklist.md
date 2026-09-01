@@ -174,8 +174,8 @@ links for every item below.
   against the same resource each produce a delivery.
   Exhausted commit-status callback retries resolve through the deployment and
   notify only its tenant.
-  Exhausted notification deliveries are listed without payloads or endpoint
-  secrets, cannot be retried across tenants or through disabled destinations,
+  Exhausted notification deliveries are listed without payloads, endpoint
+  secrets, or raw transport errors, cannot be retried across tenants or through disabled destinations,
   and an audited concurrent redrive creates exactly one active job while
   clearing prior attempt state. Prometheus and the deterministic AI baseline
   must report the exhausted state but suppress it while a durable retry is active.

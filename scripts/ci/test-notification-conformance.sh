@@ -30,6 +30,7 @@ done
 cd "$root_dir"
 go test -c -o "$work_dir/deploy.test" ./internal/deploy
 go test -c -o "$work_dir/store.test" ./internal/store
+go test -c -o "$work_dir/httpapi.test" ./internal/httpapi
 go test -c -o "$work_dir/auditor.test" ./cmd/dockyard
 go test -c -o "$work_dir/observability.test" ./internal/observability
 
@@ -62,6 +63,11 @@ export DOCKYARD_NOTIFICATION_CONFORMANCE=1
   -test.run='^(TestCommitStatusFailuresUseDeploymentTenantEvent|TestEdgeCertificateFailureNotificationsFanOutToAffectedTenants|TestNotificationDeliveryHistoryAndAuditedRedrive)$' \
   -test.count=1 -test.v | tee -a "$work_dir/conformance.log"
 
+"$work_dir/httpapi.test" \
+  -test.timeout=2m \
+  -test.run='^TestNotificationDeliveryHistoryAndRetryAPI$' \
+  -test.count=1 -test.v | tee -a "$work_dir/conformance.log"
+
 "$work_dir/auditor.test" \
   -test.timeout=2m \
   -test.run='^TestDeterministicAuditDetectsExhaustedNotificationDelivery$' \
@@ -81,6 +87,7 @@ grep -F -- '--- PASS: TestSeparateTerminalOperationsNotifyForTheSameResource ' "
 grep -F -- '--- PASS: TestEdgeCertificateFailureNotificationsFanOutToAffectedTenants ' "$work_dir/conformance.log" >/dev/null
 grep -F -- '--- PASS: TestCommitStatusFailuresUseDeploymentTenantEvent ' "$work_dir/conformance.log" >/dev/null
 grep -F -- '--- PASS: TestNotificationDeliveryHistoryAndAuditedRedrive ' "$work_dir/conformance.log" >/dev/null
+grep -F -- '--- PASS: TestNotificationDeliveryHistoryAndRetryAPI ' "$work_dir/conformance.log" >/dev/null
 grep -F -- '--- PASS: TestDeterministicAuditDetectsExhaustedNotificationDelivery ' "$work_dir/conformance.log" >/dev/null
 grep -F -- '--- PASS: TestDatabaseMetricsQueriesRemainValid ' "$work_dir/conformance.log" >/dev/null
 grep -F -- '--- PASS: TestPrometheusAlertsCoverExhaustedNotificationDeliveries ' "$work_dir/conformance.log" >/dev/null
@@ -90,7 +97,7 @@ test "$(wc -l <"$work_dir/evidence.json")" -eq 1
 jq \
   --arg sourceCommit "${GITHUB_SHA:-$(git rev-parse HEAD)}" \
   --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '. + {sourceCommit:$sourceCommit,createdAt:$createdAt,realProviderCredentials:"staging-required",atomicTerminalOutbox:true,operationScopedDeduplication:true,edgeCertificateFailureFanout:true,commitStatusFailureNotification:true,auditedDeliveryRedrive:true,exhaustedDeliverySignals:true}' \
+  '. + {sourceCommit:$sourceCommit,createdAt:$createdAt,realProviderCredentials:"staging-required",atomicTerminalOutbox:true,operationScopedDeduplication:true,edgeCertificateFailureFanout:true,commitStatusFailureNotification:true,auditedDeliveryRedrive:true,exhaustedDeliverySignals:true,httpAPIContract:true}' \
   "$work_dir/evidence.json" >"$evidence_file"
 
 jq -e '
@@ -104,6 +111,7 @@ jq -e '
   .commitStatusFailureNotification and
   .auditedDeliveryRedrive and
   .exhaustedDeliverySignals and
+  .httpAPIContract and
   .deliveries == 6 and .jobAttempts == 7 and
   (.sourceCommit | test("^[a-f0-9]{40}$"))
 ' "$evidence_file" >/dev/null

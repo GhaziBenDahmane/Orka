@@ -113,7 +113,11 @@ func (s *Store) ListNotificationDeliveries(ctx context.Context, organizationID u
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT d.id,d.endpoint_id,e.name,e.kind,d.event_type,d.resource_type,d.resource_id,d.status,
-		       d.response_code,d.last_error,d.created_at,d.started_at,d.finished_at,
+		       d.response_code,CASE
+		           WHEN d.last_error='' THEN ''
+		           WHEN d.response_code IS NOT NULL THEN 'provider returned HTTP ' || d.response_code::text
+		           ELSE 'delivery failed; inspect controller logs using the delivery ID'
+		       END,d.created_at,d.started_at,d.finished_at,
 		       state.active,
 		       e.enabled AND d.status='failed' AND NOT state.active AS retryable
 		FROM notification_deliveries d
