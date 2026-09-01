@@ -72,12 +72,20 @@ type agentTrustUpdate struct {
 	SigningCACertificate string `json:"signingCaCertificate"`
 }
 
+const (
+	minEnrollmentTokenBytes = 32
+	maxEnrollmentTokenBytes = 4096
+)
+
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.EnrollmentURL == "" || cfg.AgentURL == "" || !filepath.IsAbs(cfg.StateDirectory) {
 		return errors.New("agent enrollment URL, agent URL, and absolute state directory are required")
 	}
 	if err := ValidateEndpoints(cfg.EnrollmentURL, cfg.AgentURL); err != nil {
 		return err
+	}
+	if strings.TrimSpace(cfg.EnrollmentToken) != "" && cfg.EnrollmentTokenFile != "" {
+		return errors.New("DOCKYARD_AGENT_ENROLLMENT_TOKEN and DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE cannot both be configured")
 	}
 	if cfg.DockerBin == "" {
 		cfg.DockerBin = "docker"
@@ -287,13 +295,9 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 	if validateSavedAgentIdentity(certPath, keyPath, caPath, time.Now()) == nil {
 		return nil
 	}
-	token := strings.TrimSpace(cfg.EnrollmentToken)
-	if token == "" && cfg.EnrollmentTokenFile != "" {
-		contents, err := os.ReadFile(cfg.EnrollmentTokenFile)
-		if err != nil {
-			return fmt.Errorf("read agent enrollment token: %w", err)
-		}
-		token = strings.TrimSpace(string(contents))
+	token, err := loadEnrollmentToken(cfg)
+	if err != nil {
+		return err
 	}
 	if token == "" {
 		return errors.New("agent identity missing and DOCKYARD_AGENT_ENROLLMENT_TOKEN is empty")
@@ -346,6 +350,61 @@ func ensureIdentity(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("remove pending enrollment key: %w", err)
 	}
 	return nil
+}
+
+func loadEnrollmentToken(cfg Config) (string, error) {
+	inline := strings.TrimSpace(cfg.EnrollmentToken)
+	if inline != "" && cfg.EnrollmentTokenFile != "" {
+		return "", errors.New("DOCKYARD_AGENT_ENROLLMENT_TOKEN and DOCKYARD_AGENT_ENROLLMENT_TOKEN_FILE cannot both be configured")
+	}
+	if inline != "" {
+		return validateEnrollmentToken(inline)
+	}
+	if cfg.EnrollmentTokenFile == "" {
+		return "", nil
+	}
+	before, err := os.Lstat(cfg.EnrollmentTokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read agent enrollment token: %w", err)
+	}
+	if !before.Mode().IsRegular() {
+		return "", errors.New("agent enrollment token file must be a regular file, not a symbolic link or directory")
+	}
+	if before.Size() < minEnrollmentTokenBytes || before.Size() > maxEnrollmentTokenBytes {
+		return "", fmt.Errorf("agent enrollment token file must contain between %d and %d bytes", minEnrollmentTokenBytes, maxEnrollmentTokenBytes)
+	}
+	file, err := os.Open(cfg.EnrollmentTokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read agent enrollment token: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return "", errors.New("agent enrollment token file changed while it was opened")
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, maxEnrollmentTokenBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read agent enrollment token: %w", err)
+	}
+	defer clear(contents)
+	after, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() || !opened.ModTime().Equal(after.ModTime()) {
+		return "", errors.New("agent enrollment token file changed while it was read")
+	}
+	if len(contents) > maxEnrollmentTokenBytes {
+		return "", fmt.Errorf("agent enrollment token file exceeds %d bytes", maxEnrollmentTokenBytes)
+	}
+	if strings.ContainsAny(string(contents), "\x00\r\n") {
+		return "", errors.New("agent enrollment token file must contain one token without NUL or line breaks")
+	}
+	return validateEnrollmentToken(strings.TrimSpace(string(contents)))
+}
+
+func validateEnrollmentToken(token string) (string, error) {
+	if len(token) < minEnrollmentTokenBytes || len(token) > maxEnrollmentTokenBytes || strings.ContainsAny(token, "\x00\r\n") {
+		return "", fmt.Errorf("agent enrollment token must contain between %d and %d bytes without NUL or line breaks", minEnrollmentTokenBytes, maxEnrollmentTokenBytes)
+	}
+	return token, nil
 }
 
 func loadOrCreateEnrollmentKey(directory string) (*rsa.PrivateKey, error) {

@@ -465,8 +465,11 @@ manager, and a mode-0600 non-symlink enrollment-token file containing
 `DOCKYARD_AGENT_STACK_NAME`, and requires the replica count to remain converged
 for the same stability window. Existing enrollment
 secrets are rejected unless `DOCKYARD_REUSE_EXISTING_SECRETS=true`; only reuse
-one when the corresponding agent identity volume is intact. Docker secrets are
-immutable: when issuing a fresh enrollment token or recovering from a lost
+one when the corresponding agent identity volume is intact. The agent
+revalidates its mounted token as a stable regular file with the same size and
+single-line constraints; configuring both inline and file token sources fails.
+Docker secrets are immutable: when issuing a fresh enrollment token or
+recovering from a lost
 agent identity volume, set `DOCKYARD_AGENT_ENROLLMENT_TOKEN_SECRET` to a new,
 versioned Docker secret name rather than reusing the old secret. The equivalent
 installer verifies the exact requested image digest and rejects active, paused,

@@ -232,6 +232,49 @@ func TestArtifactUploadSendsVerifiedContentLength(t *testing.T) {
 	}
 }
 
+func TestLoadEnrollmentTokenFailsClosed(t *testing.T) {
+	valid := strings.Repeat("t", minEnrollmentTokenBytes)
+	if token, err := loadEnrollmentToken(Config{EnrollmentToken: valid}); err != nil || token != valid {
+		t.Fatalf("inline token=%q error=%v", token, err)
+	}
+	if _, err := loadEnrollmentToken(Config{EnrollmentToken: valid, EnrollmentTokenFile: "/run/secrets/token"}); err == nil || !strings.Contains(err.Error(), "cannot both be configured") {
+		t.Fatalf("ambiguous token error=%v", err)
+	}
+	for name, token := range map[string]string{
+		"short":     strings.Repeat("x", minEnrollmentTokenBytes-1),
+		"oversized": strings.Repeat("x", maxEnrollmentTokenBytes+1),
+		"multiline": strings.Repeat("x", minEnrollmentTokenBytes) + "\nsecond",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadEnrollmentToken(Config{EnrollmentToken: token}); err == nil {
+				t.Fatalf("invalid inline token %q was accepted", name)
+			}
+		})
+	}
+	directory := t.TempDir()
+	tokenPath := filepath.Join(directory, "token")
+	if err := os.WriteFile(tokenPath, []byte(valid), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := loadEnrollmentToken(Config{EnrollmentTokenFile: tokenPath}); err != nil || token != valid {
+		t.Fatalf("file token=%q error=%v", token, err)
+	}
+	link := filepath.Join(directory, "token-link")
+	if err := os.Symlink(tokenPath, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadEnrollmentToken(Config{EnrollmentTokenFile: link}); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlinked token error=%v", err)
+	}
+	lineBreakPath := filepath.Join(directory, "token-line-break")
+	if err := os.WriteFile(lineBreakPath, []byte(valid+"\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadEnrollmentToken(Config{EnrollmentTokenFile: lineBreakPath}); err == nil || !strings.Contains(err.Error(), "line breaks") {
+		t.Fatalf("multiline token file error=%v", err)
+	}
+}
+
 func TestEnsureIdentityValidatesEnrollmentBeforePersistence(t *testing.T) {
 	now := time.Now().UTC()
 	caPEM, caKey, err := agentpki.NewCA(now, 24*time.Hour)
@@ -297,7 +340,7 @@ func TestEnsureIdentityValidatesEnrollmentBeforePersistence(t *testing.T) {
 			}))
 			defer server.Close()
 
-			err := ensureIdentity(context.Background(), Config{EnrollmentURL: server.URL, EnrollmentToken: "one-time-token", StateDirectory: directory})
+			err := ensureIdentity(context.Background(), Config{EnrollmentURL: server.URL, EnrollmentToken: strings.Repeat("t", minEnrollmentTokenBytes), StateDirectory: directory})
 			certPath, keyPath, caPath := identityPaths(directory)
 			if test.wantErr == "" {
 				if err != nil {
@@ -365,7 +408,7 @@ func TestEnsureIdentityRetriesWithTheSameCSR(t *testing.T) {
 	}))
 	defer server.Close()
 	directory := t.TempDir()
-	cfg := Config{EnrollmentURL: server.URL, EnrollmentToken: "one-time-token", StateDirectory: directory}
+	cfg := Config{EnrollmentURL: server.URL, EnrollmentToken: strings.Repeat("t", minEnrollmentTokenBytes), StateDirectory: directory}
 	if err = ensureIdentity(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "verify agent client certificate") {
 		t.Fatalf("first enrollment error=%v", err)
 	}
