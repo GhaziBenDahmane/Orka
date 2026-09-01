@@ -1,6 +1,6 @@
 [variables]
 domain = "${domain}"
-barktrace_version = "0.31.0"
+barktrace_version = "0.48.0"
 oidc_issuer_url = "https://id.example.com"
 oidc_client_id = "barktrace"
 oidc_client_secret = "${password:32}"

@@ -5,7 +5,7 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 project="dockyard-template-smoke"
 port="${DOCKYARD_TEMPLATE_SMOKE_PORT:-18081}"
 evidence_file="${DOCKYARD_TEMPLATE_EVIDENCE:-template-conformance.json}"
-barktrace_version="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.31.0}"
+barktrace_version="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_VERSION:-0.48.0}"
 template_selection="${DOCKYARD_TEMPLATE_SMOKE_TEMPLATES:-9router postgres timescaledb mysql mariadb mongo redis valkey libsql clickhouse qdrant meilisearch barktrace-sqlite barktrace-postgres}"
 read -r -a template_keys <<<"$template_selection"
 if (( ${#template_keys[@]} == 0 )); then

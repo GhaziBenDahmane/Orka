@@ -203,8 +203,8 @@ func TestBarkTraceTemplatePinsReleasedImage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(definition), `barktrace_version = "0.31.0"`) {
-			t.Fatalf("%s template must pin the released 0.31.0 image", name)
+		if !strings.Contains(string(definition), `barktrace_version = "0.48.0"`) {
+			t.Fatalf("%s template must pin the released 0.48.0 image", name)
 		}
 	}
 }
