@@ -38,6 +38,9 @@ func (s *Store) CreateSCIMTokenWithAudit(ctx context.Context, principal Principa
 		return SCIMToken{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return SCIMToken{}, err
+	}
 	item, err := createSCIMTokenTx(ctx, tx, principal.OrganizationID, name, role, hash, expiresAt)
 	if err != nil {
 		return SCIMToken{}, err
@@ -92,6 +95,9 @@ func (s *Store) RevokeSCIMTokenWithAudit(ctx context.Context, principal Principa
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return err
+	}
 	if err = revokeSCIMTokenTx(ctx, tx, principal.OrganizationID, tokenID); err != nil {
 		return err
 	}

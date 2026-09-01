@@ -164,7 +164,10 @@ enrollment details.
 
 Service-account creation, token rotation, and disablement commit atomically
 with their operator audit records. An audit failure cannot retain a newly
-issued bearer token, revoke the prior token, or disable the identity.
+issued bearer token, revoke the prior token, or disable the identity. These
+operations revalidate the actor under the organization identity lock; a
+concurrently demoted or disabled actor receives `403 forbidden` and leaves no
+credential or audit mutation.
 
 Mandatory-SSO policy changes, OIDC/SAML provider creation and configuration
 updates, and provider enable or disable transitions commit atomically with
@@ -235,6 +238,9 @@ environment grants and revokes federated sessions for that organization.
 Membership role changes, member removal, and project/environment grant changes
 commit atomically with their administrator audit evidence; an evidence failure
 rolls back the complete RBAC transition, including grant and session cleanup.
+The same transaction re-reads the actor after taking the organization identity
+lock, so authorization cached at request entry cannot survive an intervening
+demotion, removal, user disablement, or service-account disablement.
 Invitation tokens are returned only at creation and stored as SHA-256 digests.
 Creating another invitation for the same organization and email revokes the
 previous token. Creation, revocation, and one-time acceptance commit atomically

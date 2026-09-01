@@ -33,8 +33,8 @@ func TestOrganizationInvitationLifecycle(t *testing.T) {
 	}
 	t.Cleanup(db.Pool.Close)
 	organizationID, otherOrganizationID := uuid.New(), uuid.New()
-	ownerID, adminID, existingID, otherOwnerID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	ownerToken, adminToken, otherOwnerToken := "owner-"+uuid.NewString(), "admin-"+uuid.NewString(), "other-owner-"+uuid.NewString()
+	ownerID, adminID, existingID, otherOwnerID, serviceAccountID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ownerToken, adminToken, otherOwnerToken, serviceAccountToken := "owner-"+uuid.NewString(), "admin-"+uuid.NewString(), "other-owner-"+uuid.NewString(), "service-account-"+uuid.NewString()
 	for _, statement := range []struct {
 		query string
 		args  []any
@@ -43,6 +43,8 @@ func TestOrganizationInvitationLifecycle(t *testing.T) {
 		{`INSERT INTO users(id,email,password_hash,display_name) VALUES($1,$2,'x','Owner'),($3,$4,'x','Admin'),($5,$6,'x','Existing'),($7,$8,'x','Other owner')`, []any{ownerID, ownerID.String() + "@example.test", adminID, adminID.String() + "@example.test", existingID, existingID.String() + "@example.test", otherOwnerID, otherOwnerID.String() + "@example.test"}},
 		{`INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin'),($4,$5,'owner')`, []any{organizationID, ownerID, adminID, otherOrganizationID, otherOwnerID}},
 		{`INSERT INTO sessions(id,user_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour'),($4,$5,$6,now()+interval '1 hour'),($7,$8,$9,now()+interval '1 hour')`, []any{uuid.New(), ownerID, cryptox.Digest(ownerToken), uuid.New(), adminID, cryptox.Digest(adminToken), uuid.New(), otherOwnerID, cryptox.Digest(otherOwnerToken)}},
+		{`INSERT INTO service_accounts(id,organization_id,name,role) VALUES($1,$2,'invitation-automation','admin')`, []any{serviceAccountID, organizationID}},
+		{`INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')`, []any{uuid.New(), serviceAccountID, cryptox.Digest(serviceAccountToken)}},
 		{`INSERT INTO organization_auth_settings(organization_id,require_sso) VALUES($1,true)`, []any{otherOrganizationID}},
 	} {
 		if _, err = db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -58,6 +60,26 @@ func TestOrganizationInvitationLifecycle(t *testing.T) {
 	server := httptest.NewServer((&Server{Store: db, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), SessionTTL: time.Hour, PublicURL: "https://dockyard.example.test"}).Handler())
 	defer server.Close()
 	invitationsURL := server.URL + "/v1/invitations"
+	status, body := scopedAPIRequest(t, invitationsURL, serviceAccountToken, organizationID, http.MethodPost, map[string]any{"email": "service-account@invite.test", "role": "viewer"})
+	var serviceCreated struct {
+		Invitation store.OrganizationInvitation `json:"invitation"`
+		Token      string                       `json:"token"`
+	}
+	if err = json.Unmarshal(body, &serviceCreated); err != nil || status != http.StatusCreated || serviceCreated.Invitation.ID == uuid.Nil || serviceCreated.Token == "" {
+		t.Fatalf("service-account invitation status=%d response=%#v err=%v body=%s", status, serviceCreated, err, body)
+	}
+	var creatorIsNull bool
+	if err = db.Pool.QueryRow(ctx, `SELECT created_by IS NULL FROM organization_invitations WHERE id=$1`, serviceCreated.Invitation.ID).Scan(&creatorIsNull); err != nil || !creatorIsNull {
+		t.Fatalf("service-account invitation human creator null=%t err=%v", creatorIsNull, err)
+	}
+	var serviceAuditCount int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_service_account_id=$2 AND action='invitation.create' AND resource_id=$3`, organizationID, serviceAccountID, serviceCreated.Invitation.ID.String()).Scan(&serviceAuditCount); err != nil || serviceAuditCount != 1 {
+		t.Fatalf("service-account invitation audit count=%d err=%v", serviceAuditCount, err)
+	}
+	if status, _ = scopedAPIRequest(t, invitationsURL+"/"+serviceCreated.Invitation.ID.String(), serviceAccountToken, organizationID, http.MethodDelete, nil); status != http.StatusNoContent {
+		t.Fatalf("service-account invitation revocation status=%d, want 204", status)
+	}
+
 	if status, _ := scopedAPIRequest(t, invitationsURL, adminToken, organizationID, http.MethodPost, map[string]any{"email": "owner@invite.test", "role": "owner"}); status != http.StatusForbidden {
 		t.Fatalf("admin owner invitation status=%d, want 403", status)
 	}
@@ -65,7 +87,7 @@ func TestOrganizationInvitationLifecycle(t *testing.T) {
 		t.Fatalf("existing member invitation status=%d, want 409", status)
 	}
 
-	status, body := scopedAPIRequest(t, invitationsURL, adminToken, organizationID, http.MethodPost, map[string]any{"email": "new-local@invite.test", "role": "developer", "expiresInDays": 3})
+	status, body = scopedAPIRequest(t, invitationsURL, adminToken, organizationID, http.MethodPost, map[string]any{"email": "new-local@invite.test", "role": "developer", "expiresInDays": 3})
 	var created struct {
 		Invitation store.OrganizationInvitation `json:"invitation"`
 		Token      string                       `json:"token"`

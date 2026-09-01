@@ -652,8 +652,11 @@ func (s *Store) CreateServiceAccountWithAudit(ctx context.Context, principal Pri
 		return ServiceAccount{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return ServiceAccount{}, err
+	}
 	var creatorID *uuid.UUID
-	if principal.UserID != uuid.Nil {
+	if principal.ServiceAccountID == nil && principal.UserID != uuid.Nil {
 		creatorID = &principal.UserID
 	}
 	item, err := createServiceAccountTx(ctx, tx, principal.OrganizationID, creatorID, name, role, tokenHash, expiresAt)
@@ -716,6 +719,9 @@ func (s *Store) RotateServiceAccountTokenWithAudit(ctx context.Context, principa
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return err
+	}
 	if err = rotateServiceAccountTokenTx(ctx, tx, principal.OrganizationID, id, tokenHash, expiresAt); err != nil {
 		return err
 	}
@@ -759,6 +765,9 @@ func (s *Store) DisableServiceAccountWithAudit(ctx context.Context, principal Pr
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return err
+	}
 	if err = disableServiceAccountTx(ctx, tx, principal.OrganizationID, id); err != nil {
 		return err
 	}

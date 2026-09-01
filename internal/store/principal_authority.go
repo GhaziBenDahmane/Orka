@@ -14,6 +14,10 @@ import (
 // disable, or service-account disable commits before this function re-reads
 // the actor's current authority.
 func lockOrganizationAndRequirePrincipalRole(ctx context.Context, tx pgx.Tx, principal Principal, minimum string) (string, error) {
+	minimumRank := organizationRoleRank(minimum)
+	if minimumRank == 0 {
+		return "", errors.New("invalid minimum organization role")
+	}
 	var organizationID uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, principal.OrganizationID).Scan(&organizationID); errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
@@ -49,7 +53,7 @@ func lockOrganizationAndRequirePrincipalRole(ctx context.Context, tx pgx.Tx, pri
 			return "", err
 		}
 	}
-	if organizationRoleRank(role) < organizationRoleRank(minimum) {
+	if organizationRoleRank(role) < minimumRank {
 		return "", ErrInsufficientRole
 	}
 	return role, nil

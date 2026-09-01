@@ -21,6 +21,9 @@ func TestServiceAccountLifecycleCommitsWithAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
 	principal := Principal{OrganizationID: organizationID, UserID: userID, Role: "owner"}
 	invalidPrincipal := principal
 	invalidServiceAccountID := uuid.New()

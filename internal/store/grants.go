@@ -42,6 +42,9 @@ func (s *Store) UpsertResourceGrantWithAudit(ctx context.Context, principal Prin
 		return ResourceGrant{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return ResourceGrant{}, err
+	}
 	item, err := upsertResourceGrantTx(ctx, tx, principal.OrganizationID, scopeType, scopeID, userID, role)
 	if err != nil {
 		return ResourceGrant{}, err
@@ -128,6 +131,9 @@ func (s *Store) DeleteResourceGrantWithAudit(ctx context.Context, principal Prin
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return err
+	}
 	if err = deleteResourceGrantTx(ctx, tx, principal.OrganizationID, scopeType, scopeID, userID); err != nil {
 		return err
 	}

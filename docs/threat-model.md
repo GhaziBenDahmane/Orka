@@ -48,7 +48,12 @@ service-account revocation. Mandatory-SSO policy and OIDC/SAML provider state
 changes serialize on the organization row, preventing sequential or concurrent
 operations from disabling the final enabled provider. The AI baseline reports
 a critical lockout finding if legacy or manually altered state violates that
-invariant. Each local, OIDC, or SAML session is issued atomically with its tenant
+invariant. Identity-administration transactions lock the organization and then
+re-read the actor's active membership and current role, or the service
+account's enabled state and current role. A request authorized before a
+concurrent demotion, removal, disablement, or deprovisioning therefore cannot
+commit a stale member, invitation, grant, service-account, SCIM-token, or SSO
+mutation. Each local, OIDC, or SAML session is issued atomically with its tenant
 audit event; unscoped local logins append evidence to every organization the
 identity can enter, while federated sessions remain bound to one tenant.
 Logout and both individual and bulk session revocation use the same atomic

@@ -177,6 +177,107 @@ func TestAdministrativeMutationsRevalidateActorAuthorityAfterOrganizationLock(t 
 			t.Fatalf("service account invitation audit events=%d err=%v, want only the authorized mutation", audits, err)
 		}
 	})
+
+	t.Run("remaining identity administration after admin demotion", func(t *testing.T) {
+		db, ctx, organizationID, ownerID, actorID := authorityFenceFixture(t)
+		targetID, projectID := uuid.New(), uuid.New()
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, targetID, targetID.String()+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'viewer')`, organizationID, targetID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO projects(id,organization_id,name,slug) VALUES($1,$2,'Authority project',$3)`, projectID, organizationID, "authority-project-"+projectID.String()); err != nil {
+			t.Fatal(err)
+		}
+
+		expiresAt := time.Now().Add(time.Hour)
+		originalServiceHash := []byte("authority-original-service-" + uuid.NewString())
+		account, err := db.CreateServiceAccount(ctx, organizationID, ownerID, "authority-target", "developer", originalServiceHash, expiresAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalSCIMHash := []byte("authority-original-scim-" + uuid.NewString())
+		scimToken, err := db.CreateSCIMToken(ctx, organizationID, "authority-target", "viewer", originalSCIMHash, expiresAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = db.UpsertResourceGrant(ctx, organizationID, "project", projectID, targetID, "viewer"); err != nil {
+			t.Fatal(err)
+		}
+
+		demotion, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer demotion.Rollback(ctx)
+		if _, err = updateOrganizationMemberRoleTx(ctx, demotion, organizationID, actorID, "developer", "owner"); err != nil {
+			t.Fatal(err)
+		}
+
+		principal := Principal{OrganizationID: organizationID, UserID: actorID, Role: "admin"}
+		result := make(chan error, 1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, createErr := db.CreateServiceAccountWithAudit(ctx, principal, "stale-created", "viewer", []byte("authority-stale-service-"+uuid.NewString()), expiresAt, "127.0.0.1:1234")
+			result <- createErr
+		}()
+		<-started
+		assertAuthorityMutationBlocked(t, result)
+		if err = demotion.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertInsufficientRoleResult(t, result)
+
+		rotatedServiceHash := []byte("authority-rotated-service-" + uuid.NewString())
+		if err = db.RotateServiceAccountTokenWithAudit(ctx, principal, account.ID, rotatedServiceHash, expiresAt, "127.0.0.1:1234"); !errors.Is(err, ErrInsufficientRole) {
+			t.Fatalf("stale service-account rotation error=%v", err)
+		}
+		if err = db.DisableServiceAccountWithAudit(ctx, principal, account.ID, "127.0.0.1:1234"); !errors.Is(err, ErrInsufficientRole) {
+			t.Fatalf("stale service-account disable error=%v", err)
+		}
+		staleSCIMHash := []byte("authority-stale-scim-" + uuid.NewString())
+		if _, err = db.CreateSCIMTokenWithAudit(ctx, principal, "stale-created", "viewer", staleSCIMHash, expiresAt, "127.0.0.1:1234"); !errors.Is(err, ErrInsufficientRole) {
+			t.Fatalf("stale SCIM-token creation error=%v", err)
+		}
+		if err = db.RevokeSCIMTokenWithAudit(ctx, principal, scimToken.ID, "127.0.0.1:1234"); !errors.Is(err, ErrInsufficientRole) {
+			t.Fatalf("stale SCIM-token revocation error=%v", err)
+		}
+		if _, err = db.UpsertResourceGrantWithAudit(ctx, principal, "project", projectID, targetID, "admin", "127.0.0.1:1234"); !errors.Is(err, ErrInsufficientRole) {
+			t.Fatalf("stale grant update error=%v", err)
+		}
+		if err = db.DeleteResourceGrantWithAudit(ctx, principal, "project", projectID, targetID, "127.0.0.1:1234"); !errors.Is(err, ErrInsufficientRole) {
+			t.Fatalf("stale grant deletion error=%v", err)
+		}
+
+		var count int
+		if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM service_accounts WHERE organization_id=$1 AND name='stale-created'`, organizationID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("stale actor created service accounts=%d err=%v", count, err)
+		}
+		if _, err = db.Authenticate(ctx, originalServiceHash, &organizationID); err != nil {
+			t.Fatalf("stale mutation invalidated original service-account token: %v", err)
+		}
+		if _, err = db.Authenticate(ctx, rotatedServiceHash, &organizationID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("stale mutation activated replacement service-account token: %v", err)
+		}
+		if _, _, err = db.AuthenticateSCIM(ctx, originalSCIMHash); err != nil {
+			t.Fatalf("stale mutation revoked original SCIM token: %v", err)
+		}
+		if _, _, err = db.AuthenticateSCIM(ctx, staleSCIMHash); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("stale mutation created SCIM token: %v", err)
+		}
+		var grantRole string
+		if err = db.Pool.QueryRow(ctx, `SELECT role FROM project_grants WHERE project_id=$1 AND user_id=$2`, projectID, targetID).Scan(&grantRole); err != nil || grantRole != "viewer" {
+			t.Fatalf("stale mutation changed grant role=%q err=%v", grantRole, err)
+		}
+		if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND actor_user_id=$2 AND action IN ('service_account.create','service_account.rotate','service_account.disable','scim.token.create','scim.token.revoke','grant.update','grant.delete')`, organizationID, actorID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("rejected identity mutations retained audit events=%d err=%v", count, err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, targetID)
+		})
+	})
 }
 
 func authorityFenceFixture(t *testing.T) (*Store, context.Context, uuid.UUID, uuid.UUID, uuid.UUID) {
