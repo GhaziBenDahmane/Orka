@@ -83,6 +83,7 @@ jq -e '
   .auditArchivePostureAudited and
   .jobQueuePostureAudited and
   .identitySecurityPostureAudited and
+  .sourceBuildProvenanceAudited and
   .managedNetworkPostureAudited and
   .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and

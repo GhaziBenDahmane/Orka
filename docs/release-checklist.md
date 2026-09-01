@@ -135,7 +135,10 @@ links for every item below.
   normal workload APIs to the auditor identity. It distinguishes desired
   template tags from digest-pinned effective runtime snapshots, reports a
   mutable deployed image, and keeps runtime image identities outside the model
-  boundary. It also proves deterministic detection of a managed database left
+  boundary. A successful Git-source deployment without a recorded resolved
+  commit must produce a provenance finding while repository URLs, build
+  configuration, and registry coordinates remain outside the model boundary.
+  It also proves deterministic detection of a managed database left
   in an error state, its missing successful backup and restore drill, an
   expired custom TLS certificate, and a missing edge
   reconciliation target while keeping encrypted certificate and private-key
