@@ -3276,6 +3276,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "owner_required", err.Error())
 		return
 	}
+	if errors.Is(err, store.ErrInsufficientRole) {
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+		return
+	}
 	if errors.Is(err, store.ErrLastOwner) {
 		writeError(w, http.StatusConflict, "last_owner", err.Error())
 		return

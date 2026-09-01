@@ -32,6 +32,7 @@ var ErrRemoteBackupTLSRequired = errors.New("remote backup destinations must use
 var ErrLastOwner = errors.New("organization must retain an active owner")
 var ErrSCIMManaged = errors.New("membership is managed by SCIM")
 var ErrOwnerRequired = errors.New("organization owner role is required")
+var ErrInsufficientRole = errors.New("insufficient role")
 var ErrAlreadyMember = errors.New("user is already an organization member")
 var ErrPasswordRequired = errors.New("a password is required for a new local account")
 var ErrInvalidCurrentPassword = errors.New("current password is incorrect")
@@ -867,6 +868,9 @@ func (s *Store) SetOrganizationAuthSettingsWithAudit(ctx context.Context, princi
 		return OrganizationAuthSettings{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return OrganizationAuthSettings{}, err
+	}
 	settings, err := setOrganizationAuthSettingsTx(ctx, tx, principal.OrganizationID, requireSSO)
 	if err != nil {
 		return OrganizationAuthSettings{}, err
@@ -4272,6 +4276,9 @@ func (s *Store) CreateOIDCProviderWithAudit(ctx context.Context, principal Princ
 		return OIDCProvider{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return OIDCProvider{}, err
+	}
 	p, err = createOIDCProvider(ctx, tx, p)
 	if err != nil {
 		return OIDCProvider{}, err
@@ -4324,6 +4331,9 @@ func (s *Store) UpdateOIDCProviderWithAudit(ctx context.Context, principal Princ
 		return OIDCProvider{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return OIDCProvider{}, err
+	}
 	p, err = updateOIDCProviderTx(ctx, tx, principal.OrganizationID, p)
 	if err != nil {
 		return OIDCProvider{}, err
@@ -4506,6 +4516,9 @@ func (s *Store) CreateSAMLProviderWithAudit(ctx context.Context, principal Princ
 		return SAMLProvider{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return SAMLProvider{}, err
+	}
 	p, err = createSAMLProvider(ctx, tx, p)
 	if err != nil {
 		return SAMLProvider{}, err
@@ -4552,6 +4565,9 @@ func (s *Store) UpdateSAMLProviderWithAudit(ctx context.Context, principal Princ
 		return SAMLProvider{}, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return SAMLProvider{}, err
+	}
 	p, err = updateSAMLProviderTx(ctx, tx, principal.OrganizationID, p)
 	if err != nil {
 		return SAMLProvider{}, err
@@ -4635,6 +4651,9 @@ func (s *Store) BeginSAMLCertificateRotationWithAudit(ctx context.Context, princ
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return err
+	}
 	if err = beginSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id, certificatePEM, encryptedPrivateKey, notAfter); err != nil {
 		return err
 	}
@@ -4680,6 +4699,9 @@ func (s *Store) PromoteSAMLCertificateRotationWithAudit(ctx context.Context, pri
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return err
+	}
 	if err = promoteSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id); err != nil {
 		return err
 	}
@@ -4721,6 +4743,9 @@ func (s *Store) CancelSAMLCertificateRotationWithAudit(ctx context.Context, prin
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return err
+	}
 	if err = cancelSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id); err != nil {
 		return err
 	}

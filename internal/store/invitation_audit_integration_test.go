@@ -21,6 +21,9 @@ func TestInvitationLifecycleCommitsWithAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, ownerID, ownerID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, ownerID); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM organizations WHERE id=$1`, organizationID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE email LIKE '%@invitation-audit.test' OR id=$1`, ownerID)

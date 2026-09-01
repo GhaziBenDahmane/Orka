@@ -32,19 +32,20 @@ type InvitationAcceptance struct {
 }
 
 func (s *Store) CreateOrganizationInvitation(ctx context.Context, organizationID, creatorID uuid.UUID, email, role, actorRole string, tokenHash []byte, expiresAt time.Time) (OrganizationInvitation, error) {
-	return s.createOrganizationInvitation(ctx, Principal{}, organizationID, creatorID, email, role, actorRole, tokenHash, expiresAt, "", false)
+	return s.createOrganizationInvitation(ctx, Principal{}, organizationID, &creatorID, email, role, actorRole, tokenHash, expiresAt, "", false)
 }
 
 func (s *Store) CreateOrganizationInvitationWithAudit(ctx context.Context, principal Principal, email, role string, tokenHash []byte, expiresAt time.Time, remoteAddr string) (OrganizationInvitation, error) {
-	return s.createOrganizationInvitation(ctx, principal, principal.OrganizationID, principal.UserID, email, role, principal.Role, tokenHash, expiresAt, remoteAddr, true)
+	var creatorID *uuid.UUID
+	if principal.ServiceAccountID == nil && principal.UserID != uuid.Nil {
+		creatorID = &principal.UserID
+	}
+	return s.createOrganizationInvitation(ctx, principal, principal.OrganizationID, creatorID, email, role, principal.Role, tokenHash, expiresAt, remoteAddr, true)
 }
 
-func (s *Store) createOrganizationInvitation(ctx context.Context, principal Principal, organizationID, creatorID uuid.UUID, email, role, actorRole string, tokenHash []byte, expiresAt time.Time, remoteAddr string, audit bool) (OrganizationInvitation, error) {
+func (s *Store) createOrganizationInvitation(ctx context.Context, principal Principal, organizationID uuid.UUID, creatorID *uuid.UUID, email, role, actorRole string, tokenHash []byte, expiresAt time.Time, remoteAddr string, audit bool) (OrganizationInvitation, error) {
 	if !ValidOrganizationRole(role) {
 		return OrganizationInvitation{}, errors.New("invalid organization role")
-	}
-	if role == "owner" && actorRole != "owner" {
-		return OrganizationInvitation{}, ErrOwnerRequired
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	tx, err := s.Pool.Begin(ctx)
@@ -52,6 +53,15 @@ func (s *Store) createOrganizationInvitation(ctx context.Context, principal Prin
 		return OrganizationInvitation{}, err
 	}
 	defer tx.Rollback(ctx)
+	if audit {
+		actorRole, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin")
+		if err != nil {
+			return OrganizationInvitation{}, err
+		}
+	}
+	if role == "owner" && actorRole != "owner" {
+		return OrganizationInvitation{}, ErrOwnerRequired
+	}
 	item, err := createOrganizationInvitationTx(ctx, tx, organizationID, creatorID, email, role, tokenHash, expiresAt)
 	if err != nil {
 		return OrganizationInvitation{}, err
@@ -64,7 +74,7 @@ func (s *Store) createOrganizationInvitation(ctx context.Context, principal Prin
 	return item, tx.Commit(ctx)
 }
 
-func createOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, organizationID, creatorID uuid.UUID, email, role string, tokenHash []byte, expiresAt time.Time) (OrganizationInvitation, error) {
+func createOrganizationInvitationTx(ctx context.Context, tx pgx.Tx, organizationID uuid.UUID, creatorID *uuid.UUID, email, role string, tokenHash []byte, expiresAt time.Time) (OrganizationInvitation, error) {
 	var lockedOrganizationID uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organizationID).Scan(&lockedOrganizationID); errors.Is(err, pgx.ErrNoRows) {
 		return OrganizationInvitation{}, ErrNotFound
@@ -140,6 +150,9 @@ func (s *Store) RevokeOrganizationInvitationWithAudit(ctx context.Context, princ
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin"); err != nil {
+		return err
+	}
 	if err = revokeOrganizationInvitationTx(ctx, tx, principal.OrganizationID, invitationID); err != nil {
 		return err
 	}

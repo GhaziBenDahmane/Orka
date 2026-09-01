@@ -29,6 +29,9 @@ func (s *Store) SetSSOProviderEnabledWithAudit(ctx context.Context, principal Pr
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "owner"); err != nil {
+		return err
+	}
 	if err = setSSOProviderEnabledTx(ctx, tx, principal.OrganizationID, providerID, kind, enabled); err != nil {
 		return err
 	}

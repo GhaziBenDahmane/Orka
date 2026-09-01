@@ -60,6 +60,12 @@ func (s *Store) updateOrganizationMemberRole(ctx context.Context, principal Prin
 		return OrganizationMember{}, err
 	}
 	defer tx.Rollback(ctx)
+	if audit {
+		actorRole, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin")
+		if err != nil {
+			return OrganizationMember{}, err
+		}
+	}
 	item, err := updateOrganizationMemberRoleTx(ctx, tx, organizationID, userID, role, actorRole)
 	if err != nil {
 		return OrganizationMember{}, err
@@ -119,6 +125,12 @@ func (s *Store) deleteOrganizationMember(ctx context.Context, principal Principa
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if audit {
+		actorRole, err = lockOrganizationAndRequirePrincipalRole(ctx, tx, principal, "admin")
+		if err != nil {
+			return err
+		}
+	}
 	if err = deleteOrganizationMemberTx(ctx, tx, organizationID, userID, actorRole); err != nil {
 		return err
 	}

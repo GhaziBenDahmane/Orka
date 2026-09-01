@@ -1,0 +1,71 @@
+package store
+
+import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// lockOrganizationAndRequirePrincipalRole closes the gap between HTTP
+// authorization and a later administrative mutation. The organization row is
+// the identity subsystem's first lock, so an in-flight demotion, removal, user
+// disable, or service-account disable commits before this function re-reads
+// the actor's current authority.
+func lockOrganizationAndRequirePrincipalRole(ctx context.Context, tx pgx.Tx, principal Principal, minimum string) (string, error) {
+	var organizationID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, principal.OrganizationID).Scan(&organizationID); errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	} else if err != nil {
+		return "", err
+	}
+
+	var role string
+	if principal.ServiceAccountID != nil {
+		if principal.UserID != uuid.Nil {
+			return "", ErrInsufficientRole
+		}
+		err := tx.QueryRow(ctx, `SELECT role FROM service_accounts WHERE id=$1 AND organization_id=$2 AND enabled FOR UPDATE`, *principal.ServiceAccountID, principal.OrganizationID).Scan(&role)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrInsufficientRole
+		}
+		if err != nil {
+			return "", err
+		}
+	} else {
+		if principal.UserID == uuid.Nil {
+			return "", ErrInsufficientRole
+		}
+		err := tx.QueryRow(ctx, `SELECT membership.role
+			FROM memberships membership
+			JOIN users actor ON actor.id=membership.user_id
+			WHERE membership.organization_id=$1 AND membership.user_id=$2 AND actor.disabled_at IS NULL
+			FOR UPDATE OF membership,actor`, principal.OrganizationID, principal.UserID).Scan(&role)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrInsufficientRole
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	if organizationRoleRank(role) < organizationRoleRank(minimum) {
+		return "", ErrInsufficientRole
+	}
+	return role, nil
+}
+
+func organizationRoleRank(role string) int {
+	switch role {
+	case "viewer":
+		return 1
+	case "developer":
+		return 2
+	case "admin":
+		return 3
+	case "owner":
+		return 4
+	default:
+		return 0
+	}
+}

@@ -23,6 +23,9 @@ func TestSSOPolicyTransitionsCommitWithAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
 	provider, err := db.CreateOIDCProvider(ctx, OIDCProvider{OrganizationID: organizationID, Name: "Workforce", Issuer: "https://identity.example.test", ClientID: "client", EncryptedClientSecret: "ciphertext", Domains: []string{"example.test"}})
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +84,9 @@ func TestSSOProviderTransitionsRevokePendingLoginStatesAtomically(t *testing.T) 
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, userID); err != nil {
 		t.Fatal(err)
 	}
 	principal := Principal{OrganizationID: organizationID, UserID: userID}
@@ -222,6 +228,9 @@ func TestOIDCProviderMutationCommitsWithAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, userID); err != nil {
+		t.Fatal(err)
+	}
 	invalidPrincipal := Principal{OrganizationID: organizationID, UserID: uuid.New()}
 	principal := Principal{OrganizationID: organizationID, UserID: userID}
 	providerInput := OIDCProvider{ID: providerID, Name: "Workforce", Issuer: "https://identity.example.test", ClientID: "client", EncryptedClientSecret: "original-ciphertext", Domains: []string{"example.test"}, Scopes: []string{"openid", "email"}, DefaultRole: "developer"}
@@ -290,6 +299,9 @@ func TestSAMLProviderMutationCommitsWithAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES($1,$2,'!test')`, userID, userID.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')`, organizationID, userID); err != nil {
 		t.Fatal(err)
 	}
 	invalidPrincipal := Principal{OrganizationID: organizationID, UserID: uuid.New()}
