@@ -126,9 +126,17 @@ func TestDeployTokenExpiryUseAndRevocation(t *testing.T) {
 	if hookResponse.StatusCode != http.StatusAccepted {
 		t.Fatalf("hook status=%d body=%s", hookResponse.StatusCode, hookData)
 	}
+	var hookedDeployment store.Deployment
+	if err = json.Unmarshal(hookData, &hookedDeployment); err != nil || hookedDeployment.ID == uuid.Nil {
+		t.Fatalf("hook deployment=%#v err=%v", hookedDeployment, err)
+	}
 	var lastUsedAt *time.Time
 	if err = db.Pool.QueryRow(ctx, `SELECT last_used_at FROM deploy_tokens WHERE id=$1`, created.DeployToken.ID).Scan(&lastUsedAt); err != nil || lastUsedAt == nil {
 		t.Fatalf("last_used_at=%v err=%v", lastUsedAt, err)
+	}
+	var hookAudits int
+	if err = db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='deployment.hook' AND resource_id=$2 AND metadata->>'deployTokenId'=$3`, organizationID, hookedDeployment.ID.String(), created.DeployToken.ID.String()).Scan(&hookAudits); err != nil || hookAudits != 1 {
+		t.Fatalf("deployment hook audits=%d err=%v", hookAudits, err)
 	}
 
 	if err = db.RevokeDeployToken(ctx, otherOrganizationID, serviceID, created.DeployToken.ID); err != store.ErrNotFound {

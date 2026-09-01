@@ -282,6 +282,9 @@ backup-policy writes reject a service whose deletion has been queued. Compose
 revisions, source and uploaded-artifact changes, routes, deployment hooks, and
 provider-webhook records also take that service lock, preventing configuration
 from being created inside an in-flight deletion transaction.
+Deployment-token hooks additionally commit their token-use time, deployment
+snapshot, worker job, and secret-free system audit event in one transaction;
+an audit outage cannot launch unattributed work.
 Environment and project cascades lock their descendants in
 parent-to-environment-to-database-to-service order, apply the same
 active-operation barrier to linked and unbound database records, and serialize

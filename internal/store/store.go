@@ -3574,6 +3574,14 @@ func (s *Store) GetDatabaseRestore(ctx context.Context, organizationID, id uuid.
 }
 
 func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (Deployment, error) {
+	return s.queueDeploymentByToken(ctx, tokenHash, "", false)
+}
+
+func (s *Store) QueueDeploymentByTokenWithAudit(ctx context.Context, tokenHash []byte, remoteAddr string) (Deployment, error) {
+	return s.queueDeploymentByToken(ctx, tokenHash, remoteAddr, true)
+}
+
+func (s *Store) queueDeploymentByToken(ctx context.Context, tokenHash []byte, remoteAddr string, audit bool) (Deployment, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
@@ -3614,6 +3622,11 @@ func (s *Store) QueueDeploymentByToken(ctx context.Context, tokenHash []byte) (D
 	}
 	if _, err = tx.Exec(ctx, `UPDATE deploy_tokens SET last_used_at=now() WHERE id=$1`, tokenID); err != nil {
 		return Deployment{}, err
+	}
+	if audit {
+		if err = s.AuditOrganizationTx(ctx, tx, organizationID, "deployment.hook", "deployment", d.ID.String(), remoteAddr, map[string]any{"deployTokenId": tokenID, "composeServiceId": serviceID}); err != nil {
+			return Deployment{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return Deployment{}, err

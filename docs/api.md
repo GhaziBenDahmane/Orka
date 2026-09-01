@@ -604,6 +604,9 @@ First-time agent enrollment atomically consumes its one-time token, activates
 the cluster certificate, and records the system audit event. Signed provider
 webhooks likewise record replay protection, deployment snapshots, worker jobs,
 pending commit status, and their system audit evidence in one transaction.
+Deployment-token hooks atomically record token use, the deployment snapshot,
+worker job, and a secret-free `deployment.hook` system audit event; audit
+persistence failure leaves the token unused and queues no work.
 Dokploy native database-transfer admission commits the migration record and
 worker job with its system audit evidence. Scheduled template-repository sync
 finalization commits the fenced attempt status and system audit event together.

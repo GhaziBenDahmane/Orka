@@ -3155,7 +3155,7 @@ func (s *Server) deployWebhook(w http.ResponseWriter, r *http.Request) {
 	if !s.allowPublicWebhookAttempt(w, r, "deploy", token) {
 		return
 	}
-	deployment, err := s.Store.QueueDeploymentByToken(r.Context(), cryptox.Digest(token))
+	deployment, err := s.Store.QueueDeploymentByTokenWithAudit(r.Context(), cryptox.Digest(token), r.RemoteAddr)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, 404, "not_found", "deployment token not found")
