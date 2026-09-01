@@ -31,6 +31,10 @@ jobs:
             .auditedDeliveryRedrive and .exhaustedDeliverySignals and .httpAPIContract and
             .commitStatusAuditedRedrive and .commitStatusExhaustedSignals and
             .commitStatusHTTPAPIContract and
+            .deletionFinalizerFailureNotification and
+            .deletionFinalizerHistoryRedacted and .deletionFinalizerTenantIsolation and
+            .deletionFinalizerAuditedRedrive and .deletionFinalizerIntentPreserved and
+            .deletionFinalizerConcurrentRedrive and .deletionFinalizerSignals and
             .deliveries == 6 and .jobAttempts == 7
           ' notification-conformance.json >/dev/null
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
