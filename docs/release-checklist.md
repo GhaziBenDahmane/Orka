@@ -164,6 +164,10 @@ links for every item below.
   An exhausted notification delivery must likewise appear only as aggregate
   endpoint posture and produce an intervention finding without exposing its
   encrypted destination, payload, or raw provider error.
+  An enabled immutable audit archive with a failed latest batch must expose
+  only its checkpoint and aggregate status, produce a deterministic delivery
+  failure finding, and keep object keys, chain hashes, and raw errors outside
+  the model boundary.
   A failed or thirty-minute-stalled offline named-volume recovery must produce
   a critical deterministic finding with service, volume, and target-node
   context while excluding the raw restore error from the model boundary.

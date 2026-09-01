@@ -80,6 +80,7 @@ jq -e '
   .volumeRecoveryPostureAudited and
   .templateRepositoryPostureAudited and
   .notificationFailurePostureAudited and
+  .auditArchivePostureAudited and
   .managedNetworkPostureAudited and
   .deletionFinalizerPostureAudited and
   .staleDeployCredentialAudited and
