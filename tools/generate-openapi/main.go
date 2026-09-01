@@ -72,7 +72,8 @@ paths:
 			isMigrationList := op.method == "get" && op.path == "/v1/migration-resources"
 			isNotificationDeliveryList := op.method == "get" && op.path == "/v1/notification-deliveries"
 			isCommitStatusDeliveryList := op.method == "get" && op.path == "/v1/commit-status-deliveries"
-			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList || isNotificationDeliveryList || isCommitStatusDeliveryList {
+			isDeletionFinalizerList := op.method == "get" && op.path == "/v1/deletion-finalizers"
+			if len(parameters) > 0 || (op.method == "get" && op.path == "/v1/templates") || isSCIMList || isMigrationList || isNotificationDeliveryList || isCommitStatusDeliveryList || isDeletionFinalizerList {
 				output.WriteString("      parameters:\n")
 				for _, parameter := range parameters {
 					format := ""
@@ -95,6 +96,9 @@ paths:
 				}
 				if isCommitStatusDeliveryList {
 					output.WriteString("        - name: status\n          in: query\n          schema: {type: string, enum: [pending, running, succeeded, failed]}\n        - name: provider\n          in: query\n          schema: {type: string, enum: [github, gitlab, gitea, bitbucket]}\n        - name: state\n          in: query\n          schema: {type: string, enum: [pending, success, failure, error]}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n")
+				}
+				if isDeletionFinalizerList {
+					output.WriteString("        - name: resourceType\n          in: query\n          schema: {type: string, enum: [project, environment, service, database, cluster, network]}\n        - name: status\n          in: query\n          schema: {type: string, enum: [missing, pending, running, succeeded, failed, cancelled]}\n        - name: limit\n          in: query\n          schema: {type: integer, minimum: 1, maximum: 200, default: 100}\n")
 				}
 			}
 			if op.method == "post" || op.method == "put" || op.method == "patch" || (op.method == "delete" && op.path == "/v1/auth/mfa") {

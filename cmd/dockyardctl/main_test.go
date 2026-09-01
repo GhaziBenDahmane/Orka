@@ -116,6 +116,8 @@ func TestCommandRequestMappings(t *testing.T) {
 		{[]string{"retry-notification-delivery", "delivery-id"}, http.MethodPost, "/v1/notification-deliveries/delivery-id/retry"},
 		{[]string{"commit-status-deliveries"}, http.MethodGet, "/v1/commit-status-deliveries"},
 		{[]string{"retry-commit-status-delivery", "delivery-id"}, http.MethodPost, "/v1/commit-status-deliveries/delivery-id/retry"},
+		{[]string{"deletion-finalizers"}, http.MethodGet, "/v1/deletion-finalizers"},
+		{[]string{"retry-deletion-finalizer", "service", "service-id"}, http.MethodPost, "/v1/deletion-finalizers/service/service-id/retry"},
 		{[]string{"databases", "environment-id"}, http.MethodGet, "/v1/environments/environment-id/databases"},
 		{[]string{"database", "database-id"}, http.MethodGet, "/v1/databases/database-id"},
 		{[]string{"link-database", "service-id", `{}`}, http.MethodPost, "/v1/services/service-id/databases"},

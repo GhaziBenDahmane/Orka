@@ -2198,6 +2198,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/deletion-finalizers:
+    get:
+      operationId: get_v1_deletion_finalizers
+      tags: [deletion-finalizers]
+      parameters:
+        - name: resourceType
+          in: query
+          schema: {type: string, enum: [project, environment, service, database, cluster, network]}
+        - name: status
+          in: query
+          schema: {type: string, enum: [missing, pending, running, succeeded, failed, cancelled]}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/deletion-finalizers/{resourceType}/{resourceID}/retry:
+    post:
+      operationId: post_v1_deletion_finalizers_resourceType_resourceID_retry
+      tags: [deletion-finalizers]
+      parameters:
+        - name: resourceType
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: resourceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/deployments/{deploymentID}:
     get:
       operationId: get_v1_deployments_deploymentID

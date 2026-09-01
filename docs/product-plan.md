@@ -212,7 +212,10 @@ durable provider build-status callbacks implemented.
   credentials remain a staging requirement.
 - Resumable asynchronous finalizers cover services, projects, environments,
   clusters, and opt-in stack-labelled volume cleanup. Parent deletion waits
-  for all child stacks and active deployments block the cascade.
+  for all child stacks and active deployments block the cascade. Tenant-scoped
+  operator history exposes terminal and missing finalizers without payloads or
+  raw Swarm errors, and audited redrive preserves durable deletion intent with
+  one active finalizer per resource.
 - Durable service stop/start intent preserves named volumes, is serialized with
   deployments and deletion, works through local or remote Swarm schedulers,
   and prevents reconciliation from resurrecting intentionally stopped stacks.

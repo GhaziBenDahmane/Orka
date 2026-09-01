@@ -95,11 +95,14 @@ keys make it a privileged service.
   least 25% failed; severity becomes high at 50%. Pending, running, and
   cancelled work is excluded from the denominator.
 - Finalizer posture reports tenant-scoped counts of projects, environments,
-  services, and clusters awaiting deletion, their oldest request time, deletion
+  services, linked databases, clusters, and managed networks awaiting deletion, their oldest request time, deletion
   job states, and resources with no active finalizer. Job payloads, Swarm
   output, and raw failure text remain excluded. Failed or missing finalizers are
   reported immediately; otherwise deletion pending beyond fifteen minutes is
-  reported as stalled.
+  reported as stalled. Administrators can inspect the corresponding redacted
+  finalizer history and atomically redrive a terminal or missing job from the API,
+  CLI, or console. Redrive preserves the last durable payload; if a service job
+  is missing entirely, reconstruction retains named volumes by default.
 - Audit-log posture reports the effective retention period, enabled and
   disabled immutable archive counts, the tenant's current maximum event ID,
   and per-destination checkpoint, backlog, and latest batch status/timestamps.

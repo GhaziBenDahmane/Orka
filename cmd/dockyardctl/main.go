@@ -545,6 +545,13 @@ func commandRequest(args []string, stdin io.Reader) (string, string, any, error)
 			return "", "", nil, err
 		}
 		return http.MethodPost, "/v1/commit-status-deliveries/" + args[1] + "/retry", nil, nil
+	case "deletion-finalizers":
+		return http.MethodGet, "/v1/deletion-finalizers", nil, require(1)
+	case "retry-deletion-finalizer":
+		if err := require(3); err != nil {
+			return "", "", nil, err
+		}
+		return http.MethodPost, "/v1/deletion-finalizers/" + args[1] + "/" + args[2] + "/retry", nil, nil
 	case "databases":
 		if err := require(2); err != nil {
 			return "", "", nil, err
@@ -1052,7 +1059,7 @@ func envOr(name, fallback string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules, migration-resources, verify-dokploy-migration)")
+	return errors.New("usage: dockyardctl [--url URL] [--token TOKEN] [--org UUID] <command> (run without a command to see this message; common commands: projects, services, service, move-service, rebind-service-storage-node, restore-volume-offline, tags, networks, custom-tls-certificates, create-custom-tls-certificate, create-route, update-route, deploy, stop, start, schedules, deletion-finalizers, retry-deletion-finalizer, migration-resources, verify-dokploy-migration)")
 }
 
 func verifyDokployMigrationResult(data []byte) error {

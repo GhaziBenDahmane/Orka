@@ -52,8 +52,10 @@ export DOCKYARD_LIFECYCLE_CONFORMANCE=1
 
 "$work_dir/httpapi.test" \
   -test.timeout=1m \
-  -test.run='^TestLifecycleAPIConformance$' \
+  -test.run='^(TestLifecycleAPIConformance|TestDeletionFinalizerHistoryAndRetryAPI)$' \
   -test.count=1 -test.v | tee "$work_dir/api.log"
+
+grep -F -- "--- PASS: TestDeletionFinalizerHistoryAndRetryAPI " "$work_dir/api.log" >/dev/null
 
 "$work_dir/deploy.test" \
   -test.timeout=1m \
@@ -82,6 +84,7 @@ jq \
     staleCompletionRejected:true,
     cancellationCompletionRace:true,
     remoteAgentCommand:true,
+    deletionFinalizerRecovery:true,
     notificationProvider:"signed-webhook",
     externalNotificationProviders:"staging-required"
   }' "$work_dir/api-evidence.json" >"$evidence_file"
@@ -93,7 +96,8 @@ jq -e '
   .webhookReplayRejected and .commitStatusDelivered and
   .failureNotificationDelivered and .workerTakeoverFenced and
   .staleCompletionRejected and .cancellationCompletionRace and
-  .remoteAgentCommand and (.sourceCommit | test("^[a-f0-9]{40}$"))
+  .remoteAgentCommand and .deletionFinalizerRecovery and
+  (.sourceCommit | test("^[a-f0-9]{40}$"))
 ' "$evidence_file" >/dev/null
 
 cat "$evidence_file"

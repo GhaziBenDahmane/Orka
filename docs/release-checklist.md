@@ -185,6 +185,11 @@ links for every item below.
   Shared local-edge certificate failures fan out once to every affected tenant,
   including after the last custom-certificate route has been removed, without
   notifying an unrelated tenant.
+  Terminal and missing deletion finalizers are listed through the administrator
+  API without job payloads or raw Swarm errors. Verify viewer denial,
+  cross-tenant concealment, audit rollback, preservation of the original volume
+  cleanup choice, conservative volume retention for a reconstructed missing
+  service job, and exactly one active job under concurrent redrive.
   The release attaches
   `notification-conformance.json`; real provider credentials remain a staging
   requirement.

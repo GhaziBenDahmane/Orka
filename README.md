@@ -271,6 +271,11 @@ Commit-provider callbacks have the same recovery path through
 `commit-status-deliveries` and `retry-commit-status-delivery DELIVERY_ID`.
 Their tenant-scoped history redacts repository, revision, credential, and raw
 transport details, while redrive preserves the immutable callback snapshot.
+Deletion cleanup can be inspected with `deletion-finalizers` and redriven with
+`retry-deletion-finalizer RESOURCE_TYPE RESOURCE_ID`. The API and console
+expose only tenant-scoped resource/job metadata, never finalizer payloads or raw
+Swarm errors. Failed retries preserve the original cleanup intent; if a service
+job is entirely missing, reconstruction defaults to retaining named volumes.
 
 Expiring service-account credentials can be managed with
 `dockyard_service_account`. Terraform/OpenTofu retains the one-time bearer

@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditArchiveBatch, AuditEvent, BackupDestination, Cluster, ClusterCommand, CommitStatusDelivery, CustomTLSCertificate, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, Deployment, DeployToken, DokployVerification, Environment, LinkedDatabaseInput, ManagedNetwork, MFAStatus, MigrationResource, NotificationDelivery, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourceGrant, ResourcePolicy, Role, Route, RouteBasicAuthUser, RouteInput, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceSchedule, ServiceScheduleExecution, ServiceScheduleInput, ServiceVolume, SessionInfo, SourceCredential, session, Tag, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore, WebhookIntegration } from "./api";
+import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditArchiveBatch, AuditEvent, BackupDestination, Cluster, ClusterCommand, CommitStatusDelivery, CustomTLSCertificate, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, DeletionFinalizer, Deployment, DeployToken, DokployVerification, Environment, LinkedDatabaseInput, ManagedNetwork, MFAStatus, MigrationResource, NotificationDelivery, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourceGrant, ResourcePolicy, Role, Route, RouteBasicAuthUser, RouteInput, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceSchedule, ServiceScheduleExecution, ServiceScheduleInput, ServiceVolume, SessionInfo, SourceCredential, session, Tag, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore, WebhookIntegration } from "./api";
 import "./styles.css";
 
 const starterCompose = `services:
@@ -901,17 +901,18 @@ function Notifications({ flash, setError }: { flash: (s: string) => void; setErr
   const [items, setItems] = useState<NotificationEndpoint[]>([]);
   const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([]);
   const [commitStatusDeliveries, setCommitStatusDeliveries] = useState<CommitStatusDelivery[]>([]);
+  const [deletionFinalizers, setDeletionFinalizers] = useState<DeletionFinalizer[]>([]);
   const [deliveryStatus, setDeliveryStatus] = useState("");
   const [deliveryEvent, setDeliveryEvent] = useState("");
   const [input, setInput] = useState({ name: "", kind: "webhook", url: "https://", pagerDutyIntegrationKey: "", opsgenieApiKey: "", opsgenieRegion: "us", smtpHost: "", smtpPort: 587, smtpMode: "starttls", smtpUsername: "", smtpPassword: "", from: "", to: "", events: [...notificationEvents] });
   const [signingSecret, setSigningSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(async () => {
-    const [endpointResult, deliveryResult, commitStatusResult] = await Promise.all([api.notificationEndpoints(), api.notificationDeliveries(deliveryStatus, deliveryEvent), api.commitStatusDeliveries(deliveryStatus)]);
-    setItems(endpointResult.items); setDeliveries(deliveryResult.items); setCommitStatusDeliveries(commitStatusResult.items);
+    const [endpointResult, deliveryResult, commitStatusResult, finalizerResult] = await Promise.all([api.notificationEndpoints(), api.notificationDeliveries(deliveryStatus, deliveryEvent), api.commitStatusDeliveries(deliveryStatus), api.deletionFinalizers()]);
+    setItems(endpointResult.items); setDeliveries(deliveryResult.items); setCommitStatusDeliveries(commitStatusResult.items); setDeletionFinalizers(finalizerResult.items);
   }, [deliveryStatus, deliveryEvent]);
   useEffect(() => { refresh().catch(reason => setError(message(reason))); }, [refresh, setError]);
-  const activeDelivery = [...deliveries, ...commitStatusDeliveries].some(item => item.inProgress || item.status === "pending" || item.status === "running");
+  const activeDelivery = [...deliveries, ...commitStatusDeliveries].some(item => item.inProgress || item.status === "pending" || item.status === "running") || deletionFinalizers.some(item => item.status === "pending" || item.status === "running");
   useEffect(() => { if (!activeDelivery) return; const timer = window.setInterval(() => void refresh().catch(reason => setError(message(reason))), 3000); return () => window.clearInterval(timer); }, [activeDelivery, refresh, setError]);
   async function create(event: FormEvent) {
     event.preventDefault(); setBusy(true); setSigningSecret("");
@@ -928,6 +929,11 @@ function Notifications({ flash, setError }: { flash: (s: string) => void; setErr
     setBusy(true); try { await api.retryCommitStatusDelivery(delivery.id); await refresh(); flash("Commit status delivery queued for retry"); }
     catch (reason) { setError(message(reason)); } finally { setBusy(false); }
   }
+  async function retryFinalizer(item: DeletionFinalizer) {
+    if (!window.confirm(`Retry deletion of ${item.resourceType} ${item.resourceName}? Existing deletion intent will be preserved; missing service jobs retain volumes.`)) return;
+    setBusy(true); try { await api.retryDeletionFinalizer(item); await refresh(); flash("Deletion finalizer queued for retry"); }
+    catch (reason) { setError(message(reason)); } finally { setBusy(false); }
+  }
   const toggleEvent = (value: string) => setInput({ ...input, events: input.events.includes(value) ? input.events.filter(x => x !== value) : [...input.events, value] });
   return <div className="notification-layout"><form className="card settings-card" onSubmit={create}><p className="eyebrow">Failure delivery</p><h2>Add notification endpoint</h2><label>Name<input value={input.name} onChange={e => setInput({ ...input, name: e.target.value })} required /></label><label>Provider<select value={input.kind} onChange={e => setInput({ ...input, kind: e.target.value })}><option value="webhook">Signed webhook</option><option value="slack">Slack-compatible webhook</option><option value="smtp">SMTP email</option><option value="pagerduty">PagerDuty</option><option value="opsgenie">Opsgenie</option></select></label>
     {(input.kind === "webhook" || input.kind === "slack") && <label>HTTPS URL<input type="url" value={input.url} onChange={e => setInput({ ...input, url: e.target.value })} required /></label>}
@@ -940,6 +946,8 @@ function Notifications({ flash, setError }: { flash: (s: string) => void; setErr
       <section className="card audit-table"><div className="table-scroll"><table><thead><tr><th>Time</th><th>Endpoint</th><th>Event</th><th>Resource</th><th>Result</th><th></th></tr></thead><tbody>{deliveries.map(delivery => <tr key={delivery.id}><td>{new Date(delivery.createdAt).toLocaleString()}</td><td>{delivery.endpointName}<small>{delivery.endpointKind}</small></td><td><code>{delivery.eventType}</code></td><td>{delivery.resourceType}<small>{delivery.resourceId}</small></td><td><Status value={delivery.inProgress ? "running" : delivery.status} /><small>{delivery.lastError || (delivery.responseCode ? `HTTP ${delivery.responseCode}` : "—")}</small></td><td>{delivery.retryable && <button disabled={busy} onClick={() => void retry(delivery)}>Retry</button>}</td></tr>)}</tbody></table></div>{!deliveries.length && <p className="muted padded">No matching notification deliveries.</p>}</section>
       <section className="section-head spaced"><div><h2>Commit status callbacks</h2><p className="muted">Provider callback history is tenant-scoped and excludes repository, revision, and credential material.</p></div></section>
       <section className="card audit-table"><div className="table-scroll"><table><thead><tr><th>Time</th><th>Service</th><th>Provider</th><th>State</th><th>Result</th><th></th></tr></thead><tbody>{commitStatusDeliveries.map(delivery => <tr key={delivery.id}><td>{new Date(delivery.createdAt).toLocaleString()}</td><td>{delivery.serviceName}<small>{delivery.deploymentId}</small></td><td>{delivery.provider}</td><td><Status value={delivery.state} /></td><td><Status value={delivery.inProgress ? "running" : delivery.status} /><small>{delivery.lastError || (delivery.responseCode ? `HTTP ${delivery.responseCode}` : "—")}</small></td><td>{delivery.retryable && <button disabled={busy} onClick={() => void retryCommitStatus(delivery)}>Retry</button>}</td></tr>)}</tbody></table></div>{!commitStatusDeliveries.length && <p className="muted padded">No matching commit status callbacks.</p>}</section>
+      <section className="section-head spaced"><div><h2>Deletion finalizers</h2><p className="muted">Resources awaiting asynchronous cleanup. Raw Swarm output and job payloads are excluded.</p></div></section>
+      <section className="card audit-table"><div className="table-scroll"><table><thead><tr><th>Requested</th><th>Resource</th><th>Finalizer</th><th>Attempts</th><th>Result</th><th></th></tr></thead><tbody>{deletionFinalizers.map(item => <tr key={`${item.resourceType}:${item.resourceId}`}><td>{new Date(item.requestedAt).toLocaleString()}</td><td>{item.resourceName}<small>{item.resourceType} · {item.resourceId}</small></td><td><code>{item.kind}</code><small>{item.jobId ?? "No job found"}</small></td><td>{item.attempts}/{item.maxAttempts || "—"}</td><td><Status value={item.status} /><small>{item.lastError || "—"}</small></td><td>{item.retryable && <button disabled={busy} onClick={() => void retryFinalizer(item)}>Retry</button>}</td></tr>)}</tbody></table></div>{!deletionFinalizers.length && <p className="muted padded">No resources are awaiting deletion.</p>}</section>
     </section>
   </div>;
 }

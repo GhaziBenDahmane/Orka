@@ -166,6 +166,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/notification-deliveries/{deliveryID}/retry", s.requireRole("admin", http.HandlerFunc(s.retryNotificationDelivery)))
 	mux.Handle("GET /v1/commit-status-deliveries", s.requireRole("admin", http.HandlerFunc(s.listCommitStatusDeliveries)))
 	mux.Handle("POST /v1/commit-status-deliveries/{deliveryID}/retry", s.requireRole("admin", http.HandlerFunc(s.retryCommitStatusDelivery)))
+	mux.Handle("GET /v1/deletion-finalizers", s.requireRole("admin", http.HandlerFunc(s.listDeletionFinalizers)))
+	mux.Handle("POST /v1/deletion-finalizers/{resourceType}/{resourceID}/retry", s.requireRole("admin", http.HandlerFunc(s.retryDeletionFinalizer)))
 	mux.Handle("GET /v1/migration-resources", s.requireRole("admin", http.HandlerFunc(s.listMigrationResources)))
 	mux.Handle("POST /v1/migration-resources/verify", s.requireRole("admin", http.HandlerFunc(s.verifyDokployMigration)))
 	mux.Handle("GET /v1/swarm/nodes", s.requireRole("admin", http.HandlerFunc(s.swarmNodes)))

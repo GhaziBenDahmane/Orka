@@ -65,6 +65,7 @@ export type AuditArchiveBatch = { id: string; destinationId: string; firstEventI
 export type NotificationEndpoint = { id: string; name: string; kind: "webhook" | "slack" | "smtp" | "pagerduty" | "opsgenie"; events: string[]; enabled: boolean; updatedAt: string };
 export type NotificationDelivery = { id: string; endpointId: string; endpointName: string; endpointKind: string; eventType: string; resourceType: string; resourceId: string; status: "pending" | "running" | "succeeded" | "failed"; responseCode?: number; lastError?: string; inProgress: boolean; retryable: boolean; createdAt: string; startedAt?: string; finishedAt?: string };
 export type CommitStatusDelivery = { id: string; deploymentId: string; serviceId: string; serviceName: string; state: "pending" | "success" | "failure" | "error"; provider: "github" | "gitlab" | "gitea" | "bitbucket"; status: "pending" | "running" | "succeeded" | "failed"; responseCode?: number; lastError?: string; inProgress: boolean; retryable: boolean; createdAt: string; startedAt?: string; finishedAt?: string };
+export type DeletionFinalizer = { resourceType: "project" | "environment" | "service" | "database" | "cluster" | "network"; resourceId: string; resourceName: string; requestedAt: string; jobId?: string; kind: string; status: "missing" | "pending" | "running" | "succeeded" | "failed" | "cancelled"; attempts: number; maxAttempts: number; lastError?: string; runAfter?: string; createdAt?: string; lockedAt?: string; finishedAt?: string; retryable: boolean };
 export type ServiceAccount = { id: string; name: string; role: string; enabled: boolean; tokenExpiresAt?: string; lastUsedAt?: string; createdAt: string; updatedAt: string };
 export type SCIMToken = { id: string; organizationId: string; name: string; defaultRole: "admin" | "developer" | "viewer"; createdAt: string; expiresAt: string; revokedAt?: string };
 export type OrganizationMember = { userId: string; email: string; displayName: string; role: Role; active: boolean; managedByScim: boolean; createdAt: string };
@@ -315,6 +316,13 @@ export const api = {
     return request<Envelope<CommitStatusDelivery>>(`/v1/commit-status-deliveries?${query}`);
   },
   retryCommitStatusDelivery: (id: string) => request<CommitStatusDelivery>(`/v1/commit-status-deliveries/${id}/retry`, { method: "POST" }),
+  deletionFinalizers: (status = "", resourceType = "", limit = 100) => {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status) query.set("status", status);
+    if (resourceType) query.set("resourceType", resourceType);
+    return request<Envelope<DeletionFinalizer>>(`/v1/deletion-finalizers?${query}`);
+  },
+  retryDeletionFinalizer: (item: Pick<DeletionFinalizer, "resourceType" | "resourceId">) => request<DeletionFinalizer>(`/v1/deletion-finalizers/${item.resourceType}/${item.resourceId}/retry`, { method: "POST" }),
   serviceAccounts: () => request<Envelope<ServiceAccount>>("/v1/service-accounts"),
   createServiceAccount: (name: string, role: "admin" | "developer" | "viewer", expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role, expiresInDays }) }),
   createAuditorAccount: (name: string, expiresInDays: number) => request<{ serviceAccount: ServiceAccount; token: string }>("/v1/service-accounts", { method: "POST", body: JSON.stringify({ name, role: "auditor", expiresInDays }) }),
