@@ -40,7 +40,7 @@ func (s *Store) SetSSOProviderEnabledWithAudit(ctx context.Context, principal Pr
 	if enabled {
 		action = "sso." + kind + ".enable"
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, action, resourceType, providerID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, action, resourceType, providerID.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

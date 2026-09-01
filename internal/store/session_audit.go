@@ -180,7 +180,7 @@ func (s *Store) revokeSessionWithAudit(ctx context.Context, principal Principal,
 	if tag.RowsAffected() != 1 {
 		return ErrNotFound
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, action, "session", sessionID.String(), remoteAddr, metadata); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, action, "session", sessionID.String(), remoteAddr, metadata); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -209,7 +209,7 @@ func (s *Store) RevokeOtherSessionsWithAudit(ctx context.Context, principal Prin
 		return 0, err
 	}
 	revoked := tag.RowsAffected()
-	if err = appendPrincipalAudit(ctx, tx, principal, "session.revoke_others", "user", principal.UserID.String(), remoteAddr, map[string]int64{"revoked": revoked}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "session.revoke_others", "user", principal.UserID.String(), remoteAddr, map[string]int64{"revoked": revoked}); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -239,6 +239,13 @@ func lockPrincipalSession(ctx context.Context, tx pgx.Tx, principal Principal) e
 }
 
 func appendPrincipalAudit(ctx context.Context, tx pgx.Tx, principal Principal, action, resourceType, resourceID, remoteAddr string, metadata any) error {
+	if err := lockAuthenticatedPrincipalCredential(ctx, tx, principal); err != nil {
+		return err
+	}
+	return appendPrincipalAuditUnchecked(ctx, tx, principal, action, resourceType, resourceID, remoteAddr, metadata)
+}
+
+func appendPrincipalAuditUnchecked(ctx context.Context, tx pgx.Tx, principal Principal, action, resourceType, resourceID, remoteAddr string, metadata any) error {
 	auditMetadata, err := json.Marshal(metadata)
 	if err != nil {
 		return err

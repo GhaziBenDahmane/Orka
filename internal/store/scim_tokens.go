@@ -45,7 +45,7 @@ func (s *Store) CreateSCIMTokenWithAudit(ctx context.Context, principal Principa
 	if err != nil {
 		return SCIMToken{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "scim.token.create", "scim_token", item.ID.String(), remoteAddr, map[string]any{"name": item.Name, "defaultRole": item.DefaultRole, "expiresAt": item.ExpiresAt}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "scim.token.create", "scim_token", item.ID.String(), remoteAddr, map[string]any{"name": item.Name, "defaultRole": item.DefaultRole, "expiresAt": item.ExpiresAt}); err != nil {
 		return SCIMToken{}, err
 	}
 	return item, tx.Commit(ctx)
@@ -101,7 +101,7 @@ func (s *Store) RevokeSCIMTokenWithAudit(ctx context.Context, principal Principa
 	if err = revokeSCIMTokenTx(ctx, tx, principal.OrganizationID, tokenID); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "scim.token.revoke", "scim_token", tokenID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "scim.token.revoke", "scim_token", tokenID.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

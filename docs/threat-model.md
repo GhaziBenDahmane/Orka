@@ -56,7 +56,10 @@ commit a stale member, invitation, grant, service-account, SCIM-token, or SSO
 mutation. When authentication supplied a browser session or service-account
 token, that exact credential is locked and revalidated too; concurrent logout,
 revocation, expiry, or token rotation cannot leave an already-started identity
-administration request able to commit afterward. Each local, OIDC, or SAML session is issued atomically with its tenant
+administration request able to commit afterward. The common audited mutation
+boundary applies the same exact-credential fence to workload, deployment,
+backup, routing, catalog, and operational changes, not only identity endpoints.
+Each local, OIDC, or SAML session is issued atomically with its tenant
 audit event; unscoped local logins append evidence to every organization the
 identity can enter, while federated sessions remain bound to one tenant.
 Logout and both individual and bulk session revocation use the same atomic

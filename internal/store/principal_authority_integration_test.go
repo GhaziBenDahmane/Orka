@@ -359,6 +359,85 @@ func TestAdministrativeMutationsRevalidateActorAuthorityAfterOrganizationLock(t 
 	})
 }
 
+func TestAuditedMutationsRevalidateAuthenticatedCredential(t *testing.T) {
+	t.Run("browser session revocation", func(t *testing.T) {
+		db, ctx, organizationID, _, actorID := authorityFenceFixture(t)
+		sessionID, tagID := uuid.New(), uuid.New()
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO sessions(id,user_id,token_hash,expires_at,auth_method) VALUES($1,$2,$3,now()+interval '1 hour','local')`, sessionID, actorID, []byte("audited-session-"+uuid.NewString())); err != nil {
+			t.Fatal(err)
+		}
+		principal := Principal{OrganizationID: organizationID, UserID: actorID, SessionID: sessionID, Role: "admin"}
+
+		revocation, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer revocation.Rollback(ctx)
+		if err = lockPrincipalSession(ctx, revocation, principal); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = revocation.Exec(ctx, `DELETE FROM sessions WHERE id=$1`, sessionID); err != nil {
+			t.Fatal(err)
+		}
+
+		result := make(chan error, 1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, createErr := db.CreateTagWithAudit(ctx, principal, Tag{ID: tagID, Name: "revoked-session", Color: "#112233"}, "127.0.0.1:1234")
+			result <- createErr
+		}()
+		<-started
+		assertAuthorityMutationBlocked(t, result)
+		if err = revocation.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertInsufficientRoleResult(t, result)
+		assertNoTagOrAudit(t, db, ctx, organizationID, tagID)
+	})
+
+	t.Run("service account token rotation", func(t *testing.T) {
+		db, ctx, organizationID, ownerID, _ := authorityFenceFixture(t)
+		accountID, tokenID, tagID := uuid.New(), uuid.New(), uuid.New()
+		originalHash := []byte("audited-service-token-" + uuid.NewString())
+		replacementHash := []byte("audited-service-replacement-" + uuid.NewString())
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO service_accounts(id,organization_id,name,role,created_by) VALUES($1,$2,'audited-admin','admin',$3)`, accountID, organizationID, ownerID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO service_account_tokens(id,service_account_id,token_hash,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')`, tokenID, accountID, originalHash); err != nil {
+			t.Fatal(err)
+		}
+		principal, err := db.Authenticate(ctx, originalHash, &organizationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rotation, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rotation.Rollback(ctx)
+		if err = rotateServiceAccountTokenTx(ctx, rotation, organizationID, accountID, replacementHash, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+
+		result := make(chan error, 1)
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, createErr := db.CreateTagWithAudit(ctx, principal, Tag{ID: tagID, Name: "rotated-token", Color: "#334455"}, "127.0.0.1:1234")
+			result <- createErr
+		}()
+		<-started
+		assertAuthorityMutationBlocked(t, result)
+		if err = rotation.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertInsufficientRoleResult(t, result)
+		assertNoTagOrAudit(t, db, ctx, organizationID, tagID)
+	})
+}
+
 func authorityFenceFixture(t *testing.T) (*Store, context.Context, uuid.UUID, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	pool, ctx := migrationTestPool(t)
@@ -424,5 +503,16 @@ func assertNoInvitationOrAudit(t *testing.T, db *Store, ctx context.Context, org
 	var audits int
 	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND `+actorColumn+`=$2 AND action='invitation.create'`, organizationID, actorID).Scan(&audits); err != nil || audits != 0 {
 		t.Fatalf("revoked credential retained audit events=%d err=%v", audits, err)
+	}
+}
+
+func assertNoTagOrAudit(t *testing.T, db *Store, ctx context.Context, organizationID, tagID uuid.UUID) {
+	t.Helper()
+	var tags, audits int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM tags WHERE id=$1 AND organization_id=$2`, tagID, organizationID).Scan(&tags); err != nil || tags != 0 {
+		t.Fatalf("revoked credential retained tags=%d err=%v", tags, err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE organization_id=$1 AND action='tag.create' AND resource_id=$2`, organizationID, tagID.String()).Scan(&audits); err != nil || audits != 0 {
+		t.Fatalf("revoked credential retained tag audit events=%d err=%v", audits, err)
 	}
 }

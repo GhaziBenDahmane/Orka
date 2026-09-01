@@ -666,7 +666,7 @@ func (s *Store) CreateServiceAccountWithAudit(ctx context.Context, principal Pri
 	if err != nil {
 		return ServiceAccount{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "service_account.create", "service_account", item.ID.String(), remoteAddr, map[string]any{"role": item.Role, "expiresAt": expiresAt}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "service_account.create", "service_account", item.ID.String(), remoteAddr, map[string]any{"role": item.Role, "expiresAt": expiresAt}); err != nil {
 		return ServiceAccount{}, err
 	}
 	return item, tx.Commit(ctx)
@@ -728,7 +728,7 @@ func (s *Store) RotateServiceAccountTokenWithAudit(ctx context.Context, principa
 	if err = rotateServiceAccountTokenTx(ctx, tx, principal.OrganizationID, id, tokenHash, expiresAt); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "service_account.rotate", "service_account", id.String(), remoteAddr, map[string]any{"expiresAt": expiresAt}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "service_account.rotate", "service_account", id.String(), remoteAddr, map[string]any{"expiresAt": expiresAt}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -774,7 +774,7 @@ func (s *Store) DisableServiceAccountWithAudit(ctx context.Context, principal Pr
 	if err = disableServiceAccountTx(ctx, tx, principal.OrganizationID, id); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "service_account.disable", "service_account", id.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "service_account.disable", "service_account", id.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -887,7 +887,7 @@ func (s *Store) SetOrganizationAuthSettingsWithAudit(ctx context.Context, princi
 	if err != nil {
 		return OrganizationAuthSettings{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.policy.update", "organization", principal.OrganizationID.String(), remoteAddr, map[string]any{"requireSso": settings.RequireSSO}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.policy.update", "organization", principal.OrganizationID.String(), remoteAddr, map[string]any{"requireSso": settings.RequireSSO}); err != nil {
 		return OrganizationAuthSettings{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -4295,7 +4295,7 @@ func (s *Store) CreateOIDCProviderWithAudit(ctx context.Context, principal Princ
 	if err != nil {
 		return OIDCProvider{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.oidc.create", "oidc_provider", p.ID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.oidc.create", "oidc_provider", p.ID.String(), remoteAddr, nil); err != nil {
 		return OIDCProvider{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -4350,7 +4350,7 @@ func (s *Store) UpdateOIDCProviderWithAudit(ctx context.Context, principal Princ
 	if err != nil {
 		return OIDCProvider{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.oidc.update", "oidc_provider", p.ID.String(), remoteAddr, map[string]any{"rotatedSecret": rotatedSecret}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.oidc.update", "oidc_provider", p.ID.String(), remoteAddr, map[string]any{"rotatedSecret": rotatedSecret}); err != nil {
 		return OIDCProvider{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -4535,7 +4535,7 @@ func (s *Store) CreateSAMLProviderWithAudit(ctx context.Context, principal Princ
 	if err != nil {
 		return SAMLProvider{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.create", "saml_provider", p.ID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.saml.create", "saml_provider", p.ID.String(), remoteAddr, nil); err != nil {
 		return SAMLProvider{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -4584,7 +4584,7 @@ func (s *Store) UpdateSAMLProviderWithAudit(ctx context.Context, principal Princ
 	if err != nil {
 		return SAMLProvider{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.update", "saml_provider", p.ID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.saml.update", "saml_provider", p.ID.String(), remoteAddr, nil); err != nil {
 		return SAMLProvider{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -4669,7 +4669,7 @@ func (s *Store) BeginSAMLCertificateRotationWithAudit(ctx context.Context, princ
 	if err = beginSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id, certificatePEM, encryptedPrivateKey, notAfter); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.certificate_rotation.begin", "saml_provider", id.String(), remoteAddr, map[string]any{"notAfter": notAfter}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.saml.certificate_rotation.begin", "saml_provider", id.String(), remoteAddr, map[string]any{"notAfter": notAfter}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -4717,7 +4717,7 @@ func (s *Store) PromoteSAMLCertificateRotationWithAudit(ctx context.Context, pri
 	if err = promoteSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.certificate_rotation.promote", "saml_provider", id.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.saml.certificate_rotation.promote", "saml_provider", id.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -4761,7 +4761,7 @@ func (s *Store) CancelSAMLCertificateRotationWithAudit(ctx context.Context, prin
 	if err = cancelSAMLCertificateRotationTx(ctx, tx, principal.OrganizationID, id); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "sso.saml.certificate_rotation.cancel", "saml_provider", id.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "sso.saml.certificate_rotation.cancel", "saml_provider", id.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

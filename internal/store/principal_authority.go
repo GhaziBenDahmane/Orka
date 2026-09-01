@@ -93,3 +93,73 @@ func organizationRoleRank(role string) int {
 		return 0
 	}
 }
+
+// lockAuthenticatedPrincipalCredential revalidates the exact credential that
+// entered an authenticated HTTP request. Callers without a credential binding
+// are internal workflows (for example bootstrap and invitation acceptance)
+// and retain the existing audit foreign-key validation.
+func lockAuthenticatedPrincipalCredential(ctx context.Context, tx pgx.Tx, principal Principal) error {
+	if principal.ServiceAccountTokenID != nil {
+		if principal.ServiceAccountID == nil || principal.UserID != uuid.Nil {
+			return ErrInsufficientRole
+		}
+		var role string
+		err := tx.QueryRow(ctx, `SELECT account.role
+			FROM service_accounts account
+			WHERE account.id=$1 AND account.organization_id=$2 AND account.enabled
+			FOR UPDATE`, *principal.ServiceAccountID, principal.OrganizationID).Scan(&role)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInsufficientRole
+		}
+		if err != nil {
+			return err
+		}
+		if !currentRoleCoversAuthenticatedRole(role, principal.Role) {
+			return ErrInsufficientRole
+		}
+		var tokenID uuid.UUID
+		err = tx.QueryRow(ctx, `SELECT id FROM service_account_tokens WHERE id=$1 AND service_account_id=$2 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, *principal.ServiceAccountTokenID, *principal.ServiceAccountID).Scan(&tokenID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInsufficientRole
+		}
+		return err
+	}
+	if principal.SessionID != uuid.Nil {
+		if principal.ServiceAccountID != nil || principal.UserID == uuid.Nil {
+			return ErrInsufficientRole
+		}
+		var role string
+		err := tx.QueryRow(ctx, `SELECT membership.role
+			FROM memberships membership
+			JOIN users actor ON actor.id=membership.user_id
+			WHERE membership.organization_id=$1 AND membership.user_id=$2 AND actor.disabled_at IS NULL
+			FOR UPDATE OF membership,actor`, principal.OrganizationID, principal.UserID).Scan(&role)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInsufficientRole
+		}
+		if err != nil {
+			return err
+		}
+		if !currentRoleCoversAuthenticatedRole(role, principal.Role) {
+			return ErrInsufficientRole
+		}
+		var sessionID uuid.UUID
+		err = tx.QueryRow(ctx, `SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND expires_at>now() AND (organization_id IS NULL OR organization_id=$3) FOR UPDATE`, principal.SessionID, principal.UserID, principal.OrganizationID).Scan(&sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInsufficientRole
+		}
+		return err
+	}
+	return nil
+}
+
+func currentRoleCoversAuthenticatedRole(current, authenticated string) bool {
+	if authenticated == "" {
+		return true
+	}
+	authenticatedRank := organizationRoleRank(authenticated)
+	if authenticatedRank == 0 {
+		return current == authenticated
+	}
+	return organizationRoleRank(current) >= authenticatedRank
+}

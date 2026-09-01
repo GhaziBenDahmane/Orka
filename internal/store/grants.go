@@ -49,7 +49,7 @@ func (s *Store) UpsertResourceGrantWithAudit(ctx context.Context, principal Prin
 	if err != nil {
 		return ResourceGrant{}, err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "grant.update", scopeType, scopeID.String(), remoteAddr, map[string]any{"userId": userID, "role": role}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "grant.update", scopeType, scopeID.String(), remoteAddr, map[string]any{"userId": userID, "role": role}); err != nil {
 		return ResourceGrant{}, err
 	}
 	return item, tx.Commit(ctx)
@@ -137,7 +137,7 @@ func (s *Store) DeleteResourceGrantWithAudit(ctx context.Context, principal Prin
 	if err = deleteResourceGrantTx(ctx, tx, principal.OrganizationID, scopeType, scopeID, userID); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "grant.delete", scopeType, scopeID.String(), remoteAddr, map[string]any{"userId": userID}); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "grant.delete", scopeType, scopeID.String(), remoteAddr, map[string]any{"userId": userID}); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

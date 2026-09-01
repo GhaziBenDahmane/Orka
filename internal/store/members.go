@@ -71,7 +71,7 @@ func (s *Store) updateOrganizationMemberRole(ctx context.Context, principal Prin
 		return OrganizationMember{}, err
 	}
 	if audit {
-		if err = appendPrincipalAudit(ctx, tx, principal, "membership.role.update", "user", userID.String(), remoteAddr, map[string]string{"role": item.Role}); err != nil {
+		if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "membership.role.update", "user", userID.String(), remoteAddr, map[string]string{"role": item.Role}); err != nil {
 			return OrganizationMember{}, err
 		}
 	}
@@ -135,7 +135,7 @@ func (s *Store) deleteOrganizationMember(ctx context.Context, principal Principa
 		return err
 	}
 	if audit {
-		if err = appendPrincipalAudit(ctx, tx, principal, "membership.remove", "user", userID.String(), remoteAddr, nil); err != nil {
+		if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "membership.remove", "user", userID.String(), remoteAddr, nil); err != nil {
 			return err
 		}
 	}

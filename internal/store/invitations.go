@@ -67,7 +67,7 @@ func (s *Store) createOrganizationInvitation(ctx context.Context, principal Prin
 		return OrganizationInvitation{}, err
 	}
 	if audit {
-		if err = appendPrincipalAudit(ctx, tx, principal, "invitation.create", "invitation", item.ID.String(), remoteAddr, map[string]any{"email": item.Email, "role": item.Role, "expiresAt": item.ExpiresAt}); err != nil {
+		if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "invitation.create", "invitation", item.ID.String(), remoteAddr, map[string]any{"email": item.Email, "role": item.Role, "expiresAt": item.ExpiresAt}); err != nil {
 			return OrganizationInvitation{}, err
 		}
 	}
@@ -156,7 +156,7 @@ func (s *Store) RevokeOrganizationInvitationWithAudit(ctx context.Context, princ
 	if err = revokeOrganizationInvitationTx(ctx, tx, principal.OrganizationID, invitationID); err != nil {
 		return err
 	}
-	if err = appendPrincipalAudit(ctx, tx, principal, "invitation.revoke", "invitation", invitationID.String(), remoteAddr, nil); err != nil {
+	if err = appendPrincipalAuditUnchecked(ctx, tx, principal, "invitation.revoke", "invitation", invitationID.String(), remoteAddr, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

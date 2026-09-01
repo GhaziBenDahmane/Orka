@@ -80,6 +80,12 @@ session is issued atomically with its login event, so a usable session cannot
 exist without durable tenant audit evidence. An unscoped local login is
 recorded in every organization that identity can enter; a federated login
 remains IdP-tenant scoped and records the exact provider that authenticated it.
+Every authenticated operator mutation revalidates and locks the exact browser
+session or service-account token before its audit record can commit. If logout,
+session revocation, service-account rotation, or token revocation wins the
+race, the resource mutation and audit record both roll back with `403
+forbidden`. Identity self-removal and credential-rotation paths perform the
+same check before changing the credential and retain that lock through commit.
 Disabling or changing an OIDC or SAML provider atomically revokes its pending
 login attempts and active sessions without affecting sessions from other
 providers in the organization.
