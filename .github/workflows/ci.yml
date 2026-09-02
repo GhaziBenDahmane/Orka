@@ -74,7 +74,7 @@ jobs:
         run: make check-alerts
       - name: Check operational scripts
         run: |
-          sh -n scripts/backup-control-plane.sh scripts/restore-control-plane.sh scripts/backup-ai-gateway.sh scripts/restore-ai-gateway.sh scripts/install-swarm.sh scripts/install-agent.sh scripts/install-ai-auditors.sh scripts/ci/check-image-digests.sh scripts/ci/check-signal-traps.sh scripts/ci/validate-image-reference.sh scripts/ci/test-image-reference-validation.sh
+          sh -n install.sh scripts/backup-control-plane.sh scripts/restore-control-plane.sh scripts/backup-ai-gateway.sh scripts/install-swarm.sh scripts/install-agent.sh scripts/install-ai-auditors.sh scripts/ci/check-image-digests.sh scripts/ci/check-signal-traps.sh scripts/ci/validate-image-reference.sh scripts/ci/test-image-reference-validation.sh
           sh scripts/ci/check-signal-traps.sh
           bash -n scripts/ci/smoke-compose.sh scripts/ci/smoke-templates.sh scripts/ci/test-agent-certificate-conformance.sh scripts/ci/test-ai-audit-conformance.sh scripts/ci/test-ai-gateway-recovery.sh scripts/ci/test-control-plane-recovery.sh scripts/ci/test-install-swarm.sh scripts/ci/test-install-agent.sh scripts/ci/test-install-ai-auditors.sh scripts/ci/test-keycloak-oidc.sh scripts/ci/test-lifecycle-conformance.sh scripts/ci/test-migration-conformance.sh scripts/ci/test-notification-conformance.sh scripts/ci/test-reconciliation-conformance.sh scripts/ci/test-release-soak.sh scripts/ci/test-release-upgrade.sh scripts/ci/test-swarm-ha.sh
           make test-install

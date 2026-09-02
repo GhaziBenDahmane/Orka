@@ -55,6 +55,19 @@ checks to outbound remote-cluster agents and the optional 9Router/Headroom AI
 auditor stack. See [deploy/README.md](deploy/README.md) for the preflight,
 installation, upgrade, backup, and recovery procedures.
 
+For the familiar pipe-friendly entry point, run the following on the Swarm
+manager after exporting the installer inputs documented in
+[`deploy/README.md`](deploy/README.md):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/GhaziBenDahmane/Orka/master/install.sh | sh
+```
+
+Pin `ORKA_INSTALL_REVISION` to an immutable release tag or commit when
+installing a released build. The bootstrap script downloads that revision to a
+temporary directory and invokes the same validated installer; it does not
+weaken the immutable-image or secret-file requirements.
+
 ## Development
 
 ```sh
