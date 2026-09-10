@@ -70,6 +70,13 @@ jobs:
       - run: go build ./cmd/dockyard
       - run: go build ./cmd/terraform-provider-dockyard
       - run: docker compose config --quiet
+      - name: Validate quick-start domain stack
+        env:
+          DOCKYARD_HTTP_BIND: 127.0.0.1:8080
+          ORKA_DOMAIN: orka.example.test
+          ORKA_ACME_EMAIL: ops@example.test
+          ORKA_TRUSTED_PROXY_CIDR: 10.255.251.0/24
+        run: docker compose -f compose.yml -f compose.quickstart-domain.yml config --quiet
       - name: Validate Prometheus alert rules
         run: make check-alerts
       - name: Check operational scripts

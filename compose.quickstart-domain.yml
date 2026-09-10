@@ -1,0 +1,54 @@
+services:
+  dockyard:
+    environment:
+      DOCKYARD_PUBLIC_URL: https://${ORKA_DOMAIN:?set ORKA_DOMAIN}
+      DOCKYARD_TRUSTED_PROXY_CIDRS: ${ORKA_TRUSTED_PROXY_CIDR:?set ORKA_TRUSTED_PROXY_CIDR}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: orka-edge-control
+      traefik.http.routers.orka.rule: Host(`${ORKA_DOMAIN:?set ORKA_DOMAIN}`)
+      traefik.http.routers.orka.entrypoints: websecure
+      traefik.http.routers.orka.tls: "true"
+      traefik.http.routers.orka.tls.certresolver: letsencrypt
+      traefik.http.services.orka.loadbalancer.server.port: "8080"
+    networks: [default, dockyard-public, edge-control]
+
+  traefik:
+    image: traefik:v3.5
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=orka-edge-control
+      - --providers.swarm=true
+      - --providers.swarm.exposedbydefault=false
+      - --providers.swarm.network=dockyard-public
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ORKA_ACME_EMAIL:?set ORKA_ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/data/acme.json
+      - --ping=true
+    ports:
+      - target: 80
+        published: "80"
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: "443"
+        protocol: tcp
+        mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-data:/data
+    networks: [dockyard-public, edge-control]
+
+networks:
+  dockyard-public:
+    external: true
+    name: dockyard-public
+  edge-control:
+    external: true
+    name: orka-edge-control
+
+volumes:
+  traefik-data: {}

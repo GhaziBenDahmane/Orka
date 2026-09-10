@@ -8,6 +8,8 @@ revision=${ORKA_INSTALL_REVISION:-master}
 mode=${ORKA_INSTALL_MODE:-quickstart}
 install_root=${ORKA_INSTALL_DIR:-/opt/orka}
 http_bind=${ORKA_HTTP_BIND:-8080}
+dashboard_domain=${ORKA_DOMAIN:-}
+acme_email=${ORKA_ACME_EMAIL:-}
 
 fail() {
   echo "orka-install: $*" >&2
@@ -19,9 +21,10 @@ usage() {
 Usage:
   curl -fsSL https://raw.githubusercontent.com/GhaziBenDahmane/Orka/master/install.sh | sh
 
-The default quick-start installs Docker when needed, initializes a local Swarm,
-starts Orka at port 8080, and creates an initial administrator automatically.
-It prompts for sudo when it needs system privileges.
+The default quick-start asks for a dashboard domain and Let's Encrypt email,
+installs Docker when needed, initializes a local Swarm, starts Orka behind TLS,
+and creates an initial administrator automatically. It prompts for sudo when it
+needs system privileges.
 
 Advanced production installation:
   ORKA_INSTALL_MODE=production curl -fsSL .../install.sh | sh
@@ -45,15 +48,52 @@ case "$install_root" in / ) fail "ORKA_INSTALL_DIR must not be /" ;; esac
 case "$http_bind" in ''|*[!0-9]* ) fail "ORKA_HTTP_BIND must be a TCP port number" ;; esac
 [ "$http_bind" -ge 1 ] && [ "$http_bind" -le 65535 ] || fail "ORKA_HTTP_BIND must be a TCP port number"
 
+is_dns_hostname() {
+  value=$1
+  printf '%s\n' "$value" | awk '
+    NR != 1 { exit 1 }
+    length($0) < 3 || length($0) > 253 { exit 1 }
+    {
+      count = split($0, labels, ".")
+      if (count < 2) exit 1
+      for (i = 1; i <= count; i++) {
+        if (length(labels[i]) < 1 || length(labels[i]) > 63) exit 1
+        if (labels[i] !~ /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) exit 1
+      }
+    }
+    END { if (NR != 1) exit 1 }
+  '
+}
+
+prompt_from_tty() {
+  prompt=$1
+  [ -r /dev/tty ] || fail "an interactive terminal is required; set ORKA_DOMAIN and ORKA_ACME_EMAIL instead"
+  printf '%s' "$prompt" >/dev/tty
+  IFS= read -r value </dev/tty || fail "could not read from terminal"
+  printf '%s' "$value"
+}
+
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
   exit 0
 fi
 [ "$#" -eq 0 ] || { usage; exit 2; }
 
-for command in cp curl cut find id mkdir mktemp openssl rm seq sleep tar tr; do
+for command in awk cp curl cut find id mkdir mktemp openssl rm seq sleep tar tr; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
+
+if [ "$mode" = quickstart ]; then
+  if [ -z "$dashboard_domain" ]; then
+    dashboard_domain=$(prompt_from_tty "Dashboard domain (for example orka.example.com): ")
+  fi
+  is_dns_hostname "$dashboard_domain" || fail "ORKA_DOMAIN must be a DNS hostname such as orka.example.com"
+  if [ -z "$acme_email" ]; then
+    acme_email=$(prompt_from_tty "Let's Encrypt email [$dashboard_domain]: ")
+    [ -n "$acme_email" ] || acme_email="admin@$dashboard_domain"
+  fi
+  case "$acme_email" in *'@'*.* ) ;; *) fail "ORKA_ACME_EMAIL must be an email address" ;; esac
+fi
 
 # A default installation writes state under /opt and manages Docker. Re-run as
 # root so curl | sh remains a one-command installation for a regular user.
@@ -66,6 +106,8 @@ if [ "$mode" = quickstart ] && [ "$(id -u)" -ne 0 ]; then
     "ORKA_INSTALL_MODE=$mode" \
     "ORKA_INSTALL_DIR=$install_root" \
     "ORKA_HTTP_BIND=$http_bind" \
+    "ORKA_DOMAIN=$dashboard_domain" \
+    "ORKA_ACME_EMAIL=$acme_email" \
     sh -c "curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 '$bootstrap_url' | sh"
 fi
 
@@ -117,8 +159,13 @@ if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != active ]; then
   docker swarm init >/dev/null
 fi
 if ! docker network inspect dockyard-public >/dev/null 2>&1; then
-  docker network create --driver overlay --attachable --opt encrypted dockyard-public >/dev/null
+  docker network create --driver overlay --attachable --opt encrypted --subnet 10.255.250.0/24 dockyard-public >/dev/null
 fi
+if ! docker network inspect orka-edge-control >/dev/null 2>&1; then
+  docker network create --driver overlay --attachable --opt encrypted --subnet 10.255.251.0/24 orka-edge-control >/dev/null
+fi
+edge_subnet=$(docker network inspect orka-edge-control --format '{{(index .IPAM.Config 0).Subnet}}')
+case "$edge_subnet" in */* ) ;; *) fail "could not determine Orka edge-control network subnet" ;; esac
 
 mkdir -p "$install_root"
 cp -R "$source_directory/." "$install_root/"
@@ -126,9 +173,12 @@ umask 077
 mkdir -p "$install_root/data/backups"
 
 echo "Building and starting Orka..." >&2
-DOCKYARD_HTTP_BIND="$http_bind" \
+DOCKYARD_HTTP_BIND="127.0.0.1:$http_bind" \
 DOCKYARD_POSTGRES_BIND=127.0.0.1:54329 \
-  docker compose --project-directory "$install_root" --project-name orka -f "$install_root/compose.yml" up --build --detach
+ORKA_DOMAIN="$dashboard_domain" \
+ORKA_ACME_EMAIL="$acme_email" \
+ORKA_TRUSTED_PROXY_CIDR="$edge_subnet" \
+  docker compose --project-directory "$install_root" --project-name orka -f "$install_root/compose.yml" -f "$install_root/compose.quickstart-domain.yml" up --build --detach
 
 base_url="http://127.0.0.1:$http_bind"
 ready=false
@@ -149,7 +199,7 @@ if [ ! -f "$credentials_file" ]; then
     200|201)
       {
         echo "Orka initial administrator"
-        echo "URL: http://SERVER_IP:$http_bind"
+        echo "URL: https://$dashboard_domain"
         echo "Email: admin@orka.local"
         echo "Password: $admin_password"
         echo "Change this password after first sign-in."
@@ -161,7 +211,8 @@ if [ ! -f "$credentials_file" ]; then
 fi
 
 echo >&2
-echo "Orka is running at http://SERVER_IP:$http_bind" >&2
+echo "Orka is running at https://$dashboard_domain" >&2
+echo "Point DNS for $dashboard_domain to this server and allow inbound TCP ports 80 and 443." >&2
 if [ -f "$credentials_file" ]; then
   cat "$credentials_file" >&2
 else

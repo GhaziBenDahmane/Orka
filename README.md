@@ -61,11 +61,14 @@ For a zero-configuration single-node quick-start, run:
 curl -fsSL https://raw.githubusercontent.com/GhaziBenDahmane/Orka/master/install.sh | sh
 ```
 
-It prompts for sudo when needed, installs Docker on Debian/Ubuntu when absent,
-initializes a single-node Swarm, builds Orka, starts it on port 8080, and prints
-a generated initial administrator password. It is intended for evaluation or a
-small self-managed installation. To use the digest-pinned, secret-file-based
-production installer, set `ORKA_INSTALL_MODE=production` and follow
+It prompts for your dashboard domain and Let's Encrypt email, then prompts for
+sudo when needed, installs Docker on Debian/Ubuntu when absent, initializes a
+single-node Swarm, builds Orka, and prints a generated initial administrator
+password. Point the chosen DNS name to the server and allow inbound TCP ports
+80 and 443; Orka obtains TLS automatically and is then available at your
+domain. It is intended for evaluation or a small self-managed installation. To
+use the digest-pinned, secret-file-based production installer, set
+`ORKA_INSTALL_MODE=production` and follow
 [`deploy/README.md`](deploy/README.md). Pin `ORKA_INSTALL_REVISION` to an
 immutable release tag or commit for either mode.
 
