@@ -1,7 +1,15 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { ActionIcon, AppShell, Avatar, Badge, Box, Burger, Button, Divider, Group, MantineProvider, NavLink, Paper, Select, SimpleGrid, Stack, Text, Title, Tooltip } from "@mantine/core";
+import { Notifications as MantineNotifications } from "@mantine/notifications";
+import { Spotlight, spotlight } from "@mantine/spotlight";
+import { useDisclosure, useHotkeys } from "@mantine/hooks";
+import { IconActivityHeartbeat, IconBox, IconChevronRight, IconCircleCheck, IconCode, IconDatabase, IconFileStack, IconGridDots, IconHistory, IconLayoutDashboard, IconLogout, IconSearch, IconSettings, IconShieldCheck, IconStack2, IconTerminal2 } from "@tabler/icons-react";
 import { api, AIAuditFinding, AIAuditRun, APIError, ApplicationSource, AuditArchive, AuditArchiveBatch, AuditEvent, BackupDestination, Cluster, ClusterCommand, CommitStatusDelivery, CustomTLSCertificate, Database, DatabaseBackup, DatabaseEngine, DatabaseMigration, DatabaseRestore, DeletionFinalizer, Deployment, DeployToken, DokployVerification, Environment, LinkedDatabaseInput, ManagedNetwork, MFAStatus, MigrationResource, NotificationDelivery, NotificationEndpoint, OIDCProvider, OrganizationInvitation, OrganizationMember, Principal, Project, ResourceGrant, ResourcePolicy, Role, Route, RouteBasicAuthUser, RouteInput, SAMLProvider, SCIMToken, Service, ServiceAccount, ServiceReconciliation, ServiceSchedule, ServiceScheduleExecution, ServiceScheduleInput, ServiceVolume, SessionInfo, SourceCredential, session, Tag, Template, TemplateInstance, TemplatePreview, TemplateRepository, VolumeBackup, VolumeBackupPolicy, VolumeRestore, WebhookIntegration } from "./api";
 import "./styles.css";
+import "@mantine/core/styles.css";
+import "@mantine/notifications/styles.css";
+import "@mantine/spotlight/styles.css";
 
 const starterCompose = `services:
   web:
@@ -39,7 +47,7 @@ function App() {
     api.me().then(setPrincipal).catch(() => session.clear()).finally(() => setChecking(false));
   }, []);
 
-  if (checking) return <div className="center"><div className="spinner" /><span>Opening Dockyard…</span></div>;
+  if (checking) return <div className="center"><div className="spinner" /><span>Opening Orka…</span></div>;
   if (invitationToken) return <Login onLogin={setPrincipal} invitationToken={invitationToken} clearInvitation={() => setInvitationToken("")} />;
   if (!principal) return <Login onLogin={setPrincipal} invitationToken={invitationToken} clearInvitation={() => setInvitationToken("")} />;
   return <Console principal={principal} onLogout={() => { session.clear(); setPrincipal(null); }} />;
@@ -106,7 +114,7 @@ function Login({ onLogin, invitationToken, clearInvitation }: { onLogin: (princi
     </section>
     <section className="login-panel">
       <form className="card login-card" onSubmit={submit}>
-        <p className="eyebrow">Dockyard Console</p><h2>Welcome back</h2>
+        <p className="eyebrow">Orka Control Plane</p><h2>Welcome back</h2>
         {invitationToken && <section className="invitation-accept"><h3>Accept organization invitation</h3><p className="muted">Choose a display name and, for a new local account, a password of at least 12 characters. Existing and SSO accounts can leave the password empty.</p><label>Display name<input value={inviteName} onChange={event => setInviteName(event.target.value)} maxLength={120} /></label><label>New-account password<input type="password" value={invitePassword} onChange={event => setInvitePassword(event.target.value)} minLength={12} autoComplete="new-password" /></label><div className="actions"><button type="button" className="primary" disabled={busy} onClick={() => void acceptInvitation()}>Accept invitation</button><button type="button" disabled={busy} onClick={clearInvitation}>Dismiss</button></div></section>}
         {inviteAccepted && <p className="success-text">{inviteAccepted}</p>}
         <p className="muted">Sign in with your local administrator account.</p>
@@ -124,10 +132,11 @@ function Login({ onLogin, invitationToken, clearInvitation }: { onLogin: (princi
   </main>;
 }
 
-type View = "workloads" | "templates" | "databases" | "clusters" | "governance" | "ai" | "audit" | "notifications" | "settings" | "account";
+type View = "overview" | "workloads" | "templates" | "databases" | "clusters" | "governance" | "ai" | "audit" | "notifications" | "settings" | "account";
 
 function Console({ principal, onLogout }: { principal: Principal; onLogout: () => void }) {
-  const [view, setView] = useState<View>("workloads");
+  const [view, setView] = useState<View>("overview");
+  const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] = useDisclosure(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState("");
   const [environments, setEnvironments] = useState<Environment[]>([]);
@@ -173,44 +182,52 @@ function Console({ principal, onLogout }: { principal: Principal; onLogout: () =
 
   async function logout() { try { await api.logout(); } finally { onLogout(); } }
   function flash(text: string) { setNotice(text); setError(""); window.setTimeout(() => setNotice(""), 3500); }
+  const navigate = (next: View) => { setView(next); closeMobile(); };
+  const title: Record<View, string> = { overview: "Platform health", workloads: "Deployments", templates: "Templates", databases: "Databases", clusters: "Clusters", governance: "Governance", ai: "AI audits", audit: "Audit log", notifications: "Notifications", settings: "Settings", account: "Account" };
+  const admin = (["admin", "owner"] as string[]).includes(principal.role);
+  useHotkeys([["mod+K", () => spotlight.open()]]);
+  const actions = ([
+    ["Platform health", "Current platform status and attention queue", "overview", IconLayoutDashboard],
+    ["Deployments", "Services in the selected environment", "workloads", IconStack2],
+    ["Templates", "Deploy a Compose template", "templates", IconFileStack],
+    ["Databases", "Managed data services and backups", "databases", IconDatabase],
+    ...(admin ? [["Clusters", "Fleet nodes and agents", "clusters", IconGridDots], ["Governance", "Access and policy controls", "governance", IconShieldCheck], ["Audit log", "Organization activity", "audit", IconHistory], ["Settings", "Platform configuration", "settings", IconSettings]] : [])
+  ] as [string, string, View, typeof IconLayoutDashboard][]).map(([label, description, target, Icon]) => ({ id: target, label, description, leftSection: <Icon size={18} stroke={1.8} />, onClick: () => navigate(target) }));
 
-  return <div className="shell">
-    <aside>
-      <div className="wordmark"><span>D</span> Dockyard</div>
-      <nav aria-label="Main navigation">
-        <Nav active={view === "workloads"} onClick={() => setView("workloads")} icon="◫">Workloads</Nav>
-        <Nav active={view === "templates"} onClick={() => setView("templates")} icon="◇">Templates</Nav>
-        <Nav active={view === "databases"} onClick={() => setView("databases")} icon="◉">Databases</Nav>
-        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "clusters"} onClick={() => setView("clusters")} icon="⌁">Clusters</Nav>}
-        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "governance"} onClick={() => setView("governance")} icon="◈">Governance</Nav>}
-        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "ai"} onClick={() => setView("ai")} icon="✦">AI audits</Nav>}
-        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "audit"} onClick={() => setView("audit")} icon="≡">Audit</Nav>}
-        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "notifications"} onClick={() => setView("notifications")} icon="◌">Notifications</Nav>}
-        {(["admin", "owner"] as string[]).includes(principal.role) && <Nav active={view === "settings"} onClick={() => setView("settings")} icon="⚙">Settings</Nav>}
-        <Nav active={view === "account"} onClick={() => setView("account")} icon="◎">Account</Nav>
-      </nav>
-      <div className="account"><div className="avatar">{principal.email.slice(0, 1).toUpperCase()}</div><div><strong>{principal.email}</strong><small>{principal.role}</small></div><button className="icon-button" onClick={logout} title="Sign out">↪</button></div>
-    </aside>
-    <main className="content">
-      <header><div><p className="eyebrow">Organization workspace</p><h1>{view[0].toUpperCase() + view.slice(1)}</h1></div><div className="live"><i /> Live</div></header>
+  return <AppShell header={{ height: 62 }} navbar={{ width: 270, breakpoint: "sm", collapsed: { mobile: !mobileOpened } }} padding={0} className="orka-shell">
+    <Spotlight actions={actions} shortcut="mod + K" searchProps={{ placeholder: "Jump to a page or action…" }} />
+    <AppShell.Header className="orka-header"><Group h="100%" px="md" justify="space-between"><Group gap="sm"><Burger opened={mobileOpened} onClick={toggleMobile} hiddenFrom="sm" size="sm" /><div className="orka-wordmark"><span>O</span><strong>Orka</strong></div><Divider orientation="vertical" visibleFrom="sm" /><Text size="sm" c="dimmed" visibleFrom="sm">Infrastructure control plane</Text></Group><Group gap="xs"><Tooltip label="Command palette"><Button variant="subtle" color="gray" leftSection={<IconSearch size={16} />} rightSection={<Text component="kbd" size="xs">⌘K</Text>} onClick={() => spotlight.open()}>Search</Button></Tooltip><Badge variant="light" color="teal" leftSection={<IconCircleCheck size={12} />}>Operational</Badge></Group></Group></AppShell.Header>
+    <AppShell.Navbar className="orka-navbar" p="sm"><Stack h="100%" gap="md"><div className="orka-workspace"><Text size="xs" fw={700} c="dimmed" tt="uppercase">Workspace</Text><Select mt={6} value={projectId || null} onChange={value => setProjectId(value || "")} data={projects.map(project => ({ value: project.id, label: project.name }))} placeholder="Select project" leftSection={<IconBox size={15} />} /><Select mt={8} value={environmentId || null} onChange={value => setEnvironmentId(value || "")} disabled={!projectId} data={environments.map(environment => ({ value: environment.id, label: environment.name }))} placeholder="Environment" leftSection={<IconTerminal2 size={15} />} /></div><Divider /><nav aria-label="Main navigation" className="orka-nav"><Text size="xs" fw={700} c="dimmed" tt="uppercase" px="xs">Platform</Text><NavLink label="Overview" leftSection={<IconLayoutDashboard size={18} />} active={view === "overview"} onClick={() => navigate("overview")} /><NavLink label="Deployments" leftSection={<IconStack2 size={18} />} active={view === "workloads"} onClick={() => navigate("workloads")} /><NavLink label="Databases" leftSection={<IconDatabase size={18} />} active={view === "databases"} onClick={() => navigate("databases")} /><NavLink label="Templates" leftSection={<IconFileStack size={18} />} active={view === "templates"} onClick={() => navigate("templates")} />{admin && <><Text size="xs" fw={700} c="dimmed" tt="uppercase" px="xs" mt="md">Platform</Text><NavLink label="Clusters" leftSection={<IconGridDots size={18} />} active={view === "clusters"} onClick={() => navigate("clusters")} /><NavLink label="Governance" leftSection={<IconShieldCheck size={18} />} active={view === "governance"} onClick={() => navigate("governance")} /><NavLink label="Audit log" leftSection={<IconHistory size={18} />} active={view === "audit"} onClick={() => navigate("audit")} /></>}</nav><Box mt="auto"><Divider mb="sm" /><Group gap="sm" wrap="nowrap"><Avatar color="orange" radius="xl">{principal.email.slice(0, 1).toUpperCase()}</Avatar><Box style={{ minWidth: 0, flex: 1 }}><Text size="sm" fw={600} truncate>{principal.email}</Text><Text size="xs" c="dimmed" tt="capitalize">{principal.role}</Text></Box><ActionIcon variant="subtle" color="gray" onClick={logout} aria-label="Sign out"><IconLogout size={18} /></ActionIcon></Group></Box></Stack></AppShell.Navbar>
+    <AppShell.Main><main className="content orka-content"><header><div><p className="eyebrow">{projectId ? `${projects.find(item => item.id === projectId)?.name ?? "Workspace"} · ${environments.find(item => item.id === environmentId)?.name ?? "No environment"}` : "Organization workspace"}</p><h1>{title[view]}</h1></div><div className="live"><i /> Live</div></header>
       {error && <div className="toast error" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
       {notice && <div className="toast success">{notice}</div>}
+      {view === "overview" && <Overview projects={projects} environments={environments} services={services} onNavigate={navigate} />}
       {view === "workloads" && <Workloads {...{ projects, projectId, setProjectId, environments, environmentId, setEnvironmentId, services, selectedService, setSelectedService, reloadProjects: loadProjects, reloadEnvironments: loadEnvironments, reloadServices: loadServices, flash, setError }} canCreateProject={roleRank(principal.role) >= roleRank("developer")} projectRole={projectRole} environmentRole={environmentRole} canManageCredentials={roleRank(principal.role) >= roleRank("developer")} canManageTags={roleRank(principal.role) >= roleRank("admin")} />}
       {view === "templates" && <Templates environmentId={environmentId} canWrite={roleRank(environmentRole) >= roleRank("developer")} canAdmin={roleRank(principal.role) >= roleRank("admin")} reloadServices={loadServices} flash={flash} setError={setError} />}
       {view === "databases" && <Databases environmentId={environmentId} canWrite={roleRank(environmentRole) >= roleRank("developer")} canAdmin={roleRank(environmentRole) >= roleRank("admin")} canManageDestinations={roleRank(principal.role) >= roleRank("developer")} flash={flash} setError={setError} />}
       {view === "clusters" && <Clusters flash={flash} setError={setError} />}
       {view === "governance" && <Governance principal={principal} projects={projects} projectId={projectId} environments={environments} environmentId={environmentId} flash={flash} setError={setError} />}
-      {view === "ai" && <AIAudits flash={flash} setError={setError} navigate={setView} />}
+      {view === "ai" && <AIAudits flash={flash} setError={setError} navigate={navigate} />}
       {view === "audit" && <Audit flash={flash} setError={setError} />}
       {view === "notifications" && <Notifications flash={flash} setError={setError} />}
       {view === "settings" && <Settings canManageIdentity={principal.role === "owner"} flash={flash} setError={setError} />}
       {view === "account" && <Account principal={principal} onSessionRevoked={onLogout} flash={flash} setError={setError} />}
-    </main>
-  </div>;
+    </main></AppShell.Main>
+  </AppShell>;
 }
 
-function Nav({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: string; children: string }) {
-  return <button className={active ? "active" : ""} onClick={onClick}><span>{icon}</span>{children}</button>;
+function Overview({ projects, environments, services, onNavigate }: { projects: Project[]; environments: Environment[]; services: Service[]; onNavigate: (view: View) => void }) {
+  const healthy = services.filter(service => ["active", "running", "ready", "healthy", "succeeded"].includes((service.status || "").toLowerCase())).length;
+  const attention = services.filter(service => ["failed", "degraded", "missing", "repairing"].includes((service.status || "").toLowerCase()));
+  return <Stack gap="xl" className="health-overview">
+    <section className="health-summary"><div><Text className="eyebrow">Current state</Text><Title order={2}>Your platform is {attention.length ? "requiring attention" : "operating normally"}.</Title><Text c="dimmed" mt={6}>A concise view of the selected namespace and its immediate operational signals.</Text></div><Button variant="light" color="orange" rightSection={<IconChevronRight size={16} />} onClick={() => onNavigate("workloads")}>Review deployments</Button></section>
+    <SimpleGrid cols={{ base: 2, sm: 4 }} spacing={0} className="health-metrics"><Metric label="Projects" value={projects.length} detail="Available namespaces" /><Metric label="Environments" value={environments.length} detail="In selected project" /><Metric label="Services healthy" value={`${healthy}/${services.length}`} detail={services.length ? `${Math.round((healthy / services.length) * 100)}% nominal` : "No services selected"} tone={attention.length ? "orange" : "teal"} /><Metric label="Needs attention" value={attention.length} detail={attention.length ? "Review service state" : "Nothing urgent"} tone={attention.length ? "red" : "teal"} /></SimpleGrid>
+    <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="xl"><Paper withBorder radius="md" p="lg" className="health-panel"><Group justify="space-between" mb="md"><div><Text fw={600}>Deployment state</Text><Text size="sm" c="dimmed">Services in the selected environment</Text></div><Button variant="subtle" color="gray" size="compact-sm" onClick={() => onNavigate("workloads")}>Open deployments</Button></Group>{services.length ? <Stack gap={0}>{services.slice(0, 7).map(service => <Group key={service.id} justify="space-between" className="health-row"><Group gap="sm"><span className="health-service-mark">{service.name.slice(0, 1).toUpperCase()}</span><div><Text size="sm" fw={600}>{service.name}</Text><Text size="xs" c="dimmed">Revision {service.revision} · {service.slug}</Text></div></Group><Status value={service.status || "configured"} /></Group>)}</Stack> : <Empty title="No service signal yet" text="Select a project and environment, then create a service or deploy a template." />}</Paper><Paper withBorder radius="md" p="lg" className="health-panel"><Group justify="space-between" mb="md"><div><Text fw={600}>Attention queue</Text><Text size="sm" c="dimmed">Items requiring an operator decision</Text></div><IconActivityHeartbeat size={19} color="var(--mantine-color-orange-6)" /></Group>{attention.length ? <Stack gap={0}>{attention.map(service => <Group key={service.id} justify="space-between" className="health-row"><div><Text size="sm" fw={600}>{service.name}</Text><Text size="xs" c="dimmed">{service.status} · revision {service.revision}</Text></div><Button variant="subtle" color="orange" size="compact-sm" onClick={() => onNavigate("workloads")}>Inspect</Button></Group>)}</Stack> : <div className="health-clear"><IconCircleCheck size={22} /><div><Text size="sm" fw={600}>No active incidents</Text><Text size="xs" c="dimmed">Failed, degraded, and missing services will appear here.</Text></div></div>}</Paper></SimpleGrid>
+  </Stack>;
+}
+
+function Metric({ label, value, detail, tone = "gray" }: { label: string; value: string | number; detail: string; tone?: string }) {
+  return <div className="health-metric"><Text size="xs" tt="uppercase" fw={700} c="dimmed">{label}</Text><Text className="health-metric-value" c={tone === "gray" ? undefined : tone}>{value}</Text><Text size="xs" c="dimmed">{detail}</Text></div>;
 }
 
 function Account({ principal, onSessionRevoked, flash, setError }: { principal: Principal; onSessionRevoked: () => void; flash: (s: string) => void; setError: (s: string) => void }) {
@@ -1072,4 +1089,9 @@ function AdminItems({ items, action, onAction, onEdit }: { items: { id: string; 
 function Status({ value }: { value: string }) { return <span className={`status ${value}`}>{value.replaceAll("_", " ")}</span>; }
 function Empty({ title, text }: { title: string; text: string }) { return <section className="empty card"><div>⌁</div><h3>{title}</h3><p className="muted">{text}</p></section>; }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <MantineProvider defaultColorScheme="auto" theme={{ primaryColor: "orange", fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif", headings: { fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif" }, defaultRadius: "md" }}>
+    <MantineNotifications position="top-right" />
+    <App />
+  </MantineProvider>
+);

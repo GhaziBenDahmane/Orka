@@ -8,6 +8,11 @@
     "check": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@mantine/core": "^9.6.1",
+    "@mantine/hooks": "^9.6.1",
+    "@mantine/notifications": "^9.6.1",
+    "@mantine/spotlight": "^9.6.1",
+    "@tabler/icons-react": "^3.46.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
