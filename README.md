@@ -55,18 +55,19 @@ checks to outbound remote-cluster agents and the optional 9Router/Headroom AI
 auditor stack. See [deploy/README.md](deploy/README.md) for the preflight,
 installation, upgrade, backup, and recovery procedures.
 
-For the familiar pipe-friendly entry point, run the following on the Swarm
-manager after exporting the installer inputs documented in
-[`deploy/README.md`](deploy/README.md):
+For a zero-configuration single-node quick-start, run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/GhaziBenDahmane/Orka/master/install.sh | sh
 ```
 
-Pin `ORKA_INSTALL_REVISION` to an immutable release tag or commit when
-installing a released build. The bootstrap script downloads that revision to a
-temporary directory and invokes the same validated installer; it does not
-weaken the immutable-image or secret-file requirements.
+It prompts for sudo when needed, installs Docker on Debian/Ubuntu when absent,
+initializes a single-node Swarm, builds Orka, starts it on port 8080, and prints
+a generated initial administrator password. It is intended for evaluation or a
+small self-managed installation. To use the digest-pinned, secret-file-based
+production installer, set `ORKA_INSTALL_MODE=production` and follow
+[`deploy/README.md`](deploy/README.md). Pin `ORKA_INSTALL_REVISION` to an
+immutable release tag or commit for either mode.
 
 ## Development
 
