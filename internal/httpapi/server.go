@@ -322,6 +322,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/services/{serviceID}/schedule-executions/{executionID}/cancel", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.cancelServiceScheduleExecution)))
 	mux.Handle("GET /v1/services/{serviceID}/deployments", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listDeployments)))
 	mux.Handle("GET /v1/services/{serviceID}/logs", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.serviceLogs)))
+	mux.Handle("POST /v1/services/{serviceID}/commands", s.requireResourceRole("developer", "service", "serviceID", http.HandlerFunc(s.runServiceCommand)))
 	mux.Handle("GET /v1/services/{serviceID}/volumes", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listServiceVolumes)))
 	mux.Handle("GET /v1/services/{serviceID}/volume-backup-policies", s.requireResourceRole("viewer", "service", "serviceID", http.HandlerFunc(s.listVolumeBackupPolicies)))
 	mux.Handle("PUT /v1/services/{serviceID}/volume-backup-policies/{volumeName}", s.requireResourceRole("admin", "service", "serviceID", http.HandlerFunc(s.putVolumeBackupPolicy)))
@@ -3063,6 +3064,56 @@ func (s *Server) serviceLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"logs": logs})
+}
+
+// runServiceCommand executes a short, explicitly requested command in one running
+// Compose task. It deliberately returns bounded output rather than exposing a raw
+// Docker socket or a long-lived terminal session.
+func (s *Server) runServiceCommand(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("serviceID"))
+	if err != nil {
+		writeError(w, 400, "invalid_id", "invalid service id")
+		return
+	}
+	var input struct {
+		TargetService string `json:"targetService"`
+		Shell         string `json:"shell"`
+		Command       string `json:"command"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	if input.Shell == "" {
+		input.Shell = "sh"
+	}
+	item, _, err := s.Store.GetComposeService(r.Context(), principal(r).OrganizationID, id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	var runner deploy.ServiceCommandRunner
+	var clusterID *uuid.UUID
+	if queryErr := s.Store.Pool.QueryRow(ctx, `SELECT cluster_id FROM environments WHERE id=$1`, item.EnvironmentID).Scan(&clusterID); queryErr != nil {
+		writeStoreError(w, queryErr)
+		return
+	}
+	if clusterID != nil {
+		runner = deploy.RemoteSwarm{Store: s.Store, Box: s.Box, ClusterID: *clusterID, Timeout: 30 * time.Second}
+	} else if local, ok := s.Swarm.(deploy.ServiceCommandRunner); ok {
+		runner = local
+	}
+	if runner == nil {
+		writeError(w, 501, "commands_unsupported", "service commands are unavailable for this cluster")
+		return
+	}
+	output, err := runner.RunServiceCommand(ctx, item.StackName, input.TargetService, input.Shell, input.Command)
+	if err != nil {
+		s.writeInternalError(w, r, 502, "command_failed", "service command failed", err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"output": output})
 }
 
 func (s *Server) rollbackService(w http.ResponseWriter, r *http.Request) {

@@ -3789,6 +3789,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /v1/services/{serviceID}/commands:
+    post:
+      operationId: post_v1_services_serviceID_commands
+      tags: [services]
+      parameters:
+        - name: serviceID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '2XX':
+          description: Successful response
+        default:
+          description: Structured API error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /v1/services/{serviceID}/databases:
     post:
       operationId: post_v1_services_serviceID_databases

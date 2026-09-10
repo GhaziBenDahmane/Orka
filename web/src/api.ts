@@ -199,6 +199,7 @@ export const api = {
   createWebhookIntegration: (serviceId: string, body: { name: string; provider: WebhookIntegration["provider"]; branch: string }) => request<{ integration: WebhookIntegration; secret: string; url: string }>(`/v1/services/${serviceId}/webhooks`, { method: "POST", body: JSON.stringify(body) }),
   disableWebhookIntegration: (integrationId: string) => request<void>(`/v1/webhooks/${integrationId}`, { method: "DELETE" }),
   logs: (serviceId: string) => request<{ logs: string }>(`/v1/services/${serviceId}/logs`),
+  runCommand: (serviceId: string, targetService: string, shell: "sh" | "bash", command: string) => request<{ output: string }>(`/v1/services/${serviceId}/commands`, { method: "POST", body: JSON.stringify({ targetService, shell, command }) }),
   serviceVolumes: (serviceId: string) => request<Envelope<ServiceVolume>>(`/v1/services/${serviceId}/volumes`),
   rebindServiceStorageNode: (serviceId: string, nodeId: string, confirm: string) => request<Service>(`/v1/services/${serviceId}/storage-node-rebind`, { method: "POST", body: JSON.stringify({ nodeId, confirm }) }),
   volumeBackupPolicies: (serviceId: string) => request<Envelope<VolumeBackupPolicy>>(`/v1/services/${serviceId}/volume-backup-policies`),
