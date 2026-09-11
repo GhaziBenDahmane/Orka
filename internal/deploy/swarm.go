@@ -655,12 +655,53 @@ func (s Swarm) captureResolvedImages(ctx context.Context, stackName string) (map
 		if len(parts) != 2 || !strings.HasPrefix(parts[0], prefix) || strings.TrimSpace(parts[1]) == "" {
 			return nil, fmt.Errorf("inspect deployed images: unexpected service record %q", line)
 		}
-		images[strings.TrimPrefix(parts[0], prefix)] = strings.TrimSpace(parts[1])
+		serviceName, image := strings.TrimPrefix(parts[0], prefix), strings.TrimSpace(parts[1])
+		if !ociref.IsDigestPinned(image) {
+			image, err = s.runningServiceImageDigest(ctx, parts[0])
+			if err != nil {
+				return nil, fmt.Errorf("inspect deployed image for service %q: %w", serviceName, err)
+			}
+		}
+		images[serviceName] = image
 	}
 	if len(images) == 0 {
 		return nil, errors.New("inspect deployed images: stack has no services")
 	}
 	return images, nil
+}
+
+// runningServiceImageDigest derives the immutable repository digest from the
+// exact container image used by a converged Swarm task. Docker's stack service
+// table can retain the submitted tag even when --resolve-image has pulled a
+// digest, so it is not sufficient evidence for the persisted deployment.
+func (s Swarm) runningServiceImageDigest(ctx context.Context, service string) (string, error) {
+	tasks, err := s.run(ctx, "service", "ps", "--no-trunc", "--filter", "desired-state=running", "--format", "{{.ID}}", service)
+	if err != nil {
+		return "", err
+	}
+	var digest string
+	for _, task := range strings.Fields(tasks) {
+		containerID, inspectErr := s.run(ctx, "inspect", "--format", "{{.Status.ContainerStatus.ContainerID}}", task)
+		if inspectErr != nil || strings.TrimSpace(containerID) == "" {
+			return "", fmt.Errorf("inspect running task %q: %w", task, inspectErr)
+		}
+		imageID, inspectErr := s.run(ctx, "inspect", "--format", "{{.Image}}", strings.TrimSpace(containerID))
+		if inspectErr != nil || strings.TrimSpace(imageID) == "" {
+			return "", fmt.Errorf("inspect task container image: %w", inspectErr)
+		}
+		resolved, inspectErr := s.run(ctx, "image", "inspect", "--format", "{{index .RepoDigests 0}}", strings.TrimSpace(imageID))
+		if inspectErr != nil || !ociref.IsDigestPinned(strings.TrimSpace(resolved)) {
+			return "", fmt.Errorf("running task image has no repository digest: %w", inspectErr)
+		}
+		if digest != "" && digest != strings.TrimSpace(resolved) {
+			return "", errors.New("running service tasks use different image digests")
+		}
+		digest = strings.TrimSpace(resolved)
+	}
+	if digest == "" {
+		return "", errors.New("service has no running tasks")
+	}
+	return digest, nil
 }
 
 func ApplyResolvedImages(compose string, images map[string]string) (string, error) {
@@ -884,11 +925,15 @@ func (s Swarm) Nodes(ctx context.Context) ([]Node, error) {
 		if line == "" {
 			continue
 		}
-		var raw map[string]string
+		var raw map[string]any
 		if err = json.Unmarshal([]byte(line), &raw); err != nil {
 			return nil, err
 		}
-		items = append(items, Node{ID: raw["ID"], Hostname: raw["Hostname"], Status: raw["Status"], Availability: raw["Availability"], ManagerStatus: raw["ManagerStatus"], EngineVersion: raw["EngineVersion"]})
+		stringValue := func(key string) string {
+			value, _ := raw[key].(string)
+			return value
+		}
+		items = append(items, Node{ID: stringValue("ID"), Hostname: stringValue("Hostname"), Status: stringValue("Status"), Availability: stringValue("Availability"), ManagerStatus: stringValue("ManagerStatus"), EngineVersion: stringValue("EngineVersion")})
 	}
 	for index := range items {
 		resourceOutput, inspectErr := s.run(ctx, "node", "inspect", items[index].ID, "--format", "{{json .Description.Resources}}")

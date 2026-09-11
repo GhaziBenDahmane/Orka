@@ -8,16 +8,14 @@ run_id="$$-${RANDOM}"
 postgres_container="dockyard-reconcile-postgres-${run_id}"
 work_dir=$(mktemp -d)
 created_swarm=false
-network_existed=false
+network="dockyard-reconcile-${run_id//[^A-Za-z0-9_.-]/-}"
 
 cleanup() {
   docker rm -f "$postgres_container" >/dev/null 2>&1 || true
-  if [ "$network_existed" = false ]; then
-    for _ in $(seq 1 10); do
-      docker network rm dockyard-public >/dev/null 2>&1 && break
-      sleep 1
-    done
-  fi
+  for _ in $(seq 1 10); do
+    docker network rm "$network" >/dev/null 2>&1 && break
+    sleep 1
+  done
   if [ "$created_swarm" = true ]; then
     docker swarm leave --force >/dev/null 2>&1 || true
   fi
@@ -48,9 +46,7 @@ if [ "$swarm_state" != active ]; then
   docker swarm init --advertise-addr 127.0.0.1 >/dev/null
   created_swarm=true
 fi
-if docker network inspect dockyard-public >/dev/null 2>&1; then
-  network_existed=true
-fi
+docker network create --driver overlay --opt encrypted --attachable "$network" >/dev/null
 
 docker run -d --name "$postgres_container" -p 127.0.0.1::5432 \
   -e POSTGRES_USER=dockyard -e POSTGRES_PASSWORD=dockyard -e POSTGRES_DB=dockyard_test \
@@ -69,6 +65,7 @@ fi
 
 export DOCKYARD_TEST_DATABASE_URL="postgres://dockyard:dockyard@127.0.0.1:${postgres_port}/dockyard_test?sslmode=disable"
 export DOCKYARD_TEST_SWARM=1
+export DOCKYARD_TEST_SWARM_NETWORK="$network"
 
 "$work_dir/deploy.test" \
   -test.timeout=3m \

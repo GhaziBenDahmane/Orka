@@ -16,16 +16,20 @@ func TestReconciliationRepairsMissingLiveSwarmStack(t *testing.T) {
 	if os.Getenv("DOCKYARD_TEST_SWARM") != "1" {
 		t.Skip("DOCKYARD_TEST_SWARM is not set")
 	}
+	network := os.Getenv("DOCKYARD_TEST_SWARM_NETWORK")
+	if network == "" {
+		network = "dockyard-public"
+	}
 	db, ctx := recoveryTestStore(t)
 	organizationID, projectID, environmentID, serviceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	stackName := "reconcile-live-" + serviceID.String()[:8]
-	swarm := Swarm{DockerBin: "docker", Network: "dockyard-public", Timeout: time.Minute}
+	swarm := Swarm{DockerBin: "docker", Network: network, Timeout: time.Minute}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		_, _ = swarm.Remove(cleanupCtx, stackName)
 	})
-	effective, err := (Compiler{PublicNetwork: "dockyard-public"}).Compile("services:\n  sleeper:\n    image: node@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf\n    command: [node, -e, 'setInterval(() => {}, 60000)']\n", nil)
+	effective, err := (Compiler{PublicNetwork: network}).Compile("services:\n  sleeper:\n    image: node@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf\n    command: [node, -e, 'setInterval(() => {}, 60000)']\n", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +48,7 @@ func TestReconciliationRepairsMissingLiveSwarmStack(t *testing.T) {
 		}
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	worker := &Worker{Store: db, ID: "live-reconciler", Logger: logger, Compiler: Compiler{PublicNetwork: "dockyard-public"}, Swarm: swarm}
+	worker := &Worker{Store: db, ID: "live-reconciler", Logger: logger, Compiler: Compiler{PublicNetwork: network}, Swarm: swarm}
 	candidate := store.ReconciliationCandidate{ServiceID: serviceID, OrganizationID: organizationID, StackName: stackName}
 	worker.reconcileStack(ctx, candidate)
 	worker.reconcileStack(ctx, candidate)

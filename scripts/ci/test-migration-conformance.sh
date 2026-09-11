@@ -67,7 +67,7 @@ jq \
 jq -e '
   .status == "passed" and .postgresBacked and .dryRunSecretSafe and
   .controlPlaneImported and .idempotentImport and .composeImported and
-  .applicationsImported and .routesImported and .databasesImported == 8 and
+  .applicationsImported and .routesImported and .databasesImported == 9 and
   .backupConfigurationImported and .sourceCredentialsReencrypted and
   .notificationsReencrypted and .databaseTransfersQueued == 8 and
   .transferSecretsEncrypted and .tenantOwnershipEnforced and

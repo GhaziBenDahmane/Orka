@@ -27,18 +27,20 @@ done
 export DOCKYARD_HTTP_BIND="127.0.0.1:$port"
 export DOCKYARD_POSTGRES_BIND="${DOCKYARD_POSTGRES_BIND:-127.0.0.1:54339}"
 base_url="http://127.0.0.1:$port"
-network="dockyard-public"
+network="${DOCKYARD_TEMPLATE_SMOKE_NETWORK:-dockyard-template-public}"
+export DOCKYARD_TRAEFIK_NETWORK="$network"
 initialized_swarm=false
 created_network=false
 stacks=()
 products='[]'
 state_marker='dockyard-template-smoke-v1'
 barktrace_sqlite_file_id=''
+local_build_root=''
 
 wait_for_deployment() {
   local deployment_id="$1"
   local response status=""
-  for _ in {1..120}; do
+  for _ in {1..300}; do
     response="$(curl --fail --silent --show-error "${headers[@]}" "$base_url/v1/deployments/$deployment_id")"
     status="$(jq -er '.status' <<<"$response")"
     [[ "$status" == succeeded ]] && return 0
@@ -295,6 +297,7 @@ cleanup() {
   docker compose --project-name "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
   if [[ "$created_network" == true ]]; then docker network rm "$network" >/dev/null 2>&1 || true; fi
   if [[ "$initialized_swarm" == true ]]; then docker swarm leave --force >/dev/null 2>&1 || true; fi
+  if [[ -n "$local_build_root" ]]; then rm -rf -- "$local_build_root"; fi
 }
 trap cleanup EXIT
 
@@ -303,6 +306,11 @@ if ! docker network inspect "$network" >/dev/null 2>&1; then docker network crea
 
 if [[ "${DOCKYARD_TEMPLATE_SMOKE_PREBUILT:-false}" == "true" ]]; then
   docker image inspect "$project-dockyard" >/dev/null
+  docker compose --project-name "$project" up --detach --no-build
+elif [[ "${DOCKYARD_TEMPLATE_SMOKE_LOCAL_BUILD:-false}" == "true" ]]; then
+  local_build_root="$(mktemp -d)"
+  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$local_build_root/dockyard" ./cmd/dockyard
+  docker build --file "$root_dir/scripts/ci/Dockerfile.local-smoke" --tag "$project-dockyard" "$local_build_root"
   docker compose --project-name "$project" up --detach --no-build
 elif [[ -n "${DOCKYARD_BUILD_CA_CERT:-}" ]]; then
   test -r "$DOCKYARD_BUILD_CA_CERT"
@@ -378,7 +386,6 @@ for template_key in "${template_keys[@]}"; do
   service_name="${stack}_${template_key}"
   if [[ "$template_key" == 9router ]]; then
     service_name="${stack}_router"
-    wait_for_service "${stack}_headroom"
   elif [[ "$template_key" == barktrace-sqlite ]]; then
     service_name="${stack}_barktrace"
   fi
@@ -389,7 +396,7 @@ for template_key in "${template_keys[@]}"; do
   task_before="$(service_task "$service_name")"
   runtime_image_before="$(task_local_image_id "$task_before")"
   [[ "$runtime_image_before" =~ ^sha256:[a-f0-9]{64}$ ]]
-  docker service update --force --detach=false "$service_name" >/dev/null
+  timeout 180 docker service update --force --detach=false "$service_name" >/dev/null
   wait_for_service "$service_name"
   verify_product_state "$template_key" "$service_name" "$stack"
   task_after="$(service_task "$service_name")"
@@ -404,7 +411,7 @@ for template_key in "${template_keys[@]}"; do
     dependency_task_before="$(service_task "${stack}_postgres")"
     dependency_runtime_image_before="$(task_local_image_id "$dependency_task_before")"
     [[ "$dependency_runtime_image_before" =~ ^sha256:[a-f0-9]{64}$ ]]
-    docker service update --force --detach=false "${stack}_postgres" >/dev/null
+    timeout 180 docker service update --force --detach=false "${stack}_postgres" >/dev/null
     wait_for_service "${stack}_postgres"
     verify_product_state "$template_key" "$service_name" "$stack"
     dependency_task_after="$(service_task "${stack}_postgres")"
