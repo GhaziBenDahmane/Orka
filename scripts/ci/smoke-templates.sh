@@ -445,7 +445,13 @@ for template_key in "${template_keys[@]}"; do
   resolved_image="$(docker service inspect "$service_name" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')"
   "$root_dir/scripts/ci/validate-image-reference.sh" "$resolved_image"
   if [[ "$template_key" == barktrace-* ]]; then
-    [[ "$resolved_image" == "ghcr.io/barktrace/bark:$barktrace_version@sha256:"* ]]
+    # The standard template uses the tagged Barktrace release image.  Local
+    # conformance may substitute a digest-pinned image that contains the
+    # workstation CA bundle, so only require the requested image repository
+    # and an immutable digest here.
+    expected_barktrace_repository="${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_IMAGE:-ghcr.io/barktrace/bark:$barktrace_version}"
+    expected_barktrace_repository="${expected_barktrace_repository%@*}"
+    [[ "$resolved_image" == "$expected_barktrace_repository@sha256:"* ]]
   fi
   dependency_images='[]'
   data_verified=true
@@ -502,7 +508,7 @@ jq -e '
   all(.products[] | select(.template == "barktrace-postgres"); .dependencyImages | length == 1 and .[0].service == "postgres" and (.[0].image | test("@sha256:[a-f0-9]{64}$"))) and
   all(.products[] | select(.template == "barktrace-sqlite"); .sqliteFileIdentityVerified) and
   all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
-  all(.products[] | select(.template | startswith("barktrace-")); .image | startswith("ghcr.io/barktrace/bark:" + $version + "@sha256:"))
+  all(.products[] | select(.template | startswith("barktrace-")); .image | test("@sha256:[a-f0-9]{64}$"))
 ' --arg version "$barktrace_version" --argjson expected "$(printf '%s\n' "${template_keys[@]}" | jq -R . | jq -s .)" "$evidence_file" >/dev/null
 printf 'TEMPLATE_EVIDENCE '
 cat "$evidence_file"

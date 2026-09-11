@@ -138,6 +138,13 @@ to a space-separated subset, for example
 `barktrace-sqlite barktrace-postgres`; release CI leaves it unset and always
 executes the complete five-product gate.
 
+When a local OIDC issuer is intercepted by a workstation CA, keep TLS
+verification enabled and use a test-only BarkTrace image with that CA bundle.
+`scripts/ci/Dockerfile.barktrace-local-smoke` sets `SSL_CERT_FILE` only in the
+derived local image; it does not alter either production template. Supply its
+immutable registry digest through `DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_IMAGE`
+and the issuer through `DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER`.
+
 Import the complete upstream Dokploy template checkout with:
 
 ```sh
