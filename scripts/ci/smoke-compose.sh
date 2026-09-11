@@ -6,11 +6,12 @@ project="dockyard-smoke"
 smoke_port="${DOCKYARD_SMOKE_PORT:-8080}"
 export DOCKYARD_HTTP_BIND="${DOCKYARD_HTTP_BIND:-127.0.0.1:$smoke_port}"
 base_url="http://127.0.0.1:$smoke_port"
-public_network="dockyard-public"
+public_network="${DOCKYARD_TRAEFIK_NETWORK:-dockyard-public}"
 initialized_swarm=false
 created_network=false
 stack_name=""
 recovery_root="$(mktemp -d)"
+local_build_root=""
 evidence_file="${DOCKYARD_CONTROL_PLANE_RECOVERY_EVIDENCE:-$recovery_root/control-plane-recovery-conformance.json}"
 openssl genpkey -algorithm ED25519 -out "$recovery_root/signing-key.pem" >/dev/null 2>&1
 openssl pkey -in "$recovery_root/signing-key.pem" -pubout -out "$recovery_root/verify-key.pem" >/dev/null 2>&1
@@ -39,6 +40,9 @@ cleanup() {
     docker swarm leave --force >/dev/null 2>&1 || true
   fi
   rm -rf -- "$recovery_root"
+  if [[ -n "$local_build_root" ]]; then
+    rm -rf -- "$local_build_root"
+  fi
 }
 trap cleanup EXIT
 
@@ -64,6 +68,11 @@ fi
 
 if [[ "${DOCKYARD_SMOKE_PREBUILT:-false}" == "true" ]]; then
   docker image inspect "$project-dockyard" >/dev/null
+  docker compose --project-name "$project" up --detach --no-build
+elif [[ "${DOCKYARD_SMOKE_LOCAL_BUILD:-false}" == "true" ]]; then
+  local_build_root="$(mktemp -d)"
+  CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o "$local_build_root/dockyard" ./cmd/dockyard
+  docker build --file "$root/scripts/ci/Dockerfile.local-smoke" --tag "$project-dockyard" "$local_build_root"
   docker compose --project-name "$project" up --detach --no-build
 elif (( ${#build_secrets[@]} > 0 )); then
   docker build "${build_secrets[@]}" --tag "$project-dockyard" .
@@ -94,7 +103,7 @@ environment_response="$(curl --fail --silent --show-error "${auth_headers[@]}" \
   --data '{"name":"Production","slug":"production"}' "$base_url/v1/projects/$project_id/environments")"
 environment_id="$(jq --exit-status --raw-output '.id' <<<"$environment_response")"
 service_response="$(curl --fail --silent --show-error "${auth_headers[@]}" \
-  --data '{"name":"Web","slug":"web","composeYaml":"services:\n  web:\n    image: nginx:1.29-alpine\n"}' \
+  --data '{"name":"Web","slug":"web","composeYaml":"services:\n  web:\n    image: nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de\n"}' \
   "$base_url/v1/environments/$environment_id/services")"
 service_id="$(jq --exit-status --raw-output '.id' <<<"$service_response")"
 stack_name="$(jq --exit-status --raw-output '.stackName' <<<"$service_response")"
@@ -124,9 +133,9 @@ actual_migrations="$(docker compose --project-name "$project" exec -T postgres \
 test "$actual_migrations" = "$expected_migrations"
 
 updated_service="$(curl --fail --silent --show-error --request PATCH "${auth_headers[@]}" \
-  --data '{"composeYaml":"services:\n  web:\n    image: nginx:1.28-alpine\n","environment":{"ROLLBACK_PROBE":"changed"}}' \
+  --data '{"composeYaml":"services:\n  web:\n    image: nginx@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236\n","environment":{"ROLLBACK_PROBE":"changed"}}' \
   "$base_url/v1/services/$service_id")"
-jq --exit-status '.revision == 2 and (.composeYaml | contains("nginx:1.28-alpine"))' <<<"$updated_service" >/dev/null
+jq --exit-status '.revision == 2 and (.composeYaml | contains("nginx@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236"))' <<<"$updated_service" >/dev/null
 
 docker compose --project-name "$project" restart dockyard
 for _ in {1..60}; do
@@ -137,7 +146,7 @@ for _ in {1..60}; do
 done
 curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/me" | jq --exit-status --arg id "$organization_id" '.organizationId == $id' >/dev/null
 persisted_service="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id")"
-jq --exit-status --arg id "$service_id" '.service.id == $id and .service.revision == 2 and (.service.composeYaml | contains("nginx:1.28-alpine"))' <<<"$persisted_service" >/dev/null
+jq --exit-status --arg id "$service_id" '.service.id == $id and .service.revision == 2 and (.service.composeYaml | contains("nginx@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236"))' <<<"$persisted_service" >/dev/null
 
 rollback_response="$(curl --fail --silent --show-error "${auth_headers[@]}" \
   --data '{}' "$base_url/v1/services/$service_id/rollback")"
@@ -158,8 +167,8 @@ test "${rollback_status:-}" = "succeeded"
 jq --exit-status '.trigger == "rollback" and .revision == 3' <<<"$rollback_response" >/dev/null
 
 rolled_back_service="$(curl --fail --silent --show-error "${auth_headers[@]}" "$base_url/v1/services/$service_id")"
-jq --exit-status '.service.revision == 3 and (.service.composeYaml | contains("nginx:1.29-alpine")) and (.service.composeYaml | contains("nginx:1.28-alpine") | not)' <<<"$rolled_back_service" >/dev/null
-docker service inspect "${stack_name}_web" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' | grep -E '^nginx:1\.29-alpine(@sha256:[a-f0-9]{64})?$'
+jq --exit-status '.service.revision == 3 and (.service.composeYaml | contains("nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de")) and (.service.composeYaml | contains("nginx@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236") | not)' <<<"$rolled_back_service" >/dev/null
+docker service inspect "${stack_name}_web" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' | grep -Fx 'nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de'
 
 # Exercise a complete control-plane recovery using the same PostgreSQL tools as
 # the bundled production stack. The backup intentionally excludes the master

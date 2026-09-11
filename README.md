@@ -108,6 +108,16 @@ DOCKYARD_BUILD_CA_CERT=/path/to/corporate-ca.crt \
   scripts/ci/smoke-compose.sh
 ```
 
+When dependency downloads are unavailable but the checked-out module cache is
+already verified, run the full Compose/Swarm flow with a locally compiled
+controller image:
+
+```sh
+DOCKYARD_SMOKE_PORT=18080 \
+  DOCKYARD_TRAEFIK_NETWORK=dockyard-smoke-public \
+  DOCKYARD_SMOKE_LOCAL_BUILD=true scripts/ci/smoke-compose.sh
+```
+
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Every interactive user can inspect active device
 sessions, revoke individual or all other sessions, and rotate a local password

@@ -27,7 +27,7 @@ esac
 case "$database_user" in
   ""|-*|*[!A-Za-z0-9_]*) echo "invalid DOCKYARD_POSTGRES_USER" >&2; exit 1 ;;
 esac
-for command in awk base64 cp docker find grep jq mktemp openssl sha256sum tr wc; do
+for command in awk base64 cp docker find grep id jq mktemp openssl sha256sum tr wc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -222,6 +222,7 @@ if [ "$verifier_image" != "$image" ]; then
   }
 fi
 set -- docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
   --mount "type=bind,src=$manifest_file,dst=/input/manifest.json,readonly" \
   --mount "type=bind,src=$signature_file,dst=/input/manifest.sig,readonly" \
   --mount "type=bind,src=$verify_key,dst=/input/verify-key.pem,readonly" \
