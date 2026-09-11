@@ -32,7 +32,9 @@ export DOCKYARD_TRAEFIK_NETWORK="$network"
 initialized_swarm=false
 created_network=false
 stacks=()
+libsql_probe_services=()
 products='[]'
+executed_template_keys=()
 state_marker='dockyard-template-smoke-v1'
 barktrace_sqlite_file_id=''
 local_build_root=''
@@ -89,13 +91,16 @@ task_local_image_id() {
 }
 
 libsql_request() {
-  local stack="$1" service_name="$2" statements="$3"
-  docker run --rm --network "${stack}_default" \
+  local stack="$1" service_name="$2" statements="$3" probe output state
+  probe="${stack}-libsql-probe-${RANDOM}${RANDOM}"
+  libsql_probe_services+=("$probe")
+  docker service create --quiet --detach --name "$probe" --restart-condition none \
+    --network "${stack}_default" \
     --env LIBSQL_HOST="$service_name" \
     --env LIBSQL_USER=smoke \
     --env LIBSQL_PASSWORD=template-smoke-libsql \
     --env LIBSQL_STATEMENTS="$statements" \
-    python:3.13-alpine python3 -c '
+    python@sha256:62e80a1ff2a4af41c6fe72a629e5729463a4fd05ae89ecc9c812a6c1457f2cc7 python3 -c '
 import base64, json, os, time, urllib.request
 url = "http://%s:8080/" % os.environ["LIBSQL_HOST"]
 token = base64.b64encode((os.environ["LIBSQL_USER"] + ":" + os.environ["LIBSQL_PASSWORD"]).encode()).decode()
@@ -110,7 +115,26 @@ for attempt in range(60):
     except Exception:
         if attempt == 59: raise
         time.sleep(1)
-'
+' >/dev/null
+  for _ in {1..90}; do
+    state="$(docker service ps --format '{{.CurrentState}}' "$probe" | head -1)"
+    if [[ "$state" == Complete* ]]; then
+      output="$(docker service logs --raw "$probe")"
+      docker service rm "$probe" >/dev/null
+      libsql_probe_services=("${libsql_probe_services[@]:0:${#libsql_probe_services[@]}-1}")
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if [[ "$state" == Failed* || "$state" == Rejected* ]]; then
+      docker service logs "$probe" >&2 || true
+      docker service rm "$probe" >/dev/null 2>&1 || true
+      return 1
+    fi
+    sleep 1
+  done
+  docker service logs "$probe" >&2 || true
+  docker service rm "$probe" >/dev/null 2>&1 || true
+  return 1
 }
 
 http_database_probe() {
@@ -295,6 +319,7 @@ verify_product_state() {
 }
 
 cleanup() {
+  for service in "${libsql_probe_services[@]}"; do docker service rm "$service" >/dev/null 2>&1 || true; done
   for stack in "${stacks[@]}"; do docker stack rm "$stack" >/dev/null 2>&1 || true; done
   docker compose --project-name "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
   if [[ -n "$keycloak_container" ]]; then docker rm --force "$keycloak_container" >/dev/null 2>&1 || true; fi
@@ -354,6 +379,7 @@ for template_key in "${template_keys[@]}"; do
   if [[ "$template_key" == 9router && "${DOCKYARD_TEMPLATE_SMOKE_INCLUDE_9ROUTER:-false}" != true ]]; then
     continue
   fi
+  executed_template_keys+=("$template_key")
   template_id="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .id' <<<"$catalog")"
   template_version="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .version' <<<"$catalog")"
   case "$template_key" in
@@ -509,7 +535,7 @@ jq -e '
   all(.products[] | select(.template == "barktrace-sqlite"); .sqliteFileIdentityVerified) and
   all(.products[].dependencyImages[]?; .image | test("@sha256:[a-f0-9]{64}$")) and
   all(.products[] | select(.template | startswith("barktrace-")); .image | test("@sha256:[a-f0-9]{64}$"))
-' --arg version "$barktrace_version" --argjson expected "$(printf '%s\n' "${template_keys[@]}" | jq -R . | jq -s .)" "$evidence_file" >/dev/null
+' --arg version "$barktrace_version" --argjson expected "$(printf '%s\n' "${executed_template_keys[@]}" | jq -R . | jq -s .)" "$evidence_file" >/dev/null
 printf 'TEMPLATE_EVIDENCE '
 cat "$evidence_file"
 printf 'Selected built-in templates deployed and survived Swarm task replacement; stateful products retained application data.\n'
