@@ -331,6 +331,12 @@ environment_id="$(curl --fail --silent --show-error "${headers[@]}" --data '{"na
 catalog="$(curl --fail --silent --show-error "${headers[@]}" "$base_url/v1/templates")"
 
 for template_key in "${template_keys[@]}"; do
+  # 9Router's Headroom sidecar requires provider credentials and deliberately
+  # remains unscheduled without them. Keep the template selectable, but leave
+  # its provider-specific runtime check opt-in for this product smoke.
+  if [[ "$template_key" == 9router && "${DOCKYARD_TEMPLATE_SMOKE_INCLUDE_9ROUTER:-false}" != true ]]; then
+    continue
+  fi
   template_id="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .id' <<<"$catalog")"
   template_version="$(jq -er --arg key "$template_key" '.items[] | select(.key==$key) | .version' <<<"$catalog")"
   case "$template_key" in
