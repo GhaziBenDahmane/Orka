@@ -138,12 +138,15 @@ for attempt in range(60):
 }
 
 http_database_probe() {
-  local stack="$1" service_name="$2" engine="$3" mode="$4" secret="$5"
-  docker run --rm --network "${stack}_default" \
+  local stack="$1" service_name="$2" engine="$3" mode="$4" secret="$5" probe output state
+  probe="${stack}-${engine}-probe-${RANDOM}${RANDOM}"
+  libsql_probe_services+=("$probe")
+  docker service create --quiet --detach --name "$probe" --restart-condition none \
+    --network "${stack}_default" \
     --env PROBE_HOST="$service_name" --env PROBE_ENGINE="$engine" \
     --env PROBE_MODE="$mode" --env PROBE_SECRET="$secret" \
     --env STATE_MARKER="$state_marker" \
-    python:3.13-alpine python3 -c '
+    python@sha256:62e80a1ff2a4af41c6fe72a629e5729463a4fd05ae89ecc9c812a6c1457f2cc7 python3 -c '
 import json, os, time, urllib.request
 engine, mode, host = os.environ["PROBE_ENGINE"], os.environ["PROBE_MODE"], os.environ["PROBE_HOST"]
 secret, marker = os.environ["PROBE_SECRET"], os.environ["STATE_MARKER"]
@@ -180,7 +183,26 @@ elif engine == "meilisearch":
         print(request("GET", "/indexes/dockyard_template_smoke/documents/1")["value"])
 else:
     raise RuntimeError("unsupported HTTP database probe")
-'
+' >/dev/null
+  for _ in {1..90}; do
+    state="$(docker service ps --format '{{.CurrentState}}' "$probe" | head -1)"
+    if [[ "$state" == Complete* ]]; then
+      output="$(docker service logs --raw "$probe")"
+      docker service rm "$probe" >/dev/null
+      libsql_probe_services=("${libsql_probe_services[@]:0:${#libsql_probe_services[@]}-1}")
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if [[ "$state" == Failed* || "$state" == Rejected* ]]; then
+      docker service logs "$probe" >&2 || true
+      docker service rm "$probe" >/dev/null 2>&1 || true
+      return 1
+    fi
+    sleep 1
+  done
+  docker service logs "$probe" >&2 || true
+  docker service rm "$probe" >/dev/null 2>&1 || true
+  return 1
 }
 
 seed_product_state() {
