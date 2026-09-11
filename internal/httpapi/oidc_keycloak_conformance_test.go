@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -72,7 +74,12 @@ func TestKeycloakOIDCConformance(t *testing.T) {
 		_, _ = db.Pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1 OR id=$2 OR email='conformance@example.test'`, ownerID, localDeveloperID)
 	})
 
-	api := &Server{Store: db, Box: box, SessionTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	roots := x509.NewCertPool()
+	certificate, err := os.ReadFile(os.Getenv("SSL_CERT_FILE"))
+	if err != nil || !roots.AppendCertsFromPEM(certificate) {
+		t.Fatal("SSL_CERT_FILE must contain the Keycloak test certificate")
+	}
+	api := &Server{Store: db, Box: box, SessionTTL: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), OIDCHTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}}}
 	server := httptest.NewServer(api.Handler())
 	defer server.Close()
 	api.PublicURL = server.URL
