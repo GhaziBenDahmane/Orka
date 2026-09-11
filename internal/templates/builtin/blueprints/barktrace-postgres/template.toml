@@ -1,6 +1,7 @@
 [variables]
 domain = "${domain}"
 barktrace_version = "0.48.0"
+barktrace_image = "ghcr.io/barktrace/bark:${barktrace_version}"
 postgres_version = "17.6-alpine"
 postgres_password = "${password:32}"
 oidc_issuer_url = "https://id.example.com"
@@ -12,6 +13,7 @@ mcp_token = "${base64:32}"
 
 [config.env]
 BARKTRACE_VERSION = "${barktrace_version}"
+BARKTRACE_IMAGE = "${barktrace_image}"
 POSTGRES_VERSION = "${postgres_version}"
 POSTGRES_PASSWORD = "${postgres_password}"
 BARKTRACE_PUBLIC_URL = "https://${domain}"

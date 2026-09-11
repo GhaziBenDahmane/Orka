@@ -1,6 +1,7 @@
 [variables]
 domain = "${domain}"
 barktrace_version = "0.48.0"
+barktrace_image = "ghcr.io/barktrace/bark:${barktrace_version}"
 oidc_issuer_url = "https://id.example.com"
 oidc_client_id = "barktrace"
 oidc_client_secret = "${password:32}"
@@ -10,6 +11,7 @@ mcp_token = "${base64:32}"
 
 [config.env]
 BARKTRACE_VERSION = "${barktrace_version}"
+BARKTRACE_IMAGE = "${barktrace_image}"
 BARKTRACE_PUBLIC_URL = "https://${domain}"
 BARKTRACE_DEFAULT_ORG_NAME = "${default_org_name}"
 BARKTRACE_DEFAULT_ORG_SLUG = "${default_org_slug}"

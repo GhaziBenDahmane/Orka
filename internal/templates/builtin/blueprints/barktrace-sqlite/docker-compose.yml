@@ -1,6 +1,6 @@
 services:
   barktrace:
-    image: ghcr.io/barktrace/bark:${BARKTRACE_VERSION}
+    image: ${BARKTRACE_IMAGE}
     environment:
       BARKTRACE_PUBLIC_URL: ${BARKTRACE_PUBLIC_URL}
       BARKTRACE_DEFAULT_ORG_NAME: ${BARKTRACE_DEFAULT_ORG_NAME}

@@ -36,6 +36,8 @@ products='[]'
 state_marker='dockyard-template-smoke-v1'
 barktrace_sqlite_file_id=''
 local_build_root=''
+keycloak_container=''
+local_oidc_issuer=''
 
 wait_for_deployment() {
   local deployment_id="$1"
@@ -295,6 +297,7 @@ verify_product_state() {
 cleanup() {
   for stack in "${stacks[@]}"; do docker stack rm "$stack" >/dev/null 2>&1 || true; done
   docker compose --project-name "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  if [[ -n "$keycloak_container" ]]; then docker rm --force "$keycloak_container" >/dev/null 2>&1 || true; fi
   if [[ "$created_network" == true ]]; then docker network rm "$network" >/dev/null 2>&1 || true; fi
   if [[ "$initialized_swarm" == true ]]; then docker swarm leave --force >/dev/null 2>&1 || true; fi
   if [[ -n "$local_build_root" ]]; then rm -rf -- "$local_build_root"; fi
@@ -303,6 +306,20 @@ trap cleanup EXIT
 
 if [[ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]]; then docker swarm init --advertise-addr 127.0.0.1 >/dev/null; initialized_swarm=true; fi
 if ! docker network inspect "$network" >/dev/null 2>&1; then docker network create --driver overlay --opt encrypted --attachable "$network" >/dev/null; created_network=true; fi
+if [[ -n "${selected_templates[barktrace-sqlite]:-}${selected_templates[barktrace-postgres]:-}" && -z "${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-}" ]]; then
+  keycloak_container="dockyard-template-oidc-$$"
+  docker run --detach --name "$keycloak_container" --network "$network" --network-alias template-oidc \
+    -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+    -v "$root_dir/deploy/conformance/keycloak-realm.json:/opt/keycloak/data/import/dockyard-conformance-realm.json:ro" \
+    quay.io/keycloak/keycloak@sha256:98fab020a3a490aba0978f237e2a06cd0ea42bf149c6cf10f11c0aaf27728ff2 \
+    start-dev --import-realm --hostname-strict=false >/dev/null
+  for _ in {1..45}; do
+    if docker logs "$keycloak_container" 2>&1 | grep -q 'Keycloak.*started'; then break; fi
+    sleep 1
+  done
+  docker logs "$keycloak_container" 2>&1 | grep -q 'Keycloak.*started'
+  local_oidc_issuer='http://template-oidc:8080/realms/dockyard-conformance'
+fi
 
 if [[ "${DOCKYARD_TEMPLATE_SMOKE_PREBUILT:-false}" == "true" ]]; then
   docker image inspect "$project-dockyard" >/dev/null
@@ -377,10 +394,10 @@ for template_key in "${template_keys[@]}"; do
       variables='{"meilisearch_master_key":"template-smoke-meilisearch-key"}'
       ;;
     barktrace-sqlite)
-      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"$barktrace_version\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      variables="{\"domain\":\"barktrace-sqlite.example.test\",\"barktrace_version\":\"$barktrace_version\",\"barktrace_image\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_IMAGE:-ghcr.io/barktrace/bark:$barktrace_version}\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-$local_oidc_issuer}\",\"oidc_client_id\":\"dockyard-conformance\",\"oidc_client_secret\":\"dockyard-conformance-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
       ;;
     barktrace-postgres)
-      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"$barktrace_version\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-https://accounts.google.com}\",\"oidc_client_id\":\"dockyard-template-smoke\",\"oidc_client_secret\":\"template-smoke-oidc-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
+      variables="{\"domain\":\"barktrace-postgres.example.test\",\"barktrace_version\":\"$barktrace_version\",\"barktrace_image\":\"${DOCKYARD_TEMPLATE_SMOKE_BARKTRACE_IMAGE:-ghcr.io/barktrace/bark:$barktrace_version}\",\"postgres_password\":\"template-smoke-barktrace\",\"oidc_issuer_url\":\"${DOCKYARD_TEMPLATE_SMOKE_OIDC_ISSUER:-$local_oidc_issuer}\",\"oidc_client_id\":\"dockyard-conformance\",\"oidc_client_secret\":\"dockyard-conformance-secret\",\"mcp_token\":\"template-smoke-mcp-token-0000000000000000\"}"
       ;;
   esac
   service="$(curl --fail --silent --show-error "${headers[@]}" --data "{\"environmentId\":\"$environment_id\",\"name\":\"$template_key\",\"variables\":$variables}" "$base_url/v1/templates/$template_id/instantiate")"

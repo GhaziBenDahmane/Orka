@@ -1,6 +1,6 @@
 services:
   barktrace-postgres:
-    image: ghcr.io/barktrace/bark:${BARKTRACE_VERSION}
+    image: ${BARKTRACE_IMAGE}
     environment:
       BARKTRACE_PUBLIC_URL: ${BARKTRACE_PUBLIC_URL}
       BARKTRACE_DATABASE_URL: postgresql://barktrace:${POSTGRES_PASSWORD}@postgres:5432/barktrace?sslmode=disable

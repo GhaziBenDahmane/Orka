@@ -1,0 +1,3 @@
+FROM ghcr.io/barktrace/bark:0.48.0
+COPY ca-certificates.crt /etc/ssl/certs/orka-local-ca-bundle.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/orka-local-ca-bundle.crt
