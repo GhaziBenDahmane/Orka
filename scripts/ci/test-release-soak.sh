@@ -152,7 +152,11 @@ while (( $(date +%s) < deadline )); do
   curl --fail --silent "$base_url/readyz" >/dev/null || fail "readiness check failed during soak"
   curl --fail --silent "${auth_headers[@]}" "$base_url/v1/me" | \
     jq -e --arg organization "$organization_id" '.organizationId == $organization' >/dev/null || fail "authenticated check failed during soak"
-  curl --fail --silent --header "Authorization: Bearer $metrics_token" "$base_url/metrics" | grep -q '^dockyard_http_requests_total' || fail "metrics disappeared during soak"
+  # Do not pipe curl into grep under pipefail: grep can finish after the first
+  # matching metric and close its input, causing curl to report SIGPIPE even
+  # though metrics were served successfully.
+  metrics="$(curl --fail --silent --header "Authorization: Bearer $metrics_token" "$base_url/metrics")"
+  grep -q '^dockyard_http_requests_total' <<<"$metrics" || fail "metrics disappeared during soak"
   replicas="$(docker service ls --filter "name=$controller_service" --format '{{.Replicas}}')"
   [[ "$replicas" == 1/1 ]] || fail "controller replica count changed during soak: $replicas"
   ((health_checks += 1))
