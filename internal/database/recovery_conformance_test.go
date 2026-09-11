@@ -253,6 +253,7 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	if image == "" {
 		image = tc.engine
 	}
+	imageIndex := len(args)
 	args = append(args, image+":"+tc.version)
 	args = append(args, tc.serverArgs...)
 	docker(t, ctx, nil, args...)
@@ -326,6 +327,11 @@ func exerciseRecovery(t *testing.T, ctx context.Context, network string, tc reco
 	restoreFinished := time.Now()
 	verifyRecoveryData(t, ctx, scheduler, network, clientEnv, container, tc)
 	docker(t, ctx, nil, "rm", "--force", container)
+	// Recreate from the immutable identity actually used for the first server.
+	// A mutable tag can be repointed between starts, invalidating both recovery
+	// evidence and the assertion that data survived a replacement of the same
+	// database image.
+	args[imageIndex] = serverImage.Digest
 	docker(t, ctx, nil, args...)
 	replacementImageID := strings.TrimSpace(docker(t, ctx, nil, "inspect", "--format", "{{.Image}}", container))
 	if replacementImageID != serverImage.ID {
