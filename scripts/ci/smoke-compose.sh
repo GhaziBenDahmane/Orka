@@ -51,12 +51,22 @@ if ! docker network inspect "$public_network" >/dev/null 2>&1; then
   created_network=true
 fi
 
+build_secrets=()
+if [[ -n "${DOCKYARD_BUILD_CA_CERT:-}" ]]; then
+  test -r "$DOCKYARD_BUILD_CA_CERT"
+  build_secrets+=(--secret "id=build_ca,src=$DOCKYARD_BUILD_CA_CERT")
+fi
+if [[ -n "${DOCKYARD_BUILD_GOPROXY_FILE:-}" ]]; then
+  test -r "$DOCKYARD_BUILD_GOPROXY_FILE"
+  test -s "$DOCKYARD_BUILD_GOPROXY_FILE"
+  build_secrets+=(--secret "id=goproxy,src=$DOCKYARD_BUILD_GOPROXY_FILE")
+fi
+
 if [[ "${DOCKYARD_SMOKE_PREBUILT:-false}" == "true" ]]; then
   docker image inspect "$project-dockyard" >/dev/null
   docker compose --project-name "$project" up --detach --no-build
-elif [[ -n "${DOCKYARD_BUILD_CA_CERT:-}" ]]; then
-  test -r "$DOCKYARD_BUILD_CA_CERT"
-  docker build --secret "id=build_ca,src=$DOCKYARD_BUILD_CA_CERT" --tag "$project-dockyard" .
+elif (( ${#build_secrets[@]} > 0 )); then
+  docker build "${build_secrets[@]}" --tag "$project-dockyard" .
   docker compose --project-name "$project" up --detach --no-build
 else
   docker compose --project-name "$project" up --detach --build

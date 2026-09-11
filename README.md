@@ -99,6 +99,15 @@ DOCKYARD_GOPROXY=https://proxy.example.com \
   --secret id=build_ca,src=/path/to/corporate-ca.crt .
 ```
 
+The Compose smoke test accepts the same values as file-backed BuildKit secrets:
+
+```sh
+printf '%s' 'https://proxy.example.com' >/tmp/orka-goproxy
+DOCKYARD_BUILD_CA_CERT=/path/to/corporate-ca.crt \
+  DOCKYARD_BUILD_GOPROXY_FILE=/tmp/orka-goproxy \
+  scripts/ci/smoke-compose.sh
+```
+
 The console is available at `http://localhost:8080/`. Its production assets are
 embedded in the Go binary. Every interactive user can inspect active device
 sessions, revoke individual or all other sessions, and rotate a local password
