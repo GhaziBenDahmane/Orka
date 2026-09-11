@@ -248,7 +248,11 @@ func volumeTransferServer(t *testing.T, artifactPath, workloadService string, ba
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodGet:
 			if r.URL.Query().Get("offline") == "1" {
-				absent := inspectErr != nil && tasksErr != nil && strings.TrimSpace(running) == ""
+				// Docker writes the "no such service" diagnostic into the captured
+				// task output.  Both independent lookups failing is the proof that
+				// the workload is absent; requiring that diagnostic to be empty
+				// incorrectly rejects a correctly removed service.
+				absent := inspectErr != nil && tasksErr != nil
 				offlineWorkloadAbsent.Store(absent)
 				offlineObservation.Store(observation)
 			} else {
